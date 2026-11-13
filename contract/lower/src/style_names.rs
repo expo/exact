@@ -79,6 +79,7 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("shape-outside", "css CSS Shapes 1", AttrTarget::Styles(&[StyleId::ShapeOutside])),
     ("shape-margin", "css CSS Shapes 1", AttrTarget::Styles(&[StyleId::ShapeMargin])),
     ("scroll-snap-align", "css CSS Scroll Snap 1", AttrTarget::Styles(&[StyleId::ScrollSnapAlign])),
+    ("scroll-snap-stop", "css CSS Scroll Snap 1", AttrTarget::Styles(&[StyleId::ScrollSnapStop])),
     ("line-clamp", "css CSS Overflow 4", AttrTarget::Styles(&[StyleId::LineClamp])),
     ("text-overflow", "css CSS Overflow 3", AttrTarget::Styles(&[StyleId::TextOverflow])),
     // @ref LLP 1053 §0 G4 — `normal` and `tabular-nums`; others refused by name.
@@ -216,6 +217,12 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-animation-trigger", "exact LLP 1055", AttrTarget::Styles(&[StyleId::AnimationTrigger])),
     // @ref LLP 1057.003 D4 — CSS `timeline-scope`.
     ("timeline-scope", "css CSS Scroll Animations 1", AttrTarget::Styles(&[StyleId::TimelineScope])),
+    // @ref LLP 1057.003 D5 — scroll and view progress timelines.
+    ("scroll-timeline-name", "css CSS Scroll Animations 1", AttrTarget::Styles(&[StyleId::ScrollTimelineName])),
+    ("scroll-timeline-axis", "css CSS Scroll Animations 1", AttrTarget::Styles(&[StyleId::ScrollTimelineAxis])),
+    ("view-timeline-name", "css CSS Scroll Animations 1", AttrTarget::Styles(&[StyleId::ViewTimelineName])),
+    ("view-timeline-axis", "css CSS Scroll Animations 1", AttrTarget::Styles(&[StyleId::ViewTimelineAxis])),
+    ("view-timeline-inset", "css CSS Scroll Animations 1", AttrTarget::Styles(&[StyleId::ViewTimelineInset])),
     ("display", "css CSS Display 3", AttrTarget::Styles(&[StyleId::Display])),
     ("grid-auto-flow", "css CSS Grid 2", AttrTarget::Styles(&[StyleId::GridAutoFlow])),
     ("grid-template-columns", "css CSS Grid 2", AttrTarget::Styles(&[StyleId::GridTemplateColumns])),
@@ -260,6 +267,13 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-hit-slop-right", "exact LLP 1061", AttrTarget::Styles(&[StyleId::HitSlopRight])),
     ("-exact-hit-slop-bottom", "exact LLP 1061", AttrTarget::Styles(&[StyleId::HitSlopBottom])),
     ("-exact-hit-slop-left", "exact LLP 1061", AttrTarget::Styles(&[StyleId::HitSlopLeft])),
+    // A content owner's clearance of its chrome, per edge (LLP 1123 D4), and
+    // the safe area where a box is, as an author sets it (D9).
+    ("-exact-safe-area", "exact LLP 1123 D4", AttrTarget::Styles(&[StyleId::SafeArea])),
+    ("--exact-safe-area-inset-top", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetTop])),
+    ("--exact-safe-area-inset-right", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetRight])),
+    ("--exact-safe-area-inset-bottom", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetBottom])),
+    ("--exact-safe-area-inset-left", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetLeft])),
     ("z-index", "css CSS 2", AttrTarget::Styles(&[StyleId::ZIndex])),
     ("order", "css CSS Display 3", AttrTarget::Styles(&[StyleId::Order])),
     ("transition", "css CSS Transitions 1", AttrTarget::Styles(&[StyleId::Transition])),
@@ -298,6 +312,8 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("dynamic-range-limit", "css CSS Color HDR 1", AttrTarget::Styles(&[StyleId::DynamicRangeLimit])),
     // @ref LLP 1034 §8 — a subtree's colour scheme.
     ("color-scheme", "css CSS Color Adjustment 1", AttrTarget::Styles(&[StyleId::ColorScheme])),
+    // Issue #152: authored release velocity enters LLP 1002’s spring input.
+    ("-exact-translate-velocity", "exact LLP 1002", AttrTarget::Styles(&[StyleId::TranslateVelocity])),
     // @ref LLP 1061 D1 — host-owned press feedback; not a motion target.
     ("-exact-press-scale", "exact LLP 1061", AttrTarget::Styles(&[StyleId::PressScale])),
     // @ref LLP 1061 D7 — the author's pressed paint, host-owned as the scale is.
@@ -338,6 +354,8 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     // @ref LLP 1011.002 D3 — a keyword, or a length (`baseline-shift`).
     ("vertical-align", "css CSS Inline Layout 3", AttrTarget::Shorthand),
     ("text-box", "css CSS Inline Layout 3", AttrTarget::Shorthand),
+    ("scroll-timeline", "css CSS Scroll Animations 1", AttrTarget::Shorthand),
+    ("view-timeline", "css CSS Scroll Animations 1", AttrTarget::Shorthand),
 ];
 
 /// Why a literal `n` written as `name` is no value of the press family's
@@ -414,6 +432,8 @@ fn applies(i: usize, rows: &[StyleId]) -> bool {
             StyleId::AnimationTimeline,
             StyleId::TimelineScope,
             StyleId::DragTimeline,
+            StyleId::ScrollTimelineName,
+            StyleId::ViewTimelineName,
         ]),
         _ => any(&[StyleId::Transition, StyleId::LayoutTransition]),
     }

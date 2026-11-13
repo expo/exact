@@ -724,22 +724,21 @@ for (const sheet of ['host/web/glue.js', 'host/web-js/symbols.js']) browserCheck
   }, {html});
 });
 
-// LLP 1121 stage 9 B (D10), LLP 1081 stage 2: a symbol nobody tinted draws
-// in its `color`, written (`data-symbol-color`, element.rs) or inherited, a
-// `light-dark()` one by its scheme and a later one at once; an ink set on it
+// LLP 1081 stage 2: a symbol nobody tinted draws in its `color`, written
+// or inherited, a `light-dark()` one by its scheme and a later one at once; an ink set on it
 // (`--exact-tint`) still wins. Both targets' sheets.
 for (const sheet of ['host/web/glue.js', 'host/web-js/symbols.js']) browserCheck(`a symbol draws in its written colour (${sheet})`, async () => {
   const style = symbolSheet(readFileSync(resolve(ROOT, sheet), 'utf8'));
-  const img = (id, css = '', marked = true) => `<img id="${id}" data-symbol-path="M0 0h16v16H0Z"${marked ? ' data-symbol-color' : ''} style="width:16px;height:16px;${css}">`;
-  const html = SHIPPED.replace('<div id="exact-root"></div>', `<style>${style}</style><div id="exact-root" style="--exact-accent:rgb(102, 82, 197)"><div id="ink" style="color:rgb(10, 20, 30)">${img('written')}${img('authored', '--exact-tint:rgb(255, 0, 0)')}${img('unmarked', '', false)}${['light', 'dark'].map(scheme => `<div style="color-scheme:${scheme};color:light-dark(rgb(1, 2, 3), rgb(4, 5, 6))">${img(scheme)}</div>`).join('')}</div></div>`).replace('<script type="module" src="./glue.js"></script>', '');
+  const img = (id, css = '') => `<img id="${id}" data-symbol-path="M0 0h16v16H0Z" style="width:16px;height:16px;${css}">`;
+  const html = SHIPPED.replace('<div id="exact-root"></div>', `<style>${style}</style><div id="exact-root" style="--exact-accent:rgb(102, 82, 197)"><div id="ink" style="color:rgb(10, 20, 30)">${img('inherited')}${img('authored', '--exact-tint:rgb(255, 0, 0)')}${img('own', 'color:rgb(30, 20, 10)')}${img('cleared', 'color:inherit')}${img('refused', 'color:not-a-colour')}${['light', 'dark'].map(scheme => `<div style="color-scheme:${scheme};color:light-dark(rgb(1, 2, 3), rgb(4, 5, 6))">${img(scheme)}</div>`).join('')}</div></div>`).replace('<script type="module" src="./glue.js"></script>', '');
   await withDocument('/', async tab => {
     const page = await tab(true);
     await page.until("document.readyState === 'complete'", 'symbol fixture');
-    const read = `(() => Object.fromEntries(['written', 'authored', 'unmarked', 'light', 'dark'].map(id => [id, getComputedStyle(document.getElementById(id)).backgroundColor])))()`;
+    const read = `(() => Object.fromEntries(['inherited', 'authored', 'own', 'cleared', 'refused', 'light', 'dark'].map(id => [id, getComputedStyle(document.getElementById(id)).backgroundColor])))()`;
     const tint = await page(read);
-    expect(tint).toEqual({ written: 'rgb(10, 20, 30)', authored: 'rgb(255, 0, 0)', unmarked: 'rgb(10, 20, 30)', light: 'rgb(1, 2, 3)', dark: 'rgb(4, 5, 6)' });
+    expect(tint).toEqual({ inherited: 'rgb(10, 20, 30)', authored: 'rgb(255, 0, 0)', own: 'rgb(30, 20, 10)', cleared: 'rgb(10, 20, 30)', refused: 'rgb(10, 20, 30)', light: 'rgb(1, 2, 3)', dark: 'rgb(4, 5, 6)' });
     await page(`document.getElementById('ink').style.color = 'rgb(0, 128, 0)'`);
-    expect((await page(read)).written).toBe('rgb(0, 128, 0)');
+    expect(await page(read)).toEqual({ ...tint, inherited: 'rgb(0, 128, 0)', cleared: 'rgb(0, 128, 0)', refused: 'rgb(0, 128, 0)' });
   }, {html});
 });
 

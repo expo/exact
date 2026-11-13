@@ -32,22 +32,53 @@ exact-route = { path = "../../route" }
 exact-raster = { path = "../raster" }
 exact-svg-file = { path = "../svg-file" }
 exact-runner = { path = "../../runner" }
-exact-grants = { path = "../../grants" }
-# The executor for a request that leaves the process (LLP 1016 D2): ibex2's
-# standard library for a Rust consumer (ibex LLP 0068) — no engine, no
-# loader — taken from the sibling checkout, as Weird Castle takes exact2.
+# The executor for a request that leaves the process (LLP 1016 D2).
+exact-executor = { path = "../executor" }
+# Its transport: ibex2's standard library for a Rust consumer (ibex LLP 0068)
+# — no engine, no loader — taken from the sibling checkout, as Weird Castle
+# takes exact2.
 # `websocket`: the transport for an app's WebSockets (exactStream sockets); the
 # vendored v4 crate gates it behind a default feature (27275f3d4), which
 # default-features = false had turned off.
 ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false, features = ["websocket"] }
 
 serde_json = "1.0"
-# The URL type ibex2's hop gate takes (LLP 1133.036 D6).
+# A launch request's URL is checked before it is sent (src/launch_preloads.rs).
 url = "2.5"
 
+# Default features for registry crates already in this host's graph, which
+# nothing here uses directly. An app crate that names one of them at its
+# defaults would otherwise add features to it, and Cargo would rebuild it and
+# every SDK crate above it: 3 to 35 units each. sdk-features.test.mjs keeps
+# the list whole. A crate whose defaults bring a crate the graph lacks
+# (cssparser, ff, icu_normalizer, p256) stays as it is: pinning it would cost
+# every app that compile.
+arcstr = "1.2"
+arrayvec = "0.7"
+crypto-bigint = "0.5"
+ecdsa = "0.16"
+elliptic-curve = "0.13"
+# Through ibex2-sqlite, which app crates name beside this one.
+foldhash = "0.2"
+group = "0.13"
+idna = "1"
+litemap = "0.8"
+memchr = "2"
+percent-encoding = "2"
+potential_utf = "0.1"
+serde_core = "1"
+slotmap = "1"
+stable_deref_trait = "1"
+subtle = "2"
+tinystr = "0.8"
+triomphe = "0.1"
+writeable = "0.6"
+yoke = "0.8"
+zerofrom = "0.1"
+zeroize = "1"
+zerotrie = "0.2"
+
 [dev-dependencies]
-# The listener the executor's tests install in place of the library (LLP 1133.005).
-exact-listen = { path = "../listen" }
 exact-logic = { path = "../../logic" }
 caltrain = { path = "../../apps/caltrain" }
 caltrain-data = { path = "../../apps/caltrain/data" }

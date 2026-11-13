@@ -16,6 +16,27 @@ import UIKit
 /// on its segment views, in order, after each layout, which is when UIKit
 /// makes them. A segment named by nothing is UIKit's (its title).
 class LabelledSegmentedControl: UISegmentedControl {
+    /// UIKit's parts stood in for at the frames the surface draws them at,
+    /// inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    private let placedParts = PlacedStandIns()
+    private func placedElements() -> [PlacedElement]? {
+        placedParts.elements(of: self) {
+            declaredElements(super.accessibilityElements, count: super.accessibilityElementCount(), at: { super.accessibilityElement(at: $0) })
+        }
+    }
+    override var accessibilityElements: [Any]? {
+        get { placedElements() ?? super.accessibilityElements }
+        set { super.accessibilityElements = newValue }
+    }
+    override func accessibilityElementCount() -> Int { placedElements()?.count ?? super.accessibilityElementCount() }
+    override func accessibilityElement(at index: Int) -> Any? {
+        guard let elements = placedElements() else { return super.accessibilityElement(at: index) }
+        return elements.indices.contains(index) ? elements[index] : nil
+    }
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        guard let elements = placedElements() else { return super.index(ofAccessibilityElement: element) }
+        return elements.firstIndex { $0 === element as AnyObject } ?? NSNotFound
+    }
     var segmentLabels: [String?] = [] { didSet { if segmentLabels != oldValue { setNeedsLayout() } } }
     var segmentIDs: [String?] = [] { didSet { if segmentIDs != oldValue { setNeedsLayout() } } }
     var segmentUnavailable: [Bool] = [] { didSet { if segmentUnavailable != oldValue { setNeedsLayout() } } }
@@ -58,6 +79,25 @@ extension UISegmentedControl {
             return x.0 == x.1 ? a.offset < b.offset : x.0 < x.1
         }.map(\.element)
         return effectiveUserInterfaceLayoutDirection == .rightToLeft ? views.reversed() : views
+    }
+
+    /// The segment under `point`, in this control's coordinates: the segment
+    /// view whose columns hold it, or the nearest across a gap between them.
+    /// Segments sized by content (`apportionsSegmentWidthsByContent`) are
+    /// unequal, so equal shares stand in only when the views are not found.
+    func segment(at point: CGPoint) -> Int? {
+        guard bounds.contains(point), numberOfSegments > 0 else { return nil }
+        let views = segmentViews
+        if views.count == numberOfSegments {
+            let distance = views.map { view -> CGFloat in
+                let box = view.convert(view.bounds, to: self)
+                return max(box.minX - point.x, point.x - box.maxX, 0)
+            }
+            return distance.indices.min { distance[$0] < distance[$1] }
+        }
+        var index = Int(point.x / bounds.width * CGFloat(numberOfSegments))
+        if effectiveUserInterfaceLayoutDirection == .rightToLeft { index = numberOfSegments - 1 - index }
+        return (0..<numberOfSegments).contains(index) ? index : nil
     }
 }
 
@@ -203,29 +243,23 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             guard boxes.count == ids.count else { return nil }
             return boxes.firstIndex { $0.contains(point) }.map { ids[$0] }
         }
-        // A segmented control: its segments' own boxes (widths by content
-        // when squeezed; `segmentViews`, in segment order), else equal widths.
-        if let control = view as? ExactSegmentedControl {
-            let segments = control.segmentViews
-            if segments.count == ids.count { return segments.firstIndex { $0.convert($0.bounds, to: view).contains(point) }.map { ids[$0] } }
-        }
-        var index = Int(point.x / view.bounds.width * CGFloat(ids.count))
-        if view.effectiveUserInterfaceLayoutDirection == .rightToLeft { index = ids.count - 1 - index }
-        return ids.indices.contains(index) ? ids[index] : nil
+        return (view as? ExactSegmentedControl)?.segment(at: point).flatMap { ids.indices.contains($0) ? ids[$0] : nil }
     }
     #endif
 
     init(_ presenter: Presenter) { self.presenter = presenter; super.init() }
 
     private func contextTab(_ gesture: UIGestureRecognizer) -> NodeView? {
-        guard let control = gesture.view as? ExactSegmentedControl,
+        guard let control = gesture.view as? UISegmentedControl else { return nil }
+        return contextTab(at: gesture.location(in: control), in: control)
+    }
+
+    /// The tab whose `contextmenu` a long press at `point` in `control` runs.
+    func contextTab(at point: CGPoint, in control: UISegmentedControl) -> NodeView? {
+        guard let control = control as? ExactSegmentedControl,
               let ids = members[control.ownerID], control.bounds.width > 0,
               let owner = presenter.views[control.ownerID], available(owner) else { return nil }
-        let point = gesture.location(in: control)
-        guard control.bounds.contains(point) else { return nil }
-        var index = Int(point.x / control.bounds.width * CGFloat(ids.count))
-        if control.effectiveUserInterfaceLayoutDirection == .rightToLeft { index = ids.count - 1 - index }
-        guard ids.indices.contains(index), let tab = presenter.views[ids[index]],
+        guard let index = control.segment(at: point), ids.indices.contains(index), let tab = presenter.views[ids[index]],
               !tab.disabled, tab.handlers.contains("contextmenu") else { return nil }
         return tab
     }

@@ -346,6 +346,39 @@ fn a_view_carries_a_keyboards_segment_rects() {
             exact_kernel::Rect::new(0., 440., 402., 15.)
         );
         assert_eq!(env.viewport_height, 455.);
+        // The keyboard's overlap (mask 32) is the last word, after the rects.
+        let mut tail = vec![2];
+        tail.extend(rects(15.));
+        tail.push(419.0f32.to_bits());
+        let len = bridge.input_write(&view_words((mask & !8) | 32, &regions, &tail));
+        let out = bridge.view(len);
+        let batch = std::str::from_utf8(bridge.output_bytes(out as usize)).unwrap();
+        assert!(!batch.contains("\"error\":\""), "{batch}");
+        assert_eq!(
+            bridge
+                .host
+                .as_ref()
+                .unwrap()
+                .runner()
+                .viewport()
+                .keyboard_height,
+            419.
+        );
+        // Without that word, mask 32 is malformed and changes nothing.
+        let len = bridge.input_write(&view_words(32, &regions, &[]));
+        let out = bridge.view(len);
+        let batch = std::str::from_utf8(bridge.output_bytes(out as usize)).unwrap();
+        assert!(batch.contains("view: malformed"), "{batch}");
+        assert_eq!(
+            bridge
+                .host
+                .as_ref()
+                .unwrap()
+                .runner()
+                .viewport()
+                .keyboard_height,
+            419.
+        );
     }
 }
 

@@ -51,6 +51,12 @@ pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         // Whether the app must finish work an answer started (`must_finish`):
         // what a host's quit waits for, cheaper than `state`.
         Some("background") => format!("{{\"mustFinish\":{}}}", runner.must_finish()),
+        // Recent background action endings for diagnostics (LLP 1133.004
+        // stage 2). A host drains delivery through `take_ended_actions`.
+        Some("actions") => format!("{{\"ended\":{}}}", runner.ended_actions()),
+        // What the app's literals declare (LLP 1133.004 stage 2): the
+        // notification categories a host registers at launch.
+        Some("declared") => runner.declared_values().to_string(),
         // A polled module source's ask in flight (LLP 1133.009 D10 item 7):
         // what a jump waits for before it replies.
         Some("polls") => format!("{{\"asking\":{}}}", runner.polls_asking()),
@@ -265,7 +271,14 @@ pub fn answer<D: DataSource>(
                 None,
             ));
         };
-        return Some(match (picker.hold)(runner, &id) {
+        let held = match field_num(request, "view") {
+            Some(view) if view >= 0.0 && view <= u32::MAX as f64 && view == view.trunc() => {
+                (picker.hold_view)(runner, view as u32)
+            }
+            Some(_) => Err("showPicker needs a valid view".into()),
+            None => (picker.hold)(runner, &id),
+        };
+        return Some(match held {
             Ok(ticket) => (format!("{{\"ticket\":{ticket}}}"), None),
             Err(e) => (error(&e), None),
         });
@@ -1076,6 +1089,10 @@ fn delivery<D: DataSource>(runner: &Runner<D>, s: &mut String) {
     }
     s.push_str("],\"compatibilityId\":");
     quote(&d.compatibility_id, s);
+    s.push_str(",\"version\":");
+    quote(&d.version, s);
+    s.push_str(",\"buildNumber\":");
+    quote(&d.build_number, s);
     s.push_str(",\"L\":");
     quote(&d.store.to_string(), s);
     s.push_str(",\"E\":[");

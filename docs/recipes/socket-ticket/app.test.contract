@@ -1,0 +1,8 @@
+test "each reconnect obtains a new single-use ticket"
+  tap "connect"
+  clock until state feed.status == "connected" within 15000
+  expect text "protocol" == "events.v1"
+  expect text "message" == "connection 1"
+  tap "connect"
+  clock until state feed.text == "connection 2" within 15000
+  expect text "protocol" == "events.v1"

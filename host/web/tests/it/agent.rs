@@ -105,9 +105,11 @@ fn state_is_typed_json_with_field_names() {
     assert_eq!(derives["canvasColor"], "#05081a");
     assert_eq!(derives["tracked"], serde_json::Value::Null);
     assert_eq!(derives["trackedId"], "");
+    // The departure is ten minutes after the clock's own epoch, which this
+    // test's clock puts at zero.
     assert_eq!(
         derives["departureState"],
-        serde_json::json!({"station":"Mountain View","headsign":"San Francisco","train":101,"at":1787916000000_u64,"status":"On time"})
+        serde_json::json!({"station":"Mountain View","headsign":"San Francisco","train":101,"at":600000_u64,"status":"On time"})
     );
     assert!(
         state.contains("\"station\":{\"id\":\"mv\",\"name\":\"Mountain View\",\"zone\":"),

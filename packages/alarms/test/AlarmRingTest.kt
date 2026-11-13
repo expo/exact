@@ -85,4 +85,48 @@ class AlarmRingTest {
                 .edit().clear().commit()
         }
     }
+
+    /** B rings at 0 s and A at 1 s; A is repeated at 2 s and rings again at 62 s. B keeps the service alive through the
+     * repeat, so A's first ring's limit, due at 601 s, must not end its second, due at 662 s. */
+    @Test fun aRepeatedRingGetsItsOwnTimeLimit() {
+        val app = RuntimeEnvironment.getApplication()
+        val alarms = app.getSystemService(AlarmManager::class.java)
+        val looper = shadowOf(Looper.getMainLooper())
+        ShadowAlarmManager.setCanScheduleExactAlarms(true)
+        Settings.Global.putInt(app.contentResolver, Settings.Global.BOOT_COUNT, 1)
+        val now = System.currentTimeMillis().toDouble()
+        val b = AlarmRecord("b", "Oven", now, null, null, null, "scheduled")
+        val a = AlarmRecord("a", "Tea", now, 60_000.0, 60_000.0, null, "countdown")
+        val service = Robolectric.buildService(AlarmService::class.java).create()
+        fun ring(r: AlarmRecord) {
+            alarms.cancel(AlarmRing.action(app, r, AlarmRing.FIRE))
+            AlarmRing.due(app, r.tag)
+            service.get().onStartCommand(Intent(app, AlarmService::class.java).putExtra("tag", r.tag), 0, 1)
+        }
+        try {
+            AlarmRing.set(app, b)
+            ring(b)
+            looper.idleFor(Duration.ofSeconds(1))
+            a.at = System.currentTimeMillis().toDouble()
+            AlarmRing.set(app, a)
+            ring(a)
+            looper.idleFor(Duration.ofSeconds(1))
+            AlarmRing.snooze(app, a.tag)
+            looper.idle()
+            looper.idleFor(Duration.ofSeconds(60))
+            ring(AlarmRecords.get(app, a.tag)!!)
+
+            looper.idleFor(Duration.ofSeconds(538))
+            assertNull("B's ring ends at its limit", AlarmRecords.get(app, b.tag))
+            looper.idleFor(Duration.ofSeconds(1))
+            assertEquals("A's second ring outlives its first ring's limit", "alerting", AlarmRecords.get(app, a.tag)?.state)
+            looper.idleFor(Duration.ofSeconds(61))
+            assertNull("A's second ring ends at its own limit", AlarmRecords.get(app, a.tag))
+        } finally {
+            service.destroy()
+            listOf(a, b).forEach { AlarmRing.cancel(app, it.tag) }
+            app.createDeviceProtectedStorageContext().getSharedPreferences("exact.alarms", Context.MODE_PRIVATE)
+                .edit().clear().commit()
+        }
+    }
 }

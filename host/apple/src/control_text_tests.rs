@@ -201,7 +201,7 @@ fn running_session_chrome_failure_keeps_updates_but_withholds_staged_geometry() 
     let mut batch = crate::batch::Batch::new();
     // Native-region promotion can have written geometry before layout fails.
     batch.frame(native, 10., 20., 30., 40.);
-    batch.content(native, 300., 400.);
+    batch.content(native, 300., 400., None);
     batch.field_content(
         native,
         Some(crate::batch::ContentBox {

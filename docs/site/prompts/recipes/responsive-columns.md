@@ -1,5 +1,5 @@
 ```prompt Make my columns wrap on a phone
-Make the columns in the Exact app in this folder sit side by side on a wide window and stack on a phone. Use https://github.com/expo/exact/blob/main/docs/recipes/responsive-columns.md as the source for each step. The exact2 checkout has the same page at docs/recipes/responsive-columns.md.
+Make the columns in the Exact app in this folder sit side by side on a wide window and stack on a phone. Use https://github.com/expo/exact/blob/main/docs/recipes/responsive-columns.md as the source for each step. The Exact checkout has the same page at docs/recipes/responsive-columns.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not name the screen, find the one with columns side by side and ask me before you write code.

@@ -1149,7 +1149,7 @@ browserTest('a flowed paragraph is trimmed to its own font\'s cap height, whatev
     const cut = textBoxCut({ textBoxTrim: 'trim-both', textBoxEdge: 'cap alphabetic' }, { font: '20px Arabic' }, 30, context);
     return { cap: baseline - cut.top, fallbackInk: m.actualBoundingBoxAscent };
   };
-  const { cap, fallbackInk } = await inChrome(fixture, ['/textflow-glue.js', '/timer-glue.js'], { '/arabic.ttf': new URL('../linux/tests/fonts/NotoSansArabic.ttf', import.meta.url) });
+  const { cap, fallbackInk } = await inChrome(fixture, ['/textflow-glue.js', '/timer-glue.js'], { '/arabic.ttf': new URL('../painted/tests/fonts/NotoSansArabic.ttf', import.meta.url) });
   expect(Math.abs(cap - 20 * 0.416)).toBeLessThan(0.5);
   expect(Math.abs(fallbackInk - 20 * 0.416)).toBeGreaterThan(1); // the fallback's H is not the font's cap height
 }, 20000);
@@ -1201,7 +1201,7 @@ async function flowWidthFixture() {
 // percentage computed style gives, and a percentage with no keyword keeps ordinary layout.
 browserTest('a flowed paragraph is measured and painted at the width CSS gives it', async () => {
   const { between, condensedClamp, condensedHyphen, ...got } = await inChrome(flowWidthFixture, ['/textflow-glue.js', '/timer-glue.js'],
-    { '/flex.ttf': new URL('../linux/tests/fonts/RobotoFlex-subset.ttf', import.meta.url) });
+    { '/flex.ttf': new URL('../painted/tests/fonts/RobotoFlex-subset.ttf', import.meta.url) });
   for (const [name, { css, measured, painted }] of Object.entries(got)) {
     expect([name, Math.abs(measured - css) < 0.5, Math.abs(painted - css) < 0.5]).toEqual([name, true, true]);
   }

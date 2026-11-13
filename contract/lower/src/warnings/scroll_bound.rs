@@ -182,19 +182,12 @@ fn walk<'a>(
                 };
                 walk(children, &next, styles, seen, out);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, parent, styles, seen, out);
-                walk(otherwise, parent, styles, seen, out);
-            }
-            Node::Each { body, .. } => walk(body, parent, styles, seen, out),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, parent, styles, seen, out);
-                walk(none, parent, styles, seen, out);
-            }
             Node::Use { children, .. } => walk(children, &Parent::unknown(), styles, seen, out),
-            Node::Children { .. } => {}
+            node => {
+                for list in node.child_lists() {
+                    walk(list, parent, styles, seen, out);
+                }
+            }
         }
     }
 }

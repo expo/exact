@@ -42,15 +42,15 @@ component App
   screen's PNG, `width` points wide, on `background_color`.
 - **`host.ios.icon`** `"art/App.icon"`: an Icon Composer `.icon`; dark icons are `color_scheme_dark.icons`.
 - **`protocol_handlers`**: `euxy://p/abc` is `/p/euxy%3A%2F%2Fp%2Fabc` (whole at `%s`).
-  A cold launch opens it in its route's tab: declare it (`p "/p/:d"`). Running, `go`
-  pushes it on the selected tab; `open` uses its route's (`vocab navigate`).
-- **Other keys:** `userInterfaceStyle` (`dark`/`light`), `data` (the `data-*` words a hatch
-  reads), `tamber` (the design file), `strings`, `typescript.sources` (outside directories
-  `app.ts` imports), `commands` (the app's `exact.mjs` verbs), `env` (settings inlined at
-  build, so never a secret: [a REST server](rest-backend.md)), `host.web.head`
-  ([a website](website.md)).
-- **`host.ios.appClip`** `{}`: the app as an App Clip too (`id` defaults to `<app id>.Clip`;
-  each `applinks:` domain is its `appclips:` one).
+  Cold, it opens in its route's tab (declare `p "/p/:d"`); running, `go` pushes it on the
+  selected tab, `open` on its route's (`vocab navigate`).
+- **Other keys:** `userInterfaceStyle` (`dark`/`light`), `categories` (store, Game Mode),
+  `data` (`data-*` words a hatch reads), `tamber` (design file), `strings`,
+  `typescript.sources` (outside directories `app.ts` imports), `commands` (the app's
+  `exact.mjs` verbs), `env` (settings inlined at build, so never a secret:
+  [a REST server](rest-backend.md)), `host.web.head` ([a website](website.md)).
+- **`host.ios.appClip`** `{}`: an App Clip too (`id` `<app id>.Clip` by default; each
+  `applinks:` domain is its `appclips:` one).
 - **Not here:** grants (in `app.ts`), fonts and sounds (Contract).
 - **A change to `app.json`, `assets/`, Swift, grants, `appId`, fonts or strings rebuilds** the
   native app (`bun exact.mjs ios`). An edit to `.contract` files, to `app.ts` (short of its

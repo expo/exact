@@ -3,6 +3,25 @@ use super::*;
 use crate::{generated::metric, style::metrics, Dimension, StyleValue};
 use std::sync::LazyLock;
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct State {
+    pub prefixes: SlotSet,
+    /// Popovers a shown source opened as choosers (`set_popover_source_visible`).
+    pub choosers: SlotSet,
+}
+
+impl State {
+    pub fn clear(&mut self) {
+        self.prefixes.clear();
+        self.choosers.clear();
+    }
+
+    pub fn remove(&mut self, slot: u32) {
+        self.prefixes.remove(slot);
+        self.choosers.remove(slot);
+    }
+}
+
 fn rows(values: &[(StyleId, &str)]) -> StyleProps {
     let mut s = StyleProps::default();
     for (id, value) in values {
@@ -259,14 +278,14 @@ impl NodeArena {
     }
 
     pub(crate) fn has_alert_prefix(&self, slot: u32) -> bool {
-        self.alert_prefixes.contains(slot)
+        self.alert_state.prefixes.contains(slot)
     }
 
     pub(crate) fn set_alert_prefix(&mut self, slot: u32, present: bool) {
         if present {
-            self.alert_prefixes.insert(slot);
+            self.alert_state.prefixes.insert(slot);
         } else {
-            self.alert_prefixes.remove(slot);
+            self.alert_state.prefixes.remove(slot);
         }
     }
 

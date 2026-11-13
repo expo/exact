@@ -25,7 +25,7 @@ fn spacing(v: &str, font_size: f64) -> Option<(String, f64)> {
         return None;
     }
     let value = exact_num::parse_f64(n).ok()?;
-    Some((format!("{}{unit}", font::js_number(value)), px))
+    Some((format!("{}{unit}", exact_num::js(value)), px))
 }
 
 impl Inner {
@@ -81,7 +81,7 @@ impl Inner {
             return;
         }
         if let Some(m) = max_width {
-            if m.is_nan() || m <= 0.0 {
+            if !m.is_finite() || m <= 0.0 {
                 return;
             }
         }
@@ -153,10 +153,10 @@ impl Context2d {
         self.set_enum(v, &font::DIRECTION, |g| &mut g.state.text.direction)
     }
 
-    /// `direction`: `inherit` reads as the canvas node's.
+    /// `direction`, as set: `inherit` resolves to the canvas node's only
+    /// where text is laid out (HTML, "text preparation algorithm").
     pub fn direction(&self) -> String {
-        let g = self.g();
-        font::DIRECTION[if g.rtl() { 1 } else { 0 }].into()
+        font::DIRECTION[self.g().state.text.direction as usize].into()
     }
 
     /// `fontKerning = v`.

@@ -26,6 +26,8 @@ pub struct PackageView {
     pub package: String,
     pub displayed: bool,
     pub binds: Vec<String>,
+    /// The interface's agent vocabulary, including interfaces with no names.
+    pub agent: String,
     /// Its declared props' types and its events beyond the nine, which the
     /// lowering holds the tag's attributes to (LLP 1133.021 §9 items 1, 2).
     pub declared: contract_lower::DeclaredView,
@@ -79,12 +81,14 @@ pub fn declared(app_root: &Path) -> Result<BTreeMap<String, PackageView>, Declar
                     &json,
                     &extension,
                     json["name"].as_str().unwrap_or(&name),
+                    &json["agent"],
                 )?);
                 for implementation in carried(&root) {
                     found.extend(views(
                         &implementation,
                         &extension,
                         json["name"].as_str().unwrap_or(&name),
+                        &json["agent"],
                     )?);
                 }
             }
@@ -96,7 +100,23 @@ pub fn declared(app_root: &Path) -> Result<BTreeMap<String, PackageView>, Declar
                 } else {
                     interface
                 };
-                found.extend(views(&json, &extension_of(interface), interface)?);
+                let declaration = located(app_root, interface)
+                    .map(|(_, json)| json)
+                    .unwrap_or_default();
+                let agent = &declaration["agent"];
+                let extension = extension_of(interface);
+                let shared = views(&declaration, &extension, interface, agent)?;
+                for view in views(&json, &extension, interface, agent)? {
+                    // A served tag takes its interface's declaration regardless
+                    // of which dependency is read first.
+                    found.push(
+                        shared
+                            .iter()
+                            .find(|decl| decl.tag == view.tag)
+                            .cloned()
+                            .unwrap_or(view),
+                    );
+                }
             }
             _ => {}
         }
@@ -146,12 +166,18 @@ fn views(
     json: &Value,
     extension: &str,
     package: &str,
+    agent: &Value,
 ) -> Result<Vec<PackageView>, DeclarationError> {
+    let agent = crate::declaration::agent_words(agent).map_err(|message| DeclarationError {
+        id: "contract-use-declaration",
+        message: format!("{package}: {message}"),
+    })?;
     let made = |tag: &str, decl: Option<&Map<String, Value>>| {
         Ok(PackageView {
             tag: tag.to_owned(),
             extension: extension.to_owned(),
             package: package.to_owned(),
+            agent: agent.clone(),
             displayed: decl.is_some_and(|d| d.get("displayed") == Some(&Value::Bool(true))),
             binds: decl
                 .and_then(|d| d.get("props"))
@@ -163,10 +189,13 @@ fn views(
                         .collect()
                 })
                 .unwrap_or_default(),
-            declared: decl
-                .map(|d| declared_view(d, tag, package))
-                .transpose()?
-                .unwrap_or_default(),
+            declared: contract_lower::DeclaredView {
+                extension: extension.to_owned(),
+                ..decl
+                    .map(|d| declared_view(d, tag, package))
+                    .transpose()?
+                    .unwrap_or_default()
+            },
         })
     };
     match &json["views"] {
@@ -235,7 +264,11 @@ fn declared_view(
         Some((name.to_owned(), args))
     })
     .collect();
-    Ok(contract_lower::DeclaredView { props, events })
+    Ok(contract_lower::DeclaredView {
+        props,
+        events,
+        ..Default::default()
+    })
 }
 
 /// The nearest `package.json` above `app_root`: its `dependencies`' names.

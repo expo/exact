@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { developmentGate } from './install-page.mjs';
+import { designLog } from './tamber-history.mjs';
 import { tamberServer } from './tamber-server.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -167,6 +168,38 @@ test.each([false, true])('a removed param revert refuses a conditional without i
     expect(read()).toBe(PARAM_DESIGN.replace('#000000', '#111111').replace('#101010', '#303030'));
   });
 }, 120_000);
+
+test("history lists a merged branch's design edit once, in the merge", () => {
+  const repo = mkdtempSync(join(tmpdir(), 'exact-tamber-merge-history-'));
+  const env = { ...process.env, GIT_AUTHOR_NAME: 'Ada', GIT_AUTHOR_EMAIL: 'ada@example.test', GIT_COMMITTER_NAME: 'Ada', GIT_COMMITTER_EMAIL: 'ada@example.test' };
+  const g = (...args) => {
+    const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8', env });
+    expect(r.status, r.stderr).toBe(0);
+  };
+  // Lines enough between the two edits that the merge is clean.
+  const design = `tamber t\n\ntheme\n  ink = #111111\n${'abcdef'.split('').map((n, i) => `  ${n} = #0${i}0${i}0${i}\n`).join('')}  edge = #222222\n`;
+  const commit = (text, message) => {
+    writeFileSync(join(repo, 'app.tamber'), text);
+    g('commit', '-q', '-am', message);
+  };
+  try {
+    writeFileSync(join(repo, 'app.contract'), 'component App\n  view\n    text "a"\n');
+    writeFileSync(join(repo, 'app.tamber'), design);
+    g('init', '-q', '-b', 'main');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'A');
+    g('checkout', '-q', '-b', 'side');
+    commit(design.replace('#222222', '#bbbbbb'), 'B');
+    g('checkout', '-q', 'main');
+    commit(design.replace('#111111', '#aaaaaa'), 'C');
+    g('merge', '-q', '--no-ff', '-m', 'M', 'side');
+    const { ok } = designLog(repo, 'app.tamber');
+    expect(ok.commits.map(c => c.message)).toEqual(['M', 'C', 'A']);
+    expect(ok.commits[0].files[0].diff).toContain('+  edge = #bbbbbb');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
 
 test('history reads three design commits as token edits; a revert applies, is recomputed on moved files, and is refused', async () => {
   const V1 = 'tamber t\n\ntheme\n  ink = #000000\n  edge = #101010\n';

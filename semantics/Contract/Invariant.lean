@@ -306,15 +306,17 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
     split
     · exact hfinish c hJ hA
     next tm i hd =>
+    split
+    · exact ⟨hJ, hA⟩
     have htm := hA tm (hdue c tm i hd)
     have hset : ∀ y ∈ c.timers.set i tm.fired, y.action ∈ A := fun y hy => by
       rcases List.mem_or_eq_of_mem_set hy with hy | rfl
       · exact hA y hy
       · unfold Timer.fired; split <;> (try split) <;> (try split) <;> exact htm
     dsimp only
-    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := tm.next }
+    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
       tm.action [] [] = r
-    have hJ' := hclock c _ tm.next c.armed c.nexts hJ hset
+    have hJ' := hclock c _ (if tm.change && tm.next < c.now then c.now else tm.next) c.armed c.nexts hJ hset
     obtain ⟨c₂, out₂⟩ := r
     have hf := (runAction_frame hr).1
     have hJ₂ := hrun _ _ _ _ hJ' (.inl htm) hr
@@ -322,7 +324,11 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
       obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map hf hy
       exact he ▸ hset y₀ hy₀
     cases out₂ with
-    | ok => exact advance_go J A T hdue hpick hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+    | ok =>
+      dsimp only
+      split
+      · exact ⟨hJ₂, hA₂⟩
+      · exact advance_go J A T hdue hpick hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
     | refused => exact ⟨hJ₂, hA₂⟩
     | poisoned => exact ⟨hJ₂, hA₂⟩
 

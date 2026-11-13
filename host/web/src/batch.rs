@@ -34,12 +34,19 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
             return Some("only HTTP may opt into independent transport");
         }
     }
+    // This host's sockets only listen (LLP 1016.000 D7): a Rust source's
+    // two-way socket is refused, never opened to only listen (LLP 1016.003).
+    // A TypeScript socket here asks for none.
+    if request.socket && request.listen.is_none() && !request.is_process() {
+        return Some("Request::socket is unavailable on the web's wasm host");
+    }
     // This host's sockets carry no idle timeout (LLP 1016.000 D11).
     if request.idle_timeout_ms.is_some() {
         return Some("an idle timeout is unavailable on the web's wasm host");
     }
     (request.ceiling_refusal())
         .or(request.timeout_refusal())
+        .or(request.protocols_refusal())
         .or(request.body_from_refusal())
         .or(request.body_to_refusal())
         .or(request.long_poll_refusal())
@@ -263,44 +270,21 @@ impl Batch {
     }
 
     /// `{"op":"create","id":…,"tag":…,"props":{…},"css":…,"handlers":[…]}`,
-    /// plus `"ns":"http://www.w3.org/2000/svg"` for an SVG element (LLP 1055 D4).
+    /// plus `"ns":"http://www.w3.org/2000/svg"` when `svg`, an SVG node by its
+    /// type (LLP 1055 D4). The tag cannot say: a module's custom element may
+    /// be named `felt-haptics` (LLP 1024 D1).
     pub fn create(
         &mut self,
         id: u32,
         tag: &str,
+        svg: bool,
         props: &[(&str, String)],
         css: &str,
         handlers: &[&str],
     ) {
         let mut s = text!("{{\"op\":\"create\",\"id\":{},\"tag\":", id);
         quote(tag, &mut s);
-        if matches!(
-            tag,
-            "svg"
-                | "g"
-                | "path"
-                | "polyline"
-                | "polygon"
-                | "circle"
-                | "ellipse"
-                | "line"
-                | "rect"
-                | "defs"
-                | "linearGradient"
-                | "radialGradient"
-                | "stop"
-                | "use"
-                | "symbol"
-                | "clipPath"
-                | "marker"
-                | "mask"
-                | "pattern"
-                | "foreignObject"
-                | "filter"
-                | "text"
-                | "tspan"
-        ) || tag.starts_with("fe")
-        {
+        if svg {
             s.push_str(",\"ns\":\"http://www.w3.org/2000/svg\"");
         }
         s.push_str(",\"props\":");
@@ -375,6 +359,14 @@ impl Batch {
         quote(css, &mut s);
         s.push('}');
         self.ops.push(s);
+    }
+
+    /// The large-title size at the runner's root, for the bar's reserved line.
+    pub fn large_title(&mut self, size: f32) {
+        self.ops.push(text!(
+            "{{\"op\":\"large-title\",\"size\":{}}}",
+            Shortest(f64::from(size))
+        ));
     }
 
     /// `{"op":"looks","id":…,"css":…}`: a view's state-look rules for the
@@ -570,6 +562,10 @@ impl Batch {
     /// — a request the runner handed the host to run (LLP 1016 D2); the
     /// reply comes back through `exact_fulfill`.
     pub fn request(&mut self, r: &exact_runner::RequestOut) {
+        if let Err(message) = r.request.check_protocols() {
+            self.refuse(r.ticket, &message);
+            return;
+        }
         if let Some(message) = request_refusal(&r.request) {
             self.refuse(r.ticket, message);
             return;
@@ -654,6 +650,17 @@ impl Batch {
         }
         if let Some(ms) = r.request.timeout_ms {
             push_text!(&mut s, ",\"timeoutMs\":{}", ms);
+        }
+        if !r.request.protocols.is_empty() {
+            s.push_str(",\"protocols\":");
+            string_list(
+                &r.request
+                    .protocols
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                &mut s,
+            );
         }
         // `exactHeld` (LLP 1016.000 D9): the page lists it, and no clock waits on it.
         if r.request.is_held() {
@@ -870,6 +877,32 @@ impl Batch {
                         push_text!(&mut s, ",\"pan\":{}", Shortest(*pan));
                     }
                     s.push('}');
+                }
+                // LLP 1096 D14: only the values the call gave.
+                SoundOp::Set {
+                    id,
+                    at,
+                    gain,
+                    playback_rate,
+                    pan,
+                    ramp,
+                } => {
+                    push_text!(
+                        &mut s,
+                        "{{\"op\":\"set\",\"id\":{},\"at\":{}",
+                        id,
+                        Shortest(*at)
+                    );
+                    for (name, v) in [
+                        ("gain", gain),
+                        ("playbackRate", playback_rate),
+                        ("pan", pan),
+                    ] {
+                        if let Some(v) = v {
+                            push_text!(&mut s, ",\"{}\":{}", name, Shortest(*v));
+                        }
+                    }
+                    push_text!(&mut s, ",\"ramp\":{}}}", Shortest(*ramp));
                 }
                 SoundOp::End { id, at } => push_text!(
                     &mut s,

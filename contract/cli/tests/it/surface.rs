@@ -664,3 +664,53 @@ fn a_chord_names_its_modifiers_and_the_physical_keys_that_type_it() {
         assert!(names(chord).is_empty(), "{chord}: {:?}", names(chord));
     }
 }
+
+#[test]
+fn canvas_performance_is_optional_ephemeral_and_names_its_canvas() {
+    let source = r#"shape Metrics
+  frames: option<number>
+  gpuMs: option<number>
+component App
+  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  view
+    column
+      canvas surface=world
+      text "Metrics"
+"#;
+    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    assert!(!contract::typescript(&p)
+        .unwrap()
+        .contains("exactCanvasPerformance"));
+    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let empty = Value::record(vec![Value::NONE, Value::NONE]);
+    assert_eq!(r.resource("metrics"), Some(&empty));
+    assert!(r.wants_canvas_performance("world"));
+    assert!(!r.wants_canvas_performance("unread"));
+    assert!(r
+        .set_canvas_performance("unread", Some("invalid"))
+        .unwrap()
+        .is_none());
+    r.set_canvas_performance("world", Some(r#"{"frames":60}"#))
+        .unwrap();
+    let sampled = Value::record(vec![Value::some(Value::Number(60.)), Value::NONE]);
+    assert_eq!(r.resource("metrics"), Some(&sampled));
+    assert!(r
+        .set_canvas_performance("world", Some(r#"{"frames":"bad"}"#))
+        .is_err());
+    assert_eq!(r.resource("metrics"), Some(&sampled));
+    assert!(r
+        .set_canvas_performance("world", Some(&" ".repeat(16385)))
+        .is_err());
+    assert!(r.take_store_writes().is_empty());
+    assert!(r.carry().store.is_empty());
+    r.set_canvas_performance("world", None).unwrap();
+    assert_eq!(r.resource("metrics"), Some(&empty));
+    for bad in [
+        source.replace("frames: option<number>", "frames: number"),
+        source.replace("frames", "unknown"),
+        source.replace("Performance(\"world\")", "Performance(\"missing\")"),
+    ] {
+        let p = contract::compile(&bad).unwrap();
+        assert!(contract::bake(p, NoData).is_err());
+    }
+}

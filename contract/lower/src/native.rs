@@ -1,6 +1,7 @@
 //! Native modules (LLP 1024 D1): a hyphenated tag is a custom element. It
-//! lowers to a `NativeView` whose module name is the tag and whose leftover
-//! attributes are one JSON object, replaced whole on change.
+//! lowers to a `NativeView` whose module name is the tag and whose props
+//! are one JSON object, replaced whole on change. A package view admits
+//! only declared props and events beyond its box's attributes and handlers.
 //!
 //! @ref LLP 1024 D1 (HTML's potential-custom-element-name, lowercase only,
 //! the SVG/MathML reserved names refused; a fixed `display: block` row; the
@@ -205,6 +206,13 @@ const CONTROL_PROPS: [&str; 20] = [
 /// Every module tag the file's views name, with where: the driver checks
 /// them against the app's roster (`bake-unknown-module`).
 pub fn module_tags(file: &File) -> Vec<(String, Span)> {
+    file.components
+        .iter()
+        .flat_map(|c| module_tags_in(&c.view))
+        .collect()
+}
+
+pub(crate) fn module_tags_in(nodes: &[Node]) -> Vec<(String, Span)> {
     fn walk(nodes: &[Node], out: &mut Vec<(String, Span)>) {
         for n in nodes {
             match n {
@@ -219,35 +227,26 @@ pub fn module_tags(file: &File) -> Vec<(String, Span)> {
                     }
                     walk(children, out);
                 }
-                Node::Use { children, .. } => walk(children, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, out);
-                    walk(otherwise, out);
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, out);
+                    }
                 }
-                Node::Each { body, .. } => walk(body, out),
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, out);
-                    walk(none, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }
     let mut out = Vec::new();
-    for c in &file.components {
-        walk(&c.view, &mut out);
-    }
+    walk(nodes, &mut out);
     out
 }
 
 impl Lowerer<'_> {
-    /// A module node's two props: its name, and its leftover attributes as
-    /// one object — keys sorted, the last binding of a key winning, each
-    /// value a string, number or bool (or an option of one, absent when
-    /// none), evaluated with the node's bindings. A package view's record
-    /// or list prop, and its declared events, are `native_typed.rs`'s.
+    /// A module node's name and props object: keys sorted, the last binding
+    /// of a key winning, scalar values carried as strings (absent when
+    /// none), evaluated with the node's bindings. App modules accept leftover
+    /// attributes; package views refuse undeclared leftovers before writing
+    /// them into the object. `native_typed.rs` handles record and list schemas
+    /// and declared events.
     pub(crate) fn native_bindings(
         &mut self,
         tag: &str,
@@ -267,11 +266,23 @@ impl Lowerer<'_> {
             module,
             crate::IMPLIED,
         ));
-        let view = crate::native_typed::declared(tag).unwrap_or_default();
+        let declared = crate::native_typed::declared(tag);
+        let is_package_view = declared.is_some();
+        let view = declared.unwrap_or_default();
         let mut keyed: std::collections::BTreeMap<&str, &Attr> = Default::default();
         for a in leftovers {
             match view.events.get(&a.name) {
                 Some(args) => self.view_event(tag, args, a, handlers)?,
+                None if is_package_view && !view.props.contains_key(&a.name) => {
+                    return err(
+                        "lower-native-attr",
+                        format!(
+                            "`{}` on `{tag}` is not declared by its package as a prop or event",
+                            a.name
+                        ),
+                        a.span,
+                    );
+                }
                 None => {
                     keyed.insert(a.name.as_str(), a);
                 }

@@ -83,7 +83,7 @@ pub(super) fn quad(texture: &str) -> Model {
     }
 }
 /// A solid 4×4 sRGB texture with its mips, as a delivered `.tex` file.
-fn solid(rgb: [u8; 3]) -> Vec<u8> {
+pub(super) fn solid(rgb: [u8; 3]) -> Vec<u8> {
     let texel = [rgb[0], rgb[1], rgb[2], 255];
     exact_game::bin::to_vec(&TextureData {
         width: 4,
@@ -94,7 +94,7 @@ fn solid(rgb: [u8; 3]) -> Vec<u8> {
     })
 }
 /// The centre pixel's dominant channel: 0 red, 1 green, 2 blue, 3 yellow.
-fn hue(pixels: &fixture::Pixels) -> usize {
+pub(super) fn hue(pixels: &fixture::Pixels) -> usize {
     let [r, g, b, _] = pixels.at(32, 32);
     let (r, g, b) = (u32::from(r), u32::from(g), u32::from(b));
     assert!(r.max(g).max(b) > 20, "the die draws: {r} {g} {b}");

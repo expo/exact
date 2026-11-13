@@ -757,6 +757,18 @@ const counted = () => {
   return n;
 };
 
+/** Detached from the API objects, including nested colour and alias values. */
+const documentState = () => structuredClone({
+  collections: f.collections.map(c => ({
+    id: c.id, name: c.name, defaultModeId: c.defaultModeId, modes: c.modes, kept: c.kept,
+  })),
+  variables: f.variables.map(v => ({
+    id: v.id, name: v.name, collectionId: v.variableCollectionId, type: v.resolvedType,
+    values: v.valuesByMode, kept: v.kept,
+  })),
+  parts: f.figma.root.kept,
+});
+
 test('leftovers: a pull that drops or remakes variables names each one that goes, in each collection, by its name in the file now', async () => {
   await load(2); // (one collection a tuple: accent/fill in each)
   await send({ type: 'apply', text: TEXT }, 'applied');
@@ -787,10 +799,14 @@ test('leftovers: a pull short of room is refused naming the collection and its d
   const col = f.collections[0];
   col.name = 'Brand';
   col.modes[0].name = 'Dimmer';
+  const fill = f.variables.find(v => v.name === 'accent/fill');
+  fill.setValueForMode(col.defaultModeId, { r: 1, g: 0, b: 0, a: 1 });
+  const before = documentState();
   const n = counted();
   await expect(send({ type: 'apply', text: ctx(['dark-style=black, dark', 'dark-style=dim, light'], 'dark-style=black, dark') }, 'applied')).rejects.toThrow("this file allows 2 modes a collection, and `Brand` needs 1 more place: remove `Dimmer` (kept unused by Tamber), and the values on it go (`Dimmer` is the default mode, which Figma won't remove: drag another mode above it first); then pull");
   // (each try's renaming undone: the one-collection try, then the two-mode one)
-  expect([n.undos, col.name, col.modes[0].name]).toEqual([2, 'Brand', 'Dimmer']);
+  expect(n.undos).toBe(2);
+  expect(documentState()).toStrictEqual(before);
 });
 
 test('leftovers: a mode of the person\'s in the way that is the default says to drag another above it; one in a replaced collection says delete it', async () => {
@@ -805,26 +821,42 @@ test('leftovers: a mode of the person\'s in the way that is the default says to 
   const col = f.collections[0];
   col.addMode('Local review');
   col.modes.unshift(col.modes.pop()); // (dragged to the top: the default)
+  const local = f.figma.variables.createVariable('local/gutter', col, 'FLOAT');
+  local.setValueForMode(col.defaultModeId, 8);
+  const fill = f.variables.find(v => v.name === 'accent/fill');
+  fill.setValueForMode(col.defaultModeId, { r: 1, g: 0, b: 0, a: 1 });
+  const before = documentState();
   const n = counted();
   await expect(send({ type: 'apply', text: only(['dark-style=black, light', 'dark-style=black, dark']) }, 'applied')).rejects.toThrow("`Tamber` needs 1 more place: remove `Local review` (yours), and the values on it go (`Local review` is the default mode, which Figma won't remove: drag another mode above it first); then pull");
-  expect([n.undos, col.modes.map((m: any) => m.name)]).toEqual([0, ['Local review', 'dark-style=black, light']]);
+  expect(n.undos).toBe(0);
+  expect(documentState()).toStrictEqual(before);
   // A layout change that would replace a collection holding a mode of the person's: delete it, its values go.
   await load(10);
   await send({ type: 'apply', text: TEXT }, 'applied');
-  f.collections[0].addMode('Local review');
+  const review = f.collections[0].addMode('Local review');
+  f.variables.find(v => v.name === 'accent/fill').setValueForMode(review, { r: 0, g: 1, b: 0, a: 1 });
+  const original = documentState();
   f.raise(2);
   const six = variant(doc => {
     const contexts = doc.modifiers.mode.contexts;
     for (const scheme of ['light', 'dark']) contexts[`dark-style=grey, ${scheme}`] = structuredClone(contexts[`dark-style=dim, ${scheme}`]);
   });
   const m = counted();
+  const trigger = f.figma.triggerUndo;
+  let attempted: ReturnType<typeof documentState>;
+  f.figma.triggerUndo = () => { attempted = documentState(); trigger(); };
   await expect(send({ type: 'apply', text: six }, 'applied')).rejects.toThrow('has modes Tamber did not make (Local review): delete them, and the values on them go; then pull');
-  expect([m.undos, f.collections.length]).toEqual([1, 1]); // (the one-collection try changed nothing; the split collections it made, undone)
+  expect(m.undos).toBe(1);
+  expect(attempted!.collections).toHaveLength(4);
+  expect(attempted!.variables.length).toBeGreaterThan(original.variables.length);
+  expect(documentState()).toStrictEqual(original);
   // The same, that mode dragged to the top: the default, which Figma won't remove.
   const top = f.collections.find(c => c.modes.some((x: any) => x.name === 'Local review'));
   top.modes.unshift(top.modes.splice(top.modes.findIndex((x: any) => x.name === 'Local review'), 1)[0]);
+  const reordered = documentState();
   await expect(send({ type: 'apply', text: six }, 'applied')).rejects.toThrow("(`Local review` is the default mode, which Figma won't remove: drag another mode above it first); then pull");
-  top.modes.push(top.modes.shift()); // (back below)
+  expect(m.undos).toBe(2);
+  expect(documentState()).toStrictEqual(reordered);
 });
 
 test('leftovers (round 1): a parked mode dragged off the default is named, never the live default; every mode in the way counted', async () => {
@@ -840,7 +872,9 @@ test('leftovers (round 1): a parked mode dragged off the default is named, never
   const col = f.collections[0];
   col.modes[0].name = 'Dimmer';
   col.modes.push(col.modes.shift()); // (the parked mode dragged below the live one)
+  const before = documentState();
   await expect(send({ type: 'apply', text: ctx(['dark-style=black, dark', 'dark-style=dim, light'], 'dark-style=black, dark') }, 'applied')).rejects.toThrow('`Tamber` needs 1 more place: remove `Dimmer` (kept unused by Tamber), and the values on it go; then pull');
+  expect(documentState()).toStrictEqual(before);
   // Two of the person's modes where both contexts want a place: both named, both to go.
   await load(4);
   const two = ctx(['dark-style=black, light', 'dark-style=black, dark'], 'dark-style=black, light');
@@ -851,8 +885,10 @@ test('leftovers (round 1): a parked mode dragged off the default is named, never
   mine.modes.unshift(...mine.modes.splice(2, 2)); // (theirs dragged to the top)
   for (const m of mine.modes.slice(2)) mine.removeMode(m.modeId); // (Tamber's two deleted by hand)
   f.raise(2);
+  const personal = documentState();
   // (every mode left is in the way, and Figma keeps one: the collection goes instead)
   await expect(send({ type: 'apply', text: two }, 'applied')).rejects.toThrow('`Tamber` has no place for 2 more (`Personal A` (yours), `Personal B` (yours) hold every one, and Figma keeps one mode): remove that collection to pull');
+  expect(documentState()).toStrictEqual(personal);
   // A collection over the limit (lowered since): what is over it counts too.
   await load(4);
   await send({ type: 'apply', text: ctx(['dark-style=black, light'], 'dark-style=black, light') }, 'applied');
@@ -860,5 +896,54 @@ test('leftovers (round 1): a parked mode dragged off the default is named, never
   over.addMode('Personal A');
   over.addMode('Personal B');
   f.raise(2);
+  const overLimit = documentState();
   await expect(send({ type: 'apply', text: two }, 'applied')).rejects.toThrow('`Tamber` needs 2 more places: remove `Personal A` (yours) and `Personal B` (yours), and the values on them go; then pull');
+  expect(documentState()).toStrictEqual(overLimit);
+});
+
+test.each(['variable', 'baseline#1', 'plan#n'])('leftovers: a refusal at %s restores the document after partial writes', async failAt => {
+  await load(10);
+  const large = variant(doc => { doc.$description = 'x'.repeat(90_000); });
+  await send({ type: 'apply', text: large }, 'applied');
+  const col = f.collections[0], review = col.addMode('Local review');
+  col.modes.unshift(col.modes.pop());
+  col.name = 'Brand';
+  col.modes[1].name = 'Daytime';
+  const fill = f.variables.find(v => v.name === 'accent/fill');
+  const soft = f.variables.find(v => v.name === 'accent/soft');
+  fill.setValueForMode(col.modes[1].modeId, { type: 'VARIABLE_ALIAS', id: soft.id });
+  fill.setValueForMode(review, { r: 1, g: 0, b: 0, a: 1 });
+  const local = f.figma.variables.createVariable('local/gutter', col, 'FLOAT');
+  local.setValueForMode(review, 8);
+  const before = documentState(), n = counted();
+  let attempted: ReturnType<typeof documentState>;
+  const refuse = () => { attempted = documentState(); throw new Error(`refused ${failAt}`); };
+  const create = f.figma.variables.createVariable, set = f.figma.root.setSharedPluginData;
+  f.figma.variables.createVariable = (...args: any[]) => {
+    if (failAt === 'variable') refuse();
+    return create(...args);
+  };
+  f.figma.root.setSharedPluginData = (key: string, name: string, value: string) => {
+    if (name === failAt) refuse();
+    set(key, name, value);
+  };
+  const next = variant(doc => {
+    delete doc.modifiers.mode.contexts['dark-style=dim, dark'];
+    for (const c of Object.values<any>(doc.modifiers.mode.contexts)) {
+      c[0].accent.soft = { $type: 'number', $value: 1 };
+      // Enough tokens to split the stored plan as well as the export.
+      for (let i = 0; i < 250; i++) c[0][`extra${i}`] = { $type: 'number', $value: i };
+    }
+  });
+  await expect(send({ type: 'apply', text: next }, 'applied')).rejects.toThrow(`refused ${failAt}`);
+  expect(n.undos).toBe(1);
+  expect(attempted!.collections[0].modes).toHaveLength(before.collections[0].modes.length - 1);
+  expect(attempted!.variables.some(v => v.id === soft.id)).toBe(false);
+  expect(attempted!.variables.find(v => v.id === fill.id)!.values).not.toStrictEqual(before.variables.find(v => v.id === fill.id)!.values);
+  if (failAt !== 'variable') expect(attempted!.parts['baseline#0']).not.toBe(before.parts['baseline#0']);
+  if (failAt === 'plan#n') {
+    expect(attempted!.parts['plan#0']).not.toBe(before.parts['plan#0']);
+    expect(attempted!.parts['plan#1']).toBeDefined();
+  }
+  expect(documentState()).toStrictEqual(before);
 });

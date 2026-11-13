@@ -16,11 +16,12 @@ import { appRootFontSize } from './navigation/type.js';
 import { grantOrigins } from './navigation/grant-origins.js';
 import { storageKey } from './storage-environment.js';
 import { open } from '../../scripts/agent.mjs';
-import { launchFacts, launchEnvironment, parseFlags } from '../../scripts/agent-launch.mjs';
+import { suiteBrowser, launchFacts, launchEnvironment, parseFlags } from '../../scripts/agent-launch.mjs';
 import { nodeNamed } from '../../scripts/agent-test.mjs';
-import { browserMissing } from '../../scripts/agent-playwright.mjs'; import { required } from '../../scripts/coverage.mjs';
+import { browserMissing } from '../../scripts/agent-playwright.mjs'; import { required, need } from '../../scripts/coverage.mjs';
 import { declaration, deferred, fixture, requestClock, source, timedRequests } from './glue-fixture.mjs';
 
+const engineTest = Object.fromEntries(await Promise.all(['chromium', 'firefox', 'webkit'].map(async e => [e, need(e, await browserMissing(e))])));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../target', import.meta.url)), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
 
 const mapAt = (digest, line = 12) => ({digest, nodes: [{file: '/app/ui/bubble.contract', line, col: 3, end_col: 9, component: 'Bubble',
@@ -1120,9 +1121,47 @@ test('tree forwards its target and preserves host annotations and runner errors'
     return request.target === 'missing' ? {error:'no view matches missing'} : {roots:[7],nodes:[{id:7,type:'WebView'}]};
   };
   const reply = f.exact.agent({op:'tree',target:'panel',shallow:true});
-  expect(requests[0]).toEqual({op:'tree',target:'panel',shallow:true});
+  expect(requests).toEqual([{op:'tree'}, {op:'tree',target:'panel',shallow:true}]);
   expect(reply.nodes[0]).toEqual({id:7,type:'WebView',focused:false,url:'/guest',loading:false,guest:[{tag:'button',depth:0,text:'guest'}]});
   expect(f.exact.agent({op:'tree',target:'missing'})).toEqual({error:'no view matches missing'});
+});
+
+test('a targeted wasm tree reads logical runs with browser activity inherited from their paragraph', () => {
+  const f = fixture();
+  vm.runInContext(declaration('tree'), f);
+  const list = { isConnected: true, dataset: { view: '3' } };
+  const copy = { isConnected: false, dataset: { view: '4', testid: 'shared' } };
+  const detail = { isConnected: true, dataset: { view: '6' } };
+  const run = { isConnected: false, dataset: { view: '7', testid: 'shared' } };
+  f.views = new Map([[7, run], [6, detail], [4, copy], [3, list]]);
+  let mode;
+  f.routeFlags = () => el => mode === 'modal' ? 1 : mode === 'narrow' && (el === list || el === copy) ? 2 : 0;
+  f.ask = request => {
+    // The runner sees a pushed stack, with no native pane report.
+    const nodes = [
+      { id: 3, type: 'View', props: {}, inactive: true, hidden: true },
+      { id: 4, parent: 3, type: 'Text', props: { testId: 'shared' }, inactive: true, hidden: true },
+      { id: 6, type: 'Text', props: {} },
+      { id: 7, parent: 6, type: 'Text', props: { testId: 'shared' } },
+    ];
+    if (request.target === undefined) return { roots: [3, 6], nodes };
+    const id = typeof request.target === 'number' ? request.target : 7;
+    return { roots: [id], nodes: nodes.filter(n => n.id === id) };
+  };
+  for (const [at, id, inactive] of [['wide', 4, false], ['narrow', 7, false], ['modal', 4, true]]) {
+    mode = at;
+    const copies = f.exact.agent({ op: 'tree' }).nodes.filter(n => n.props.testId === 'shared');
+    expect((copies.find(n => !n.inactive) ?? copies[0]).id).toBe(id);
+    for (const [target, expected] of [['shared', id], [4, 4], [7, 7]]) {
+      const full = copies.find(n => n.id === expected);
+      for (const shallow of [false, true]) {
+        const reply = f.exact.agent({ op: 'tree', target, shallow });
+        expect(reply.roots).toEqual([expected]);
+        expect([!!reply.nodes[0].inactive, !!reply.nodes[0].hidden]).toEqual([!!full.inactive, !!full.hidden]);
+      }
+    }
+    expect(!!copies.find(n => n.id === id).inactive).toBe(inactive);
+  }
 });
 
 // Uncontrolled fields live in the presenter; inspection must read what the
@@ -1397,3 +1436,46 @@ test('an install outside a drive waits for the drive of each app it installs, an
 }, 60000);
 test('tap parses every mouse form, refuses a word it does not use, and a carrier that cannot deliver one says unsupported (#107)', async () => {
   const { tapWords: t, pointerGap: gap } = await import('../../scripts/agent.mjs'); expect(t(['p', 'auxclick', 'at', '30', '40', 'modifiers', 'Meta'])).toEqual(['p', { auxclick: true, at: [30, 40], modifiers: 'Meta' }]); expect(t(['p', 'clicks', '3'])).toEqual(['p', { clicks: 3 }]); expect(t(['p', 'wheel', '0', '20', 'at', '10', '10'])).toEqual(['p', { wheel: [0, 20], at: [10, 10] }]); expect(t(['p', 'down', 'at', '10', '20', 'modifiers', 'Shift'])).toEqual(['p', { down: true, at: [10, 20], modifiers: 'Shift' }]); expect(t(['up', 'modifiers', 'Shift'], true)).toEqual([null, { phase: 'up', modifiers: 'Shift' }]); for (const words of [['p', 'mouse', 'foo'], ['p', 'auxclick', 'at', '1'], ['p', 'hover', 'x'], ['p', 'clicks'], ['p', 'frob']]) expect(() => t(words)).toThrow(/unknown word|takes a number/); expect(gap('macos', undefined, { auxclick: true })).toBeNull(); expect(gap('web', 'chrome', { clicks: 3, modifiers: 'Shift', down: true })).toBeNull(); for (const host of ['linux', 'windows', 'ios']) expect(gap(host, undefined, { wheel: [0, 1], at: [1, 1] })).toContain('a wheel at a point'); expect(gap('web', 'firefox', { drag: { modifiers: 'Shift' } })).toContain('modifiers'); });
+
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: typing accepts sanitized valid values and restores refused unbound values`, async () => {
+  const browser = await suiteBrowser(engine);
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/favicon.ico') return new Response(null, {status: 204});
+    return path === '/' ? new Response('<!doctype html><body></body>', {headers: {'content-type': 'text/html'}})
+      : new Response(Bun.file(new URL('.' + path, import.meta.url)));
+  }});
+  const page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const results = await page.evaluate(async engine => {
+      const { typeControl } = await import('/agent-input.js');
+      const cases = [
+        ['datetime-local', '2026-03-04T10:30:00', '2026-03-04T10:30'],
+        ['datetime-local', '2026-03-04 10:30', '2026-03-04T10:30'],
+        ['datetime-local', '2026-03-04T10:30:45.500', engine === 'firefox' ? '2026-03-04T10:30:45.500' : '2026-03-04T10:30:45.5'],
+        ['time', '10:30:00', '10:30:00'], ['time', '10:30:45.500', '10:30:45.500'],
+        ['color', '#ABCDEF', '#abcdef'], ['number', '1e2', '1e2'],
+        ['number', '01.50', '01.50'], ['email', '  a@example.com \n', 'a@example.com'],
+        ['url', '  https://example.com/ \n', 'https://example.com/'],
+        ['datetime-local', 'not-a-date', null], ['time', '25:00', null],
+        ['number', 'not-a-number', null], ['color', 'not-a-color', null],
+        ['datetime-local', '', ''],
+      ];
+      return cases.map(([kind, text, expected]) => {
+        const el = document.createElement('input'); el.type = kind; document.body.append(el);
+        el.value = kind === 'color' ? '#123456' : kind === 'datetime-local' ? '2026-01-01T00:00' : kind === 'time' ? '10:00' : '3';
+        const before = el.value, heard = [];
+        for (const event of ['input', 'change']) el.addEventListener(event, () => heard.push([event, el.value]));
+        const reply = typeControl(el, { id: 1, text }, () => false, () => {});
+        const result = {kind, text, expected, before, value: el.value, heard, error: !!reply.error};
+        el.remove(); return result;
+      });
+    }, engine);
+    for (const r of results) {
+      expect(r.error, `${r.kind} ${r.text}`).toBe(r.expected === null);
+      expect(r.value, `${r.kind} ${r.text}`).toBe(r.expected ?? r.before);
+      expect(r.heard).toEqual(r.expected === null ? [] : [['input', r.expected], ['change', r.expected]]);
+    }
+  } finally { await page.close(); await browser.close(); server.stop(true); }
+}, 30000);

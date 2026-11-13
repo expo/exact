@@ -1,7 +1,7 @@
 //! The voice table through a runner (LLP 1096 §5): retrigger, past starts,
 //! groups by start time, stops, the bound, drops, a refused commit, reload,
 //! the seek rule, no wake, and the record; a voice's playback rate and pan
-//! (LLP 1125 D10).
+//! (LLP 1125 D10), and changing them while it plays (LLP 1096 D14).
 
 use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
@@ -62,6 +62,17 @@ component Kit
     playSound("assets/kick.wav", playbackRate=rate == -1 ? 0 / 0 : rate, pan=pan == -9 ? 1 / 0 : pan)
   action slowHat(ms: number)
     playSound("assets/hat.wav", at=performanceNow() + ms, group="hat", playbackRate=0.5, pan=0.25)
+  action kickIn
+    playSound("assets/kick.wav", group="k")
+  action glide(g: string, rate: number, ramp: number)
+    setSounds(group=g, playbackRate=rate, ramp=ramp)
+  action level(g: number)
+    setSounds(gain=g, pan=-0.5)
+  action playSet
+    playSound("assets/kick.wav", group="ps")
+    setSounds(group="ps", playbackRate=2, gain=0.5)
+  action badSet
+    setSounds(gain=0 / 0)
   action window
     playSounds(hits)
     ahead = performanceNow() + 100
@@ -510,4 +521,148 @@ fn a_group_cuts_at_the_end_a_rate_gives() {
     r.act("slowHat", vec![Value::Number(250.0)]).unwrap();
     r.act("hat", vec![Value::Number(460.0)]).unwrap();
     assert_eq!(ends(&r)[2], (3, 450.0, By::End));
+}
+
+fn glide(r: &mut Runner<Kit>, group: &str, rate: f64, ramp: f64) {
+    let args = vec![Value::str(group), Value::Number(rate), Value::Number(ramp)];
+    r.act("glide", args).unwrap();
+}
+
+#[test]
+fn a_rate_change_moves_the_end_by_what_is_left_of_the_file() {
+    let mut r = boot();
+    r.act("kickIn", vec![]).unwrap();
+    r.take_sounds();
+    // 100 ms into the 250 ms kick, half speed at once: 150 ms of file take 300.
+    r.advance(100.0).unwrap();
+    glide(&mut r, "k", 0.5, 0.0);
+    assert_eq!(ends(&r), [(1, 400.0, By::End)]);
+    let ops = r.take_sounds();
+    assert_eq!(
+        ops,
+        [
+            SoundOp::End { id: 1, at: 400.0 },
+            SoundOp::Set {
+                id: 1,
+                at: 100.0,
+                gain: None,
+                playback_rate: Some(0.5),
+                pan: None,
+                ramp: 0.0
+            },
+        ]
+    );
+    // 100 ms later 150 ms of file has played; back to 2 over 100 ms. The
+    // ramp would cover 125 ms of file and 100 are left, so the end is inside
+    // it: 0.5·s + 0.0075·s² = 100.
+    r.advance(200.0).unwrap();
+    glide(&mut r, "k", 2.0, 100.0);
+    let end = ends(&r)[0].1;
+    let s = (-0.5 + (0.25f64 + 3.0).sqrt()) / 0.015;
+    assert!((end - 200.0 - s).abs() < 1e-9, "{end}");
+    let lines = journal(&r);
+    for want in [
+        "sounds set: 1 (group k) playbackRate 0.5 ramp 0",
+        "sound 1 ends at 400 (end)",
+        "sounds set: 1 (group k) playbackRate 2 ramp 100",
+    ] {
+        assert!(lines.iter().any(|l| l == want), "{want}: {lines:?}");
+    }
+    // Another group, or one that has ended, is not changed.
+    glide(&mut r, "hat", 1.0, 0.0);
+    r.advance(400.0).unwrap();
+    glide(&mut r, "k", 1.0, 0.0);
+    let lines = journal(&r);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "sounds set: 0 (group hat) playbackRate 1 ramp 0"),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "sounds set: 0 (group k) playbackRate 1 ramp 0"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_change_reaches_what_waits_outright_and_what_the_commit_made_through_its_play() {
+    let mut r = boot();
+    r.act("hat", vec![Value::Number(500.0)]).unwrap();
+    r.take_sounds();
+    // A computed gain is clamped; the waiting hat takes both values outright.
+    r.act("level", vec![Value::Number(2.0)]).unwrap();
+    let v = &voices(&r)[0];
+    assert_eq!((v.gain, v.pan, v.ends), (1.0, -0.5, 600.0));
+    assert_eq!(
+        r.take_sounds(),
+        [SoundOp::Set {
+            id: 1,
+            at: 0.0,
+            gain: Some(1.0),
+            playback_rate: None,
+            pan: Some(-0.5),
+            ramp: 20.0
+        }]
+    );
+    glide(&mut r, "hat", 0.5, 50.0);
+    assert_eq!(
+        ends(&r),
+        [(1, 700.0, By::End)],
+        "a voice not started has no ramp"
+    );
+    r.take_sounds();
+    // One made in the same commit plays with the values: no change op.
+    r.act("playSet", vec![]).unwrap();
+    let v = voices(&r)[1].clone();
+    assert_eq!((v.gain, v.playback_rate, v.ends), (0.5, 2.0, 125.0));
+    let ops = r.take_sounds();
+    assert!(
+        matches!(
+            ops[..],
+            [SoundOp::Play { id: 2, gain, playback_rate, .. }] if gain == 0.5 && playback_rate == 2.0
+        ),
+        "{ops:?}"
+    );
+    // A non-finite value changes nothing, and the commit stands.
+    r.act("badSet", vec![]).unwrap();
+    assert!(journal(&r)
+        .iter()
+        .any(|l| l == "sounds not set: gain is not a number"));
+    assert_eq!(voices(&r)[1].gain, 0.5);
+}
+
+#[test]
+fn a_slower_voice_is_cut_by_the_next_in_its_group() {
+    let mut r = boot();
+    r.act("hat", vec![Value::Number(0.0)]).unwrap();
+    r.act("hat", vec![Value::Number(150.0)]).unwrap();
+    assert_eq!(ends(&r), [(1, 100.0, By::End), (2, 250.0, By::End)]);
+    // 50 ms in, a quarter speed: 50 ms of file would take 200, past the next hat.
+    r.advance(50.0).unwrap();
+    glide(&mut r, "hat", 0.25, 0.0);
+    assert_eq!(ends(&r), [(1, 150.0, By::Group), (2, 550.0, By::End)]);
+    // Back to full speed: it ends on its own again, before the next hat.
+    glide(&mut r, "hat", 1.0, 0.0);
+    assert_eq!(ends(&r), [(1, 100.0, By::End), (2, 250.0, By::End)]);
+}
+
+#[test]
+fn a_slower_voice_counts_against_the_bound_at_later_starts() {
+    let mut r = boot();
+    for _ in 0..10 {
+        r.act("three", vec![]).unwrap();
+    }
+    r.act("kickIn", vec![]).unwrap();
+    r.act("past", vec![]).unwrap();
+    r.act("hat", vec![Value::Number(300.0)]).unwrap();
+    assert_eq!(r.sounds().live(0.0), 33);
+    // Every kick now rings to 1000, so 32 sound at the hat's start: it loses.
+    glide(&mut r, "", 0.25, 0.0);
+    assert_eq!(ends(&r)[32], (33, 300.0, By::Cancelled));
+    assert!(journal(&r)
+        .iter()
+        .any(|l| l == "sound dropped: 32 voices sound at its start (assets/hat.wav at 300)"));
 }

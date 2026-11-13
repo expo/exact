@@ -49,12 +49,19 @@ final class MetalCanvasView: NSView {
 /// module itself loaded once per process (LLP 1031 D12).
 final class CanvasesHost {
     lazy var lifecycle = CanvasLifecycle(self)
+    /// The canvases' haptics (LLP 1009 D10).
+    lazy var haptics = SurfaceHaptics.make()
     var editsAdmitted = false
     weak var session: ExactSession?
+    var performanceTimer: Timer?
     /// postMessage events waiting for a live canvas of their surface name.
     var pendingPosts: [(name: String, text: String, at: Double)] = []
     /// What packages wrote into the canvases' inputs (SensorRings.swift).
     let sensorRings = SensorRings()
+    /// Where a live canvas's asset files are read, one at a time in the order
+    /// asked, off the main thread (`readAssets`).
+    let assetReads = DispatchQueue(label: "exact.canvas.assets", qos: .userInitiated)
+    var assetReadSerial: UInt64 = 0
     final class Entry {
         let view: NodeView
         let name: String
@@ -64,11 +71,16 @@ final class CanvasesHost {
         var wants = false
         /// The box (points and scale) its last render drew at.
         var drawnBox: SIMD3<Float>?
+        var performance = false
         var wantsInput = false
         var logCursor = 0
         var restoreAttempted = false
         var controls: [Int: SurfaceControl] = [:]
         var recoveryRedelivery = false
+        /// Asset names being read off the main thread (`readAssets`), each
+        /// with its read's serial; read bytes arrive in `arrived`.
+        var reading: [String: UInt64] = [:]
+        var arrived: [(name: String, bytes: Result<Data?, Error>)] = []
         var restorePending = false
         var restoreError: String?
         /// The surface samples the children (LLP 1014 D2): the overlay is
@@ -189,6 +201,8 @@ final class CanvasesHost {
             if e.waiting { session?.frames.canvasLost() }
             retainEdits(e)
             e.view.canvasInput = nil
+            // By the canvas's view: a surface id is its module's, and two modules count from 1.
+            haptics.remove(view)
             if e.id != 0 { e.module?.destroy(e.id) }
             releasePublisher(e)
         }
@@ -250,14 +264,17 @@ final class CanvasesHost {
         e.id = bytes.withUnsafeBufferPointer { m.create($0.baseAddress, bytes.count, ptr, w, h) }
         e.presentable = e.id != 0
         if e.id == 0 { FileHandle.standardError.write(Data("exact gpu: \(m.error())\n".utf8)); return }
+        e.performance = publishers[e.name] === e && session?.canvasPerformanceRequested(e.name) == true
+        if e.performance { _ = m.performanceReporting?(e.id, true) }
         e.module = m
+        updatePerformanceTimer()
         lifecycle.deliver(e.id, module: m)
         bindNow(m, e)
         e.each = m.wantsChildrenEach(e.id) != 0
         e.through = e.each || m.wantsChildren(e.id) != 0
         e.wantsInput = m.wantsInput?(e.id) == 1 && m.input != nil
         deliverPosts() // a post held for this surface, if the canvas is live already
-        if e.wantsInput { e.view.canvasInput = CanvasInputHost(view: e.view) }
+        if e.wantsInput { e.view.canvasInput = CanvasInputHost(view: e.view); openPads(e) }
         if e.through { capture(m, e) }
     }
 

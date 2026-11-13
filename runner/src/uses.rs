@@ -51,9 +51,10 @@ pub enum Capability {
     /// `input type="file"` and `showPicker` (LLP 1069.002): a plan with a
     /// file input, or whose code runs the command.
     Picker,
-    /// Drag timelines (LLP 1057.003): `-exact-drag-timeline`, `animation-timeline`,
-    /// `animation-range` and `timeline-scope`, their grammar, lowering and
-    /// name lookup. A timeline follows a held value, so it uses motion too.
+    /// Timelines (LLP 1057.003): `-exact-drag-timeline`, the scroll and view
+    /// timeline rows, `animation-timeline`, `animation-range` and
+    /// `timeline-scope`, their grammar, lowering, name lookup and placement.
+    /// A timeline follows a held value or a scroll, so it uses motion too.
     Timelines,
     /// `text-transform` (LLP 1064 D5): its Unicode case mapping, for a plan
     /// that binds the row.
@@ -92,7 +93,7 @@ pub enum Capability {
     GroupedLists,
     /// The host's I/O: the requests a data source makes (fetch, sockets,
     /// files, SQLite) and the kept secrets and answers it stores. A plan
-    /// uses it when a resource keeps its answer (a reader); an app's grants
+    /// uses it for kept answers and surface records. An app's grants
     /// link it too, which the bake reads (LLP 1047.001). The browser does
     /// its own, so the web links nothing for it.
     Io,
@@ -125,11 +126,15 @@ pub enum Capability {
     /// SQL storage, selected by a data module's `sqlite.open` grants or by
     /// the manifest's `link`, since requests live below the plan.
     Sqlite,
+    /// A tip over an element (`tip`, LLP 1035.006.000): on Apple, TipKit's
+    /// popover, whose frameworks (TipKit, SwiftUI) an app links only for it.
+    /// Hosts with no tip system show none and link nothing for it.
+    Tips,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 30] = [
+    pub const ALL: [Capability; 31] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -160,6 +165,7 @@ impl Capability {
         Capability::Numerals,
         Capability::Dates,
         Capability::Sqlite,
+        Capability::Tips,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -195,6 +201,7 @@ impl Capability {
             Capability::Numerals => "numerals",
             Capability::Dates => "dates",
             Capability::Sqlite => "sqlite",
+            Capability::Tips => "tips",
         }
     }
 
@@ -281,8 +288,9 @@ pub fn uses(plan: &Plan) -> Uses {
     if plan.router.is_some() {
         uses = uses.with(Capability::Router);
     }
-    // A reader's last answer is kept in the host's store (LLP 1027 D4).
-    if plan.resources.iter().any(|r| r.reader) {
+    // Kept answers and surface records both need the host's store, and a
+    // declared source its network (LLP 1162.001 D3).
+    if plan.resources.iter().any(|r| r.reader || r.keep) || !plan.fetches.is_empty() {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -292,10 +300,12 @@ pub fn uses(plan: &Plan) -> Uses {
         uses = uses.with(Capability::Segments);
     }
     if !plan.surfaces.is_empty()
-        || plan
-            .resources
-            .iter()
-            .any(|r| plan.str(r.source) == crate::surface_record::SOURCE)
+        || plan.resources.iter().any(|r| {
+            matches!(
+                plan.str(r.source),
+                crate::surface_record::SOURCE | crate::canvas_performance::SOURCE
+            )
+        })
     {
         uses = uses.with(Capability::Surfaces);
     }
@@ -322,6 +332,9 @@ pub fn uses(plan: &Plan) -> Uses {
                 Some(PropId::ListStyle) => uses = uses.with(Capability::GroupedLists),
                 Some(PropId::Dataset) => uses = uses.with(Capability::Dataset),
                 Some(PropId::AccessibilityControls) => uses = uses.with(Capability::Tabs),
+                Some(PropId::Tip) if can_be(&binding, &|v| !v.is_empty()) => {
+                    uses = uses.with(Capability::Tips);
+                }
                 Some(PropId::Type) if can_be(&binding, &|v| v == "file") => {
                     uses = uses.with(Capability::Picker);
                 }
@@ -345,6 +358,11 @@ pub fn uses(plan: &Plan) -> Uses {
                             | StyleId::AnimationTimeline
                             | StyleId::AnimationRange
                             | StyleId::TimelineScope
+                            | StyleId::ScrollTimelineName
+                            | StyleId::ScrollTimelineAxis
+                            | StyleId::ViewTimelineName
+                            | StyleId::ViewTimelineAxis
+                            | StyleId::ViewTimelineInset
                     )
                 ) {
                     uses = uses.with(Capability::Timelines).with(Capability::Motion);
@@ -545,6 +563,9 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
                         | Stdlib::FormatDecimal
                         | Stdlib::FormatDay,
                     ) => format = true,
+                    // The core formats `en-US`; another locale's time is
+                    // the capability's (LLP 1054.000.003 D6).
+                    Some(Stdlib::FormatTime) if plan.format.is_some() => format = true,
                     Some(
                         Stdlib::Frame
                         | Stdlib::RangeFrame
@@ -569,7 +590,10 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
 pub fn runs_sounds(plan: &Plan) -> bool {
     !plan.sounds.is_empty()
         || !plan.sequences.is_empty()
-        || runs_command(plan, &["playSound", "playSounds", "stopSounds"])
+        || runs_command(
+            plan,
+            &["playSound", "playSounds", "stopSounds", "setSounds"],
+        )
 }
 
 /// Whether `plan` asks for MIDI ports or hears an input (LLP 1125 D6–D8):
@@ -604,6 +628,12 @@ pub fn uses_picture_in_picture(plan: &Plan) -> bool {
 /// clock go on it. The JS target bundles midi.js then.
 pub fn keeps_midi(plan: &Plan) -> bool {
     uses_midi(plan) || !plan.sequences.is_empty()
+}
+
+/// Whether the plan's code runs `setLocale`: only then does a language the
+/// app chose, kept in the store, choose its strings at the next launch.
+pub fn chooses_locale(plan: &Plan) -> bool {
+    runs_command(plan, &["setLocale"])
 }
 
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
@@ -657,6 +687,40 @@ fn names_segment(s: &str) -> bool {
 #[cfg(test)]
 mod grant_tests {
     use super::{Capability, Uses};
+
+    #[test]
+    fn kept_surfaces_link_storage_without_a_data_reader() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+
+        for keep in [false, true] {
+            let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let number = builder.primitive(TypeKind::Number);
+            let hud = builder.record("Hud", &[("count", number)]);
+            let world = builder.str("world");
+            let mut argument = Asm::new();
+            argument.str(world);
+            let argument = builder.code(argument);
+            let resource = builder.resource("hud", "exactSurface", &[argument], hud, None);
+            builder.surface("world", &[]);
+            if keep {
+                builder.set_resource_keep(resource);
+            }
+            builder.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            let plan = builder.finish().unwrap();
+            assert!(!plan.resources[resource.0 as usize].reader);
+            let uses = super::uses(&plan);
+            assert!(uses.has(Capability::Surfaces));
+            assert_eq!(uses.has(Capability::Io), keep);
+        }
+    }
 
     #[test]
     fn sqlite_grants_select_sql_storage_apart_from_other_io() {

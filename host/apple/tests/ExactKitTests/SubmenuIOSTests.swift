@@ -14,7 +14,7 @@ final class SubmenuIOSTests: XCTestCase {
     /// Copy (7, opening `copy-menu`), an `hr` (6), Delete (5). `copy-menu`
     /// (8): Copy path (10), Copy link (11), an `hr` (12), Absolute paths
     /// (13, checked).
-    private func presenter(copyProps: [String: String] = [:]) -> Presenter {
+    private func presenter(copyProps: [String: String] = [:], deleteProps: [String: String] = [:]) -> Presenter {
         let p = Presenter()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 600))
         p.viewport.frame = window.bounds
@@ -37,7 +37,7 @@ final class SubmenuIOSTests: XCTestCase {
         ]
         ops += row(4, "Pinned", ["accessibilityChecked": "true"])
         ops += row(7, "Copy", ["popovertarget": "copy-menu"].merging(copyProps) { $1 }, press: false)
-        ops += row(5, "Delete") + row(10, "Copy path") + row(11, "Copy link") + row(13, "Absolute paths", ["accessibilityChecked": "true"])
+        ops += row(5, "Delete", deleteProps) + row(10, "Copy path") + row(11, "Copy link") + row(13, "Absolute paths", ["accessibilityChecked": "true"])
         ops += [["op": "children", "id": 2, "ids": [4, 7, 6, 5]], ["op": "children", "id": 8, "ids": [10, 11, 12, 13]],
                 ["op": "children", "id": 9, "ids": [1, 2, 8]], ["op": "roots", "ids": [9]],
                 ["op": "frame", "id": 9, "x": 0.0, "y": 0.0, "w": 400.0, "h": 600.0],
@@ -82,6 +82,24 @@ final class SubmenuIOSTests: XCTestCase {
         let copy = try XCTUnwrap(first.children.last as? UIAction)
         XCTAssertEqual(copy.title, "Copy")
         XCTAssertTrue(copy.attributes.contains(.disabled))
+    }
+
+    /// An inert row is shown, never chosen, as on the Mac and the web: its
+    /// action is dimmed and choosing it presses nothing, and an inert opener
+    /// is a dimmed action like a disabled one.
+    func testAnInertRowIsDimmedAndPressesNothing() throws {
+        let p = presenter(copyProps: ["inert": "true"], deleteProps: ["inert": "true"])
+        let items = p.menus.items(of: try XCTUnwrap(p.views[2]))
+        let remove = try XCTUnwrap((items.last as? UIMenu)?.children.first as? UIAction)
+        XCTAssertEqual(remove.title, "Delete")
+        XCTAssertTrue(remove.attributes.contains(.disabled), "UIMenuElement.Attributes.disabled")
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        UIButton().sendAction(remove)
+        XCTAssertEqual(pressed, [], "an inert row's action does not press it")
+        let copy = (items.first as? UIMenu)?.children.last
+        XCTAssertEqual(copy?.title, "Copy")
+        XCTAssertTrue((copy as? UIAction)?.attributes.contains(.disabled) == true, "an inert opener is a dimmed action, not a submenu")
     }
 }
 #endif

@@ -33,6 +33,7 @@ impl<G: Game> Sim<G> {
         let period_ms = self.period_ms;
         let lookahead = self.lookahead_us_hz;
         let last_motion = self.last_motion;
+        let pointer_samples = std::mem::take(&mut self.pointer_samples);
         let paused_clock = self.paused_clock;
         let rebase_queue = self.rebase_queue;
         let posts_logged = self.posts_logged;
@@ -87,6 +88,7 @@ impl<G: Game> Sim<G> {
         self.period_ms = period_ms;
         self.lookahead_us_hz = lookahead;
         self.last_motion = last_motion;
+        self.pointer_samples = pointer_samples;
         self.paused_clock = paused_clock;
         self.rebase_queue = rebase_queue;
         self.posts_logged = posts_logged;

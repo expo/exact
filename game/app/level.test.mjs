@@ -43,7 +43,7 @@ test('a level-only game bakes its declared type without an art directory', () =>
     expect(readFileSync(resolve(dir, '.shells/gpu/Cargo.toml'), 'utf8')).not.toContain('exact-game-bake.workspace = true');
     expect(readFileSync(resolve(dir, '.shells/web/Cargo.toml'), 'utf8')).not.toContain('exact-data-host');
     const windows = Bun.TOML.parse(readFileSync(resolve(dir, '.shells/windows/Cargo.toml'), 'utf8'));
-    expect(windows.dependencies['exact-linux'].workspace).toBe(true);
+    expect(windows.dependencies['exact-painted'].workspace).toBe(true);
     expect(windows.dependencies['ibex2-sqlite'].workspace).toBe(true);
     for (const kind of ['apple', 'linux', 'windows', 'android']) {
       const shell = Bun.TOML.parse(readFileSync(resolve(dir, `.shells/${kind}/Cargo.toml`), 'utf8'));
@@ -52,6 +52,37 @@ test('a level-only game bakes its declared type without an art directory', () =>
     }
     const web = Bun.TOML.parse(readFileSync(resolve(dir, '.shells/web/Cargo.toml'), 'utf8'));
     expect(web.dependencies['ibex2-sqlite']).toBeUndefined();
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test('Linux integration tests run beside the generated shell', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-linux-tests-'));
+  try {
+    mkdirSync(resolve(dir, 'logic/src'), {recursive:true});
+    mkdirSync(resolve(dir, 'linux/tests'), {recursive:true});
+    writeFileSync(resolve(dir, 'logic/src/lib.rs'), 'impl Game for Island { const ID: &\'static str = "island"; }');
+    const source = '#[test]\nfn pads() {}\n';
+    writeFileSync(resolve(dir, 'linux/tests/pads.rs'), source);
+    const other = '#[test]\nfn controls() {}\n';
+    writeFileSync(resolve(dir, 'linux/tests/controls.rs'), other);
+    gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+    expect(readFileSync(resolve(dir, '.shells/linux/tests/pads.rs'), 'utf8')).toBe(source);
+    expect(readFileSync(resolve(dir, '.shells/linux/tests/controls.rs'), 'utf8')).toBe(other);
+    const manifestText = readFileSync(resolve(dir, '.shells/linux/Cargo.toml'), 'utf8');
+    const manifest = Bun.TOML.parse(manifestText);
+    expect(manifest.bin[0].test).not.toBe(false);
+    expect(manifest['dev-dependencies']['exact-update'].path).toBeDefined();
+    rmSync(resolve(dir, 'linux/tests/pads.rs'));
+    gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+    expect(existsSync(resolve(dir, '.shells/linux/tests/pads.rs'))).toBe(false);
+    expect(readFileSync(resolve(dir, '.shells/linux/tests/controls.rs'), 'utf8')).toBe(other);
+    expect(readFileSync(resolve(dir, '.shells/linux/Cargo.toml'), 'utf8')).toBe(manifestText);
+    rmSync(resolve(dir, 'linux/tests/controls.rs'));
+    gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+    expect(existsSync(resolve(dir, '.shells/linux/tests/controls.rs'))).toBe(false);
+    const bare = Bun.TOML.parse(readFileSync(resolve(dir, '.shells/linux/Cargo.toml'), 'utf8'));
+    expect(bare.bin[0].test).toBe(false);
+    expect(bare['dev-dependencies']).toBeUndefined();
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 

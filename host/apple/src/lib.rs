@@ -53,11 +53,13 @@ pub mod delivery;
 mod doc_watch;
 pub mod documents;
 pub mod executor;
-pub mod frame_health;
+/// The frame-health reducer, shared with the Android host (LLP 1079.000 §5.1).
+pub use exact_runner::{frame_health, frame_health_exports};
 pub mod geometry;
 pub mod gradient;
 pub mod host;
 mod icon_path;
+pub mod launch_preloads;
 pub mod link;
 mod looks;
 pub mod markup;

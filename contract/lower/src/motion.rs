@@ -304,17 +304,6 @@ pub fn substitute(file: &mut File, tokens: &[(String, String)]) -> Vec<Site> {
                     rows(a, sites);
                     nodes(children, tokens, rows, sites);
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    nodes(then, tokens, rows, sites);
-                    nodes(otherwise, tokens, rows, sites);
-                }
-                Node::Each { body, .. } => nodes(body, tokens, rows, sites),
-                Node::Match { some, none, .. } => {
-                    nodes(&mut some.1, tokens, rows, sites);
-                    nodes(none, tokens, rows, sites);
-                }
                 Node::Use {
                     name,
                     args,
@@ -335,7 +324,11 @@ pub fn substitute(file: &mut File, tokens: &[(String, String)]) -> Vec<Site> {
                     }
                     nodes(children, tokens, rows, sites);
                 }
-                Node::Children { .. } => {}
+                node => {
+                    for list in node.child_lists_mut() {
+                        nodes(list, tokens, rows, sites);
+                    }
+                }
             }
         }
     }

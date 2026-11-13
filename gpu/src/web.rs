@@ -100,13 +100,17 @@ pub async fn recover(
             .ok_or_else(|| crate::recovery::RecoveryFailure::other("no device"))?;
         let mut targets = Vec::new();
         for (id, canvas) in ids.iter().zip(canvases) {
-            let config = module.instances[id].config.as_ref().ok_or_else(|| {
+            let inst = module.instances.get_mut(id).unwrap();
+            let config = inst.config.as_mut().ok_or_else(|| {
                 crate::recovery::RecoveryFailure::other("missing presentation configuration")
             })?;
             let target = gpu
                 .instance
                 .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
                 .map_err(|e| crate::recovery::RecoveryFailure::other(e.to_string()))?;
+            let caps = target.get_capabilities(&gpu.adapter);
+            inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
+            inst.alpha_modes = caps.alpha_modes;
             target.configure(&gpu.device, config);
             targets.push((*id, target));
         }
@@ -114,6 +118,8 @@ pub async fn recover(
             let inst = module.instances.get_mut(&id).unwrap();
             let config = inst.config.as_ref().unwrap();
             inst.surface.device_ready(gpu.device.features());
+            inst.surface
+                .color_space_granted(crate::target::granted(Some(config)));
             inst.surface
                 .prepare_assets(&gpu.device, &gpu.queue, crate::view_format(config));
             inst.presentation = Some(SurfaceRef::new(target));
@@ -247,6 +253,17 @@ pub fn bind_at(id: u32, values: &str, at_ms: Option<f64>) -> bool {
     with(|m| m.bind_json(id, values, at_ms)).unwrap_or(false)
 }
 
+/// Bind the named inputs that changed since the last accepted bind
+/// ([`Module::bind_changed_json`]).
+pub fn bind_changed_at(id: u32, changed: &str, at_ms: Option<f64>) -> bool {
+    with(|m| m.bind_changed_json(id, changed, at_ms)).unwrap_or(false)
+}
+
+/// The canvas's size in points, before a bind. `true` on success.
+pub fn size(id: u32, width: f32, height: f32) -> bool {
+    with(|m| m.size(id, width, height)).unwrap_or(false)
+}
+
 /// Record one frame into the open frame (shown at [`flush`]): 1 = wants
 /// another, 0 = done, 2 = failed.
 pub fn render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 {
@@ -343,6 +360,16 @@ pub fn restore(id: u32, bytes: &[u8], mode: u32) -> bool {
 /// Take the latest changed public record, if any.
 pub fn published(id: u32) -> Option<String> {
     with(|m| m.take_published(id)).flatten()
+}
+
+/// Enable or disable bounded HUD performance reporting.
+pub fn set_performance_reporting(id: u32, enabled: bool) -> bool {
+    with(|m| m.set_performance_reporting(id, enabled)).unwrap_or(false)
+}
+
+/// Take one metrics snapshot, at most once per second on the host clock.
+pub fn performance(id: u32, now_ms: f64) -> Option<String> {
+    with(|m| m.take_performance(id, now_ms)).flatten()
 }
 
 /// Drain posted messages as a JSON array.
@@ -502,6 +529,18 @@ macro_rules! module {
             $crate::web::bind_at(id, values, at_ms)
         }
 
+        /// Bind the named inputs that changed since the last accepted bind.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_bind_changed_at(id: u32, changed: &str, at_ms: Option<f64>) -> bool {
+            $crate::web::bind_changed_at(id, changed, at_ms)
+        }
+
+        /// The canvas's size in points, before a bind. `true` on success.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_size(id: u32, width: f32, height: f32) -> bool {
+            $crate::web::size(id, width, height)
+        }
+
         /// Record one frame (shown at `gpu_flush`): 1 = wants another, 0 = done, 2 = failed.
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 {
@@ -605,6 +644,18 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_published(id: u32) -> Option<String> {
             $crate::web::published(id)
+        }
+
+        /// Enable or disable bounded HUD performance reporting.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_performance_reporting(id: u32, enabled: bool) -> bool {
+            $crate::web::set_performance_reporting(id, enabled)
+        }
+
+        /// Take one metrics snapshot, at most once per second on the host clock.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_performance(id: u32, now_ms: f64) -> Option<String> {
+            $crate::web::performance(id, now_ms)
         }
 
         /// Drain messages as a JSON array.

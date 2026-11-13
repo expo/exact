@@ -1,5 +1,5 @@
 //! @fixture/vault's library, behind a C ABI as a package's prebuilt library is (LLP 1154 D3 "The library"): it
-//! carries its own Rust runtime and its own SQLite (rusqlite's bundled one), and exports these three functions alone.
+//! carries its own Rust runtime and links system SQLite on Apple, bundled SQLite elsewhere, exporting three functions.
 //! One caller at a time; nothing unwinds across the boundary (the release profile aborts on panic).
 
 use rusqlite::Connection;

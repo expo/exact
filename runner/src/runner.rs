@@ -19,6 +19,7 @@ mod request_set_tests;
 pub use errors::RunnerError;
 mod event;
 pub mod faults;
+mod fetches;
 mod field;
 mod fonts;
 pub mod foresee;
@@ -127,6 +128,7 @@ mod modules;
 pub use modules::{AppState, CallHow, CallOrigin, PresenceAnswer, PresenceAsk, WakeHow};
 #[cfg(test)]
 mod abort_tests;
+mod canvas_performance;
 mod split;
 mod surface_record;
 mod text_axes;
@@ -139,7 +141,7 @@ mod viewport;
 mod writes;
 pub use carry::Carried;
 pub use checkpoint::Checkpoint;
-pub use router::{routing, RouterChange, Routing};
+pub use router::{launch_matches, routing, RouterChange, Routing};
 pub use split::{press_writes_router, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 
@@ -187,6 +189,9 @@ pub struct Advanced {
     /// request, short of its cutoff or at it: the host lands the reply
     /// before it advances again.
     pub stopped_on_request: bool,
+    /// Apply this batch before continuing: a keyed change action needs
+    /// the preceding host layout and commands to be visible.
+    pub needs_apply: bool,
 }
 
 #[derive(Clone)]
@@ -292,6 +297,8 @@ struct PendingReq {
     replied: bool,
     /// Never sent: when a resource an overrun refused is asked again (`overrun.rs`).
     reask_at: Option<f64>,
+    /// The wait is for the launch's own ask, so its re-ask is the launch's too.
+    launch: bool,
     /// The re-asks after a turn over its budget this ask's streak has made.
     reasks: usize,
 }
@@ -352,6 +359,7 @@ pub struct Runner<D: DataSource> {
     action_binding_origin: std::rc::Rc<()>,
     detached_focus: Vec<(ViewId, FocusPath)>,
     data: D,
+    bake_warnings: Vec<String>,
     kernel: Kernel,
     slots: Vec<Value>,
     derives: Vec<Option<Value>>,
@@ -463,6 +471,12 @@ pub struct Runner<D: DataSource> {
     /// Resources an action asked to re-request; consumed by the next settle
     /// that can ask them (LLP 1054.000.000 D2).
     refresh_next: Vec<usize>,
+    /// Resources whose ask in the commit being made is the launch's own,
+    /// replacing a stand-in: nobody asked for fresh data, so the request is
+    /// not sent as a refresh, and a reply fetched for this launch may answer
+    /// it (LLP 1162.000 D1). Set for the boot's settlement, `data_ready`'s
+    /// commit and the re-ask of a wait that carries it; empty otherwise.
+    launch: Vec<usize>,
     /// Sends to mutations that declare `refreshes`, shown over the answers
     /// of the resources they change until they end or are answered.
     writes: writes::Writes,
@@ -514,6 +528,7 @@ pub struct Runner<D: DataSource> {
     delivery: crate::delivery::Delivery,
     // @ref LLP 1039 D2 — the layout size before settlement.
     viewport: crate::Viewport,
+    viewport_geometry: crate::viewport::Geometry,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     page: crate::page::Page,
     // @ref LLP 1027.000.000 — the date, once the host says it.
@@ -522,6 +537,7 @@ pub struct Runner<D: DataSource> {
     text_axes: text_axes::TextAxes,
     place: crate::time::Place,
     surface_records: exact_kernel::SortedMap<String, String>,
+    canvas_performance: exact_kernel::SortedMap<String, String>,
     surface_refusals: exact_kernel::SortedMap<String, String>,
     /// What the host links of the runner's own answers (LLP 1047 D3).
     links: RunnerLinks,
@@ -642,9 +658,13 @@ impl<D: DataSource> Runner<D> {
         snapshot: Vec<(String, Vec<u8>)>,
         delivery: crate::delivery::Delivery,
         // @ref LLP 1039 D2 — the layout size before settlement.
-        viewport: crate::Viewport,
+        mut viewport: crate::Viewport,
         launch: &str,
     ) -> Result<Runner<D>, RunnerError> {
+        viewport.device_pixel_ratio = kernel
+            .reported_display_scale()
+            .map(f64::from)
+            .or(viewport.device_pixel_ratio);
         viewport.validate()?;
         // @ref LLP 1095 D9 — every platform colour the plan can show is known
         // before the host's first report, a branch not yet taken included.
@@ -712,8 +732,8 @@ impl<D: DataSource> Runner<D> {
         // app granting Health forgets them all, at every boot (LLP 1069.008.000 D7).
         let private = crate::device::keeps_no_answers(data.grants());
         let obsolete_kept = match carried {
-            _ if private => kept::all(&snapshot),
-            None => kept::obsolete(&plan, &snapshot),
+            _ if private => kept::all(snapshot.iter().map(|(name, _)| name)),
+            None => kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)),
             Some(_) => Vec::new(),
         };
         let mut store = Store::new_linked(data.grants(), snapshot, links.grants);
@@ -759,6 +779,16 @@ impl<D: DataSource> Runner<D> {
                         }))
             })
             .collect();
+        // What each carried reader's last ask read (LLP 1069.005 D2): whether
+        // a store change asks it again.
+        let read_contents: Vec<Option<bool>> = (plan.resources.iter())
+            .map(|resource| {
+                let (name, source) = (plan.str(resource.name), plan.str(resource.source));
+                (carried.filter(|_| same_logic)?.read_contents.iter())
+                    .find(|(reader, origin, _)| reader == name && origin == source)
+                    .map(|(_, _, contents)| *contents)
+            })
+            .collect();
         let router = match links.router {
             Some(routing) => routing(&plan)?,
             None => None,
@@ -768,6 +798,7 @@ impl<D: DataSource> Runner<D> {
         let roles = exact_kernel::style::roles::Roles::new(crate::bridge::role_overrides(&plan));
         let booting = exact_kernel::style::roles::bind(&roles);
         root_font::bold_text_facts(&mut kernel, &plan, viewport.preferences.bold_text); // LLP 1115.000 D12.3
+        let viewport_geometry = crate::viewport::Geometry::of(&kernel);
         let mut runner = Runner {
             sites: crate::instance::SiteIndex::linked(&plan, links.keyframes),
             strings: vm::intern(&plan),
@@ -785,12 +816,16 @@ impl<D: DataSource> Runner<D> {
             derives: Vec::new(),
             resources: store_readers
                 .into_iter()
-                .map(|store_reader| resources::ResourceRow {
+                .zip(read_contents)
+                .map(|(store_reader, contents)| resources::ResourceRow {
                     store_reader,
+                    contents_reader: contents.unwrap_or(false),
+                    reads_known: contents.is_some(),
                     ..Default::default()
                 })
                 .collect(),
             tree: None,
+            bake_warnings: Vec::new(),
             reorder_owner: None,
             reorder_ops: Vec::new(),
             reorder_kept: Default::default(),
@@ -850,6 +885,7 @@ impl<D: DataSource> Runner<D> {
             retry_reader: None,
             mutation_requests: 0,
             refresh_next: Vec::new(),
+            launch: Vec::new(),
             writes: writes::Writes::default(),
             reconciling: Vec::new(),
             refused_unsent: Vec::new(),
@@ -861,12 +897,14 @@ impl<D: DataSource> Runner<D> {
             extensions: Default::default(),
             delivery,
             viewport,
+            viewport_geometry,
             page: Default::default(),
             time: crate::time::launch_time(),
             live_times: Default::default(),
             text_axes: Default::default(),
             place: launched_place.clone().unwrap_or_default(),
             surface_records: Default::default(),
+            canvas_performance: Default::default(),
             surface_refusals: Default::default(),
             links,
             router,
@@ -930,15 +968,10 @@ impl<D: DataSource> Runner<D> {
         runner.carry_uploads_in(carried.map_or(&[][..], |c| &c.uploads));
         // @ref LLP 1048.000 D6 — a document's answers seed their resources.
         // The device's own store is an input its render never had.
-        let (seeded, open, note) = match seed {
+        let (seeded, again) = match seed {
             Seed::Checkpoint(checkpoint) => runner.seed_checkpoint(checkpoint),
-            _ => (
-                vec![false; runner.plan.resources.len()],
-                Vec::new(),
-                String::new(),
-            ),
+            _ => (vec![false; runner.resources.len()], Vec::new()),
         };
-        let device_state = matches!(seed, Seed::Checkpoint(_)) && runner.has_app_store();
         // Store-reading resources when the data source is not ready (a TypeScript module before
         // its host loads it, LLP 1027 D4): the answer kept from the last launch seeds the first
         // frame if its identifying arguments still match and its value still fits; the compiled
@@ -946,21 +979,15 @@ impl<D: DataSource> Runner<D> {
         // again at `data_ready`.
         let ready = runner.data.ready();
         runner.keeping.on = !private && (!ready || carried.is_some_and(|c| c.keeps_answers));
-        runner.seed_at_boot(&seeded, device_state, ready, private);
-        if ready && device_state {
-            // … and asked now when it can answer, showing the rendered
-            // answer until it does.
-            runner.refresh_next.extend(
-                (0..seeded.len()).filter(|&i| seeded[i] && runner.plan.resources[i].reader),
-            );
-        }
-        // An open stream's rendered answer shows until the stream, asked
-        // again, answers: now when its source can, else at `data_ready`.
-        for i in open {
+        runner.seed_at_boot(&seeded, ready, private);
+        // A seeded answer asked again, an open stream's or, on a device with
+        // its own store, a store reader's, shows until it answers: asked now
+        // when its source can answer, else at `data_ready`.
+        for i in again {
             if !ready {
                 runner.resources[i].stale = true;
-            } else if !runner.refresh_next.contains(&i) {
-                runner.refresh_next.push(i);
+            } else {
+                runner.ask_at_launch(i);
             }
         }
         runner.pending_mut = vec![false; runner.plan.mutations.len()];
@@ -969,6 +996,10 @@ impl<D: DataSource> Runner<D> {
         // A carried boot never takes compiled data: it was baked for the
         // initial state, and the carried state is not that.
         runner.settle(carried.is_none())?;
+        let note = match seed {
+            Seed::Checkpoint(checkpoint) => runner.end_checkpoint_seeding(checkpoint, &seeded),
+            _ => String::new(),
+        };
         runner.journal_kept_seeds();
         runner.init_late_slots(carried)?;
         let now = runner.now_ms;
@@ -994,6 +1025,7 @@ impl<D: DataSource> Runner<D> {
             })
             .collect();
         runner.gate_step()?;
+        runner.launch.clear();
         // No commit's end follows the boot's settlement: what it did here.
         runner.hear_forgotten();
         runner.keep_sent(false);
@@ -1140,6 +1172,12 @@ impl<D: DataSource> Runner<D> {
     /// Inspect data-source identity and readiness without executing app logic.
     pub fn data_ref(&self) -> &D {
         &self.data
+    }
+
+    /// The app's grants: the data module's, and the origins its declared
+    /// sources carry (LLP 1162.001 D3). What a host endows its executor with.
+    pub fn grants(&self) -> String {
+        crate::grants::with_declared(self.data.grants(), &self.plan)
     }
 
     /// Current value of a slot by name.

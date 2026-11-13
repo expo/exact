@@ -194,10 +194,12 @@ theorem armSlots_good {p : Program} (hp : WellTyped p) {E : Err → Prop}
   split
   · next ho =>
     have ho' : st.owner = .some owner := by simpa using ho
-    obtain ⟨t, ht, -⟩ := hinit st hmem ho'
-    refine GoodW.bind (eval_sound_E hfn hE ((henv.withRows hs).envOKE' hp hE hc) hl ht) fun v _ => ?_
+    obtain ⟨t, ht, hle⟩ := hinit st hmem ho'
+    refine GoodW.bind (eval_sound_E hfn hE ((henv.withRows hs).envOKE' hp hE hc) hl ht) fun v hv => ?_
     split
-    · simp [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, GoodW]; exact hE _ trivial (by simp)
+    · simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, GoodW]
+      rw [henv.prog, unfit_typed (typed_of_valTy v (ValTy.mono hv hle))]
+      exact hE _ trivial (by simp)
     · next hc =>
       simp only [pure, Except.pure, GoodW, ForInStep.value]
       refine hs.append fun x w hx => ?_

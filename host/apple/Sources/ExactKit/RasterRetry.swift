@@ -2,7 +2,7 @@ import Foundation
 
 /// When a picture on screen whose download failed in a way asking again may
 /// mend is asked for again, and what counts as one (LLP 1011 §4): the same
-/// rules as the Linux, Android and Windows host's (`host/linux/src/image.rs`,
+/// rules as the Linux, Android and Windows host's (`host/painted/src/image.rs`,
 /// `image/remote.rs`).
 enum RasterRetry {
     /// After each failure: six times a showing, about a minute in all, then

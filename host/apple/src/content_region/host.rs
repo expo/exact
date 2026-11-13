@@ -48,7 +48,12 @@ impl<D: DataSource> Host<D> {
         self.content_region
             .as_ref()
             .ok_or("no content region")?
-            .request_json(self.runner.kernel(), id, known)
+            .request_json(
+                self.runner.kernel(),
+                id,
+                known,
+                self.runner.resolved_locale(),
+            )
     }
     /// Selected immutable publication identity, including retained old content.
     pub fn region_publication_id(&self) -> Option<u64> {
@@ -667,7 +672,7 @@ impl<D: DataSource> Host<D> {
             }
             if self.layout_withheld || old.is_none_or(|m| m.content != node.mirror.content) {
                 if let Some((w, h)) = node.mirror.content {
-                    staged.content(node.header.id, w, h);
+                    staged.content(node.header.id, w, h, None);
                 }
             }
         }

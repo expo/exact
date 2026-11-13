@@ -5,8 +5,9 @@
 // carries it. EXACT_DEV_BUILD_HOLD_MS holds each build's end, as a slow one.
 import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -350,3 +351,33 @@ test('the JS loop rebuilds when a navigation source or grant admission changes',
     rmSync(dir, { recursive: true, force: true });
   }
 }, 180_000);
+
+// A Contract library the app depends on as `file:./packages/ui` is a copy in node_modules; the loop's rebuild runs
+// host/web-js/build.mjs directly, which installs it again before it reads it (#115).
+test("the JS loop: an edit to a copied file: library rebuilds with the library's new text", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exact-file-library-')));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Library', app: { id: 'test.file-library', name: 'Library' } }));
+  writeFileSync(join(dir, 'app.contract'), 'use Badge from "@me/ui"\n\ncomponent App\n  view\n    Badge()\n');
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'library', private: true, dependencies: { '@me/ui': 'file:./packages/ui' } }));
+  mkdirSync(join(dir, 'packages/ui'), { recursive: true });
+  writeFileSync(join(dir, 'packages/ui/package.json'), '{"name":"@me/ui","version":"1.0.0"}');
+  const badge = (text) => `component Badge\n  view\n    text "${text}"\n`;
+  writeFileSync(join(dir, 'packages/ui/index.contract'), badge('qz-lib-first'));
+  const bun = spawnSync(process.execPath, ['install'], { cwd: dir, encoding: 'utf8' });
+  expect(bun.status).toBe(0);
+  let loop = null;
+  try {
+    loop = await devLoop(dir);
+    const { said, dist } = loop;
+    const until = async (pass, ms) => { const end = Date.now() + ms; while (!pass()) { if (Date.now() > end) throw new Error(`not seen in: ${said().slice(-2000)}`); await new Promise(ok => setTimeout(ok, 100)); } };
+    const holds = (text) => { const walk = (d) => readdirSync(d, { withFileTypes: true }).some(e => e.isDirectory() ? walk(join(d, e.name)) : readFileSync(join(d, e.name)).includes(text)); return walk(dist); };
+    await until(() => said().includes('plan ready') && said().includes('design reader ready') && holds('qz-lib-first'), 900_000);
+    writeFileSync(join(dir, 'packages/ui/index.contract'), badge('qz-lib-second'));
+    await until(() => holds('qz-lib-second'), 120_000);
+    expect(holds('qz-lib-first')).toBe(false);
+    expect(readFileSync(join(dir, 'node_modules/@me/ui/index.contract'), 'utf8')).toBe(badge('qz-lib-second'));
+  } finally {
+    await loop?.stop().catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 1_200_000);

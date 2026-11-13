@@ -1,5 +1,5 @@
 ```prompt Give my app its colours
-Give the Exact app in this folder its brand colours for light and dark mode. Use https://github.com/expo/exact/blob/main/docs/recipes/theme.md as the source for each step. The exact2 checkout has the same page at docs/recipes/theme.md.
+Give the Exact app in this folder its brand colours for light and dark mode. Use https://github.com/expo/exact/blob/main/docs/recipes/theme.md as the source for each step. The Exact checkout has the same page at docs/recipes/theme.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not give the brand's colours for light and dark, ask me for them before you write code.

@@ -68,6 +68,17 @@ impl<D: DataSource> Host<D> {
             batch.language(language, self.runner.direction());
             self.language = Some(language.into());
         }
+        // A bar reserves the large title's line even when its heading has authored typography.
+        use exact_kernel::style::relative::{text_style, text_style_size};
+        let large_title = text_style_size(
+            text_style("-exact-large-title").expect("schema text style"),
+            self.runner.kernel().root_font_size(),
+        );
+        // As with a resolved style row, overflow keeps the last finite size.
+        if large_title.is_finite() && self.large_title_size != Some(large_title) {
+            batch.large_title(large_title);
+            self.large_title_size = Some(large_title);
+        }
         self.finish(batch, error.as_deref())
     }
 }

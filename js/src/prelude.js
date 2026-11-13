@@ -486,12 +486,14 @@
   }
   // The operation in flight's owner, or null.
   function headOwner() { return head ? owner(head.call) : null; }
-  // A fetch's `signal` is watched through Ibex's own abort hooks natively, which no listener can stop; a browser
-  // realm's is the browser's, watched by a listener and checked again when the reply lands. Either ends with the fetch.
+  // Neither Ibex's abort hooks nor a browser's dependent signal can be stopped by a listener on the caller's signal.
   var abortHooks = global.__exact_ibex2_abort_hooks;
   delete global.__exact_ibex2_abort_hooks;
+  // Capture the browser's composition before app code can replace it.
+  var PlatformAbortSignal = global.AbortSignal, composeSignals = PlatformAbortSignal.any;
   function watchAbort(signal, aborted) {
     if (abortHooks) return abortHooks.subscribe(signal, aborted);
+    signal = composeSignals.call(PlatformAbortSignal, [signal]);
     signal.addEventListener("abort", aborted);
     return function () { signal.removeEventListener("abort", aborted); };
   }
@@ -582,7 +584,7 @@
     // A stream's own options, refused (LLP 1016.000 D11): at bake marked as storage's refusal is, so a source that lets it through keeps its placeholder.
     // (The door throws its refusal as a string: marked, it is an Error.)
     var streamOption = init ? init.exactStream : undefined, marks = streamOption !== undefined && !listen && !own && !child;
-    function mark(e) { if (marks && host(12, "bake", "") === "1") { if (!e || typeof e !== "object") e = new Error(String(e)); e.kind = "Unavailable"; e.code = "bake"; } return e; } function optionRefused(e) { return Promise.reject(mark(e)); }
+    function mark(e) { if (marks && host(12, "bake", "") === "1") { if (!e || typeof e !== "object") e = new Error(String(e)); e.kind = "Unavailable"; e.code = "bake"; e.bakeWarning = true; } return e; } function optionRefused(e) { return Promise.reject(mark(e)); }
     if (call.socketConflict || (call.socketOps && call.socketOps.length)) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
     var method = init && init.method ? String(init.method).toUpperCase() : "GET";
     var headers = new global.Headers(init && init.headers);
@@ -651,8 +653,9 @@
     var ticket = nextTicket++;
     // A WebSocket stream owns a two-way socket (LLP 1016.000 D7); an HTTP one's body that is not events is bytes.
     var socket = stream && (!!listen || !!own || /^wss?:/i.test(String(url)));
-    var wire = JSON.stringify({ method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, held: held ? true : undefined, listen: listen });
-    var error; try { error = host(1, String(ticket), wire); } catch (e) { throw mark(e); } // only the door's own refusal, never what building the request threw
+    var protocols; try { protocols = binary.socketProtocols(init ? init.exactProtocols : undefined, !!stream && /^wss?:/i.test(url)); } catch (e) { return optionRefused(e); }
+    var wire = JSON.stringify({ protocols: protocols, method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes && !bytesDoor ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, held: held ? true : undefined, listen: listen });
+    var error; try { error = binary.sendRequest(host, ticket, wire, bytes); } catch (e) { throw mark(e); } // only the door's own refusal, never what building the request threw
     if (error !== undefined) return optionRefused(new Error(error));
     call.tickets.push(ticket);
     if (stream) { call.stream = stream; call.upload = !!upload; }
@@ -1050,7 +1053,7 @@
     var message = e && typeof e === "object" && e.message !== undefined ? e.message : e;
     // `reason`: what `failure(x).reason` reads, a string the error carries (the snapback4 driver's refusal code).
     var reason = e && typeof e === "object" && typeof e.reason === "string" ? e.reason : "";
-    return JSON.stringify({ tag: 2, kind: kind, code: e && e.code, failure: failureCode(e), reason: reason, message: String(message) });
+    return JSON.stringify({ tag: 2, kind: kind, code: e && e.code, bakeWarning: e && e.bakeWarning === true, failure: failureCode(e), reason: reason, message: String(message) });
   }
   // A fetch with no live owner is claimed by one waiter (LLP 1162 D2).
   var moduleWide = bytesDoor !== undefined;
@@ -1346,12 +1349,12 @@
     var o = JSON.parse(outcomeJson), event, socket = call.socket, listened = socket && socket.listen && o.message ? sockets.listenEvent(socket, o.message) : null;
     if (listened) event = listened.event;
     else if (call.upload && (o.response || o.message && o.message.event === "exact:progress")) event = binary.uploadEvent(o);
-    else if (o.message) event = { type: o.message.event || "message", data: binary.messageData(o.message), lastEventId: o.message.id, coalesced: o.message.coalesced };
+    else if (o.message) event = { type: o.message.event || "message", data: binary.messageData(o.message), lastEventId: o.message.id, coalesced: o.message.coalesced, protocol: o.message.protocol };
     else if (o.closed) event = { type: "close", data: "", lastEventId: "", coalesced: 0, code: o.closed.code, reason: o.closed.reason, wasClean: o.closed.wasClean };
     else if (o.failed) event = { type: "error", data: "", lastEventId: "", coalesced: 0, kind: o.failed.kind, message: o.failed.message, status: 0 };
     else event = { type: "error", data: o.response.body, lastEventId: "", coalesced: 0, kind: "Response", message: "HTTP " + o.response.status, status: o.response.status };
     // The socket's state as of this event (D7): `open` opens it, an end closes it. A listener's stream ends as its `error`.
-    // `AddressInUse` travels as `Refused`, its message so prefixed (executor_listen.rs).
+    // `AddressInUse` travels as `Refused`, its message so prefixed (host/executor/src/listen.rs).
     if (socket && !o.message && socket.close) { var f = o.failed || { kind: "Network", message: event.message }, inUse = /^AddressInUse: /.test(f.message); socket.close(); event = { type: "error", kind: inUse ? "AddressInUse" : f.kind, message: inUse ? f.message.slice(14) : f.message }; }
     // A child's owner reads its own events (js/src/process.js).
     if (socket && socket.event) event = socket.event(o, event);
@@ -1484,8 +1487,7 @@
     currentCall = p.module ? null : p.call; if (p.module) work.landed(); // an adopted fetch's: its let-go call's steps run as it (the async helper), a plain reaction as no answer
     // Its `AbortSignal.timeout`'s deadline passed on the host: the signal aborts.
     if (o.failed && o.failed.kind === "Timeout" && p.timed) timers.expire(p.signal);
-    // A browser realm's abort listener can be stopped by an earlier one;
-    // the signal itself still says so.
+    // A reply delivered after the signal aborts still rejects with that signal's reason.
     if (p.signal && p.signal.aborted) p.reject(p.signal.reason);
     else if (o.failed) p.reject(new FetchError(o.failed));
     else p.resolve(hostReply(o.response, p.bodyTo, p.head));

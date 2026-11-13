@@ -157,6 +157,22 @@ final class EdgeEffectIOSTests: XCTestCase {
         try assertEffectOverContent("large")
     }
 
+    /// The bar's large title, which UIKit hangs in the scroller the bar
+    /// follows, is the bar's in the agreement walk (LLP 1080.001 D3), as
+    /// the edge effect beside it is: not a stray.
+    func testTheLargeTitleInTheScrollerIsTheBarsNotAStray() throws {
+        let session = try fixture()
+        let sv = try XCTUnwrap(session.presenter.navigation.shownScroll(try node("content-large")))
+        sv.layoutIfNeeded()
+        let title = { sv.subviews.first { String(describing: type(of: $0)) == "_UINavigationBarLargeTitleView" } }
+        guard title() != nil else { throw XCTSkip("this UIKit keeps the large title in the bar") }
+        let agreement = try XCTUnwrap(Agent(session: session).agreement(limit: 32)["agreement"] as? [String: Any])
+        XCTAssertNil((agreement["counts"] as? [String: Int])?["stray"], "\(agreement["disagreements"] ?? [])")
+        let content = try node("content-large")
+        let entries = try XCTUnwrap(session.presenter.inspectionDump(content, kind: "view", depth: 2, limit: 256, flatOnly: nil) { v, r in v.convert(r ?? v.bounds, to: nil) }["entries"] as? [[String: Any]])
+        XCTAssertEqual(entries.first { $0["class"] as? String == "_UINavigationBarLargeTitleView" }?["role"] as? String, "large-title")
+    }
+
     func testTheEdgeEffectDrawsOverRowsUnderAnInlineTitle() throws {
         let session = try fixture()
         let reply = Agent(session: session).tap(["id": Int(try node("tab-inline").id)])

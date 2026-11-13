@@ -4,14 +4,17 @@ import { afterEach, beforeEach, test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { moduleGraph, notBuildInput } from './agent-launch.mjs';
+import { moduleGraph, notBuildInput, receiptChanges, refuseBinaryBackend } from './agent-launch.mjs';
+import { directoryInputSnapshot } from './cargo-dep-info.mjs';
 import { buildArgs, buildFirst, buildReason, childFailure, failureSummary, linuxRebuild, lockHolder, logged, nativeBuild, overrideDir, planOverride, planSource, planSources, ownVerb, prebuild, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { openStdio } from './agent-stdio.mjs';
-import { linuxBinary, resolveApp, PINNED_RUST } from './app.mjs';
+import { bakeOutput, hermesBundle, hermesTarget, linuxBinary, resolveApp, windowsFile, PINNED_RUST } from './app.mjs';
+import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
+import { writePackagedReceipt } from '../host/windows/build.mjs';
 
 test('Mac drives use the assembled app bundle even without catalogs or widgets', () => {
   const { dir } = scratchApp('ats-drive');
@@ -118,6 +121,279 @@ test('macOS freshness checks the full product receipt when the bundle carries a 
     write('source.swift', 'before');
   } finally {
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('native drives refuse a baked backend that the drive did not select', async () => {
+  const { dir, write } = scratchApp('backend-drive');
+  const saved = { ...process.env };
+  try {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) delete process.env[key];
+    const literal = 'http://127.0.0.1:4400', other = 'http://127.0.0.1:4412';
+    write('app.ts', `// const origin = 'http://comment.invalid';\nexport const origin = \`${literal}/\` as const;\n`);
+    const app = resolveApp(dir), paths = appleArtifacts(app), receipt = resolve(paths.products, 'receipt.json');
+    const bundled = resolve(paths.bundle, 'Contents/Resources/receipt.json');
+    const ios = resolve(appleArtifacts(app, { destination: 'ios-simulator' }).bundle, 'receipt.json');
+    write(relative(dir, appleRunBinary(app)), '');
+    const time = new Date(Date.now() + 60_000);
+    const record = origin => {
+      for (const path of [receipt, bundled, ios]) {
+        write(relative(dir, path), JSON.stringify({ target: paths.target, build: { trust: 'development', backendOrigin: origin } }));
+        utimesSync(path, time, time);
+      }
+    };
+    const check = () => {
+      assert.deepEqual(receiptChanges(receipt, app), []);
+      for (const host of ['macos', 'ios']) {
+        const state = nativeBuild(host, app);
+        assert.deepEqual(state.changed, []);
+        assert.doesNotThrow(() => refuseBuild(host, state, app));
+      }
+    };
+    record(literal); check();
+    const replaced = JSON.parse(readFileSync(bundled, 'utf8'));
+    replaced.build.backendOrigin = other;
+    writeFileSync(bundled, JSON.stringify(replaced));
+    assert.deepEqual(nativeBuild('macos', app).changed, [bundled]);
+    record(other);
+    for (const checked of [null, createHash('sha256').update(readFileSync(receipt)).digest('hex')]) {
+      assert.deepEqual(receiptChanges(receipt, app, { hashed: !!checked }), []);
+      for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app, { checked }), app), /baked backend.*4412.*app.ts origin.*4400/);
+    }
+    const unexpected = () => assert.fail('a refused backend must neither build nor bake');
+    await assert.rejects(buildFirst('macos', app, { wait: () => {}, build: unexpected, bake: unexpected }), /baked backend/);
+    const { open } = await import('./agent.mjs');
+    for (const host of ['macos', 'ios']) {
+      await assert.rejects(open({ host, app: dir, plan: resolve(dir, 'replacement.plan'), onProcess: unexpected }), /baked backend/);
+    }
+    // --backend sets this variable; selecting another origin never authorizes the baked one.
+    process.env.EXACT_BACKEND_ORIGIN = `${other}/`; check();
+    process.env.EXACT_BACKEND_ORIGIN = literal;
+    assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /baked backend.*EXACT_BACKEND_ORIGIN/);
+    delete process.env.EXACT_BACKEND_ORIGIN;
+    write('.exact/backend-origin', other); check();
+    rmSync(resolve(dir, '.exact/backend-origin'));
+    // A checkout's fixture port is also the bake's default selection.
+    write('app.ts', `const origin = '${literal}';\n`);
+    write('app.json', JSON.stringify({ ...app.manifest, commands: { server: ['bun', 'fixture/server.mjs', '--port', '4412'] } }));
+    check();
+    record(literal);
+    assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /baked backend.*commands.server --port/);
+    record(undefined);
+    assert.deepEqual(receiptChanges(receipt, app), []);
+    assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /receipt has no backend origin; run .*exact\.mjs (mac|ios)/);
+    for (const path of [receipt, bundled, ios]) rmSync(path);
+    for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app), app), /receipt has no backend origin; run .*exact\.mjs (mac|ios)/);
+    write('app.ts', "const origin = 'https://example.com/app';\n");
+    record(other);
+    for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app), app), /baked backend.*example.com/);
+    write('app.ts', `// const origin = '${literal}';\nconst config = { origin: '${literal}' };\n`);
+    check();
+  } finally {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the backend command reads a literal declaration rather than a commented origin', () => {
+  mkdirSync(resolve(import.meta.dir, '../target'), { recursive: true });
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/exact-backend-'));
+  try {
+    const app = resolve(dir, 'app'), server = resolve(dir, 'node_modules/snapback4/bin/snapback4.js');
+    mkdirSync(app);
+    mkdirSync(dirname(server), { recursive: true });
+    writeFileSync(server, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+    writeFileSync(resolve(app, 'app.json'), '{}');
+    const env = { ...process.env };
+    delete env.EXACT_BACKEND_ORIGIN;
+    const run = () => spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'backend', app], { encoding: 'utf8', env });
+    writeFileSync(resolve(app, 'app.ts'), "// const origin = 'http://comment.invalid';\nconst origin = ('http://127.0.0.1:4410' as const);\n");
+    const selected = run();
+    assert.equal(selected.status, 0, selected.stderr);
+    assert.deepEqual(JSON.parse(selected.stdout), ['dev', '--port', '4410']);
+    writeFileSync(resolve(app, 'app.ts'), "// const origin = 'http://comment.invalid';\n");
+    const absent = run();
+    assert.equal(absent.status, 1);
+    assert.match(absent.stderr, /needs a literal const origin/);
+    assert.equal(absent.stdout, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an app launcher selects a native backend before checking its build', () => {
+  const { dir, write } = scratchApp('backend-launcher');
+  const literal = 'http://127.0.0.1:4400', selected = 'http://127.0.0.1:4412';
+  const app = resolveApp(dir), mac = appleArtifacts(app), ios = appleArtifacts(app, { destination: 'ios-simulator' });
+  write('app.ts', `const origin = '${literal}';\n`);
+  write(relative(dir, appleRunBinary(app)), '');
+  const receipt = JSON.stringify({ target: mac.target, build: { trust: 'development', backendOrigin: selected } });
+  for (const path of [resolve(mac.products, 'receipt.json'), resolve(mac.bundle, 'Contents/Resources/receipt.json'), resolve(ios.bundle, 'receipt.json')]) {
+    write(relative(dir, path), receipt);
+    const time = new Date(Date.now() + 60_000);
+    utimesSync(path, time, time);
+  }
+  const script = `
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    const spawn = processes.spawn;
+    mock.module(${JSON.stringify(resolve(import.meta.dir, 'app-shells.mjs'))}, () => ({
+      platformOf: () => null,
+    }));
+    mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
+      if (args[0].endsWith('/scripts/agent.mjs')) {
+        return spawn(command, ['-e', 'console.log(process.env.EXACT_BACKEND_ORIGIN)'], options);
+      }
+      return spawn(command, args, options);
+    } }));
+    const { run } = await import('./scripts/app-cli.mjs');
+    process.exitCode = await run({ dir: ${JSON.stringify(dir)}, name: 'backend-launcher',
+      exact2: ${JSON.stringify(resolve(import.meta.dir, '..'))}, args: process.argv.slice(1) });
+  `;
+  const env = { ...process.env };
+  for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_MAC_BIN', 'EXACT_BUILD_CHECKED', 'PORT']) delete env[key];
+  try {
+    for (const host of ['macos', 'ios']) {
+      const drive = backend => spawnSync(process.execPath, ['-e', script, 'agent', host, ...(backend ? ['--backend', backend] : []), 'tree'], {
+        cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', env, timeout: 15_000,
+      });
+      for (const backend of [undefined, literal]) {
+        const refused = drive(backend);
+        assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+        assert.match(refused.stderr, /baked backend.*4412.*4400/);
+        assert.equal(refused.stdout, '');
+      }
+      const overridden = drive(selected);
+      assert.equal(overridden.status, 0, overridden.stdout + overridden.stderr);
+      assert.equal(overridden.stdout.trim(), selected);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('stdio drives check backend receipts before desktop spawns or phone installation', async () => {
+  const { dir, write } = scratchApp('backend-stdio');
+  const saved = { ...process.env };
+  try {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) delete process.env[key];
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    const app = resolveApp(dir), other = 'http://127.0.0.1:4412';
+    const bin = resolve(dir, 'probe.app/Contents/MacOS/probe'), backend = { backendOrigin: other };
+    write(relative(dir, bin), 'never run');
+    write('baked/app.module.json', JSON.stringify(backend));
+    recordBuiltSettings(bin, app, resolve(dir, 'baked'));
+    // The next bake alone must not change the backend recorded for an existing executable.
+    write('baked/app.module.json', JSON.stringify({ backendOrigin: 'http://127.0.0.1:4400' }));
+    write('probe.app/Contents/Resources/receipt.json', JSON.stringify({ build: backend }));
+    const phone = appleArtifacts(app, { destination: 'ios' }).bundle;
+    write(relative(dir, resolve(phone, 'receipt.json')), JSON.stringify({ build: backend }));
+    const product = `${app.crate('windows')}.exe`, dll = resolve(dirname(bin), 'backend.dll');
+    write(relative(dir, resolve(dirname(bin), windowsFile(app, product))), readFileSync(bin));
+    write(relative(dir, dll), 'selected backend module');
+    writePackagedReceipt(app, { ...backend, products: [product, dll].map(path => ({ path,
+      sha256: createHash('sha256').update(readFileSync(resolve(dirname(bin), windowsFile(app, path)))).digest('hex') })) }, dirname(bin));
+    for (const host of ['macos', 'windows', 'linux', 'android']) {
+      process.env[`EXACT_${host === 'macos' ? 'MAC' : host.toUpperCase()}_BIN`] = bin;
+      await assert.rejects(openStdio({ host, app: dir, onProcess: () => assert.fail('refusal must precede spawn') }), /baked backend.*4412.*4400/);
+    }
+    await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /baked backend.*4412.*4400/);
+    process.env.EXACT_BACKEND_ORIGIN = other;
+    for (const options of [{}, { packaged: true }, { receipt: resolve(phone, 'receipt.json') }]) {
+      assert.doesNotThrow(() => refuseBinaryBackend(bin, app, options));
+    }
+    write(relative(dir, dll), 'a different backend module');
+    assert.throws(() => refuseBinaryBackend(bin, app, { packaged: true }), /windows build is stale: .*backend.dll.*run .*windows/);
+    await assert.rejects(openStdio({ host: 'windows', app: dir, onProcess: () => assert.fail('refusal must precede spawn') }), /windows build is stale: .*backend.dll.*run .*windows/);
+    write(relative(dir, bin), 'another executable without a bound record');
+    for (const options of [{}, { packaged: true }]) {
+      assert.throws(() => refuseBinaryBackend(bin, app, options), /receipt has no backend origin/);
+    }
+  } finally {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT', 'EXACT_MAC_BIN', 'EXACT_WINDOWS_BIN', 'EXACT_LINUX_BIN', 'EXACT_ANDROID_BIN']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The bake cache keeps one record per target; a directory packaged before the next build keeps its own.
+test('a Windows package keeps its backend after the same target is packaged elsewhere for another', () => {
+  const { dir, write } = scratchApp('backend-packages');
+  const saved = process.env.EXACT_BACKEND_ORIGIN;
+  try {
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    const app = resolveApp(dir), exe = `${app.crate('windows')}.exe`;
+    const sha = text => createHash('sha256').update(text).digest('hex');
+    const pack = (into, origin) => {
+      const products = [[exe, `executable for ${origin}`], ['backend.dll', `module for ${origin}`]].map(([path, text]) => {
+        write(`${into}/${windowsFile(app, path)}`, text);
+        return { path: resolve(app.target, 'gpu-dev', path), sha256: sha(text) };
+      });
+      const build = { version: 1, backendOrigin: origin, compat: { inputs: { app: app.id } }, products };
+      // What buildBake leaves in the cache: the target's one record, which the next build replaces.
+      write(relative(dir, resolve(bakeOutput(app), 'windows-probe.build.json')), JSON.stringify(build));
+      writePackagedReceipt(app, build, resolve(dir, into));
+      return resolve(dir, into, windowsFile(app, exe));
+    };
+    const a = pack('a', 'http://127.0.0.1:4412'), b = pack('b', 'http://127.0.0.1:4400');
+    process.env.EXACT_BACKEND_ORIGIN = 'http://127.0.0.1:4412';
+    assert.doesNotThrow(() => refuseBinaryBackend(a, app, { packaged: true }));
+    assert.throws(() => refuseBinaryBackend(b, app, { packaged: true }), /baked backend http:\/\/127\.0\.0\.1:4400 differs/);
+    // A's receipt is bound to A's executable and DLL, not to whatever the directory now holds.
+    write('a/backend.dll', 'module for http://127.0.0.1:4400');
+    assert.throws(() => refuseBinaryBackend(a, app, { packaged: true }), /windows build is stale: .*backend\.dll/);
+    write(`a/${windowsFile(app, exe)}`, 'executable for http://127.0.0.1:4400');
+    assert.throws(() => refuseBinaryBackend(a, app, { packaged: true }), /receipt has no backend origin; run bun host\/windows\/build\.mjs/);
+  } finally {
+    if (saved === undefined) delete process.env.EXACT_BACKEND_ORIGIN; else process.env.EXACT_BACKEND_ORIGIN = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A bare `cargo build` of the Linux host writes no `<executable>.settings.json`, so a refusal for want of one names
+// the build that writes it, and what that build records after Cargo satisfies the check.
+test('a Linux build without a backend record is told the build that writes one', async () => {
+  const { dir, write } = scratchApp('fixture-backend'), saved = { ...process.env };
+  try {
+    rmSync(resolve(dir, 'exact.mjs')); // exact2's own build, not an app's verb
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    Object.assign(process.env, { EXACT_APP_DIR: dir });
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_LINUX_BIN', 'CARGO_TARGET_DIR']) delete process.env[key];
+    const app = resolveApp('fixture-backend'), bin = linuxBinary(app);
+    assert.equal(linuxRebuild(app), 'bun scripts/build-linux.mjs fixture-backend');
+    write(relative(dir, bin), 'linked by cargo');
+    await assert.rejects(openStdio({ host: 'linux', app: 'fixture-backend', onProcess: () => assert.fail('refusal must precede spawn') }),
+      { message: 'the native build receipt has no backend origin; run bun scripts/build-linux.mjs fixture-backend before driving this app' });
+    // What scripts/build-linux.mjs does once Cargo has linked: the record the bake's module names, bound to the executable.
+    const out = resolve(app.target, 'host-dev/build/fixture-backend-linux-0/out');
+    write(relative(dir, resolve(out, 'app.module.json')), JSON.stringify({ backendOrigin: 'http://127.0.0.1:4400' }));
+    write(relative(dir, `${bin}.d`), `${bin}: ${resolve(out, 'app.hbc')}\n`);
+    recordBuiltSettings(bin, app);
+    assert.doesNotThrow(() => refuseBinaryBackend(bin, app));
+  } finally {
+    for (const key of ['EXACT_APP_DIR', 'EXACT_BACKEND_ORIGIN', 'EXACT_LINUX_BIN', 'CARGO_TARGET_DIR']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('missing native products name their build command before checking backend metadata', async () => {
+  const { dir, write } = scratchApp('backend-missing'), saved = { ...process.env };
+  try {
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    for (const host of ['macos', 'windows', 'linux', 'android']) {
+      const key = `EXACT_${host === 'macos' ? 'MAC' : host.toUpperCase()}_BIN`;
+      delete process.env[key];
+      await assert.rejects(openStdio({ host, app: dir }), /run .* first/);
+      process.env[key] = resolve(dir, 'absent');
+      await assert.rejects(openStdio({ host, app: dir }), host === 'macos' ? /EXACT_MAC_BIN names no file/ : /run .* first/);
+    }
+    await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /run bun host\/apple\/build.mjs --device first/);
+  } finally {
+    for (const key of ['EXACT_MAC_BIN', 'EXACT_WINDOWS_BIN', 'EXACT_LINUX_BIN', 'EXACT_ANDROID_BIN']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -402,6 +678,26 @@ test('a product the build wrote and then read is judged by its recorded bytes; a
     assert.deepEqual(changed(), [dylib]);
     writeFileSync(dylib, 'signed v2'); stamp(dylib, -10); stamp(generated, -5);
     assert.deepEqual(changed(), [generated]);
+    stamp(generated, -110);
+    // Assets watched through a directory need no individual dep-info entry.
+    const model = resolve(dir, 'assets/crate.model');
+    write('assets/crate.model', 'baked model'); stamp(model, -10);
+    const record = JSON.parse(readFileSync(receipt, 'utf8'));
+    record.build.products.push({path:model, bytes:11, sha256:sha256('baked model'), input:true});
+    record.build.watchedDirectories = [directoryInputSnapshot(dirname(model))];
+    writeFileSync(info, readFileSync(info, 'utf8').trimEnd() + ` ${dirname(model)}\n`);
+    writeFileSync(receipt, JSON.stringify(record)); stamp(receipt, 10);
+    assert.deepEqual(changed(), []);
+    writeFileSync(model, 'other model'); stamp(model, -110);
+    assert.deepEqual(changed(), [model]);
+    rmSync(model);
+    assert.deepEqual(changed(), [model]);
+    write('assets/crate.model', 'baked model');
+    assert.deepEqual(changed(), []);
+    write('assets/authored.model', 'authored'); stamp(resolve(dir, 'assets/authored.model'), -110);
+    assert.deepEqual(changed(), [dirname(model)]);
+    rmSync(resolve(dir, 'assets/authored.model'));
+    assert.deepEqual(changed(), []);
   } finally {
     process.chdir(cwd);
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
@@ -409,6 +705,51 @@ test('a product the build wrote and then read is judged by its recorded bytes; a
     if (targetDir !== undefined) process.env.CARGO_TARGET_DIR = targetDir;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('generated shell outputs a cold game build records are judged by their bytes; authored inputs keep their mtime', () => {
+  const { dir, write } = scratchApp('shell-output');
+  try {
+    const target = resolve(dir, 'target');
+    const app = { dir, workspace: resolve(dir, '.shells'), target, manifest: { game: {} }, crate: () => 'shell-output-apple' };
+    const before = new Date(Date.now() - 60_000), started = new Date(+before + 20_000), generated = new Date(+started + 10_000);
+    const stamp = (path, at) => utimesSync(resolve(dir, path), at, at);
+    const digest = path => createHash('sha256').update(readFileSync(resolve(dir, path))).digest('hex');
+    const outputs = ['app.json', 'keys.json', 'surfaces.json', 'apple/build.rs', 'apple/src/lib.rs'].map(path => `.shells/${path}`);
+    write('.shells/Cargo.toml', '[workspace]');
+    write('logic/src/lib.rs', 'pub struct Game;');
+    write('.shells/apple/src/extra.rs', 'pub const EXTRA: u32 = 1;');
+    for (const path of outputs) write(path, path.endsWith('.json') ? '{}' : '// generated shell');
+    for (const path of ['app.json', 'app.contract', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml', '.shells/Cargo.toml', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) stamp(path, before);
+    for (const path of outputs) stamp(path, generated);
+    const sources = [...outputs, 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs'];
+    write('target/aarch64-apple-ios-sim/host-dev/libshell_output_apple.d', `archive: ${sources.map(path => resolve(dir, path)).join(' ')}\n`);
+    const inputs = ['logic/src/lib.rs'].map(path => ({ path: resolve(dir, path), name: resolve(dir, path), sha256: digest(path) }));
+    const products = outputs.map(path => ({ path: resolve(dir, path), bytes: readFileSync(resolve(dir, path)).length, sha256: digest(path), input: true }));
+    const receipt = resolve(target, 'receipt.json');
+    const record = products => write('target/receipt.json', JSON.stringify({ target: 'aarch64-apple-ios-sim', started: started.toISOString(), build: {
+      binary: { inputs, missing: [], directories: [] }, products,
+    } }));
+    record(products);
+    const changed = () => receiptChanges(receipt, app).map(path => resolve(path)).sort();
+    assert.deepEqual(changed(), [], 'files produced during the cold build are not later source edits');
+    for (const path of ['app.json', 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) {
+      stamp(path, generated);
+      assert.ok(changed().includes(resolve(dir, path)), `mtime still checks ${path}`);
+      stamp(path, before);
+    }
+    for (const path of [...outputs, 'logic/src/lib.rs']) {
+      const previous = readFileSync(resolve(dir, path));
+      write(path, 'changed bytes'); stamp(path, before);
+      assert.ok(changed().includes(resolve(dir, path)), `the recorded digest still checks ${path}`);
+      write(path, previous); stamp(path, path.startsWith('.shells/') ? generated : before);
+    }
+    record([]);
+    assert.deepEqual(changed(), outputs.map(path => resolve(dir, path)).sort(), 'outputs the receipt did not record keep the mtime bound');
+    record(products);
+    rmSync(resolve(dir, '.shells/surfaces.json'));
+    assert.ok(changed().includes(resolve(dir, '.shells/surfaces.json')), 'a missing declaration still needs a build');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a build already running ends before the check: the drive neither races it nor is refused as busy', async () => {
@@ -793,7 +1134,7 @@ test.skipIf(process.platform === 'win32')('Gradle keeps its given environment wi
     const env = { PATH: bin, GRADLE_OPTS: '-Xmx128m' }, calls = [];
     expect(Bun.which('javac', { PATH: env.PATH })).toBe(resolve(bin, 'javac'));
     for (const platform of ['darwin', 'linux']) {
-      expect(androidJavaEnv(env, platform, studio)).toBeNull();
+      expect(androidJavaEnv(env, platform, studio)).toBe(env);
       expect(runGradle(['--version'], { env }, platform, { studio, run: (...args) => { calls.push(args); return { status: 0 }; } })).toBe(true);
       expect(calls.at(-1)[2].env).toBe(env);
       expect(calls.at(-1)[2].env).toEqual({ PATH: bin, GRADLE_OPTS: '-Xmx128m' });
@@ -819,6 +1160,166 @@ exit 17
     expect(readFileSync(resolve(dir, 'api'), 'utf8')).toBe('29');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+function androidHermesFixture(dir, intl) {
+  const bundle = resolve(dir, 'bundle');
+  for (const path of ['lib', 'include', 'bin', 'share/icu']) mkdirSync(resolve(bundle, path), { recursive: true });
+  const receipt = JSON.parse(readFileSync('vendor/ibex/crates/hermes-lean-sys/testdata/receipt-v2-valid.json', 'utf8'));
+  receipt.target = 'aarch64-linux-android';
+  receipt.build.flags = [`-DHERMES_ENABLE_INTL=${intl}`, '-DANDROID_PLATFORM=android-29'];
+  const digest = path => `sha256-${createHash('sha256').update(readFileSync(resolve(bundle, path))).digest('hex')}`;
+  const archives = ['hermesvm_a', 'hermesvmlean_a', 'jsi', 'boost_context', 'icui18n', 'icuuc', 'icudata', ...(intl ? ['icudata-en', 'icudata-full'] : [])]
+    .map(name => `lib/lib${name}.a`).sort();
+  for (const path of [...archives, 'bin/hermesc', 'include/sentinel.h']) writeFileSync(resolve(bundle, path), path);
+  receipt.archives = archives.map(path => ({ path, digest: digest(path) }));
+  receipt.engine.binaryDigest = digest(receipt.engine.binary);
+  receipt.compiler.digest = digest('bin/hermesc');
+  receipt.headers = [{ path: 'include/sentinel.h', digest: digest('include/sentinel.h') }];
+  if (intl) {
+    const filter = (name, source) => {
+      const path = `share/icu/${name}.json`;
+      writeFileSync(resolve(bundle, path), readFileSync(`vendor/ibex/scripts/${source}.json`));
+      return { path, digest: digest(path) };
+    };
+    receipt.icu = {
+      upstream: { artifact: 'unicode-org/icu', sourceCommit: '2d029329c82c7792b985024b2bdab5fc7278fbc8', sourceRef: 'release-74-2', sourceVersion: '74.2' },
+      codeArchives: ['lib/libicui18n.a', 'lib/libicuuc.a'],
+      data: {
+        trimmed: { archive: 'lib/libicudata.a', filter: filter('filters-root-en', 'icu74-filter-root-en') },
+        en: { archive: 'lib/libicudata-en.a', filter: filter('filters-en-intl', 'icu74-filter-en-intl') },
+        full: { archive: 'lib/libicudata-full.a' },
+      },
+    };
+  }
+  return receipt;
+}
+
+// --check-dir pairs candidates with the pinned host compiler, never an override.
+const hostHermesTarget = hermesTarget();
+const hasHostHermes = hostHermesTarget && existsSync(hermesBundle(hostHermesTarget, { ...process.env, HERMES_LEAN_SYS_DIR: undefined }).hermesc);
+const hermesBundleTest = test.skipIf(!hasHostHermes);
+if (!hasHostHermes) console.warn('Skipping local Hermes bundle tests: pinned host compiler is absent; run exact setup.');
+
+hermesBundleTest('the local Hermes builder requests and validates complete Intl and non-Intl bundles', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-intl-'));
+  try {
+    mkdirSync(resolve(dir, 'scripts'));
+    writeFileSync(resolve(dir, 'scripts/build-hermes-vanilla-release.sh'), `#!/bin/sh
+# aarch64-linux-android)
+printf '%s' "$IBEX_ANDROID_INTL" > intl
+tar -czf "$2" -C bundle .
+`);
+    for (const intl of [false, true]) {
+      const receipt = androidHermesFixture(dir, intl);
+      writeFileSync(resolve(dir, 'bundle/hermes-input-receipt.json'), JSON.stringify(receipt));
+      const built = spawnSync(process.execPath, ['scripts/hermes-android.mjs', 'build', ...(intl ? ['--intl'] : [])], {
+        encoding: 'utf8', env: { ...process.env, IBEX_DIR: dir, EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') },
+      });
+      expect(built.status, built.stderr).toBe(0);
+      expect(readFileSync(resolve(dir, 'intl'), 'utf8')).toBe(String(intl));
+      expect(JSON.parse(readFileSync(resolve(built.stdout.trim(), 'hermes-input-receipt.json'), 'utf8'))).toEqual(receipt);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
+for (const [name, mutate] of [
+  ['disabled Intl', receipt => { receipt.build.flags = ['-DHERMES_ENABLE_INTL=false']; }],
+  ['missing English metadata', receipt => { delete receipt.icu; }],
+  ['empty English metadata', receipt => { receipt.icu.data.en = {}; }],
+  ['missing English archive', (receipt, bundle) => rmSync(resolve(bundle, 'lib/libicudata-en.a'))],
+  ['changed English archive', (receipt, bundle) => writeFileSync(resolve(bundle, 'lib/libicudata-en.a'), 'changed')],
+  ['missing full archive', (receipt, bundle) => rmSync(resolve(bundle, 'lib/libicudata-full.a'))],
+  ['wrong schema', receipt => { receipt.schema = 'invalid'; }],
+  ['malformed JSON', () => '{'],
+]) hermesBundleTest(`the local Hermes builder rejects ${name} without replacing the installed bundle`, () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-reject-'));
+  try {
+    mkdirSync(resolve(dir, 'scripts'));
+    writeFileSync(resolve(dir, 'scripts/build-hermes-vanilla-release.sh'), `#!/bin/sh
+# aarch64-linux-android)
+tar -czf "$2" -C bundle .
+`);
+    const bundle = resolve(dir, 'bundle'), receiptPath = resolve(bundle, 'hermes-input-receipt.json');
+    const previous = JSON.stringify(androidHermesFixture(dir, false));
+    writeFileSync(receiptPath, previous);
+    const env = { ...process.env, IBEX_DIR: dir, EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') };
+    const run = args => spawnSync(process.execPath, ['scripts/hermes-android.mjs', ...args], { encoding: 'utf8', env });
+    const installed = run(['build']);
+    expect(installed.status, installed.stderr).toBe(0);
+    const current = resolve(dir, 'cache/current'), before = realpathSync(current);
+    const receipt = androidHermesFixture(dir, true);
+    const json = mutate(receipt, bundle);
+    writeFileSync(receiptPath, typeof json === 'string' ? json : JSON.stringify(receipt));
+    const rejected = run(['build', '--intl']);
+    expect(rejected.status, rejected.stderr).toBe(1);
+    expect(realpathSync(current)).toBe(before);
+    expect(readFileSync(resolve(current, 'hermes-input-receipt.json'), 'utf8')).toBe(previous);
+    // Installing an archive directly must validate the same candidate too.
+    if (name !== 'disabled Intl') {
+      const archive = resolve(dir, 'candidate.tar.gz');
+      expect(spawnSync('tar', ['-czf', archive, '-C', bundle, '.']).status).toBe(0);
+      expect(run(['install', archive]).status).toBe(1);
+      expect(realpathSync(current)).toBe(before);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
+
+for (const intl of [false, true]) hermesBundleTest(`the local Hermes installer authenticates every receipt file with Intl ${intl}`, () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-manifest-'));
+  try {
+    const bundle = resolve(dir, 'bundle'), receiptPath = resolve(bundle, 'hermes-input-receipt.json');
+    const archive = resolve(dir, 'candidate.tar.gz'), current = resolve(dir, 'cache/current');
+    const env = { ...process.env, EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') };
+    const install = timeout => {
+      expect(spawnSync('tar', ['-czf', archive, '-C', bundle, '.']).status).toBe(0);
+      return spawnSync(process.execPath, ['scripts/hermes-android.mjs', 'install', archive], { encoding: 'utf8', env, timeout });
+    };
+    const writeReceipt = receipt => writeFileSync(receiptPath, JSON.stringify(receipt));
+    const snapshot = () => readdirSync(current, { recursive: true, withFileTypes: true })
+      .filter(entry => entry.isFile()).map(entry => {
+        const path = resolve(entry.parentPath, entry.name);
+        return [relative(current, path), createHash('sha256').update(readFileSync(path)).digest('hex')];
+      }).sort();
+    const complete = androidHermesFixture(dir, true);
+    complete.build.flags[0] = `-DHERMES_ENABLE_INTL=${intl}`;
+    writeReceipt(complete);
+    const installed = install();
+    expect(installed.status, installed.stderr).toBe(0);
+    const before = realpathSync(current), contents = snapshot();
+    const files = [...complete.archives, ...complete.headers, complete.compiler,
+      complete.icu.data.trimmed.filter, complete.icu.data.en.filter].map(entry => entry.path ?? entry.binary);
+    const failures = [];
+    for (const [path, mutation] of [
+      ...files.flatMap(path => ['missing', 'changed'].map(mutation => [path, mutation])),
+      ...(process.platform === 'win32' ? [] : ['hermes-input-receipt.json', 'include/sentinel.h'].map(path => [path, 'fifo'])),
+      ...['jsi', 'boost_context', 'icui18n', 'icuuc', 'icudata'].map(name => [`lib/lib${name}.a`, 'unlisted']),
+    ]) {
+      const receipt = androidHermesFixture(dir, true);
+      receipt.build.flags[0] = `-DHERMES_ENABLE_INTL=${intl}`;
+      if (mutation === 'missing') rmSync(resolve(bundle, path));
+      else if (mutation === 'changed') writeFileSync(resolve(bundle, path), 'changed');
+      else if (mutation === 'unlisted') {
+        receipt.archives = receipt.archives.filter(entry => entry.path !== path);
+        if (!intl) delete receipt.icu;
+      }
+      writeReceipt(receipt);
+      if (mutation === 'fifo') {
+        rmSync(resolve(bundle, path));
+        expect(spawnSync('mkfifo', [resolve(bundle, path)]).status).toBe(0);
+      }
+      const rejected = install(mutation === 'fifo' ? 30000 : undefined);
+      if (mutation === 'fifo') rmSync(resolve(bundle, path));
+      try {
+        expect(rejected.status, `${mutation} ${path}: ${rejected.stderr}`).toBe(1);
+        expect(realpathSync(current), `${mutation} ${path}`).toBe(before);
+        expect(snapshot(), `${mutation} ${path}`).toEqual(contents);
+      } catch (error) { failures.push(`${mutation} ${path}: ${error.message}`); }
+    }
+    expect(failures).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 180_000);
+
 
 for (const [form, dependencies, api, bundleApi = 30] of [
   ['API-29 Hermes', '[dependencies.exact-js]\npath = "../js"', 29, 29],

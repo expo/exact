@@ -11,8 +11,10 @@
 //! count in. Pure: no I/O, no host, no dependency.
 //!
 //! The dialect, exactly (LLP 1045 D2): ATX headings without closing hashes;
-//! `*` `_` emphasis with CommonMark's flanking rules; code spans without
-//! edge-space normalization; `~~` strikethrough (one tilde stays literal);
+//! `*` `_` emphasis with CommonMark's flanking rules; code spans that strip
+//! one space from each end of content that begins and ends with one and is
+//! not all spaces, as CommonMark does, hide those spaces like the backticks,
+//! and keep line endings; `~~` strikethrough (one tilde stays literal);
 //! inline links, autolinks, bare `http(s)` URLs; backslash escapes; fenced
 //! code outside quotes; `- * +` and `1.` `1)` lists with `[ ]` tasks; quotes
 //! by depth; rules; GFM pipe tables with the alignment row ignored; footnote
@@ -38,7 +40,7 @@ pub use atoms::{Atom, AtomFace, AtomForm, AtomKind, AtomRole, Atoms};
 pub use edit::{edit, Command, Edit};
 pub use pieces::{pieces, pieces_with, spoken, AtomPiece, Piece, Role};
 pub use segment::{
-    embed, excerpt, plain, plain_range, plain_with, segments, video, Embed, Provider, Segment,
+    embed, plain, plain_range, plain_with, segments, video, Embed, Provider, Segment,
 };
 pub use selection::{selection, Selection};
 pub use style::{

@@ -134,6 +134,24 @@ fn a_tab_is_built_when_first_selected_and_keeps_its_state() {
 }
 
 #[test]
+fn panels_inside_the_tablist_are_built_when_selected() {
+    let source = source(ARIA)
+        .replace("      column\n", "      row role=\"tablist\"\n")
+        .replace(
+            "      row role=\"tablist\"\n        button",
+            "        button",
+        );
+    let mut r = boot(&source, "/");
+    let tree = agent::tree(&r);
+    assert!(!unopened(&tree, "a"));
+    assert!(unopened(&tree, "b") && unopened(&tree, "c"));
+    r.act("pick", vec![Value::str("b")]).unwrap();
+    let tree = agent::tree(&r);
+    assert!(!unopened(&tree, "b") && unopened(&tree, "c"));
+    assert!(has(&tree, "bump-b") && !has(&tree, "bump-c"));
+}
+
+#[test]
 fn a_launch_into_another_tab_builds_that_tab_alone() {
     let r = boot(&source(ARIA), "/c");
     let tree = agent::tree(&r);

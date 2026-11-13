@@ -12,6 +12,7 @@ import { APP_CRATES, NO_WORKSPACE } from '../scripts/cargo-check.mjs';
 import { APPLE_BUILD_SCRIPT, EARLIER_APPLE_BUILD_SCRIPT } from '../scripts/linked-plan.mjs';
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
 const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url)) ? await import('../snapback4/web/device-build.mjs') : null;
+const NO_SNAPBACK = 'this checkout has no Snapback client (snapback4/), so it cannot wire an app to Snapback';
 
 /** Type names a game's generated type may not take: the engine's public items
  * (what `use exact_game::*` brings in), the template's own and those it imports. */
@@ -55,6 +56,9 @@ export function createGame(destination, directory = import.meta.dir, options = {
   if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name ?? '') || /-(web|apple|linux|windows|gpu)$/.test(name)) {
     throw new Error('Usage: bun game/new.mjs <name|path> [--assets] [--render] (lowercase-hyphenated name, no host suffix)');
   }
+  const taken = ['logic', 'bake', 'gpu', 'render', 'web', 'apple', 'linux', 'windows', 'android']
+    .map(kind => `${name}-${kind}`).find(crate => SDK_CRATES.has(crate));
+  if (taken) throw new Error(`exact new ${destination} --game: the game's name ${name} would make the crate ${taken}, which is one of exact2's own; choose another name, such as my-${name}`);
   // The type is `use exact_game::*;`'s neighbour: it may not shadow an engine export
   // (World, Camera…) or another of the template's items (Beacon, Options).
   const collided = takenTypes(directory).has(name.split('-').map(word => word[0].toUpperCase() + word.slice(1)).join(''));
@@ -157,6 +161,8 @@ export function createApp(destination, options = {}) {
   if (options.id !== undefined && !BUNDLE_ID.test(options.id)) throw new Error(`exact new --bundle-id ${options.id}: not a reverse-DNS id; write two or more dot-separated parts of letters, digits and hyphens, each starting with a letter, as com.yourcompany.${name.replaceAll('-', '')}`);
   if (options.title !== undefined && (!options.title.trim() || /[\x00-\x1f\x7f]/.test(options.title))) throw new Error('exact new --name: give the name people see, on one line, as --name "Field Log"');
   if (existsSync(dir) && readdirSync(dir).length) throw new Error(`${dir} already exists and is not empty`);
+  // Refused before anything is written: wiring is the last step, after the app and the backend's schema above it.
+  if (options.snapback && !snapbackDevice) throw new Error(NO_SNAPBACK);
   const port = options.snapback ? snapbackPort(options.snapback.port) : null;
   if (options.snapback?.online && !existsSync(resolve(dir, '..', 'snapback/schema.q'))) throw new Error('exact new --snapback --online: write the backend schema above the app first; the guestbook starter uses a device');
   // A failure leaves nothing of ours behind: the directory itself when we made
@@ -197,7 +203,7 @@ export function createApp(destination, options = {}) {
 
 /** The crates an app's own depend on by path (`writeApp`, `linuxCrate`): a
  * folder named `exact` would write an `exact-apple` beside the SDK's. */
-const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-web', 'exact-web-capabilities', 'exact-js-web']);
+const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-painted', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
 
 const rosterRule = body => {
   const insert = /^[ \t]+insert[ \t]*<-[ \t]*([^\n]*)/m.exec(body);
@@ -535,7 +541,7 @@ const onlineMount = path => /(?:^|\/)snapback4\/online\/?$/.test((path ?? '').re
  * operations once its server is installed above, mounts the driver and those operations in app.json, builds the
  * device the page loads, and says what is left: the server to install or start, an appId that disagrees. */
 export function wireSnapback(dir, { build = true, port = null, online = null, artifactOnly = false, rebuild = false } = {}) {
-  if (!snapbackDevice) throw new Error('this checkout has no Snapback client (snapback4/), so it cannot wire an app to Snapback');
+  if (!snapbackDevice) throw new Error(NO_SNAPBACK);
   dir = resolve(dir);
   const manifestPath = resolve(dir, 'app.json');
   if (!existsSync(manifestPath)) throw new Error(`${dir}: no app.json here (bun exact.mjs snapback runs in the app's directory, the backend's above it)`);
@@ -854,8 +860,9 @@ and rebuilds the device, including after exact2 moves; \`snapback --port <n>\` m
 \`bunx snapback4 dev --port <the origin's port>\` above before \`test web\`. \`fresh\` resets it per test
 (Snapback4 ${snapbackVersion()}, dev only; a password-only schema's dev needs \`--unsafe-dev-doors\` for it). Typed reads use \`db.read(api.recent, {}, now)\`; \`send\` writes, syncs and answers
 the write's fate. \`failure(x).reason\` carries a refusal's code. Read the guide before data code.`;
-  return `Shared data: \`exact new <path> --snapback\`, or \`bun exact.mjs snapback\` here.
-Install \`snapback4@${snapbackVersion()}\` above; ${readme} has setup and server commands.`;
+  // Offered only where it can be done: a checkout without the client refuses both commands.
+  return snapbackDevice ? `Shared data: \`exact new <path> --snapback\`, or \`bun exact.mjs snapback\` here.
+Install \`snapback4@${snapbackVersion()}\` above; ${readme} has setup and server commands.` : '';
 }
 
 /** What an agent in the app's directory can't discover (LLP 1086 D1): what
@@ -870,6 +877,7 @@ function agentNotes(dir, name, {game = false} = {}) {
   const doc = file => pathFrom(from, resolve(ROOT, 'docs', file));
   const sdk = file => pathFrom(from, resolve(ROOT, file));
   if (game) return gameNotes(name, doc, sdk, from);
+  const snapback = snapbackNotes(dir, from);
   return `${BEGIN}
 # ${name}: an Exact app
 
@@ -889,8 +897,7 @@ app.json's \`"commands"\`.
 \`bun exact.mjs update --without linux\` stops shipping Linux.` : ` Native verbs (\`ios\`, \`mac\`, \`linux\`, \`android\`, \`windows\`)
 name their platform in app.json on first use and build in a generated workspace;
 \`update --without <platform>\` stops shipping it.`}
-\`bun ${sdk('scripts/exact.mjs')} setup --check\` names what a native build lacks.
-${snapbackNotes(dir, from)}
+\`bun ${sdk('scripts/exact.mjs')} setup --check\` names what a native build lacks.${snapback && `\n${snapback}`}
 
 Generated, so don't edit: \`exact.mjs\`${authoredApp(dir) ? `, \`rust-toolchain.toml\`, \`.cargo/config.toml\`,
 \`Cargo.toml\`'s \`[patch.crates-io]\`` : ''} and this block.

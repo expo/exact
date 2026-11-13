@@ -115,6 +115,10 @@ fn validate(schema: &Schema) {
             def.values.contains(&def.default),
             "schema: enum `{name}` default is not a member"
         );
+        assert!(
+            def.refused.iter().all(|v| def.values.contains(v) && *v != def.default),
+            "schema: enum `{name}` refuses a value it lacks, or its default"
+        );
     }
     let mut fields = BTreeSet::new();
     for (i, row) in schema.styles.iter().enumerate() {

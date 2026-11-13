@@ -15,7 +15,7 @@ import java.io.File
  * its own and waits on none. An activity attaches one by overriding [ExactActivity.drive].
  */
 fun interface Drive {
-    /** The app's first content has been drawn: called once, on the main thread. */
+    /** The first frame after successful startup, even with an empty page: called once, on the main thread. */
     fun contentReady()
 }
 
@@ -84,7 +84,8 @@ open class ExactActivity : Activity() {
         // The starting window goes the moment the first frame is drawn, not after its exit fade (splashfade=1: the
         // platform's fade, to compare): the first frame is what shows.
         if (Build.VERSION.SDK_INT >= 31 && intent.getStringExtra("splashfade") != "1") Splash.quick(this)
-        if (!again) environment()
+        val arrived = Shares.arrived(intent, state != null)
+        if (!again) environment(arrived)
         edgeToEdge()
         // exact2's thread, made before the assets are checked: it loads exact2's library meanwhile.
         owner()
@@ -107,10 +108,10 @@ open class ExactActivity : Activity() {
         }
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
-        // A launch with a URL (a shortcut, a link) into a process whose host runs goes where the URL says; one the
-        // system restores (a saved state) keeps where it was. The first launch's is the host's launch location
-        // ([environment]).
-        if (again && state == null) received(intent)
+        // A launch with a URL (a shortcut, a link) or a share into a process whose host runs goes where it says; an
+        // intent the system starts again ([Shares.arrived]) keeps where the app was. The first launch's is the host's
+        // launch location ([environment]).
+        if (again && arrived) received(intent)
     }
 
     /** A URL or a share given to the running activity: its location, as a link's (LLP 1133.023 D15 item 3), or the
@@ -193,6 +194,8 @@ open class ExactActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) backCallback.take(on)
     }
     private fun back() { if (Exact.back()) view.invalidate() else finish() }
+    /** Predictive Back's gesture as it goes ([Native.backProgress]): exact2 previews the pop or the sheet's close. */
+    private fun backProgress(phase: Int, progress: Float, edge: Int) { Exact.backProgress(phase, progress, edge); view.invalidate() }
 
     /** Before Android 13 Back arrives here, and the app's routes take it while they have somewhere to go. */
     @Deprecated("Android 13's OnBackInvokedDispatcher takes Back from then on ([Back]).")
@@ -200,14 +203,28 @@ open class ExactActivity : Activity() {
         if (Build.VERSION.SDK_INT < 33 && takesBack) back() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
-    /** [takeBack]'s callback from Android 13, in a class of its own: an older release never resolves its types. */
+    /** [takeBack]'s callback from Android 13, in a class of its own: an older release never resolves its types. From
+     * Android 14 it hears the gesture as it goes, so exact2 can preview what Back does (LLP 1115.001 D6, D12). */
     @android.annotation.TargetApi(33)
     private class Back(activity: ExactActivity) {
         private val dispatcher = activity.onBackInvokedDispatcher
-        private val callback = android.window.OnBackInvokedCallback { activity.back() }
+        private val callback: android.window.OnBackInvokedCallback =
+            if (Build.VERSION.SDK_INT >= 34) Predictive.callback(activity) else android.window.OnBackInvokedCallback { activity.back() }
         fun take(on: Boolean) {
             if (on) dispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
             else dispatcher.unregisterOnBackInvokedCallback(callback)
+        }
+    }
+
+    /** Android 14's `OnBackAnimationCallback`, in an object of its own: an older release never resolves its types. The
+     * system eases the progress; the edge is `BackEvent`'s (0 the left, 1 the right). */
+    @android.annotation.TargetApi(34)
+    private object Predictive {
+        fun callback(activity: ExactActivity) = object : android.window.OnBackAnimationCallback {
+            override fun onBackStarted(e: android.window.BackEvent) = activity.backProgress(0, e.progress, e.swipeEdge)
+            override fun onBackProgressed(e: android.window.BackEvent) = activity.backProgress(1, e.progress, e.swipeEdge)
+            override fun onBackCancelled() = activity.backProgress(2, 0f, 0)
+            override fun onBackInvoked() = activity.back()
         }
     }
 
@@ -270,6 +287,9 @@ open class ExactActivity : Activity() {
         if (owner != null) {
             owner.chrome = { c -> chrome(c) }
             owner.asked = { r -> requests.perform(r) }
+            owner.rates = { r -> natives?.frameRates(r) }
+            owner.displays(this)
+            frameIdentity(owner)
             owner.configure(device)
             owner.colors(colors)
             owner.window(size.first, size.second, density, edges)
@@ -402,7 +422,8 @@ open class ExactActivity : Activity() {
 
     /** What the host says to draw around the page ([Native.chrome]): the page's place in the window (x, y, width and
      * height in pixels), where the view and the hosted views under it are put; the colour behind the page and in the
-     * edges it keeps out of, which is the window's background; and the two bars' icon appearances (LLP 1105 D7). */
+     * edges it keeps out of, which is the window's background; the two bars' icon appearances; and whether the bars
+     * give way to the page (LLP 1105 D7). */
     private fun chrome(c: IntArray) {
         for (child in listOfNotNull<View>(view, natives ?: return, fields)) {
             child.layoutParams = FrameLayout.LayoutParams(c[2], c[3]).apply {
@@ -412,12 +433,29 @@ open class ExactActivity : Activity() {
         }
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(c[4]))
         val bars = barAppearance(c[5])
-        if (Build.VERSION.SDK_INT < 30) { Legacy.lightBars(window, bars.statusLight, bars.navigationLight); return }
+        val hide = bars.hidden.takeIf { it != barsHidden }
+        barsHidden = bars.hidden
+        if (Build.VERSION.SDK_INT < 30) {
+            Legacy.lightBars(window, bars.statusLight, bars.navigationLight)
+            hide?.let { Legacy.hideBars(window, it) }
+            return
+        }
+        val controller = window.insetsController ?: return
         val status = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
         val navigation = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(
+        controller.setSystemBarsAppearance(
             (if (bars.statusLight) status else 0) or (if (bars.navigationLight) navigation else 0), status or navigation)
+        // Immersive mode as a hand-built app asks for it: both bars go, and a swipe from an edge shows them over the
+        // page for a moment. Only a change is applied, so a chrome that moves the page does not hide bars the person
+        // has just swiped in.
+        if (hide == true) {
+            controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(android.view.WindowInsets.Type.systemBars())
+        } else if (hide == false) controller.show(android.view.WindowInsets.Type.systemBars())
     }
+
+    /** Whether [chrome] last hid the system bars; null before the first. */
+    private var barsHidden: Boolean? = null
 
     /** The device's settings as the host was last told them. */
     private var told: Device? = null
@@ -472,12 +510,36 @@ open class ExactActivity : Activity() {
         configure()
         view.running(true)
         Exact.hidden(false)
+        if (measured) Exact.owner?.windowFrames?.attach(window)
+        Extensions.started()
+    }
+
+    /** A driver's launch: the window's frames are measured for `perf frames` while it shows (LLP 1079.000 §6.2). */
+    private val measured by lazy { android.system.Os.getenv("EXACT_AGENT") == "1" }
+
+    /** The device a `perf frames report` names. */
+    private fun frameIdentity(owner: Owner) {
+        if (!measured) return
+        val display = (getSystemService(android.hardware.display.DisplayManager::class.java))?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        val identity = org.json.JSONObject().put("host", "android").put("app", packageName.take(160))
+            .put("device", "${Build.MANUFACTURER} ${Build.MODEL}".take(160))
+            .put("os", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            .put("emulator", Build.FINGERPRINT.contains("generic") || Build.HARDWARE.contains("ranchu"))
+            .put("displayMaximumHz", display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: 0f)
+        owner.tell { try { Native.frameIdentity(identity.toString().toByteArray()) } catch (e: UnsatisfiedLinkError) {} }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus && reads()) pads.background()
     }
 
     override fun onStop() {
         stopped = true
+        Exact.owner?.windowFrames?.detach()
         Exact.hidden(true)
         if (reads()) pads.background()
+        if (reads()) Extensions.stopped(isChangingConfigurations)
         view.running(false, reads())
         // Behind the hide, the pads' release and the stop of the turns (none queued after it), what they and anything
         // since the pause committed is on disk before Android may kill it.
@@ -498,6 +560,7 @@ open class ExactActivity : Activity() {
         // Everything committed before the pause is on disk (exact2 writes the store on a thread of its own).
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the pause")
         Extensions.paused()
+        requests.paused()
         super.onPause()
     }
 
@@ -542,17 +605,20 @@ open class ExactActivity : Activity() {
         Exact.turned = {}
     }
 
-    /** The launch extras that reach exact2 as its environment, written before its library loads. */
-    private fun environment() {
+    /** The launch extras that reach exact2 as its environment, written before its library loads; the launching
+     * intent's URL or share only when it [arrived] now. */
+    private fun environment(arrived: Boolean) {
         android.system.Os.setenv("XDG_CACHE_HOME", cacheDir.absolutePath, true)
         // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
-        // drive with no scratch store keeps its `app:/` files under it (`exact_linux::picker`).
+        // drive with no scratch store keeps its `app:/` files under it (`exact_painted::picker`).
         android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, false)
         // The launching intent's URL is the launch location (LLP 1133.023 D15 item 3): the activity is exported, so
         // any app may start it with one, which reaches only what the navigation root routes, as a link does.
-        intent.data?.takeUnless { Shares.isShare(intent) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
-        // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
-        Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
+        if (arrived) {
+            intent.data?.takeUnless { Shares.isShare(intent) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
+            // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
+            Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
+        }
         // GPU modules (LLP 1009) come from this APK. Exported intents never select executable content.
         android.system.Os.setenv("EXACT_NATIVE_LIBS", applicationInfo.nativeLibraryDir, true)
         android.system.Os.setenv("EXACT_MOVE_TRACKS", "1", true)

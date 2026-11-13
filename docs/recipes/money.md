@@ -44,6 +44,9 @@ test "money is grouped and rounded to the cent"
 - `formatNumber(n, "currency", "<code>")` takes an ISO 4217 code literal (USD, EUR, GBP,
   JPY, …; an unknown code is refused at compile time). `formatNumber(n, "decimal")` is a
   grouped number (`1,234.5`), `formatNumber(n, "percent")` a percentage of a fraction
-  (`0.256` is `26%`). All are en-US forms; a non-finite number prints `""`.
+  (`0.256` is `26%`). These are the en-US forms; with a German strings table shown they
+  are `1.481,47 $`, `1.234,5` and `26 %`, in the table's locale
+  ([formatting by locale](../contract-grammar.md#formatting-by-locale)). A non-finite
+  number prints `""`.
 - `formatDecimal(cents, 2)` is the exact, ungrouped form (`"1481.47"`) for a field's value.
 - Amounts that change in place take `font-variant-numeric="tabular-nums"`.

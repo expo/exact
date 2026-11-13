@@ -208,13 +208,14 @@ export async function poolingDrive(s, { host, check }) {
   console.log(`${host} carousel pool: parks ${before.parks}→${after.parks}, takes ${before.takes}→${after.takes}, parked ${after.parked}`);
 }
 
-/** A web page the smoke reloaded has booted again. Nothing notifies across a reload, so this polls, and its bound
- *  only stops a page that never boots (docs/testing.md). The bound was 5 s, which a loaded Mac's boot outlasts, and
- *  the caller then read an `exact` the page had not made yet ("exact is not defined"). */
-export async function rebooted(carrier) {
-  const ready = "document.readyState === 'complete' && document.getElementById('exact-root')?.dataset.bootMs != null && !!globalThis.exact?.agentSettled";
+/** Wait for the replacement document and its runtime. The time origin distinguishes it from the page reloaded. */
+export async function rebooted(carrier, before) {
+  const ready = `performance.timeOrigin !== ${JSON.stringify(before)} && document.readyState === 'complete' && document.getElementById('exact-root')?.dataset.bootMs != null && !!globalThis.exact?.ready && !!globalThis.exact?.agentSettled`;
   for (let i = 0; i < 600; i++) {
-    if (await carrier.evaluate(ready).catch(() => false)) return;
+    if (await carrier.evaluate(ready).catch(() => false)) {
+      await carrier.evaluate('globalThis.exact.ready');
+      return;
+    }
     await new Promise((done) => setTimeout(done, 50));
   }
   throw new Error('the reloaded page did not boot within 30 s');

@@ -201,6 +201,13 @@ impl crate::Module {
             .is_some_and(|i| i.surface.wants_input())
     }
 
+    /// Whether this canvas reads gamepads ([`crate::Surface::wants_pads`]).
+    pub fn wants_pads(&self, id: u32) -> bool {
+        self.instances
+            .get(&id)
+            .is_some_and(|i| i.surface.wants_input() && i.surface.wants_pads())
+    }
+
     /// Deliver one device event; the canvas is dirty after it unless the
     /// surface says it changed nothing ([`crate::Surface::input_changed`]).
     pub fn input(&mut self, id: u32, event: &InputEvent) -> bool {

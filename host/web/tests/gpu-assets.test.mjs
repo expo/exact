@@ -62,6 +62,7 @@ test('a final paused frame delivers submitted output once without another render
     const requestAnimationFrame = () => 1;
   ` + source.slice(source.indexOf('function flush('), source.indexOf('// The live frame clock'))
     + source.slice(source.indexOf('function frame(now)'), source.indexOf('// An editable element'))
+    + source.slice(source.indexOf('function performanceRecord(entry)'), source.indexOf('function schedulePerformance()'))
     + source.slice(source.indexOf('function messages(entry'), source.indexOf('function listen(entry)'));
   const api = new Function('globalThis','gpu','surfaces','entry','delivered','records',body + 'return {frame,flush};')(
     {exact:{}},gpu,surfaces,entry,delivered,records);

@@ -140,6 +140,17 @@ for (const engine of engines) {
     await tap(page, 'keep');
     const kept = await until(page, 'shot', t => t.startsWith('app:/data/kept.'), 15000);
     check(engine, 'a written path gets its extension', /^app:\/data\/kept\.(jpg|png|webp) /.test(kept), kept);
+    // The camera app is the web's file input with `capture`, opened in the press; the test plays the person's choice.
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), tap(page, 'camera-app')]);
+    const input = await chooser.element().evaluate(el => `${el.accept} capture=${el.getAttribute('capture')}`);
+    check(engine, 'takePhotoWithCameraApp opens a file input asking for an image from the camera', input === 'image/* capture=', input);
+    await chooser.setFiles({ name: 'card.jpg', mimeType: 'image/jpeg', buffer: readFileSync(resolve(pkg, 'fixture/card.jpg')) });
+    const fromApp = await until(page, 'shot', t => /^app:\/tmp\/camera\/2\.jpg /.test(t), 15000);
+    check(engine, 'the chosen photo is written and answered as takePhoto answers one', /^app:\/tmp\/camera\/2\.jpg image\/jpeg true [1-9]\d*x[1-9]\d*$/.test(fromApp), `${fromApp} ${await text(page, 'shot-error')}`);
+    const [none] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), tap(page, 'camera-app')]);
+    await none.setFiles([]);
+    const cancelled = await until(page, 'shot-error', t => t === 'AbortError');
+    check(engine, 'choosing nothing is AbortError', cancelled === 'AbortError', cancelled);
 
     // Another camera under the same id (D1): the browser's track replaced, the app's id kept.
     // A camera that already faces the person (WebKit's mock) stays as it is.

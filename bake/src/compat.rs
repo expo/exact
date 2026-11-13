@@ -30,10 +30,11 @@ const ABI_HEADER: &str = include_str!(concat!(
 ));
 /// The GPU module's C ABI (LLP 1009 D2): unnumbered in the module today.
 pub const GPU_MODULE_ABI: u32 = 1;
-/// The separately linked Rust data-source wire ABI: admitted secret names
-/// before the store snapshot (LLP 1048.000 D9), two-way sockets (LLP 1016.003),
-/// and cache-mode tag 12 (LLP 1162 D4).
-pub(crate) const RUST_ABI: u32 = 7;
+/// The separately linked Rust data-source wire ABI, as the seam declares it:
+/// admitted secret names before the store snapshot (LLP 1048.000 D9), two-way
+/// sockets (LLP 1016.003), cache-mode tag 12 (LLP 1162 D4), and stream
+/// protocol names (LLP 1016.000).
+pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude
@@ -73,7 +74,8 @@ pub(crate) const RUST_ABI: u32 = 7;
 /// the method through an alias, so no text in the bundle shows the call: a
 /// module whose grants admit `sqlite.open` needs 10 ([`typescript_runtime_of`]).
 /// 11: Fetch's `cache` (LLP 1162 D4), which an older prelude ignores.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 11;
+/// 12: `exactProtocols`, which an older prelude would ignore (LLP 1016.000).
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 12;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -84,7 +86,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 11;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 24] = [
+const RUNTIME_OPTIONS: [(u32, &str); 25] = [
+    (12, "exactProtocols"),
     (11, "cache"),
     (9, "exactIdleTimeout"),
     (8, "Response"),
@@ -268,10 +271,10 @@ pub fn compatibility_id_sources_with_entries(
     )
 }
 
-/// The module a platform's stored bundles are pinned to: the compiled module's
-/// sha256 from a bake's metadata (`module.sha256`) when the platform has a
-/// store, since stores deliver plans and assets and cannot replace the compiled
-/// module; none without one. Metadata without the hash is refused either way.
+/// The compiled module's sha256 (`module.sha256`) to pin in this platform's
+/// compatibility id when it has a store; none without one. Metadata without
+/// the hash is refused either way. This cohort pin does not prohibit a signed
+/// module pair that the installed executor admits.
 pub fn stored_module<'a>(
     meta: &'a serde_json::Value,
     manifest: &Manifest,
@@ -283,13 +286,11 @@ pub fn stored_module<'a>(
     Ok((manifest.store(platform) != "0").then_some(module))
 }
 
-/// As [`compatibility_id_sources_with_entries`], for a module client (its
-/// logic compiled into the binary, LLP 1027) whose binary has an update store.
-/// Bundles carry plan and assets, never code, so a bundle is safe only on a
-/// binary whose module is the one the plan was baked against: `module` (the
-/// compiled module's sha256) enters the id as `typescriptModule`, and any
-/// change to the app's TypeScript is a new cohort, a new stream and a new
-/// binary.
+/// As [`compatibility_id_sources_with_entries`], with an optional compiled-module
+/// pin. When supplied, `module` enters the id as `typescriptModule`, so changing
+/// it changes the baked cohort. Signed delivery may carry a replacement module
+/// pair within an installed cohort, subject to its runtime, identity, grants
+/// and module policy; this helper does not decide candidate admission.
 #[allow(clippy::too_many_arguments)]
 pub fn compatibility_id_pinned(
     app_dir: &Path,
@@ -305,6 +306,8 @@ pub fn compatibility_id_pinned(
     // External apps call this same entrypoint from their own build scripts.
     if std::env::var_os("OUT_DIR").is_some() {
         println!("cargo:rerun-if-env-changed=EXACT_UPDATE_TRUST");
+        println!("cargo:rerun-if-env-changed=EXACT_VERSION");
+        println!("cargo:rerun-if-env-changed=EXACT_BUILD_NUMBER");
         println!("cargo:rerun-if-env-changed=EXACT_TYPESCRIPT_PLACEMENT");
         println!("cargo:rerun-if-env-changed=EXACT_RUST_PLACEMENT");
     }
@@ -316,6 +319,8 @@ pub fn compatibility_id_pinned(
         Err(_) => return Err("EXACT_UPDATE_TRUST is not UTF-8".into()),
     };
     crate::reach::parsed(app_dir, grants, rust_grants, trust == "production")?;
+    let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
+    let preloads = crate::preload::checked(app_dir, manifest, ceiling.as_deref().or(grants))?;
     // @ref LLP 1100 D1 — a colour this platform can't show is refused here.
     // The app's plan, compiled once here: its colours checked, and (stage
     // 14 C2) its icons' fill rules read below.
@@ -323,7 +328,6 @@ pub fn compatibility_id_pinned(
     if let Some(plan) = &plan {
         crate::colors::check_plan(app_dir, plan, platform)?;
     }
-    let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
     let mut compat = compatibility_with_trust(
         app_dir,
         platform,
@@ -332,12 +336,28 @@ pub fn compatibility_id_pinned(
         ceiling.as_deref().or(grants),
         &trust,
     )?;
+    if preloads
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        compat.inputs["preload"] = preloads;
+        compat.id = compatibility_digest(&compat.inputs);
+    }
     if let Some(rust) = rust_grants {
         source_scopes(&mut compat, grants.unwrap_or(""), rust);
     }
     if let Some(module) = module {
         compat.inputs["typescriptModule"] = serde_json::Value::String(module.into());
         compat.id = compatibility_digest(&compat.inputs);
+    }
+    // The origins its declared sources carry are the binary's grants too
+    // (LLP 1162.001 D3): an update that declares another is a new cohort.
+    if let (Some(plan), Some(ceiling)) = (&plan, compat.inputs["grantCeiling"].as_str()) {
+        let ceiling = exact_runner::grants::with_declared(ceiling, plan);
+        if compat.inputs["grantCeiling"] != ceiling.as_str() {
+            compat.inputs["grantCeiling"] = serde_json::Value::String(ceiling);
+            compat.id = compatibility_digest(&compat.inputs);
+        }
     }
     crate::reach::derive(app_dir, platform, plan.as_ref(), &mut compat)?;
     // The plans that ship, each resolved once (the receipt writes the entry
@@ -442,6 +462,7 @@ fn commands_digest() -> String {
         let shape = match *name {
             "share" => "3",
             "stopSounds" => "1",
+            "setSounds" => "5",
             "playSounds" => "1:4|5|6",
             "playSound" => "6",
             "sendMIDI" => "3",
@@ -650,7 +671,7 @@ fn compatibility_with_trust(
     if !widgets.is_empty() {
         inputs["widgets"] = json!(widgets
             .iter()
-            .map(|w| json!({"kind":w.kind,"families":w.families,"watchFamilies":w.watch_families,"requiresSecrets":w.requires_secrets,"title":w.title,"description":w.description}))
+            .map(|w| json!({"kind":w.kind,"families":w.families,"watchFamilies":w.watch_families,"requiresSecrets":w.requires_secrets,"title":w.title,"description":w.description,"configuration":w.configuration.as_ref().map(contract::Configuration::json)}))
             .collect::<Vec<_>>());
     }
     let activities = manifest.live_activities()?;
@@ -676,6 +697,11 @@ fn compatibility_with_trust(
         inputs["typescriptRuntime"] = json!(TYPESCRIPT_RUNTIME);
     }
     let id = compatibility_digest(&inputs);
+    let version = |name: &str, default: &str| match std::env::var(name) {
+        Ok(value) => Ok(value),
+        Err(std::env::VarError::NotPresent) => Ok(default.to_string()),
+        Err(_) => Err(format!("{name} is not UTF-8")),
+    };
     Ok(Compat {
         id,
         inputs,
@@ -683,7 +709,9 @@ fn compatibility_with_trust(
         origin,
         activate: manifest.activate(),
         target: target.into(),
-        embedded: json!({ "trust": trust }),
+        embedded: json!({ "trust": trust,
+            "version": version("EXACT_VERSION", "0.1.0")?,
+            "buildNumber": version("EXACT_BUILD_NUMBER", "1")? }),
         reach: serde_json::Value::Null,
         // Android shells also use the Linux bake; the target names the host.
         painter: manifest.painter(if target.contains("android") {
@@ -738,7 +766,9 @@ fn executors(app_dir: &Path, platform: &str) -> Vec<String> {
 /// The data crate's source-input digest (LLP 1030 D3a): its tree, the trees
 /// of the path crates it is built from, the workspace lockfile, the
 /// toolchain — never its compiled output, which a `wasm32` build can keep
-/// while the native build moved. A `data/` without a `Cargo.toml` is no
+/// while the native build moved. It reads every arm of a `cfg(target_*)`
+/// branch, so the bake need not refuse one (LLP 1030 D3a, amended
+/// 2026-11-12). A `data/` without a `Cargo.toml` is no
 /// crate: TypeScript modules there are the bundle's, and an edit to them is
 /// an update, not a new cohort.
 fn data_crate(app_dir: &Path) -> Result<serde_json::Value, String> {

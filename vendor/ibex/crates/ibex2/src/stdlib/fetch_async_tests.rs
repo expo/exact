@@ -62,6 +62,7 @@ struct Recorded {
     outcomes: Mutex<Vec<Result<Collected, HostError>>>,
     ended: AtomicUsize,
     metrics: Mutex<Vec<(String, HopMetrics)>>,
+    next_urls: Mutex<Vec<String>>,
     /// Next hops held back, to start by hand.
     held: Mutex<Option<Vec<Job>>>,
     /// Run at a hop's end, as a caller's re-entrant abort would.
@@ -84,7 +85,8 @@ impl FetchEvents for Recorded {
             .unwrap()
             .push((url.to_string(), metrics));
     }
-    fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
+    fn next_hop(&self, url: &str, start: Box<dyn FnOnce() + Send>) {
+        self.next_urls.lock().unwrap().push(url.to_owned());
         match self.held.lock().unwrap().as_mut() {
             Some(held) => held.push(start),
             None => start(),
@@ -239,6 +241,7 @@ fn a_followed_redirect_starts_the_next_hop_after_the_old_one_ends() {
         "the next hop waits for the old one's end"
     );
     first.sink.end(cancel_error());
+    assert_eq!(*events.next_urls.lock().unwrap(), ["https://b.example/y"]);
     let mut second = transport.take(0);
     assert_eq!(second.request.url, "https://b.example/y");
     // A late event from the first hop is ignored by hop identity.
@@ -857,6 +860,7 @@ fn reserved_capacity_refuses_without_callback_and_cancel_retires_without_activat
         body: None,
         max_body: 16,
         timeout: None,
+        speculative: false,
     };
     let (tx, rx) = mpsc::channel();
     let exchange = transport
@@ -896,7 +900,8 @@ fn worker_guards_live_through_pool_retirement_and_job_panics() {
         panic!("a panicking job must not release the worker guard");
     }));
     let worker = started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    drop(pool);
+    pool.retire();
+    assert!(pool.reserve().is_err(), "retired pools refuse new work");
     assert!(
         retired_rx.try_recv().is_err(),
         "running worker still owns its guard"
@@ -932,7 +937,8 @@ fn idle_worker_guards_retire_on_the_workers() {
     let pool =
         BoundedWorkerPool::with_worker_guards(vec![Guard(tx.clone()), Guard(tx)], 1).unwrap();
     let pending = pool.reserve().unwrap();
-    drop(pool);
+    pool.retire();
+    assert!(pool.reserve().is_err(), "retired pools refuse new work");
     assert!(
         rx.try_recv().is_err(),
         "reservation retains both idle workers"
@@ -1177,5 +1183,170 @@ fn blocking_and_async_share_the_redirect_and_grant_corpus() {
             blocking, asynchronous,
             "status {status}, location {location}, mode {mode:?}"
         );
+    }
+}
+
+#[derive(Default)]
+struct Destination {
+    bytes: Mutex<Vec<u8>>,
+    finishes: AtomicUsize,
+    task: Mutex<std::sync::Weak<FetchTask>>,
+}
+impl BodyDestination for Destination {
+    fn write(&self, bytes: &[u8]) -> Result<(), HostError> {
+        let task = self.task.lock().unwrap().upgrade().unwrap();
+        assert!(task.state.try_lock().is_ok(), "write held the fetch lock");
+        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        Ok(())
+    }
+    fn finish(&self, headers: &mut Headers) -> Result<(), HostError> {
+        let task = self.task.lock().unwrap().upgrade().unwrap();
+        assert!(task.state.try_lock().is_ok(), "finish held the fetch lock");
+        self.finishes.fetch_add(1, Ordering::SeqCst);
+        headers.set("x-written", &self.bytes.lock().unwrap().len().to_string());
+        Ok(())
+    }
+}
+
+#[test]
+fn a_destination_gets_only_the_final_2xx_body_outside_the_task_lock() {
+    let transport = Arc::new(Scripted::default());
+    let events = Arc::new(Recorded::default());
+    let destination = Arc::new(Destination::default());
+    let abort = AbortController::new();
+    let mut request = Request::get("https://a.test/start");
+    request.response_body = Some(ResponseBody {
+        destination: destination.clone(),
+        error_limit: 4,
+    });
+    let task = FetchTask::start(
+        transport.clone(),
+        granted(&["a.test"]),
+        request,
+        None,
+        abort.signal(),
+        CAPS,
+        events.clone(),
+    );
+    *destination.task.lock().unwrap() = Arc::downgrade(&task);
+    let mut first = transport.take(0);
+    assert_eq!(
+        first.sink.head(head(302, &[("location", "/final")], None)),
+        Flow::Skip
+    );
+    first.sink.end(Err(aborted()));
+    assert!(destination.bytes.lock().unwrap().is_empty());
+    let mut last = transport.take(0);
+    assert_eq!(last.sink.head(head(200, &[], None)), Flow::Continue);
+    assert_eq!(last.sink.data(b"abc"), Flow::Continue);
+    assert_eq!(last.sink.data(b"def"), Flow::Continue);
+    assert_eq!(*destination.bytes.lock().unwrap(), b"abcdef");
+    assert!(events.none(), "write did not finish the fetch");
+    last.sink.end(Ok(()));
+    let response = events.outcome().unwrap();
+    assert!(response.body.is_empty());
+    assert!(response.redirected);
+    assert_eq!(response.headers.get("x-written"), Some("6"));
+    assert_eq!(destination.finishes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_destinations_error_allowance_bounds_collection_without_writing() {
+    for size in [4, 5] {
+        let destination = Arc::new(Destination::default());
+        let mut request = Request::get("https://a.test/");
+        request.max_body = Some(100);
+        request.response_body = Some(ResponseBody {
+            destination: destination.clone(),
+            error_limit: 4,
+        });
+        let (transport, events, _) = start(request, None, &["a.test"]);
+        let mut exchange = transport.take(0);
+        assert_eq!(exchange.sink.head(head(404, &[], None)), Flow::Continue);
+        let flow = exchange.sink.data(&b"error"[..size]);
+        assert_eq!(
+            flow,
+            if size == 4 {
+                Flow::Continue
+            } else {
+                Flow::Stop
+            }
+        );
+        exchange.sink.end(Ok(()));
+        if size == 4 {
+            assert_eq!(events.outcome().unwrap().body, b"erro");
+        } else {
+            assert_eq!(events.outcome().unwrap_err(), over_limit(100));
+        }
+        assert!(destination.bytes.lock().unwrap().is_empty());
+        assert_eq!(destination.finishes.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn a_blocking_adapter_carries_speculation_through_each_redirect_hop() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    struct Recording(mpsc::Sender<(String, bool)>);
+    impl crate::stdlib::fetch::Transport for Recording {
+        fn open(
+            &self,
+            request: &Request,
+            signal: &AbortSignal,
+        ) -> Result<crate::stdlib::fetch::StreamingResponse, HostError> {
+            self.0
+                .send((request.url.clone(), request.speculative))
+                .unwrap();
+            let mut headers = Headers::new();
+            let status = if request.url.ends_with("/first") {
+                headers.set_response("Location", "/second");
+                302
+            } else {
+                200
+            };
+            Ok(crate::stdlib::fetch::Response {
+                status,
+                status_text: String::new(),
+                headers,
+                body: Vec::new(),
+                url: request.url.clone(),
+                redirected: false,
+            }
+            .into_stream(request.body_limit(), signal.clone()))
+        }
+    }
+    struct Events(mpsc::Sender<Result<Collected, HostError>>);
+    impl FetchEvents for Events {
+        fn outcome(&self, result: Result<Collected, HostError>) {
+            self.0.send(result).unwrap();
+        }
+    }
+    for speculative in [true, false] {
+        let (send, seen) = mpsc::channel();
+        let fetch = crate::host::Host::with_transport(Box::new(Recording(send)))
+            .endow((*granted(&["a.example"])).clone())
+            .fetch;
+        let workers = Arc::new(BoundedWorkerPool::new(1, 2).unwrap());
+        let transport = Arc::new(fetch.blocking_adapter(workers));
+        let (send, done) = mpsc::channel();
+        let mut request = Request::get("https://a.example/first");
+        request.speculative = speculative;
+        fetch.start_async(
+            transport,
+            request,
+            None,
+            AbortSignal::default(),
+            CAPS,
+            Arc::new(Events(send)),
+        );
+        let result = done.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+        assert_eq!(result.status, 200);
+        for path in ["first", "second"] {
+            assert_eq!(
+                seen.recv_timeout(Duration::from_secs(10)).unwrap(),
+                (format!("https://a.example/{path}"), speculative)
+            );
+        }
+        assert!(seen.try_recv().is_err());
     }
 }

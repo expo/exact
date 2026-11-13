@@ -151,6 +151,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<Answer, DataError> {
         self.inner.parse_for(target, store, source, args, outcome)
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &[]
+    }
+
     fn grants(&self) -> &str {
         &self.grants
     }

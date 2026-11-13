@@ -55,7 +55,7 @@ fn bake_source<D: contract::DataSource>(
         platform
     };
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    // The Android shell is a cdylib only on Android (`exact_linux::canvas_jni!`); off it the library is empty.
+    // The Android shell is a cdylib only on Android (`exact_painted::canvas_jni!`); off it the library is empty.
     if platform == "android" && env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         fs::write(out.join("entry.rs"), "").unwrap();
         return;
@@ -113,7 +113,7 @@ fn bake_source<D: contract::DataSource>(
         contract::native::android_reach(&app, &baked, &out)
             .unwrap_or_else(|e| panic!("android reach: {e}"));
     }
-    let entry = contract::rust_entry(data_type, constructor, "off", &compat.inputs).unwrap();
+    let entry = runtime_entry(data_type, constructor, &compat.inputs).unwrap();
     let linked = if platform == "web" {
         contract::web_linked(&baked, &compat.inputs)
     } else {
@@ -126,7 +126,7 @@ fn bake_source<D: contract::DataSource>(
     } else {
         String::new()
     };
-    let composed = "exact_linux::Composed { packages: exact_packages(), ..Default::default() }";
+    let composed = "exact_painted::Composed { packages: exact_packages(), ..Default::default() }";
     let windows = format!(
         "fn main() {{ std::process::exit(exact_windows::run_composed::<AppData>({:?}, {}, PLAN, COMPAT, {composed})); }}",
         manifest.name,
@@ -142,7 +142,7 @@ fn bake_source<D: contract::DataSource>(
         }
         "linux" => &linux,
         // canvas_jni! embeds OUT_DIR's plan and compat itself.
-        "android" => "exact_linux::canvas_jni!(crate::AppData);",
+        "android" => "exact_painted::canvas_jni!(crate::AppData);",
         "windows" => &windows,
         _ => panic!("unsupported game app platform: {platform}"),
     };
@@ -167,10 +167,57 @@ const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));"#
     .unwrap();
 }
 
+fn runtime_entry(
+    data_type: &str,
+    constructor: &str,
+    inputs: &serde_json::Value,
+) -> Result<String, String> {
+    if data_type != "()" {
+        return contract::rust_entry(data_type, constructor, "off", inputs);
+    }
+    // Native storage asks the source's identity before the runner binds the plan.
+    let app = inputs["app"]
+        .as_str()
+        .ok_or("game runtime needs an app id")?;
+    let entry = contract::rust_entry("ExactEmptyData", constructor, "off", inputs)?;
+    Ok(format!(
+        r#"#[derive(Default)]
+struct ExactEmptyData;
+impl exact_logic::exact_runner::DataSource for ExactEmptyData {{
+    fn app_id(&self) -> &str {{ {app:?} }}
+    fn query(&mut self, source: &str, args: &[exact_logic::exact_runner::Value])
+        -> Result<exact_logic::exact_runner::Value, exact_logic::exact_runner::DataError>
+    {{
+        exact_logic::exact_runner::DataSource::query(&mut (), source, args)
+    }}
+}}
+{entry}"#
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use exact_runner::Value;
+
+    #[test]
+    fn a_game_without_data_names_its_runtime_storage() {
+        for platform in ["ios", "web", "linux"] {
+            let inputs = serde_json::json!({
+                "app": "dev.exact.kept-game", "platform": platform, "linked": []
+            });
+            let entry = runtime_entry("()", "Default::default()", &inputs).unwrap();
+            assert!(entry.contains("fn app_id(&self) -> &str { \"dev.exact.kept-game\" }"));
+            assert!(
+                entry.contains("AppData, ExactEmptyData,")
+                    || entry.contains("type AppData = ExactEmptyData;")
+            );
+            assert_eq!(
+                runtime_entry("Source", "source()", &inputs).unwrap(),
+                contract::rust_entry("Source", "source()", "off", &inputs).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn contract_source_graph_includes_imported_sources() {

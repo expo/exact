@@ -357,8 +357,29 @@ fn pictures_are_admitted_only_while_the_read_is_granted() {
     assert_eq!(refused["error"], "NotAllowedError");
     assert_eq!(refused["message"], "permission photos is prompt");
     assert!(r.device_holds().is_empty(), "a draw never asks");
+    let counted = state(&r)["photos"]["pictures"].clone();
+    for _ in 0..3 {
+        assert_eq!(
+            r.check_picture("photos:agent-1", "ios"),
+            Some(refused.clone())
+        );
+    }
+    r.extension_agent(r#"{"op":"prefer","permission":{"photos":"denied"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(
+        r.check_picture("photos:agent-1", "ios").unwrap()["message"],
+        "permission photos is denied"
+    );
+    assert_eq!(state(&r)["photos"]["pictures"], counted);
     let granted = r#"{"op":"prefer","permission":{"photos":"granted"}}"#;
     r.extension_agent(granted).unwrap().1.unwrap();
+    assert_eq!(
+        r.check_picture("photos:agent-1", "ios").unwrap()["extension"],
+        "photos"
+    );
+    assert_eq!(state(&r)["photos"]["pictures"], counted);
     let admitted = r.admit_picture("photos:agent-1", "ios").unwrap();
     assert_eq!(
         admitted,

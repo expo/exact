@@ -1,5 +1,5 @@
 ```prompt Show loading, error and retry for a fetch
-Make a screen of the Exact app in this folder show loading, an error with Try Again, and the empty state for data it fetches. Use https://github.com/expo/exact/blob/main/docs/recipes/fetch-loading-error.md as the source for each step. The exact2 checkout has the same page at docs/recipes/fetch-loading-error.md.
+Make a screen of the Exact app in this folder show loading, an error with Try Again, and the empty state for data it fetches. Use https://github.com/expo/exact/blob/main/docs/recipes/fetch-loading-error.md as the source for each step. The Exact checkout has the same page at docs/recipes/fetch-loading-error.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which data, list the resources in app.contract that fetch from the network and ask me which one. If the app fetches nothing yet, ask me for the URL; do not invent one.

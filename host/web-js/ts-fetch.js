@@ -1,6 +1,6 @@
 // App-module bindings, injected by the bundler, never installed as page-wide
 // globals. Host modules keep the browser's functions at every load time.
-import { FetchError, fetchWith, inOverlay, overlaying, ownWithout, redirectOf, signalDeadline } from './admission.js';
+import { socketProtocols, FetchError, fetchWith, inOverlay, overlaying, ownWithout, redirectOf, signalDeadline } from './admission.js';
 import { tsGrantSet } from './admission-data.js';
 // A stream or an upload takes the redirect mode as `fetch` is called, as Hermes
 // does: a bad one rejects before a file is read or a stream registered.
@@ -31,8 +31,14 @@ export function fetch(input, options) {
     if (options.exactStream === undefined || options.exactUploadProgress === true || options.exactLongPoll !== undefined || !/^wss?:/i.test(url))
       return Promise.reject(new TypeError('exactIdleTimeout: only a WebSocket stream takes an idle timeout'));
   }
+  let protocols;
+  try {
+    const offered = options?.exactProtocols;
+    if (offered !== undefined)
+      protocols = socketProtocols(offered, options.exactStream !== undefined && /^wss?:/i.test(input instanceof Request ? input.url : String(input)));
+  } catch (e) { return Promise.reject(e); }
   // A stream counts by its own rule (D5), never here.
-  if (options?.exactStream !== undefined) return fetchNow(input, options);
+  if (options?.exactStream !== undefined) return fetchNow(input, options, protocols);
   // In a render a body from a file or to one is storage, refused there (ts-body-from.js): it is no work to count.
   if (globalThis.__exactRender && (options?.exactBodyFrom !== undefined || options?.exactBodyTo !== undefined)) return fetchNow(input, options);
   // An upload or a download to a file is never held (Request::is_held).
@@ -56,13 +62,43 @@ function counting(kind, start) {
   try { out = start(); } catch (e) { end(); throw e; }
   return Promise.resolve(out).finally(end);
 }
-function fetchNow(input, options) {
+function fetchNow(input, options, protocols) {
   if (overlaying.on) return Promise.reject(inOverlay('fetch()'));
   // A mapper makes no fetch (D7), in any turn of its call.
   if (answering.mapper || answering.mapperCall) return Promise.reject(new Error(answering.mapper ? "fetch() is unavailable in a socket's mapper: it answers each frame now" : "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream"));
   const call = answering.call;
   if (call?.mutation) {
-    if (call.socketConflict || call.socketOps?.length) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
+    // An answer in flight may fetch in a later turn though its source sent, as natively (LLP 1016.000 D7, amended
+    // 2026-11-12). The fetch waits for the commit that asked the answer: its refusal takes the frames back, and this too.
+    const later = !call.turn && call.flight && !call.socketConflict && call.socketOps?.length > 0;
+    // A stream's is refused, as it was (a mutation that sent opens none), and refuses nothing the answer goes on to do.
+    if (later && options?.exactStream !== undefined) return Promise.reject(new Error(SOCKET_AND_FETCH));
+    // An answer let go since (while it waited too: this runs again as it is released) fetches nothing, as it sends nothing.
+    if (later && !answers(call)) return Promise.reject(new FetchError('Aborted', 'the answer was let go before this fetch'));
+    if (later && call.stood === false) return Promise.reject(new Error('fetch(): the commit that asked this answer was refused'));
+    if (later && !call.stood) {
+      // The request is the one `fetch` was given: what it reads of its options is read now, as a mutation's always is.
+      let target, init;
+      try {
+        init = options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined ? captured(options) : held(options);
+        // A `Request` is copied: its headers can change and its body be read meanwhile. The signal stays the one
+        // given, since a copy's is another, whose `AbortSignal.timeout` deadline `signalDeadline` does not know.
+        // One whose body was read or is held by a reader cannot be copied. It is a request only when the options
+        // give another body, and is then kept, with its headers as they are now; otherwise it is refused now, as
+        // `fetch` refuses it, whatever its body becomes while this waits. Left unequal to a fetch that did not
+        // wait (LLP 1016.000, the amendment of 2026-11-12): with `exactBodyFrom` or `exactBodyTo`, that fetch
+        // looks at a reader's hold only after its file work, and takes no `body` its options inherit.
+        if (input instanceof Request) {
+          init = Object.assign(init ?? {}, init?.signal === undefined ? { signal: input.signal } : null);
+          if (!input.bodyUsed && !input.body?.locked) target = input.clone();
+          else if (init.body == null) throw new FetchError('Network', 'fetch(): the Request\'s body was read or is locked');
+          else { target = input; if (init.headers === undefined) init.headers = new Headers(input.headers); }
+        } else target = String(input);
+      } catch (e) { return Promise.reject(e); }
+      return new Promise((go, no) => (call.waiting ??= []).push(Object.assign(go, { refused: why => no(new Error(`fetch(): the commit that asked this answer was refused: ${why}`)) })))
+        .then(() => asCall(call, () => fetchNow(target, init, protocols)));
+    }
+    if (!later && (call.socketConflict || call.socketOps?.length)) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
     call.fetched = true;
     // A stream only registers with its answer, which ts-data.js then refuses;
     // a body from a file is read after its source returns, and checks then.
@@ -75,9 +111,9 @@ function fetchNow(input, options) {
         return asCall(call, () => fetchWith(tsGrantSet, target, init, null, undefined, undefined, call.origin));
       });
     }
-    return fetchOf(input, options, call);
+    return fetchOf(input, options, call, protocols);
   }
-  return fetchOf(input, options, call);
+  return fetchOf(input, options, call, protocols);
 }
 // What `fetch` reads of its options, read now (inherited ones too), with
 // the headers and a body that can change copied.
@@ -95,11 +131,19 @@ function captured(options) {
   else if (typeof FormData === 'function' && body instanceof FormData) { init.body = new FormData(); for (const [k, v] of body) init.body.append(k, v); }
   return init;
 }
+// What a file's fetch reads of its options when it is called (`fetchOf`), read now: its own fields stay own and
+// the inherited ones inherited, as the check of a file's request tells them apart.
+const INHERITED = ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout', 'cache'];
+function held(options) {
+  const own = ownWithout(options, []), inherited = {};
+  for (const key of [...INHERITED, 'redirect']) if (!Object.hasOwn(own, key)) inherited[key] = options[key];
+  return Object.assign(Object.create(inherited), own);
+}
 // The origin a fetch carries (LLP 1133.036 D6): its answer's, or, after the answer's first await, where no call is
 // traced, the least privileged of the answers in flight (LLP 1133.002 D12).
 export const activeCall = () => answering.call ?? [...answering.untraced].find(c => !c.settled);
 export const fetchOrigin = () => activeCall()?.origin ?? 'app';
-function fetchOf(input, options, call) {
+function fetchOf(input, options, call, protocols) {
   if (options?.exactStream === undefined && options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined) return fetchWith(tsGrantSet, input, options, null, undefined, undefined, fetchOrigin(), false, !!activeCall()?.forced);
   if (options.exactStream !== undefined && options.exactBodyTo !== undefined) return Promise.reject(new TypeError("exactBodyTo: a stream's body is its messages, not a file"));
   let redirect;
@@ -110,8 +154,7 @@ function fetchOf(input, options, call) {
       // Keep inherited validation fields inherited, but take their values now.
       const own = ownWithout(options, ['redirect']);
       const inherited = {};
-      for (const key of ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout', 'cache'])
-        if (!Object.hasOwn(own, key)) inherited[key] = options[key];
+      for (const key of INHERITED) if (!Object.hasOwn(own, key)) inherited[key] = options[key];
       init = Object.assign(Object.create(inherited), own);
       ms = init.exactTimeout;
       if (ms !== undefined && (!Number.isInteger(ms) || ms < 1 || ms > 3600000)) throw new TypeError('exactTimeout must be an integer number of milliseconds from 1 to 3600000');
@@ -141,28 +184,31 @@ function fetchOf(input, options, call) {
       return m.fromFile(input, init, redirect, started, origin, armed, forced);
     }).finally(() => armed?.cancel());
   }
-  return options.exactTimeout !== undefined && options.exactUploadProgress !== true ? Promise.reject(new TypeError('exactTimeout: a stream has no timeout')) : stream(input, options, redirect);
+  return options.exactTimeout !== undefined && options.exactUploadProgress !== true ? Promise.reject(new TypeError('exactTimeout: a stream has no timeout')) : stream(input, options, redirect, protocols);
 }
 
 export const files = { appId: null };
 
 // An answer that keeps coming (LLP 1016.000), with Hermes's words
-// (js/src/prelude.js): the stream is the answer's, so its fetch is made while
-// the answer is asked (`answering`, set by ts-data.js), which opens it. Its
+// (js/src/prelude.js): the stream is the answer's, so its fetch is made in one
+// of the answer's turns (`answering`, set by ts-data.js), which opens it. Its
 // promise never settles: the answer is what `exactStream` maps each event to.
 // `mapper`: a socket's mapper answering a frame, in its call's synchronous part, where it may send on that socket.
 // `mapperCall`: the stream whose mapper call is running, in every turn of that call: ts-stream.js sets it for the
 // synchronous part, and the bundle's async helper puts it back at each step of an async function the call made
 // (ts-data.js `__exact_async_context`), as Hermes's prelude carries a mapper's `currentCall`.
 export const answering = { call: null, untraced: new Set(), sockets: false, mapper: null, mapperCall: null, loose: () => {}, heldReply: () => {}, ordinary: start => ordinary(start), page: null, entropy: null, later: null }; // the hooks: held.js's, set by the page's entry; `ordinary` for ts-data.js; `page`, the runtime's clock, journal, `drive` and `time`, set by ts-data.js
-function stream(input, init, redirect) {
+function stream(input, init, redirect, protocols) {
   const call = answering.call;
-  // Hermes also claims a stream started after an await; this page has no
-  // turn to tie one to, so it says where to start it.
-  if (!call?.turn) return Promise.reject(new Error('fetch() with exactStream outside an answer: on the web a stream starts as its answer is asked, before the answer\'s first await'));
+  // The answer's own turns, as Hermes's: its source, or a later turn of an answer still in flight (its async
+  // function's steps after an `await`, its timer), whose ticket the stream then takes (ts-data.js `late`; LLP
+  // 1016.000, the amendment of 2026-11-12).
+  const later = !!call?.ticket && !call.turn && !!call.flight && answers(call);
+  if (!call?.turn && !later) return Promise.reject(new Error('fetch() with exactStream outside an answer: a stream starts in its answer\'s own turns (its source, its code after an `await` in an async function, its timer), before the answer gives its value or is let go'));
   if (call.stream) return Promise.reject(new Error('an answer streams one request'));
   // Checked and opened by ts-stream.js, which only a streaming module loads.
-  call.stream = { input, init, redirect };
+  call.stream = { input, init, redirect, protocols };
+  if (later) try { call.late(); } catch (e) { call.stream = null; return Promise.reject(e); }
   return new Promise(() => {});
 }
 
@@ -217,8 +263,9 @@ function asCall(call, run) {
   answering.call = call;
   try { return run(); } finally { answering.call = before; }
 }
-/** Whether `call`'s ticket was let go (new arguments, a refresh, a newer send, its view's end). rt.js ties the two as it makes the ticket. */
-export function letGo(call) { const t = call.ticket; return !!t && (t.owner.ticket !== t || t.owner.gone); }
+/** Whether `call`'s ticket was let go (new arguments, a refresh, a newer send, its view's end). rt.js ties the two as
+ *  it makes the ticket; a `parallel` mutation holds one for each send in flight (rt.js `tickets`). */
+export function letGo(call) { const t = call.ticket, o = t?.owner; return !!t && (!(o.parallel ? o.tickets.includes(t) : o.ticket === t) || o.gone); }
 /** Whether `call` still answers: it has not answered, and its ticket was not let go. */
 export function answers(call) { return !call.settled && !letGo(call); }
 function disarm(id) {

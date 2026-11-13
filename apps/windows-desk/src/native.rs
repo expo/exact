@@ -101,6 +101,7 @@ struct App {
     editor_font: HFONT,
     dpi: f32,
     path: Option<PathBuf>,
+    sample: isize,
 }
 
 impl App {
@@ -122,6 +123,7 @@ impl App {
             editor_font: null_mut(),
             dpi: 1.,
             path: None,
+            sample: 0,
         }
     }
 
@@ -389,6 +391,38 @@ impl App {
         SYNCING.set(false);
     }
 
+    /// Select the sample row the document came from: none (`-1`) for a new
+    /// or opened document. LB_SETCURSEL sends no LBN_SELCHANGE.
+    unsafe fn select_sample(&self) {
+        let samples = self.controls["samples"].hwnd;
+        unsafe { SendMessageW(samples, LB_SETCURSEL, self.sample as usize, 0) };
+    }
+
+    /// Choose sample `row` as a person does, answering the unsaved-changes
+    /// prompt with Cancel; whether the prompt opened.
+    unsafe fn choose_sample_cancelled(&mut self, row: usize) -> bool {
+        let samples = self.controls["samples"].hwnd;
+        let changed = self.controls["samples"].command | ((LBN_SELCHANGE as usize) << 16);
+        let owner = self.hwnd as usize;
+        let cancel = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < deadline {
+                let popup = unsafe { GetLastActivePopup(owner as HWND) };
+                if !popup.is_null() && popup != owner as HWND {
+                    unsafe { PostMessageW(popup, WM_COMMAND, IDCANCEL as usize, 0) };
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            false
+        });
+        unsafe {
+            SendMessageW(samples, LB_SETCURSEL, row, 0);
+            self.command(changed, samples as isize, None);
+        }
+        cancel.join().unwrap()
+    }
+
     unsafe fn confirm_replace(&mut self) -> bool {
         if !self.dirty() {
             return true;
@@ -517,6 +551,9 @@ impl App {
                         Event::Press,
                     );
                     self.path = None;
+                    self.sample = selected;
+                } else {
+                    unsafe { self.select_sample() };
                 }
             }
             Some("font") if notification == CBN_SELCHANGE as usize => unsafe {
@@ -546,6 +583,8 @@ impl App {
                     if unsafe { self.confirm_replace() } {
                         self.event("new", Event::Press);
                         self.path = None;
+                        self.sample = -1;
+                        unsafe { self.select_sample() };
                     }
                 }
                 OPEN => {
@@ -562,6 +601,8 @@ impl App {
                                     self.input("body", body.replace("\r\n", "\n"));
                                     self.event("save", Event::Press);
                                     self.path = Some(path);
+                                    self.sample = -1;
+                                    unsafe { self.select_sample() };
                                 }
                                 Ok(_) => unsafe {
                                     self.error(
@@ -600,6 +641,40 @@ impl App {
     }
 
     unsafe fn smoke(&mut self) {
+        let samples = self.controls["samples"].hwnd;
+        let changed = self.controls["samples"].command | ((LBN_SELCHANGE as usize) << 16);
+        for previous in [0, 2] {
+            unsafe {
+                SendMessageW(samples, LB_SETCURSEL, previous, 0);
+                self.command(changed, samples as isize, None);
+            }
+            self.input("body", "Keep this unsaved document".into());
+            let title = self.text("title");
+            assert!(
+                unsafe { self.choose_sample_cancelled(1) },
+                "the unsaved-changes dialog did not open"
+            );
+            assert_eq!(self.text("title"), title);
+            assert_eq!(self.text("body"), "Keep this unsaved document");
+            assert!(self.dirty());
+            assert_eq!(
+                unsafe { SendMessageW(samples, LB_GETCURSEL, 0, 0) },
+                previous as isize
+            );
+            self.event("save", Event::Press);
+        }
+        // A new document comes from no sample: none is selected, and a
+        // cancelled switch from it selects none again, not the last sample.
+        unsafe { self.command(NEW, 0, None) };
+        assert_eq!(unsafe { SendMessageW(samples, LB_GETCURSEL, 0, 0) }, -1);
+        self.input("body", "A new unsaved document".into());
+        assert!(
+            unsafe { self.choose_sample_cancelled(1) },
+            "the unsaved-changes dialog did not open"
+        );
+        assert_eq!(self.text("body"), "A new unsaved document");
+        assert_eq!(unsafe { SendMessageW(samples, LB_GETCURSEL, 0, 0) }, -1);
+        self.event("save", Event::Press);
         // Exercise actual HWND notifications through the same queue as a user.
         unsafe {
             SetActiveWindow(self.hwnd);

@@ -1,7 +1,7 @@
 import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { faultMessage, takeFault } from '../web/faults.js';
 import { redirectFor, reachRefusal } from '../web/address-space.js';
-export { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
+export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 
 // Captured while the entry graph loads. App source injection never replaces
 // the page global, so separately loaded host modules retain browser authority.

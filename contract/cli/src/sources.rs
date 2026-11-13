@@ -205,6 +205,7 @@ impl Loader<'_> {
         if let Err(all) = self
             .load_source(&root_key, src, 0)
             .and_then(|()| self.load_data_packages())
+            .and_then(|()| self.load_view_packages())
         {
             return Err(resolve(&self.sources, all));
         }
@@ -979,6 +980,10 @@ impl Loader<'_> {
                 .chain(refused)
                 .collect());
         }
+        if let Some(s) = (self.units.iter().skip(1)).find_map(|u| u.file.sources.first()) {
+            let why = format!("`source {}` is declared outside the app's root file: a declared source is `app.contract`'s, as its resources are (LLP 1162.001 D1)", s.name);
+            return Err(vec![name_error("contract-source-root", why, s.span)]);
+        }
         self.splice_members();
         Ok((self.merge(), scopes))
     }
@@ -989,7 +994,11 @@ impl Loader<'_> {
     /// `{name}__{file stem}`, numbered until unique. One file's two
     /// declarations of a name keep it, so the passes that refuse that refuse it.
     fn unique_names(&self) -> Vec<HashMap<(Kind, String), String>> {
-        let mut taken: HashSet<(Kind, String)> = HashSet::new();
+        let mut taken: HashSet<(Kind, String)> = self
+            .data_sources()
+            .into_iter()
+            .map(|name| (Kind::Call, name))
+            .collect();
         // Each file's local bindings: another file's `fn` or shape of one of
         // these names is renamed, or the binding's calls would reach it. A
         // members block's are its listing file's (LLP 1091.002 D4).
@@ -1351,6 +1360,8 @@ impl Loader<'_> {
             library: Vec::new(),
             library_packages: Vec::new(),
             fns: all!(fns),
+            // A declared source is the root file's (LLP 1162.001 D1).
+            sources: std::mem::take(&mut files[0].sources),
             modules: all!(modules),
             components: all!(components),
             // Each block is spliced into its component (LLP 1091.002 D4).

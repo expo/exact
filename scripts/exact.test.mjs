@@ -3,6 +3,7 @@
 // `bun test ./scripts/exact.test.mjs`.
 import { test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
+import { appVerbs } from './app-cli.mjs';
 import { pathFrom } from './app.mjs';
 import { encodePng } from './png.mjs';
 import assert from 'node:assert/strict';
@@ -164,6 +165,12 @@ for (const device of [true, false]) {
       runApple(command, args) {
         if (command === 'plutil') return { stdout: JSON.stringify(readPlist(args.at(-1))) };
         assert.equal(command, 'xcrun');
+        if (args.includes('swiftc')) {
+          // Metadata fixtures replace the Swift link but still supply a binary for the privacy scan.
+          const built = spawnSync('clang', ['-x', 'c', '-', '-o', args[args.indexOf('-o') + 1]],
+            { input: 'int main(void) { return 0; }\n', encoding: 'utf8' });
+          assert.equal(built.status, 0, built.stderr);
+        }
         return { stdout: '' };
       }, sign(extension) { signed = extension; } });
     assert.equal(signed, resolve(bundle, 'PlugIns/ExactWidgets.appex'));
@@ -232,7 +239,7 @@ test.skipIf(!tools)('signed GPU framework upgrades refresh metadata before archi
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   };
-  const app = { id: 'test.gpu', manifest: {} }, name = 'ExactGpu';
+  const app = { dir, id: 'test.gpu', manifest: {} }, name = 'ExactGpu';
   const source = resolve(dir, 'gpu.c'), product = resolve(dir, 'gpu.dylib');
   writeFileSync(source, 'int gpu_fixture(void){return 42;}\n');
   run('xcrun', ['--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0', '-dynamiclib', source, '-o', product]);
@@ -287,7 +294,7 @@ test('--archive --embed does not stop after embed staging; plain --embed builds 
 });
 
 test.skipIf(!tools)('GPU archives hash the signed framework binary, including declared modules', () => inDir(dir => {
-  const app = { id: 'test.gpu', manifest: {} };
+  const app = { dir, id: 'test.gpu', manifest: {} };
   const digests = new Map();
   const source = resolve(dir, 'gpu.c');
   writeFileSync(source, 'int gpu_fixture(void){return 42;}\n');
@@ -700,7 +707,7 @@ test.skipIf(!tools)('an executable whose name ends in parentheses is read as a f
   assertLinkedSdk(executable, '15.0');
   assert.throws(() => assertLinkedSdk(executable, '27.0'), /Demo \(Beta\) records SDK 15\.0, not 27\.0/);
   // A file the tool cannot read says so, not that it records no SDK.
-  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /vtool -show-build failed .*Gone \(Beta\)/);
+  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /cannot read .*Gone \(Beta\)/);
   // dsymutil and strip take the same path as a file.
   const { saved } = stripForDistribution(executable, resolve(dir, 'Demo (Beta).dSYM'));
   assert.ok(existsSync(resolve(dir, 'Demo (Beta).dSYM/Contents/Resources/DWARF/Demo (Beta)')), 'dsymutil wrote the dSYM');
@@ -712,77 +719,6 @@ test.skipIf(!tools)('an executable whose name ends in parentheses is read as a f
   assert.ok(existsSync(resolve(dir, 'Kept.dSYM/Contents/Resources/DWARF/Demo (Beta)')), 'dsymutil wrote the dSYM');
   assert.ok(readFileSync(executable).equals(bytes), 'the binary is unchanged');
 }));
-
-// LLP 1075.003.000.001 §5: `exact hatch` writes a stub a target, wires it into a module it wrote, and declares the word.
-test('exact hatch writes each target\'s stub, wires it in, and declares the word with its platforms', async () => {
-  const { hatch } = await import('./exact.mjs');
-  const { readFileSync } = await import('node:fs');
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hatch-'));
-  const was = process.env.EXACT_APP_DIR;
-  try {
-    for (const d of ['apple', 'web']) mkdirSync(resolve(dir, d));
-    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    column hatch="avatar"\n');
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Scratch', app: { id: 'com.example.scratch', name: 'Scratch' }, host: { ios: {}, web: {} } }));
-    process.env.EXACT_APP_DIR = dir;
-    const said = [];
-    const first = hatch(['avatar'], line => said.push(line));
-    assert.deepEqual(first.platforms, ['ios', 'web']);
-    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).hatches, { avatar: ['ios', 'web'] });
-    const swift = readFileSync(resolve(dir, 'modules/apple/Hatches.swift'), 'utf8');
-    assert.ok(swift.includes('if element.hatch == .avatar { avatarHatch(element) }') && swift.includes('if element.hatch == .avatar { avatarHatchEnded(element) }'));
-    assert.ok(readFileSync(resolve(dir, 'modules/apple/AvatarHatch.swift'), 'utf8').includes('func avatarHatch(_ element: ExactElement)'));
-    const page = readFileSync(resolve(dir, 'modules/web/index.js'), 'utf8');
-    assert.ok(page.includes("import * as avatarHatch from './hatch-avatar.js';") && page.includes('hatches["avatar"] = avatarHatch;'));
-    assert.ok(readFileSync(resolve(dir, 'modules/web/hatch-avatar.js'), 'utf8').includes('export function elementEnded(e)'));
-    // A second word joins the first; the same word again changes nothing; the scopes take no word.
-    hatch(['unread-dot'], () => {});
-    const again = hatch(['avatar'], () => {});
-    assert.deepEqual(again.wrote, []);
-    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).hatches, { avatar: ['ios', 'web'], 'unread-dot': ['ios', 'web'] });
-    assert.ok(readFileSync(resolve(dir, 'modules/apple/Hatches.swift'), 'utf8').includes('if element.hatch == .unreadDot { unreadDotHatch(element) }'));
-    hatch(['--window'], () => {});
-    assert.ok(readFileSync(resolve(dir, 'modules/apple/Hatches.swift'), 'utf8').includes('        windowHatch(window)\n        // exact:window\n'));
-    assert.ok(readFileSync(resolve(dir, 'modules/web/index.js'), 'utf8').includes('export function window(x) { windowHatch.built(x); }'));
-    // The app hatch reads the root's data-* words, which app.json `data` declares: the verb adds the list and names the accessor.
-    const app = [];
-    hatch(['--app'], line => app.push(line));
-    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).data, []);
-    assert.ok(app.some(line => line.includes('app.data[.booted]')), app.join('\n'));
-    assert.ok(readFileSync(resolve(dir, 'modules/apple/AppHatch.swift'), 'utf8').includes('app.data[.booted]'));
-    assert.throws(() => hatch(['Not A Word'], () => {}), /name a word/);
-    // A Linux crate gets one hatches file, each word an arm and its functions, and is told what its build.rs owes.
-    mkdirSync(resolve(dir, 'linux'));
-    const linux = hatch(['unread-dot'], () => {});
-    assert.ok(linux.platforms.includes('linux') && linux.todo.some(line => line.includes('rust_hatch_entry')));
-    const rust = readFileSync(resolve(dir, 'modules/linux/hatches.rs'), 'utf8');
-    assert.ok(rust.includes('"unread-dot" => unread_dot_hatch(element, context),') && rust.includes('fn unread_dot_hatch_ended<H: Hatches>'));
-    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).hatches['unread-dot'], ['ios', 'web', 'linux']);
-    // A build.rs that already asks for the app's hatches owes nothing: the first file only makes it run again.
-    rmSync(resolve(dir, 'modules/linux'), { recursive: true });
-    writeFileSync(resolve(dir, 'linux/build.rs'), 'fn main() { let _ = contract::native::rust_hatch_entry; }\n');
-    assert.deepEqual(hatch(['unread-dot'], () => {}).todo.filter(line => line.includes('build.rs')), []);
-    // An Android crate gets one Kotlin class, each word an arm and its functions, and is told what its build.rs owes.
-    mkdirSync(resolve(dir, 'android'));
-    const android = hatch(['unread-dot'], () => {});
-    assert.ok(android.platforms.includes('android') && android.todo.some(line => line.includes('android_entry')));
-    const kotlin = readFileSync(resolve(dir, 'modules/android/Hatches.kt'), 'utf8');
-    assert.ok(kotlin.includes('class Hatches : ExactHatches()') && kotlin.includes('"unread-dot" -> unreadDot(element)') && kotlin.includes('"unread-dot" -> unreadDotEnded(element)'));
-    assert.ok(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).hatches['unread-dot'].includes('android'));
-    writeFileSync(resolve(dir, 'android/build.rs'), 'fn main() { let _ = contract::native::android_entry; }\n');
-    assert.deepEqual(hatch(['unread-dot'], () => {}).todo.filter(line => line.includes('android/build.rs')), []);
-    // In a module of the app's own, with no marker, the lines to add are shown, not written.
-    rmSync(resolve(dir, 'modules/apple'), { recursive: true });
-    mkdirSync(resolve(dir, 'modules/apple'));
-    writeFileSync(resolve(dir, 'modules/apple/Mine.swift'), 'final class Mine: ExactModule {}\nlet exactModule: ExactModule.Type = Mine.self\n');
-    const mine = hatch(['seal'], () => {});
-    assert.equal(mine.todo.length, 2);
-    assert.ok(mine.todo.some(line => line.includes('if element.hatch == .seal { sealHatch(element) }')));
-    assert.equal(readFileSync(resolve(dir, 'modules/apple/Mine.swift'), 'utf8').includes('sealHatch'), false);
-  } finally {
-    if (was === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = was;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 // Catalogs are native inputs even when the app declares no native view tags.
 function composerFixture(dir) {
@@ -1126,6 +1062,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['push'], 'docs/recipes/navigation-stack.md', /^routes nav$/m],
     [['deploy'], 'docs/recipes/porting-and-release.md', /Name the port when you make it/],
     [['haptics'], 'docs/start-here.md', /haptic\("selection"\)/],
+    [['platform', 'checks'], 'docs/start-here.md', /agent macos --chrome platform "clock data" "screenshot \.exact\/mac\.png window"/],
     [['glass'], 'docs/contract-for-agents.md', /glass/],
     [['detent'], 'docs/contract-for-agents.md', /detent/],
     [['tab', 'bar'], 'docs/recipes/tabs.md', /iOS's bar/],
@@ -1196,7 +1133,7 @@ test.skipIf(!tools)('release keeps Mac widget entitlements, including the provis
 test('setup refuses the removed game warmup flag before provisioning', () => {
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'exact.mjs'),'setup','--game'],{encoding:'utf8'});
   assert.notEqual(result.status,0);
-  assert.match(result.stderr,/Usage: exact setup \[--check\]/);
+  assert.match(result.stderr,/Usage: exact setup \[--check \[--platform/);
   assert.doesNotMatch(result.stdout,/warming|cargo fetch|rustup toolchain install/);
 });
 
@@ -1286,6 +1223,29 @@ test.skipIf(process.platform === 'win32')("setup names rustup's directory when a
   });
 });
 
+test("setup's Cargo crates row fails on a registry without exact2's locked crates and names the fetch (#48)", async () => {
+  const { cratesRow } = await import('./exact.mjs');
+  // A workspace whose lock names no registry crate has every source on an empty Cargo home.
+  inDir((dir) => {
+    const home = resolve(dir, 'home'), crate = resolve(dir, 'crate');
+    mkdirSync(home); mkdirSync(resolve(crate, 'src'), { recursive: true });
+    writeFileSync(resolve(crate, 'Cargo.toml'), '[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n\n[workspace]\n');
+    writeFileSync(resolve(crate, 'src/lib.rs'), '');
+    writeFileSync(resolve(crate, 'Cargo.lock'), 'version = 4\n\n[[package]]\nname = "fixture"\nversion = "0.1.0"\n');
+    const row = cratesRow({ ...process.env, CARGO_HOME: home }, resolve(crate, 'Cargo.toml'));
+    assert.equal(row.ok, true, row.have);
+    assert.equal(row.have, 'in Cargo cache');
+  });
+  // exact2's lock on a clean CI worker's: Cargo's home has no index and no crates.
+  inDir((home) => {
+    const row = cratesRow({ ...process.env, CARGO_HOME: home });
+    assert.equal(row.ok, false);
+    assert.ok(row.required);
+    assert.match(row.have, /no matching package named|--offline was specified/);
+    assert.ok(row.fix.startsWith(`cargo fetch --locked --manifest-path ${resolve(import.meta.dir, '../Cargo.toml')}`), row.fix);
+  });
+}, 60_000);
+
 test.skipIf(process.platform === 'win32')("the setup report's Rust row and exact contract name another's cargo, rustup's rustc working", async () => {
   const { sdkReport } = await import('./exact.mjs');
   const pin = Bun.TOML.parse(readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8')).toolchain.channel;
@@ -1336,12 +1296,10 @@ test('exact hatch writes the stubs of an app whose crates are generated', async 
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Fresh', app: { id: 'com.example.fresh', name: 'Fresh' }, host: { web: {}, ios: {}, macos: {}, linux: {}, android: {} } }));
     process.env.EXACT_APP_DIR = dir;
     const made = hatch(['avatar'], () => {});
-    assert.deepEqual(made.platforms, ['ios', 'macos', 'web', 'android']);
-    for (const file of ['modules/apple/Hatches.swift', 'modules/web/index.js', 'modules/android/Hatches.kt']) assert.ok(existsSync(resolve(dir, file)), file);
-    assert.ok(!existsSync(resolve(dir, 'modules/linux')));
-    assert.ok(made.todo.some(line => line.startsWith('Linux:')), made.todo.join('\n'));
-    assert.ok(!made.todo.some(line => line.includes('build.rs')), made.todo.join('\n'));
-    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).hatches, { avatar: ['ios', 'macos', 'web', 'android'] });
+    assert.deepEqual(made.platforms, ['ios', 'macos', 'web', 'linux', 'android']);
+    for (const file of ['modules/apple/Hatches.swift', 'modules/web/index.js', 'modules/linux/hatches.rs', 'modules/android/Hatches.kt']) assert.ok(existsSync(resolve(dir, file)), file);
+    assert.deepEqual(made.todo, []);
+    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).hatches, { avatar: ['ios', 'macos', 'web', 'linux', 'android'] });
   } finally {
     if (was === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = was;
     rmSync(dir, { recursive: true, force: true });
@@ -1393,6 +1351,16 @@ test('add installs a standard package by pathFrom from an outside app with an ab
   assert.equal(JSON.parse(readFileSync(resolve(app, 'package.json'), 'utf8')).dependencies['@exact/in-app-browser'], spec);
   const frozen = spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: app, encoding: 'utf8' });
   assert.equal(frozen.status, 0, frozen.stdout + frozen.stderr);
+  // Each command add's advice names, on success and on a refusal, is a verb of the app's exact.mjs, spelled as the app
+  // runs it (`bun exact.mjs <verb>`), never as `exact <verb>`, which needs a shim the app does not have.
+  const geolocation = spawnSync(process.execPath, ['exact.mjs', 'add', 'geolocation'], { cwd: app, encoding: 'utf8' });
+  assert.equal(geolocation.status, 0, geolocation.stdout + geolocation.stderr);
+  const refused = spawnSync(process.execPath, ['exact.mjs', 'add', 'no-such-module'], { cwd: app, encoding: 'utf8' });
+  assert.notEqual(refused.status, 0, refused.stdout + refused.stderr);
+  const said = `${geolocation.stdout}${refused.stderr}`, named = [...said.matchAll(/bun exact\.mjs ([a-z-]+)/g)].map((m) => m[1]);
+  assert.deepEqual(said.match(/(?<![\w./-])exact [a-z-]+/g), null);
+  assert.ok(named.includes('add') && named.includes('docs'), said);
+  assert.deepEqual(named.filter((verb) => !(verb in appVerbs('shop', app))), []);
   rmSync(resolve(app, 'exact.mjs'));
   const fromRepo = spawnSync(process.execPath, [resolve(root, 'scripts/exact.mjs'), 'add', '@exact/in-app-browser'], {
     cwd: root, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: app },
@@ -1409,13 +1377,14 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     const sdk = resolve(root, 'SDK with spaces'), jdk = resolve(root, 'JDK with spaces');
     mkdirSync(resolve(jdk, 'bin'), { recursive: true });
     writeFileSync(resolve(jdk, 'bin/java'), '#!/bin/sh\necho \'openjdk version "21.0.1"\' >&2\n', { mode: 0o755 });
+    writeFileSync(resolve(jdk, 'bin/javac'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const tool = resolve(sdk, 'cmdline-tools/19.0/bin/sdkmanager');
     mkdirSync(dirname(tool), { recursive: true });
     writeFileSync(tool, '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     const env = { ...process.env, ANDROID_HOME: sdk, JAVA_HOME: jdk }, packages = androidSdkPackages();
     assert.deepEqual(androidSdkPackages('compileSdk { version = release(42) { minorApiLevel = 3 } }\nbuildToolsVersion = "41.0.2"').map(p => p.id), ['platforms;android-42.3', 'build-tools;41.0.2']);
     assert.throws(() => androidSdkPackages(''), /cannot read/);
-    const rows = () => sdkReport(env, { only: 'android' }).filter(r => r.name.startsWith('Android'));
+    const rows = () => sdkReport(env, { only: 'android' }).filter(r => packages.some(p => p.name === r.name));
     assert.deepEqual(rows().map(r => [r.name, r.ok, r.want]), packages.map(p => [p.name, false, p.version]));
     for (const [i, row] of rows().entries()) {
       assert.equal(row.fix, `'${tool}' '--sdk_root=${sdk}' '${packages[i].id}'`);
@@ -1425,6 +1394,8 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     assert.ok(rows().every(r => r.ok));
     assert.ok(!sdkReport(env, { only: 'web' }).some(r => r.name.startsWith('Android')));
     assert.ok(!platformRowNames('web').some(name => name.startsWith('Android')));
+    assert.equal(sdkReport(env, { only: 'android' }).find(r => r.name === 'Android JDK')?.ok, true);
+    assert.equal(sdkReport({ ...env, JAVA_HOME: resolve(root, 'absent') }, { only: 'android' }).find(r => r.name === 'Android JDK')?.ok, false);
     assert.equal(androidJavaEnv(env, 'linux').JAVA_HOME, jdk);
     assert.equal(androidJavaEnv({ PATH: '', JAVA_HOME: resolve(root, 'missing-jdk') }, 'linux'), null);
     assert.equal(androidJavaEnv({ PATH: '' }, 'darwin', jdk).JAVA_HOME, jdk);
@@ -1444,3 +1415,40 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     assert.ok(!sdkReport(absentEnv).some(r => packages.some(p => p.name === r.name)), 'without an SDK the general report omits its packages');
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
+
+// These recipes use job values directly; EAS also supports inputs on run steps.
+test('EAS recipes export resolved job versions directly and upload the native artifacts', () => {
+  for (const [platform, version, artifact] of [
+    ['ios', 'buildNumber', 'out.ipa'],
+    ['android', 'versionCode', 'target/android/app/outputs/bundle/release/app-release.aab'],
+  ]) {
+    const doc = readFileSync(resolve(import.meta.dir, `../docs/recipes/eas-${platform}.md`), 'utf8');
+    const { build } = Bun.YAML.parse(/```yaml\n([\s\S]*?)```/.exec(doc)[1]);
+    const steps = build.steps;
+    assert.equal(steps[0], 'eas/checkout');
+    const resolved = steps.indexOf('eas/resolve_build_config');
+    assert.ok(steps.indexOf('eas/install_node_modules') < resolved);
+    const buildStep = steps.findIndex(step => step.run?.command.includes('export EXACT_BUILD_NUMBER='));
+    assert.ok(buildStep > resolved);
+    const expression = '${ eas.job.version.' + version + ' }';
+    assert.ok(steps[buildStep].run.command.includes('export EXACT_BUILD_NUMBER="' + expression + '"'));
+    for (const step of steps.filter(step => step.run)) {
+      assert.equal(Object.hasOwn(step.run, 'inputs'), false, 'keep job expressions directly in these recipes');
+      const command = step.run.command.replaceAll(expression, '42');
+      assert.doesNotMatch(command, /\$\{\s*(inputs|eas|steps)\./);
+    }
+    assert.deepEqual(steps.at(-1), { 'eas/upload_artifact': { inputs: { type: 'application-archive', path: artifact } } });
+  }
+});
+
+test.skipIf(!existsSync('/bin/sh'))('EAS recipes have valid shell syntax after job versions resolve', () => {
+  for (const platform of ['ios', 'android']) {
+    const doc = readFileSync(resolve(import.meta.dir, `../docs/recipes/eas-${platform}.md`), 'utf8');
+    const { build } = Bun.YAML.parse(/```yaml\n([\s\S]*?)```/.exec(doc)[1]);
+    for (const { run } of build.steps.filter(step => step.run)) {
+      const command = run.command.replaceAll(/\$\{ eas\.job\.version\.(buildNumber|versionCode) }/g, '42');
+      const parsed = spawnSync('/bin/sh', ['-n'], { input: command, encoding: 'utf8' });
+      assert.equal(parsed.status, 0, parsed.stderr);
+    }
+  }
+});

@@ -66,11 +66,11 @@ theorem boundedTy_some {p : Program} {o : Option Ty} {t : Ty} (h : boundedTy p o
     · simp at h
   · simp at h
 
-/-- `formatNumber`'s literal parameters (`type-format-style`). The
-embedding fills an omitted code with `""`; only non-currency styles take
-that default. `Format.currencies` has the roster's admitted code literals. -/
+/-- `formatNumber`'s literal parameters (`type-format-style`), then the
+format locale. The embedding fills an omitted code with `""`; only
+non-currency styles take that default. `Format.currencies` has the roster's admitted code literals. -/
 def numberFormatArgs : List Expr → Bool
-  | [_, .str style, .str code] =>
+  | [_, .str style, .str code, _] =>
     if style == "currency" then Format.currencies.any (fun c => c.1 == code)
     else ["compact", "decimal", "percent"].contains style && code == ""
   | _ => false
@@ -1067,10 +1067,11 @@ theorem check_sound {p : Program} (h : check p = true) : WellTyped p := by
     · simp at this
 
 -- Reduced from the seed-7 `number-styled.contract` mutant, which drops USD from `usd`.
--- The emitter fills an omitted code with the roster's empty-string default.
+-- The emitter fills an omitted code with the roster's empty-string default, then
+-- the format locale (`""` in a program without format data).
 private def numberFormatProgram (args : List Expr) : Program :=
   { fns := [{ name := "usd", params := [("x", .number), ("s", .string)], ret := .string,
-              body := .call "formatNumber" args }] }
+              body := .call "formatNumber" (args ++ [.str ""]) }] }
 
 #guard !check (numberFormatProgram [.var "x", .str "currency", .str ""])
 #guard Format.currencies.all fun c =>

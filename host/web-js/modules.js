@@ -45,7 +45,7 @@ import { sheets } from "./sheets.js";
 // `rows`: source → [extension.name, send, substitute, type, request, options' type, live];
 // `bound`: extension → a loader of its web implementation, where the app binds one
 // (LLP 1133.001 D4), which answers outside the agent;
-// `views`: a package view's tag → [extension, displayed, binding props] (views.js);
+// `views`: a package view's tag → [extension, displayed, binding props, agent vocabulary] (views.js);
 // `events`: extension.event → [its action, taken when heard; activation | emit | wake; hold; its parameters' types; its
 // name; a wake's budget].
 export function modules(rows, bound = {}, views = {}, events = {}) {
@@ -88,7 +88,12 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   // A word an interface declares for its implementation's agent path alone (`agent`, LLP 1133.012 §9), by key
   // (`speech-recognition.heard`): its type, where the key is no name of the interface.
   const rowOf = key => [...byKey.values()].find(r => r.key.slice(0, r.key.indexOf(".")) === key.slice(0, key.indexOf(".")));
-  const agentWord = key => !byKey.has(key) && key.includes(".") ? rowOf(key)?.sub.agent?.[key.slice(key.indexOf(".") + 1)] : undefined;
+  const viewWords = new Map(Object.values(views).map(([extension, , , words]) => [extension, words]));
+  const agentWord = key => {
+    if (byKey.has(key) || !key.includes(".")) return undefined;
+    const row = rowOf(key), extension = key.slice(0, key.indexOf("."));
+    return (row ? row.sub.agent : viewWords.get(extension))?.[key.slice(key.indexOf(".") + 1)];
+  };
   const wordFits = (ty, v) => ty === "string" ? typeof v === "string" : ty === "number" ? typeof v === "number" : ty === "bool" ? typeof v === "boolean"
     : ty.endsWith("[]") ? Array.isArray(v) && v.every(x => wordFits(ty.slice(0, -2), x)) : true;
   const isStatus = row => row.sub.permission?.status === row.key.slice(row.key.indexOf(".") + 1);
@@ -152,12 +157,14 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (send && row.sub.shortcuts === "pin") return { now: rc.pin(row, args) };
     // A `default` written `null` is a value: an option source's none, as the runner's `value_of`.
     if (!send) return { now: valueOf(row) ?? ("default" in row.sub ? null : { error: "NotSupportedError" }) };
-    // A send that answers another source's value, raising it when it matches `raise.when` (D10).
+    // A send that raises another source's value when `raise.when` matches and its optional `raise.grant` is declared.
     const answers = sibling(row, row.sub.answers);
     if (answers) {
       const value = decide(answers, false).now ?? {};
       const when = row.sub.raise?.when;
-      return when && Object.entries(when).every(([k, v]) => value[k] === v) ? { hold: "raise" } : { now: value };
+      const grant = row.sub.raise?.grant;
+      const granted = typeof grant !== "string" || (data.grants ?? "").split("\n").some(l => l.trim().split(/\s+/)[0] === grant);
+      return granted && when && Object.entries(when).every(([k, v]) => value[k] === v) ? { hold: "raise" } : { now: value };
     }
     const from = sibling(row, row.sub.from), v = from && prefers(from);
     if (v !== undefined) return { now: v };
@@ -1010,7 +1017,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         const names = Object.keys(e.permissions ?? {});
         if (names.length === 1) e.permission = e.permissions[names[0]]; else delete e.permission;
         if (preferred.has(row.key)) e.preferred[declared] = preferred.get(row.key);
-        if (!row.send) e.readers[declared] = [...new Set([...Resources.filter(r => r.source === row.source || r.watches?.includes(row.key)).map(r => r.name), ...(globalThis.exact?.moduleReaders?.(row.key) ?? [])])];
+        if (!row.send) e.readers[declared] = [...new Set([...Resources.filter(r => r.source === row.source || r.watches?.has(row.key)).map(r => r.name), ...(globalThis.exact?.moduleReaders?.(row.key) ?? [])])];
         for (const h of held.filter(h => h.row === row && !h.queued)) e.held.push({ ticket: h.ticket, name: declared, origin: "app", waits: h.waits });
         for (const h of effects.filter(h => h.row === row)) e.held.push({ ticket: h.ticket, name: declared, origin: "app", waits: "permission" });
       }
@@ -1018,7 +1025,12 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         const extension = q.key.split(".")[0], e = out[extension] ??= { bound: false, preferred: {}, readers: {}, held: [] };
         (e.queued ??= []).push({ event: q.key.split(".")[1], args: q.args, origin: q.origin });
       }
-      // An extension of views alone (`@exact/maps`, LLP 1133.021 §12) has an entry once its implementation is loaded.
+      for (const extension of viewWords.keys()) {
+        const e = out[extension] ??= { bound: !clock.agent && !!bound[extension], preferred: {}, readers: {}, held: [] };
+        e.preferred = preferredOf(extension);
+        if (clock.agent) e.agent = true;
+      }
+      // An extension may load before its first call (`start: load`).
       for (const [extension, impl] of ready) if (impl && !out[extension]) out[extension] = { bound: !clock.agent && !!bound[extension], preferred: {}, readers: {}, held: [] };
       // What a loaded implementation discloses of its own (`state()`: a language model's sessions, LLP 1133.016 §9).
       for (const [extension, e] of Object.entries(out)) {
@@ -1248,7 +1260,12 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         if (row?.sub.changes) sp.changed(row, before, valueOf(row));
       }
       // An implementation bound under the agent is told its names' preferred values (LLP 1133.008 D8 item 9).
-      for (const extension of new Set(Object.keys(group).map(k => byKey.get(k) ?? rowOf(k)).filter(r => r && route(r) === "agent").map(extensionOf))) {
+      const told = Object.keys(group).flatMap(key => {
+        const row = byKey.get(key) ?? rowOf(key), extension = key.slice(0, key.indexOf("."));
+        if (row && route(row) === "agent") return [extensionOf(row)];
+        return clock.agent && agentWord(key) && viewWords.has(extension) ? [extension] : [];
+      });
+      for (const extension of new Set(told)) {
         loaded.get(extension)?.then(impl => impl?.preferred?.(preferredOf(extension)));
       }
       // A field word's change is an arrival, once every word is set.

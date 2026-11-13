@@ -15,12 +15,13 @@ import AppKit
 import UIKit
 #endif
 
-/// A route's header as the shared rule reads it: its heading and level, its
+/// A route's header as the shared rule reads it: its heading and level (none
+/// for a header of buttons alone, whose bar has no title), its
 /// items before and after the heading (buttons and readouts, `role="status"`),
 /// its buttons with the stack's Back control, its search field, its tablist
 /// and the pressable around the heading. Each platform's bar is made from it.
 struct HeaderRule {
-    let header: NodeView, heading: NodeView
+    let header: NodeView, heading: NodeView?
     let level: Int
     let leading: [NodeView], trailing: [NodeView], items: [NodeView]
     let search: NodeView?, segments: NodeView?, tap: NodeView?
@@ -58,6 +59,8 @@ struct HeaderRule {
         if node.presenter?.invocation(of: node)?.opensPopover == true { facts |= 16 }
         if back != nil, node.props["id"] == back { facts |= 32 }
         if node.props["semanticTag"] == "header" { facts |= 64 }
+        // A plain box, which shows nothing of its own (`fact::BOX`).
+        if node.kind == "view" { facts |= 32768 }
         if node.style["display"]?.string == "none" { facts |= 128 }
         // Written, never implied (LLP 1075.003 §9.10): a header that says it keeps its authored bar.
         if node.wrote("appearance"), node.style["appearance"]?.string == "none" { facts |= 512 }
@@ -95,7 +98,7 @@ struct HeaderRule {
         let node = { (place: UInt32) in nodes[Int(place)] }
         let optional = { (place: UInt32) in place == 0 ? nil : nodes[Int(place) - 1] }
         header = node(out[0])
-        heading = node(out[1])
+        heading = optional(out[1])
         level = Int(out[2])
         tap = optional(out[3])
         search = optional(out[4])

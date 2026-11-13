@@ -201,11 +201,11 @@ if ExactEnv.environment["EXACT_HOST_CONTROL"] != nil {
 
 final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
-        exact.installNotificationClicks { _ in
+        exact.installNotificationClicks(boot: nil, activate: { _ in
             guard launched else { return } // finishLaunching presents a cold click.
             app.windows.first?.makeKeyAndOrderFront(nil)
             app.activate(ignoringOtherApps: true)
-        }
+        })
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         readControls() // A launching notification can arrive after willFinish, before the views boot.

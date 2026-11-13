@@ -312,9 +312,72 @@ fn excluded_text_inputs_and_markdown_editor_always_get_none() {
 }
 
 #[test]
+fn non_native_fields_keep_authored_appearance_only_when_it_is_always_none() {
+    let cases = [
+        ("default", "", false),
+        ("literal", "appearance=\"none\"", true),
+        ("computed", "appearance=(on ? \"none\" : \"none\")", true),
+        (
+            "nested",
+            "appearance=(on ? (on ? \"none\" : \"none\") : \"none\")",
+            true,
+        ),
+        (
+            "matched",
+            "appearance=(match (on ? some(1) : none) { case some(n) => \"none\", case none => \"none\" })",
+            true,
+        ),
+        ("classed", "class=Bare", true),
+        ("class-choice", "class=(on ? Bare : AlsoBare)", true),
+        ("mixed", "appearance=(on ? \"none\" : \"auto\")", false),
+        (
+            "mixed-match",
+            "appearance=(match (on ? some(1) : none) { case some(n) => \"none\", case none => \"auto\" })",
+            false,
+        ),
+        ("cleared", "appearance=(on ? \"none\" : none)", false),
+        ("partial-class", "class=(on ? Bare : Plain)", false),
+    ];
+    for tag in ["textarea markup=\"markdown\"", "input type=\"hidden\""] {
+        let body = cases
+            .iter()
+            .map(|(name, attrs, _)| format!("{tag} {attrs} testId=\"{name}\"\n"))
+            .collect::<String>();
+        let plan = compile(
+            "style Bare\n  appearance=\"none\"\nstyle AlsoBare\n  appearance=\"none\"\nstyle Plain\n  opacity=1\n",
+            &body,
+        );
+        let mut r = Runner::boot(
+            Plan::decode(&plan.encode()).unwrap(),
+            NoData,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        for _ in 0..2 {
+            for (name, _, written) in cases {
+                let field = r.kernel().node(id(&r, name)).unwrap();
+                assert_eq!(field.node_type, NodeType::TextInput, "{tag}: {name}");
+                assert_eq!(field.style.appearance, Appearance::None, "{tag}: {name}");
+                assert!(field.style.mask.has(StyleId::Appearance), "{tag}: {name}");
+                assert_eq!(
+                    field.style.written.has(StyleId::Appearance),
+                    written,
+                    "{tag}: {name} ownership"
+                );
+                assert_eq!(field.says(StyleId::Appearance), written, "{tag}: {name}");
+            }
+            r.act("flip", vec![]).unwrap();
+        }
+    }
+}
+
+#[test]
 fn fields_and_buttons_share_the_literal_appearance_error() {
     for tag in ["input", "textarea", "button"] {
         for (styles, row) in [
+            ("", "appearance=(on ? \"none\" : \"none\")"),
             ("", "appearance=(on ? \"none\" : \"auto\")"),
             (
                 "style A\n  appearance=\"auto\"\nstyle B\n  opacity=1\n",

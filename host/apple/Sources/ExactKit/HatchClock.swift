@@ -15,6 +15,8 @@
 // 4,096 drained acts, are the most one agent command runs. On the wall the
 // same 4,096 bound one presented frame's ticks and one timer's `after`s,
 // so an animation keeps ticking for as long as the app runs.
+// Coalescing afters refresh values at instants the clock already reaches;
+// they add no seek stop or deadline for settling a pending reply.
 //
 //   host table   64  frames(host, token, on)     a ticket begins or stops
 //                72  after(host, token, ms)      ms < 0 cancels
@@ -29,7 +31,7 @@ final class HatchClock {
     /// The last commit the session applied, for `frame.seq`.
     var seq: UInt64 = 0
     private var tickets: [UInt64] = []
-    private var afters: [(due: Double, token: UInt64, order: Int)] = []
+    private var afters: [(due: Double, token: UInt64, order: Int, coalescing: Bool)] = []
     /// The virtual display's frames after the first ticket began: `base + k·1000/60`.
     private var base = 0.0, k = 1, order = 0
     private var fires = 0, acts = 0
@@ -52,11 +54,11 @@ final class HatchClock {
         if !tickets.isEmpty { natives?.session?.frames.run(true) }
     }
 
-    func after(_ token: UInt64, ms: Double) {
+    func after(_ token: UInt64, ms: Double, coalescing: Bool = false) {
         afters.removeAll { $0.token == token }
         if ms >= 0, ms.isFinite {
             order += 1
-            afters.append((now + ms, token, order))
+            afters.append((now + ms, token, order, coalescing))
         }
         rearm()
     }
@@ -76,11 +78,11 @@ final class HatchClock {
 
     /// The next `after` due, which a reply in flight can wait on: a bound
     /// package's effect answers at its span's end (LLP 1133.022 §21).
-    var nextAfter: Double? { afters.map(\.due).min() }
+    var nextAfter: Double? { afters.filter { !$0.coalescing }.map(\.due).min() }
 
     /// The next hatch instant, for a seek to stop at.
     var nextInstant: Double? {
-        let after = afters.map(\.due).min()
+        let after = nextAfter
         guard !tickets.isEmpty else { return after }
         return min(frameDue, after ?? .infinity)
     }

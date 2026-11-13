@@ -20,6 +20,8 @@
 //! observes boxes after layout; the hosts only present the resulting values.
 
 mod layout;
+mod looks;
+pub use looks::LookMotion;
 mod paint;
 pub use layout::{layout_presented, LayoutMotion};
 pub use paint::{still, PaintMotion};
@@ -155,6 +157,19 @@ impl MotionSync {
         for (node, property) in &self.retired {
             engine.remove_property(*node, *property);
         }
+        // A release can enable a spring at its current endpoint. An ordinary
+        // velocity-row edit on an unchanged target must not start it again.
+        let enabled: Vec<_> = self
+            .transitions
+            .iter()
+            .filter_map(|(node, row)| {
+                (!engine.has_spring_transition(*node, Property::Translate)
+                    && row.matching(Property::Translate).is_some_and(|t| {
+                        matches!(t.timing, exact_motion::TimingFunction::Spring(_))
+                    }))
+                .then_some(*node)
+            })
+            .collect();
         for (node, transitions) in &self.transitions {
             engine.set_transitions(*node, transitions.clone())?;
         }
@@ -162,7 +177,14 @@ impl MotionSync {
             engine.set_layout_transition(*node, transitions)?;
         }
         for change in &self.changes {
-            engine.observe(*change)?;
+            let mut change = *change;
+            if change.property == Property::Translate
+                && engine.target(change.node, change.property) == Some(change.value)
+                && !enabled.contains(&change.node)
+            {
+                change.velocity = None;
+            }
+            engine.observe(change)?;
         }
         for (node, path) in &self.paths {
             engine.observe_path(*node, path.clone());
@@ -867,11 +889,19 @@ impl Kernel {
             let id = motion_node(*key);
             sync.transitions.push((id, node.style.transition.clone()));
             for (property, value) in targets(node.style) {
+                let velocity = (property == Property::Translate
+                    && node.style.mask.has(StyleId::TranslateVelocity))
+                .then(|| {
+                    Value::new(
+                        node.style.translate_velocity.x as f64,
+                        node.style.translate_velocity.y as f64,
+                    )
+                });
                 sync.changes.push(Change {
                     node: id,
                     property,
                     value,
-                    velocity: None,
+                    velocity,
                 });
             }
             // @ref LLP 1055.000 D15 — a path's `d`, read only where a

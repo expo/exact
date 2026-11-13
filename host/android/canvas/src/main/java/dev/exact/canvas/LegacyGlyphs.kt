@@ -12,7 +12,7 @@ import java.nio.ByteBuffer
 /**
  * Glyph runs on Android 10 and 11, which have no `Canvas.drawGlyphs` (API 31) and no other public way to draw a glyph
  * by its id. Each glyph is drawn from its outline, read by exact2's Rust from the font file the [Font] maps
- * (`host/linux/src/canvas/legacy.rs`), the run's outlines filled as one [Path] with the run's paint (its blur too);
+ * (`host/painted/src/canvas/legacy.rs`), the run's outlines filled as one [Path] with the run's paint (its blur too);
  * a colour glyph (an emoji's bitmap) as its image. A face's outline is asked for once and kept. Entered only below
  * API 31.
  */

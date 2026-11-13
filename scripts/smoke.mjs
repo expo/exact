@@ -17,7 +17,7 @@ import { HOST_DEV, authoredTests, resolveApp, withAppFixture } from './app.mjs';
 import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, isDeckURL } from './smoke-inspect.mjs';
 import { DirectoryOrigin, parseWebRoot, webReleasePath, webRootPath } from './origin.mjs';
 import { jsTargetBuild, readStaticFile, serveStatic } from '../host/web/serve.mjs';
-import { canonicalBytes, channelOf, publicKeyFromRaw, webRelease } from './deploy.mjs';
+import { canonicalBytes, channelOf, publicKeyFromRaw, readAssetIndex, webRelease } from './deploy.mjs';
 import { crop, decodePng, diff, encodePng } from './png.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -254,9 +254,9 @@ if (host === 'deploy') {
       const head = JSON.parse(headOf(id).toString('utf8'));
       const ok = verify(null, canonicalBytes(head), publicKeyFromRaw(Buffer.from(publicKey, 'base64')), Buffer.from(head.signature.ed25519, 'base64'));
       check(ok && head.stream.seq === 1 && head.stream.compatibilityId === id && head.stream.channel === channel && head.signature.keyId === keyId, `the head of ${id.slice(0, 8)} verifies and names its stream`);
-      const cards = [head.plan, ...head.assets];
+      const blob = (card) => resolve(origin, '.exact', 'blobs', card.sha256), listed = head.assets ? readAssetIndex(head.assets, readFileSync(blob(head.assets))) : [];
       check(!existsSync(resolve(origin, '.exact', channel, id, 'app.plan'))
-        && cards.every((card) => card.url === `../../blobs/${card.sha256}` && existsSync(resolve(origin, '.exact', 'blobs', card.sha256)))
+        && [head.plan, ...(head.assets ? [head.assets] : []), ...listed].every((card) => card.url === (listed.includes(card) ? `./${card.sha256}` : `../../blobs/${card.sha256}`) && existsSync(blob(card)))
         && readdirSync(resolve(origin, '.exact', channel, id, 'releases')).length === 1,
       `the stream ${id.slice(0, 8)} points at immutable blobs and has one release record`);
     }
@@ -295,7 +295,7 @@ if (host === 'deploy') {
       check([...oldEntries].every(entry => pathOf(entry) === pointerPath || newEntries.has(entry))
         && [...newEntries].every(entry => oldEntries.has(entry) || allowed.has(pathOf(entry))), 'repeat publication rewrote or added files outside its new graph and pointer');
     }
-    // 4. An asset edit: bundle seq 2 naming it; the record's previous is the old head's digest; the old blob is kept.
+    // 4. An asset edit: bundle seq 2 naming it; the record's previous is the old head's digest; the old blobs are kept (the asset's and the index's).
     if (assetPath) {
       const first = ids[0];
       const prev = sha(headOf(first));
@@ -305,7 +305,7 @@ if (host === 'deploy') {
       const pub2 = table('--yes', '--dirty');
       const head2 = JSON.parse(headOf(first).toString('utf8'));
       const record = JSON.parse(readFileSync(resolve(origin, '.exact', channel, first, 'releases', `${pub2.release}.json`), 'utf8'));
-      check(head2.stream.seq === 2 && record.previous === prev && record.seq === 2 && readdirSync(resolve(origin, '.exact/blobs')).length === blobs1 + 1, `seq 2: head seq ${head2.stream.seq}, previous ${record.previous === prev}, blobs ${readdirSync(resolve(origin, '.exact/blobs')).length} (was ${blobs1})`);
+      check(head2.stream.seq === 2 && record.previous === prev && record.seq === 2 && readdirSync(resolve(origin, '.exact/blobs')).length === blobs1 + 2, `seq 2: head seq ${head2.stream.seq}, previous ${record.previous === prev}, blobs ${readdirSync(resolve(origin, '.exact/blobs')).length} (was ${blobs1})`);
       writeFileSync(assetPath, asset0);
     }
     // 5. A publisher meets its stream locked (the restored asset makes the
@@ -793,8 +793,7 @@ try {
 // 8. The nested case (LLP 1010, the scroll fixture): a scroll node that
 // overflows on a page that overflows. A wheel over the node scrolls it; at
 // its edge the wheel chains to the page.
-// A paired module client cannot boot unrelated bare plans. --app-only keeps
-// the complete app drive and its Contract tests, excluding host-only fixtures.
+// --app-only skips unrelated plans a paired module client cannot boot, keeping the app drive and Contract tests.
 if (!argv.includes('--app-only')) {
 if (apple && !device) await httpFrameSmoke({ host, open, check });
 // Launch facts reach a real runner on every carrier, including Linux's t() table.
@@ -830,9 +829,10 @@ if (apple && !device) await httpFrameSmoke({ host, open, check });
         const attrs = await f.carrier.evaluate('({lang:document.documentElement.lang,dir:document.documentElement.dir})');
         check(attrs.lang === lang && attrs.dir === dir, 'the document element carries lang and dir');
         if (jsTargetBuild(selectedWebDist)) { // a JS page (the plan compiled ahead) reloads, its launch facts in its URL
+          const before = await f.carrier.evaluate('performance.timeOrigin');
           await f.carrier.evaluate('location.reload()').catch(() => {});
-          await rebooted(f.carrier);
-          await f.carrier.evaluate('exact.ready'); } else await f.carrier.evaluate('fetch("/__plan").then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b)))');
+          await rebooted(f.carrier, before);
+        } else await f.carrier.evaluate('fetch("/__plan").then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b)))');
         check(byTestId(await f.tree(), 'place')?.props.text === expected, 'web reload retains launch facts');
         const attrsAfter = await f.carrier.evaluate('({lang:document.documentElement.lang,dir:document.documentElement.dir})');
         check(attrsAfter.lang === lang && attrsAfter.dir === dir, 'web reload retains lang and dir');

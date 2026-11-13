@@ -113,6 +113,9 @@ pub(crate) struct SizeIndex {
     /// And before its first row: the range starts this far before the
     /// rows' start, so a short list's end can be there.
     leading: f64,
+    /// A row list's `gap`, which each row's height counts after it: the
+    /// rows end that much before their heights' sum (`sizing.rs`).
+    gap: f64,
     #[cfg(test)]
     rebuilds: usize,
     #[cfg(test)]
@@ -142,6 +145,7 @@ impl SizeIndex {
             next_generation: 0,
             trailing: 0.0,
             leading: 0.0,
+            gap: 0.0,
             #[cfg(test)]
             rebuilds: 0,
             #[cfg(test)]
@@ -340,8 +344,49 @@ impl SizeIndex {
         (end <= self.len()).then(|| self.tree.prefix(end))
     }
 
+    /// Where the rows end: their heights' sum, less the gap the last one
+    /// counts after it.
     pub(crate) fn total_height(&self) -> f64 {
-        self.tree.total()
+        if self.rows.is_empty() {
+            return self.tree.total();
+        }
+        (self.tree.total() - self.gap).max(0.0)
+    }
+
+    /// The gap each row's height counts after it.
+    pub(crate) fn item_gap(&self) -> f64 {
+        self.gap
+    }
+
+    /// A new estimate (`estimate`, the gap after a row included) and gap:
+    /// the rows at `kept` (sorted positions) keep their sizes and
+    /// measurements, moved by the change of gap, but for one of no extent
+    /// (not displayed, so no gap around it), which stays at none; every
+    /// other row takes the estimate, unmeasured. O(N).
+    pub(crate) fn resize(
+        &mut self,
+        estimate: f64,
+        gap: f64,
+        kept: &[usize],
+    ) -> Result<(), IndexError> {
+        let estimate = valid_height(estimate)?;
+        let gap = valid_height(gap)?;
+        let mut rows = self.rows.clone();
+        for (i, row) in rows.iter_mut().enumerate() {
+            if kept.binary_search(&i).is_ok() {
+                if row.height > 0.0 {
+                    row.height = (row.height - self.gap + gap).max(gap);
+                }
+            } else {
+                row.height = estimate;
+                row.measured_epoch = None;
+            }
+        }
+        self.tree = SumTree::new(&rows)?;
+        self.rows = rows;
+        self.estimate = estimate;
+        self.gap = gap;
+        Ok(())
     }
 
     /// Sufficient bound only: caller bounds every candidate leaf and padding by H.

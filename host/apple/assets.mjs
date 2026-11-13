@@ -1,6 +1,7 @@
+import { writePrivacyManifest, privacyManifestForBinaries, privacyAPIManifest } from './privacy.mjs';
 // The app's icon and asset catalog, from its manifest, for an Apple bundle
 // (host/apple/build.mjs assembles it).
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from './toolchain.mjs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve, isAbsolute } from 'node:path';
@@ -239,8 +240,10 @@ const ICON_REFUSALS = { ios: iconRefusal, tvos: tvIconRefusal, macos: macIconRef
 export function appleRefusals(app, platform, { archive = false } = {}) {
   let catalogs;
   try { catalogs = appleAssetCatalogInventory(app, platform); } catch (e) { return [e.message]; }
-  const refused = ICON_REFUSALS[platform]?.(app, catalogs, archive);
-  return refused ? [refused] : [];
+  const refused = [ICON_REFUSALS[platform]?.(app, catalogs, archive)];
+  // Info.plist's ExactModuleConfig is `moduleConfig` as written: refused before anything compiles.
+  try { plist({ moduleConfig: app.manifest.moduleConfig ?? {} }); } catch (e) { refused.push(`${app.name}: app.json's ${e.message.slice('plist: '.length)}`); }
+  return refused.filter(Boolean);
 }
 
 /** One actool pass includes the app's catalogs, selected or generated icon and launch
@@ -268,7 +271,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       // What the compile itself writes: a cache from before `--accent-color` named no accent,
       // one from before `ExactLaunchImageSource` no launch image's source or digest,
       // one from before `digest` launch assets under fixed names
-      'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets'])).digest('hex').slice(0, 16);
+      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components'])).digest('hex').slice(0, 16);
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;
@@ -327,6 +330,10 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       run('xcrun', ['actool', ...sources, '--compile', dir, '--platform', target, '--minimum-deployment-target', minimum,
         ...{ macos: [], ios: ['iphone', 'ipad'], tvos: ['tv'], watchos: ['watch'] }[platform].flatMap(family => ['--target-device', family]),
         ...(iconName ? ['--app-icon', iconName] : []),
+        ...(selected && platform === 'ios' && process.platform === 'linux' ? (() => {
+          const fallback = (app.manifest.icons ?? []).find(icon => /^([0-9]+)x\1$/.test(icon.sizes ?? '') && Number(icon.sizes.split('x')[0]) >= 512 && icon.src?.toLowerCase().endsWith('.png'));
+          return fallback ? ['--exact-icon-fallback', resolve(app.dir, fallback.src)] : [];
+        })() : []),
         ...alternateIcons.flatMap(name => ['--alternate-app-icon', name]),
         ...(accent ? ['--accent-color', 'AccentColor'] : []),
         '--output-partial-info-plist', partial, '--output-format', 'human-readable-text'], { stdio: 'ignore' });
@@ -353,7 +360,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
  * the bake's `launchBackground`, LLP 1116.011 D2.3), `systemGroupedBackground`,
  * which the system shows as #F2F2F7 and black. That is a colour set of its own
  * (a reference to the system colour compiles to its light value alone), so the
- * window under the first frame (`ExactLaunch-…`, read by the presenter) is the
+ * window under the first frame (`ExactLaunchColor`, the same components) is the
  * same grey and nothing lighter shows between the launch screen and the first
  * frame (stopwatch, round 13: "blank white screen for ~1 s").
  * `UILaunchScreen` names colours and images only from an asset catalog, so
@@ -394,7 +401,10 @@ function launchScreen(app, catalog, launch = 'system', picture = null) {
   const name = `ExactLaunch-${digest(colors)}`;
   mkdirSync(resolve(catalog, `${name}.colorset`), { recursive: true });
   writeFileSync(resolve(catalog, `${name}.colorset`, 'Contents.json'), JSON.stringify({ colors, info: { author: 'exact', version: 1 } }));
-  return { UILaunchScreen: { UIColorName: name, ...keys }, ...source };
+  // The host uses the same sRGB components as the catalogue, including its
+  // rounded alpha, without loading Assets.car before UIApplicationMain.
+  const rgba = ({ color: { components: c } }) => [parseInt(c.red, 16) / 255, parseInt(c.green, 16) / 255, parseInt(c.blue, 16) / 255, Number(c.alpha)];
+  return { UILaunchScreen: { UIColorName: name, ...keys }, ExactLaunchColor: { light: rgba(colors[0]), ...(dark ? { dark: rgba(colors[1]) } : {}) }, ...source };
 }
 
 /** A launch asset's name ends in a digest of what it draws: iOS keeps the launch
@@ -493,7 +503,7 @@ export function signingOrder(bundle, compat = null, identity = null) {
 
 /** The Mach-O file type of a thin file, or of a universal file's first
  *  architecture (`mach-o/loader.h`: 2 is `MH_EXECUTE`, 6 `MH_DYLIB`). */
-function machOType(path) {
+export function machOType(path) {
   const read = (at, n) => { const b = Buffer.alloc(n), fd = openSync(path, 'r'); try { return readSync(fd, b, 0, n, at) === n ? b : null; } finally { closeSync(fd); } };
   let head = read(0, 16);
   if (!head) return null;
@@ -523,6 +533,18 @@ export const macReleaseEntitlements = (compat, widgets = {}) => {
   return plistFile({ ...widgets, ...Object.fromEntries(names.map((name) => [name, true])),
     ...(domains.length ? { 'com.apple.developer.associated-domains': domains } : {}) });
 };
+
+/** The keys a macOS provisioning profile authorizes (presence.mjs `macProfileEntitlements`). */
+export const PROFILE_KEYS = ['com.apple.application-identifier', 'com.apple.developer.team-identifier', 'keychain-access-groups',
+  'com.apple.developer.aps-environment', 'com.apple.developer.devicecheck.appattest-environment', 'com.apple.developer.declared-age-range',
+  'com.apple.developer.associated-domains'];
+
+/** Of `bundle`'s signed entitlements, those a profile authorizes; `signed`: its entitlements as a plist (a test's). */
+export function profileEntitlements(bundle, signed = run('codesign', ['-d', '--entitlements', '-', '--xml', bundle], { encoding: 'utf8', stdio: 'pipe' }).stdout) {
+  if (!signed?.includes('<plist')) return {};
+  const json = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', '-'], { input: signed, encoding: 'utf8', stdio: 'pipe' }).stdout);
+  return Object.fromEntries(Object.entries(json).filter(([key]) => PROFILE_KEYS.includes(key)));
+}
 
 /** The executable a bundle runs, as Foundation resolves it (`NSBundle`
  *  `executablePath`, the resolver `codesign` shares): it honours
@@ -598,6 +620,8 @@ export function signRelease(bundle, { compat, manifest, identity, id, scratch, t
     if (!signed?.includes('<plist')) throw new Error('Mac widget extension has no entitlements to preserve');
     plists.set(extension, signed);
   }
+  // What the build signed under its embedded macOS profile (LLP 1133.010 D7), kept as the build chose it.
+  if (existsSync(resolve(bundle, 'Contents/embedded.provisionprofile'))) Object.assign(widgets, profileEntitlements(bundle));
   const own = macReleaseEntitlements(compat, widgets);
   if (own) plists.set(bundle, own);
   let n = 0;
@@ -621,19 +645,19 @@ export const IOS_RESOURCE_ROOT = 'ExactResources';
  *  trees are declared, and what every bundle holds. One written over the other fails
  *  the build part-way. */
 export function iosExecutableRefusal(manifest, name, key = 'app.name') {
-  const written = [...(manifest.host?.ios?.resources?.length ? [IOS_RESOURCE_ROOT] : []), 'Frameworks', 'Info.plist', 'receipt.json', '_CodeSignature'];
+  const written = [...(manifest.host?.ios?.resources?.length ? [IOS_RESOURCE_ROOT] : []), 'Frameworks', 'Info.plist', 'PrivacyInfo.xcprivacy', 'receipt.json', '_CodeSignature'];
   const taken = written.find(n => n.toLowerCase() === name.toLowerCase());
   if (taken) throw new Error(`app.json's ${key} "${name}" names an iOS executable, which its bundle's own "${taken}" would take the place of: rename it`);
 }
 
 /** The trees every Apple bundle gets from the build's capture (`copyAppleStaticTrees`):
  *  under the Mac's `Contents/Resources`, at the top of an iOS bundle. */
-export const APPLE_STATIC_TREES = ['assets', 'deck', 'shaders', 'rust', 'plans', 'typescript', 'activities'];
+export const APPLE_STATIC_TREES = ['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities'];
 
 /** What the Mac build writes under `Contents/Resources` (bundle.mjs, intents.mjs) beside
  *  the trees an app declares, which may not take one of these places; and a
  *  `<locale>.lproj` for each usage string (`writeUsageStrings`). */
-export const MAC_RESOURCES_WRITTEN = [...APPLE_STATIC_TREES, 'receipt.json', 'Assets.car', 'AppIcon.icns', 'Metadata.appintents'];
+export const MAC_RESOURCES_WRITTEN = [...APPLE_STATIC_TREES, 'receipt.json', 'Assets.car', 'AppIcon.icns', 'Metadata.appintents', 'PrivacyInfo.xcprivacy'];
 
 /** Which file `path` is, read without following a link at its end: its device and
  *  inode. Two directories are never one identity, whatever their names; a name the
@@ -711,6 +735,15 @@ export function shareIosResources(manifest, from, to) {
     cpSync(root, resolve(to, IOS_RESOURCE_ROOT), { recursive: true });
 }
 
+/** The fallback PNGs actool writes beside Assets.car for the `CFBundleIconFiles` of the icon keys it returned
+ *  (`AppIcon60x60@2x.png`, `AppIcon76x76@2x~ipad.png`, an alternate's), by name in `dir`: a bundle that takes
+ *  those keys (the App Clip's) takes these files too, since iOS looks for them in the bundle that names them. */
+export function iconFiles(keys, dir) {
+  const names = [keys.CFBundleIcons, keys['CFBundleIcons~ipad']].flatMap(icons => icons ? [icons.CFBundlePrimaryIcon, ...Object.values(icons.CFBundleAlternateIcons ?? {})] : [])
+    .flatMap(icon => icon?.CFBundleIconFiles ?? []);
+  return readdirSync(dir).filter(file => names.some(name => file.startsWith(name) && /^(@[0-9]x)?(~ipad)?\.png$/.test(file.slice(name.length))));
+}
+
 /** Validate links before copying. Relative links stay inside their declared
  * tree, so a copied helper cannot accidentally depend on the producer machine.
  * An iOS tree holds neither links, which `bundle:` follows none of, nor
@@ -781,13 +814,21 @@ export function copyNativeResources(app, contents, expected = null, platform = '
   return inventory;
 }
 
-/** A plist from a plain object: strings, booleans, numbers, arrays, and objects, the four spellings Apple's DTD has. */
-const plist = (value, indent = '  ') => {
-  if (typeof value === 'string') return `<string>${value.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</string>`;
+const xml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+/** A plist from a plain object: strings, booleans, numbers, arrays, and objects, the four spellings Apple's DTD has.
+ *  A value a property list cannot hold (null, a number that is not finite, an integer JavaScript does not hold
+ *  exactly) is refused by its key path, `path`. */
+const plist = (value, indent = '  ', path = '') => {
+  const refuse = (what) => { throw new Error(`plist: ${path || 'the root'} is ${what}, which a property list cannot hold`); };
+  if (typeof value === 'string') return `<string>${xml(value)}</string>`;
   if (typeof value === 'boolean') return value ? '<true/>' : '<false/>';
-  if (typeof value === 'number') return Number.isInteger(value) ? `<integer>${value}</integer>` : `<real>${value}</real>`;
-  if (Array.isArray(value)) return `<array>${value.map((v) => plist(v, indent)).join('')}</array>`;
-  return `<dict>\n${Object.entries(value).map(([k, v]) => `${indent}<key>${k}</key>${plist(v, indent + '  ')}`).join('\n')}\n${indent.slice(2)}</dict>`;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) refuse(String(value));
+    return Number.isInteger(value) ? `<integer>${value}</integer>` : `<real>${value}</real>`;
+  }
+  if (Array.isArray(value)) return `<array>${value.map((v, i) => plist(v, indent, `${path}[${i}]`)).join('')}</array>`;
+  if (value === null || typeof value !== 'object') refuse(value === null ? 'null' : typeof value);
+  return `<dict>\n${Object.entries(value).map(([k, v]) => `${indent}<key>${xml(k)}</key>${plist(v, indent + '  ', path ? `${path}.${k}` : k)}`).join('\n')}\n${indent.slice(2)}</dict>`;
 };
 export const plistFile = (dict) => `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">${plist(dict)}</plist>\n`;
 
@@ -806,10 +847,30 @@ export function frameworkLayout(dir, name, platform) {
   return { binary: resolve(version, name), modules: resolve(version, 'Modules'), info: resolve(resources, 'Info.plist') };
 }
 
+/** The shared runtime has one architecture and SDK per build. SwiftPM reads this standard XCFramework layout. */
+export function singleFramework(framework, output, triple) {
+  const target = /^(arm64(?:_32)?|x86_64)-apple-(ios|macosx|watchos)[\d.]+(-simulator)?$/.exec(triple);
+  if (!target) throw new Error(`host/apple: cannot package a framework for ${triple}`);
+  const [, arch, os, variant] = target, platform = os === 'macosx' ? 'macos' : os;
+  const identifier = `${platform}-${arch}${variant ?? ''}`, name = basename(framework, '.framework');
+  // A directory without its Info.plist is an interrupted run's: start again.
+  if (existsSync(output) && !existsSync(resolve(output, 'Info.plist'))) rmSync(output, { recursive: true, force: true });
+  if (existsSync(output)) throw new Error(`host/apple: framework output already exists: ${output}`);
+  mkdirSync(output, { recursive: true });
+  try {
+    cpSync(framework, resolve(output, identifier, basename(framework)), { recursive: true, verbatimSymlinks: true });
+    writeFileSync(resolve(output, 'Info.plist'), plistFile({ CFBundlePackageType: 'XFWK', XCFrameworkFormatVersion: '1.0', AvailableLibraries: [{
+      BinaryPath: `${name}.framework/${platform === 'macos' ? 'Versions/A/' : ''}${name}`, LibraryIdentifier: identifier,
+      LibraryPath: `${name}.framework`, SupportedArchitectures: [arch], SupportedPlatform: platform,
+      ...(variant ? { SupportedPlatformVariant: 'simulator' } : {}),
+    }] }));
+  } catch (error) { rmSync(output, { recursive: true, force: true }); throw error; }
+}
+
 /** A loose `Frameworks/lib….dylib` as `Frameworks/<name>.framework/<name>`,
  * which is the only form App Store Connect accepts for an embedded library
  * (ITMS-90171, ITMS-90432). The presenter loads either (`embeddedModule` in ExactKit). */
-export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS') {
+export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS', privacy = {}) {
   const from = resolve(frameworks, loose);
   if (!existsSync(from)) return;
   const dir = resolve(frameworks, `${name}.framework`);
@@ -817,6 +878,7 @@ export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS
   renameSync(from, layout.binary);
   run('install_name_tool', ['-id', frameworkInstallName(name, platform), layout.binary], { stdio: 'ignore' });
   writeFileSync(layout.info, plistFile(frameworkInfo(name, app, platform)));
+  writePrivacyManifest(dirname(layout.info), [layout.binary], { mac: platform === 'MacOSX', ...privacy });
 }
 
 /** The Info.plist `wrapFramework` writes. `signedGpuProduct` keys its signed copy on it, so
@@ -853,7 +915,7 @@ export function codeDigest(bytes) {
   return createHash('sha256').update(code() ?? bytes).digest('hex');
 }
 
-export function signedGpuProduct(product, { identity = '-', framework = null, app, platform = 'iPhoneOS', hardened = false } = {}) {
+export function signedGpuProduct(product, { identity = '-', framework = null, app, platform = 'iPhoneOS', hardened = false, privacyManifest = null } = {}) {
   // Cargo puts its own unsigned file back on every build, and a signature
   // carries its signing time: signing in place made the app's bake (which
   // names this product's digest) run on every build. Sign a copy beside it,
@@ -862,7 +924,8 @@ export function signedGpuProduct(product, { identity = '-', framework = null, ap
   const container = resolve(directory, framework ? `${framework}.framework` : basename(product));
   const signed = framework ? resolve(container, framework) : container, record = `${container}.source`;
   const source = JSON.stringify([createHash('sha256').update(readFileSync(product)).digest('hex'), identity ?? '-',
-    hardened, framework, framework ? frameworkInfo(framework, app, platform) : null]);
+    hardened, framework, framework ? frameworkInfo(framework, app, platform) : null,
+    framework ? privacyManifestForBinaries([product], (privacyManifest ? [privacyAPIManifest(privacyManifest)] : []), { mac: platform === 'MacOSX' }) : null]);
   // An ad-hoc signature (`-`: every simulator build) names no certificate
   // to require; asked for one, the verification failed, and the copy was
   // signed again by every build, which reran the app's bake and compile.
@@ -872,7 +935,7 @@ export function signedGpuProduct(product, { identity = '-', framework = null, ap
     mkdirSync(directory, { recursive: true });
     if (framework) rmSync(container, { recursive: true, force: true });
     copyFileSync(product, resolve(directory, basename(product)));
-    if (framework) wrapFramework(directory, basename(product), framework, app, platform);
+    if (framework) wrapFramework(directory, basename(product), framework, app, platform, { apiManifests: privacyManifest ? [privacyManifest] : [] });
     run('codesign', ['--force', '--sign', identity ?? '-', ...(hardened ? ['--options', 'runtime'] : []),
       hardened && identity && identity !== '-' ? '--timestamp' : '--timestamp=none', container], {stdio:'ignore'});
     writeFileSync(record, source);

@@ -7,7 +7,7 @@ mod inline;
 mod paragraphs;
 mod refresh;
 pub(crate) mod values;
-pub use refresh::{bake_app, check_refreshes, entries, source_plan};
+pub use refresh::{bake_app, bake_app_with_warnings, check_refreshes, entries, source_plan};
 
 /// Find the props slot by this name; a route URL may add a preceding router slot.
 pub const PROPS_SLOT: &str = "snapshot_props";
@@ -23,6 +23,11 @@ mod tests;
 /// (`inject` with `snapshot_viewport: <shape>`): the entry's wrapper answers
 /// it with `exactViewport()`, so the render stays pure (LLP 1126 D3).
 pub const VIEWPORT_SLOT: &str = "snapshot_viewport";
+/// The reserved inject and slot a widget reads its configuration from
+/// (`inject` with `snapshot_configuration: <shape>`): the entry's wrapper
+/// holds the chosen values, initially the defaults, and the host replaces
+/// them with the person's choices at render.
+pub const CONFIGURATION_SLOT: &str = "snapshot_configuration";
 pub use entry::{compile, compile_entries, write_entries, Declaration, Entry};
 
 use crate::CompileError;
@@ -74,27 +79,6 @@ fn refusal(id: &str, message: impl Into<String>, span: Span) -> CompileError {
     }
 }
 
-fn visit_nodes(nodes: &[Node], f: &mut impl FnMut(&Node)) {
-    for n in nodes {
-        f(n);
-        match n {
-            Node::Element { children, .. } | Node::Use { children, .. } => visit_nodes(children, f),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                visit_nodes(then, f);
-                visit_nodes(otherwise, f);
-            }
-            Node::Each { body, .. } => visit_nodes(body, f),
-            Node::Match { some, none, .. } => {
-                visit_nodes(&some.1, f);
-                visit_nodes(none, f);
-            }
-            Node::Children { .. } => {}
-        }
-    }
-}
-
 fn expression(e: &Expr, file: &File, depth: usize, errors: &mut Vec<CompileError>) {
     // Bound traversal through helpers; the type checker diagnoses recursion.
     if depth > 64 {
@@ -104,52 +88,11 @@ fn expression(e: &Expr, file: &File, depth: usize, errors: &mut Vec<CompileError
         errors.push(refusal("snapshot-clock", "a snapshot cannot read the clock; pass an instant from refresh to `time datetime=departure.at` or `progress` over an interval", e.span()));
     }
     let mut recurse = |child: &Expr| expression(child, file, depth + 1, errors);
-    match e {
-        Expr::Call(name, args, _) => {
-            for a in args {
-                recurse(a);
-            }
-            if let Some(f) = file.fns.iter().find(|f| f.name == *name) {
-                recurse(&f.body);
-            }
+    e.operands().for_each(&mut recurse);
+    if let Expr::Call(name, _, _) = e {
+        if let Some(f) = file.fns.iter().find(|f| f.name == *name) {
+            recurse(&f.body);
         }
-        Expr::List(items, _) => {
-            for e in items {
-                recurse(e);
-            }
-        }
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(e) = p {
-                    recurse(e);
-                }
-            }
-        }
-        Expr::Some(e, _)
-        | Expr::Member(e, _, _)
-        | Expr::NamedArg(_, e, _)
-        | Expr::Unary(_, e, _)
-        | Expr::Typed(e, _, _)
-        | Expr::Arrow { body: e, .. } => recurse(e),
-        Expr::Binary(_, a, b, _)
-        | Expr::Let {
-            value: a, body: b, ..
-        } => {
-            recurse(a);
-            recurse(b);
-        }
-        Expr::Ternary(a, b, c, _)
-        | Expr::Match {
-            subject: a,
-            some: b,
-            none: c,
-            ..
-        } => {
-            recurse(a);
-            recurse(b);
-            recurse(c);
-        }
-        _ => {}
     }
 }
 
@@ -197,7 +140,7 @@ fn check(file: &File, styles: &HashSet<String>) -> Result<(), Vec<CompileError>>
             errors.push(refusal("snapshot-effect", "a snapshot render is read-only; move mutations, sequences and persisted writes into the refresh function", c.span));
         }
         for b in c.states.iter().chain(&c.derives).chain(&c.provides) {
-            if b.name == PROPS_SLOT || b.name == STATE_SLOT {
+            if b.name == PROPS_SLOT || b.name == STATE_SLOT || b.name == CONFIGURATION_SLOT {
                 errors.push(refusal(
                     "snapshot-props-name",
                     format!(
@@ -209,7 +152,7 @@ fn check(file: &File, styles: &HashSet<String>) -> Result<(), Vec<CompileError>>
             }
             expression(&b.expr, file, 0, &mut errors);
         }
-        visit_nodes(&c.view, &mut |n| match n {
+        Node::walk(&c.view).for_each(|n| match n {
             Node::Element {
                 tag,
                 attrs: a,
@@ -330,7 +273,7 @@ fn referenced_styles(file: &File) -> (HashSet<String>, Vec<CompileError>) {
     let mut styles = HashSet::new();
     let mut errors = Vec::new();
     for component in &file.components {
-        visit_nodes(&component.view, &mut |node| {
+        Node::walk(&component.view).for_each(|node| {
             let Node::Element { attrs, .. } = node else {
                 return;
             };

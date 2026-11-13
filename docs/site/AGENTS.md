@@ -29,6 +29,14 @@ exact2's commit and the last exit code, never output or code. `bun exact.mjs fee
 whether notes are sent and whether to keep a diary; under `never`, skip all of this.
 <!-- exact:end -->
 
+## Serving
+
+`bun run build` generates the pages and their Markdown, indexes and redirects. `bun start`
+uses the framework server: loopback by default, `--lan` for other devices, and `--port <n>`
+for a chosen port. Its automatic rebuild does not run this site's postbuild step; after
+editing sources, stop the server, run `bun run build`, then start it again. A page request
+between the edit and the full build removes the generated Markdown and indexes.
+
 ## Search
 
 The search dialog (Cmd+K) asks the Algolia app and index in `constants/search.ts` with its

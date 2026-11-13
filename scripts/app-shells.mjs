@@ -84,7 +84,7 @@ export function shellCrates(manifest) {
 /** A host crate's files, keyed by path under the crate's directory. `dep(path)` is a dependency's path from there and
  * `app` the app directory's, as Rust strings' content; `native` attaches the factory the bake writes for a package
  * that fills the native slot. */
-function crateFiles(kind, { name, title, dep, app, native = false }) {
+function crateFiles(kind, { name, title, dep, app, native = false, preload = false }) {
   const header = (target) => `[package]
 name = "${name}-${kind}"
 version.workspace = true
@@ -116,7 +116,7 @@ fn embedded_data() -> ExactEmbeddedData {
     : `type ExactEmbeddedData = exact_js::Placed<exact_js::Module>;
 fn embedded_data() -> ExactEmbeddedData {
     exact_js::Module::new(APP_BYTECODE, APP, GRANTS)
-        .with_canvas_surfaces(CANVAS_SURFACES)
+${preload ? '        .with_preloads(PRELOAD)\n' : ''}        .with_canvas_surfaces(CANVAS_SURFACES)
 ${native ? '        .with_native(exact_native)\n' : ''}        .placed(TYPESCRIPT_PLACEMENT)
 }
 `;
@@ -160,7 +160,8 @@ exact-js = ${dep('js')}
 
 ${build}`,
     'build.rs': appleBuildScript(app),
-    'src/lib.rs': `//! ${title} on Apple: the Contract UI and the TypeScript data module.
+    // Names no app: a change to only its identity leaves the compiled archive fresh (linked-plan.mjs compiledBakeDir).
+    'src/lib.rs': `//! The app on Apple: the Contract UI and the TypeScript data module.
 
 ${includes(false)}
 ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
@@ -173,6 +174,7 @@ include!(concat!(env!("OUT_DIR"), "/host.rs"));
     'Cargo.toml': `${header(`[[bin]]\nname = "${name}-linux"\npath = "src/main.rs"`)}ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
 exact-linux = ${dep('host/linux')}
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -181,10 +183,12 @@ ${build}`,
 
 ${includes(true)}
 ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
-// The packages' Linux implementations the build composes (exact_packages()).
+// The packages' Linux implementations the build composes (exact_packages()), and the app's Rust hatches
+// (exact_hatches(), from modules/linux).
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
+include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { packages: exact_packages(), ..Default::default() };
+    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, composed));
 }
 `,
@@ -195,7 +199,7 @@ fn main() {
 [target.'cfg(target_os = "android")'.dependencies]
 ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
-exact-linux = ${dep('host/linux')}
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -221,7 +225,7 @@ mod android {
     ${module(false).replace(/\n(?=.)/g, '\n    ')}    include!(concat!(env!("OUT_DIR"), "/logic.rs"));
     include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
-    exact_linux::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
+    exact_painted::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
 }
 `,
   };
@@ -229,8 +233,8 @@ mod android {
     'Cargo.toml': `${header(`[[bin]]\nname = "${name}-windows"\npath = "src/main.rs"\ntest = false\nbench = false`)}ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
 exact-windows = ${dep('host/windows')}
-# The packages' Windows implementations name \`exact_linux::package\` (LLP 1133.022 D10 item 5).
-exact-linux = ${dep('host/linux')}
+# The packages' Windows implementations name \`exact_painted::package\` (LLP 1133.022 D10 item 5).
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -242,10 +246,12 @@ ${build}`,
 
 ${includes(true)}
 ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
-// The packages' Windows implementations the build composes (exact_packages()).
+// The packages' Windows implementations the build composes (exact_packages()), and the app's Rust hatches
+// (exact_hatches(), from modules/windows or else modules/linux).
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
+include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { packages: exact_packages(), ..Default::default() };
+    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_windows::run_composed::<AppData>(${JSON.stringify(title)}, window(), PLAN, COMPAT, composed));
 }
 `,
@@ -296,6 +302,7 @@ export function ensureShells(dir, manifest = readManifest(dir), name = null) {
   const commit = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() ?? '';
   const stamp = {
     exact2: ROOT, commit, name, title, crates, native,
+    ...(Object.keys(manifest.preload ?? {}).length ? { preload: true } : {}),
     inputs: createHash('sha256').update([readFileSync(fileURLToPath(import.meta.url), 'utf8'), APPLE_BUILD_SCRIPT, ...copied.map(([, text]) => text), ...patches, readFileSync(resolve(ROOT, 'Cargo.lock'), 'utf8')].join('\0')).digest('hex'),
   };
   const before = stampOf(shells);
@@ -319,7 +326,7 @@ ${patches.join('\n')}
 `);
   for (const [file, text] of copied) wrote = writeChanged(resolve(shells, file), text) || wrote;
   for (const kind of crates) {
-    const files = crateFiles(kind, { name, title, native: native.length > 0, app: '../../..', dep: path => `{ path = ${JSON.stringify(pathFrom(resolve(shells, kind), resolve(ROOT, path)))} }` });
+    const files = crateFiles(kind, { name, title, native: native.length > 0, preload: Object.keys(manifest.preload ?? {}).length > 0, app: '../../..', dep: path => `{ path = ${JSON.stringify(pathFrom(resolve(shells, kind), resolve(ROOT, path)))} }` });
     for (const [file, text] of Object.entries(files)) wrote = writeChanged(resolve(shells, kind, file), text) || wrote;
   }
   // A crate for a platform no longer named goes with its platform.
@@ -346,7 +353,8 @@ export async function bringPlatform(dir, platform, { report = null, os = process
   const lines = [], verb = `bun exact.mjs ${platform === 'macos' ? 'mac' : platform}`;
   const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;
   if (!namesPlatform(manifest ?? {}, platform)) {
-    if (['ios', 'macos', 'tvos'].includes(platform) && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
+    if (platform === 'ios' && !['darwin', 'linux'].includes(os)) return { refused: `${verb}: iOS builds need macOS or Linux (use WSL on Windows); nothing was written` };
+    if (['macos', 'tvos'].includes(platform) && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
     if (platform === 'windows' && os !== 'win32') return { refused: `${verb}: a Windows build needs Windows with the MSVC Rust target; nothing was written` };
     if (report?.error) return { refused: `${verb}: the setup report could not be read, so nothing was written: ${report.error}` };
     const missing = (report ?? []).filter(row => !row.ok);

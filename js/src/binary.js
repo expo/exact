@@ -1,5 +1,5 @@
 // The data seam's bytes, and the store's presence calls (below), for
-// prelude.js: base64 for what crosses the seam
+// prelude.js: native request bytes, base64 for what crosses the seam
 // as JSON, a string's UTF-8 length, a stream message's data, a long
 // poll's terms as the seam carries them (LLP 1016.000 D8), an upload's
 // option and events, a fetch's body and file
@@ -33,6 +33,12 @@
       out.push(BASE64[v >> 18 & 63] + BASE64[v >> 12 & 63] + (i + 1 < n ? BASE64[v >> 6 & 63] : "=") + "=");
     }
     return out.join("");
+  }
+  // Native fetches copy the extracted body into the request while
+  // admitting its metadata. The web's string door carries base64.
+  function sendRequest(host, ticket, wire, bytes) {
+    if (door && bytes) door(11, ticket + " " + wire, slot(viewSlots[0], bytes));
+    else return host(1, String(ticket), wire);
   }
   // A string's UTF-8 bytes as TextEncoder makes them: a pair is 4, a lone
   // surrogate its replacement character's 3.
@@ -93,6 +99,21 @@
   }
   // `exactIdleTimeout` (LLP 1016.000 D11): why it is refused, if it is. `socket`: a WebSocket stream that is no
   // listener, child, upload or long poll.
+// Protocol names, never credentials (LLP 1016.000; RFC 7230 token).
+function socketProtocols(value, socket) {
+  if (value === undefined) return [];
+  if (!socket) throw new TypeError('exactProtocols: only a WebSocket stream takes protocols');
+  if (!Array.isArray(value)) throw new TypeError('exactProtocols must be an array of protocol names');
+  var names = [];
+  for (var name of value) {
+    if (typeof name !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+      throw new TypeError(`invalid WebSocket protocol ${JSON.stringify(name)}: expected a non-empty RFC 7230 token`);
+    if (names.includes(name)) throw new TypeError(`duplicate WebSocket protocol ${JSON.stringify(name)}`);
+    names.push(name);
+  }
+  return names;
+}
+
   function idleRefusal(idle, socket) {
     if (idle === undefined) return undefined;
     if (!Number.isInteger(idle) || idle < 1 || idle > 3600000) return "exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
@@ -835,6 +856,7 @@
   }
   global.__exact_binary = Object.freeze({
     requestBody: requestBody,
+    sendRequest: sendRequest,
     keptReply: keptReply,
     responses: responses,
     copyBytes: copyBytes,
@@ -850,6 +872,7 @@
     longPollOf: longPollOf,
     uploadOf: uploadOf,
     idleRefusal: idleRefusal,
+    socketProtocols: socketProtocols,
     uploadEvent: uploadEvent,
     presence: presence,
     sockets: sockets,

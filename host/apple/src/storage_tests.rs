@@ -193,3 +193,81 @@ fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
     let (bindings, _) = endow_bound(grants, app, true);
     assert!(snapshot_of(bindings.as_ref()).contains(&("fresh.best".into(), "22050".into())));
 }
+
+/// `app:/tmp/picked` and `app:/tmp/shared` are emptied once a process: the
+/// first activation takes the last launch's files, and a second session's
+/// runtime activating the same app's storage (LLP 1031) leaves what the
+/// first one picked or was shared.
+#[test]
+fn a_second_activation_keeps_what_the_first_session_picked() {
+    const CHILD: &str = "EXACT_SECOND_ACTIVATION_TEST";
+    if std::env::var_os(CHILD).is_none() {
+        let home = std::env::temp_dir().join(format!("exact-apple-second-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "host::storage_tests::a_second_activation_keeps_what_the_first_session_picked",
+            ])
+            .env(CHILD, "1")
+            .env("HOME", &home)
+            .env_remove("EXACT_AGENT")
+            .env_remove("EXACT_APP_GROUP_APP")
+            .env_remove("EXACT_STORE")
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let app = "test.exact.second";
+    let ([.., temporary], _) = crate::picker::app_dirs(app).unwrap().unwrap();
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    assert!(temporary.starts_with(&home), "{}", temporary.display());
+    let put = |name: &str| {
+        let file = temporary.join(name);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "x").unwrap();
+        file
+    };
+    let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    builder.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let plan = builder.finish().unwrap().encode();
+    let session = || {
+        Host::boot(
+            &plan,
+            Source(app, Arc::new(Mutex::new(Seen::default()))),
+            Box::new(MonospaceMeasurer::default()),
+            10.0,
+            10.0,
+        )
+        .unwrap()
+        .0
+    };
+    let stale = [put("picked/1-1.jpg"), put("shared/1/a.txt")];
+    let mut first = session();
+    first.activate_data();
+    for file in &stale {
+        assert!(
+            !file.exists(),
+            "the last launch's {} is kept",
+            file.display()
+        );
+    }
+    let picked = [put("picked/7-1.jpg"), put("shared/7/b.txt")];
+    let mut second = session();
+    second.activate_data();
+    for file in &picked {
+        assert!(
+            file.exists(),
+            "the first session's {} is gone",
+            file.display()
+        );
+    }
+}

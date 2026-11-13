@@ -364,6 +364,61 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
 
+test('concurrent helper callers share a checked build and validate it against inputs after waiting', async () => {
+  const {dir,call,claim,has}=helperBuilds(), callers=[];
+  const directory=dirname(claim), tickets=join(directory,'.bootstrap.claims');
+  const choosing=join(tickets,`${process.pid}-${'0'.repeat(24)}`);
+  const source=join(dir,'filesystem/src/main.rs');
+  const start=name=>{const caller=call(name);callers.push(caller);return caller;};
+  const wait=names=>shown('each caller to wait before a capture is published',()=>names.every(name=>has('waited-'+name)));
+  const finished=async (group,value='helper')=>{
+    for(const caller of group) assert.deepEqual(await caller.done,{code:0,out:value});
+    assert.equal(existsSync(claim),false,'builders and reusers release the claim');
+    assert.deepEqual(readdirSync(tickets),[],'builders and reusers release their tickets');
+  };
+  const builds=()=>readFileSync(join(dir,'build-count'),'utf8').length;
+  const records=()=>readdirSync(directory).filter(name=>name.startsWith('checked-'));
+  try {
+    mkdirSync(dirname(source),{recursive:true});writeFileSync(source,'fn main() {}\n');
+    writeFileSync(join(dir,'hold'),'');
+    const builder=start('cold');
+    await shown('the cold build to start',()=>has('building'));
+    const names=['a','b','c'], waiters=names.map(start);
+    await wait(names);
+    assert.equal(records().length,0,'every caller initially misses the record');
+    rmSync(join(dir,'hold'));
+    await finished([builder,...waiters]);
+    assert.equal(builds(),1,'concurrent misses share the completed build');
+
+    const original=join(directory,records()[0]), captured=readFileSync(original,'utf8');
+    rmSync(original);
+    writeFileSync(choosing,'');
+    const editedNames=['edit-a','edit-b','edit-c'], edited=editedNames.map(start);
+    await wait(editedNames);
+    // Restore a record valid for the callers' original inputs, then change those inputs while they wait.
+    writeFileSync(original,captured);writeFileSync(source,'fn main() { }\n');
+    writeFileSync(join(dir,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"edited"}'\n`,{mode:0o755});
+    rmSync(choosing);
+    await finished(edited,'edited');
+    assert.equal(builds(),2,'changed inputs require one fresh build for all waiting callers');
+
+    const current=join(directory,records().find(name=>join(directory,name)!==original));
+    rmSync(current);writeFileSync(choosing,'');
+    const corruptNames=['corrupt-a','corrupt-b'], corrupt=corruptNames.map(start);
+    await wait(corruptNames);
+    const invalid=`exact-filesystem-${'0'.repeat(64)}${process.platform==='win32'?'.exe':''}`;
+    writeFileSync(join(directory,invalid),'corrupt');writeFileSync(current,invalid);
+    rmSync(choosing);
+    await finished(corrupt,'edited');
+    assert.equal(builds(),3,'a capture whose bytes do not match its digest is rebuilt');
+  } finally {
+    rmSync(join(dir,'hold'),{force:true});rmSync(choosing,{force:true});
+    for(const caller of callers) if(caller.child.exitCode===null) caller.child.kill();
+    await Promise.all(callers.map(caller=>caller.done));
+    rmSync(dir,{recursive:true,force:true});
+  }
+},120_000);
+
 test('a helper named by its checker is taken without a build, and only if it is this checkout\'s and intact', () => {
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-named-')));
   try {

@@ -14,6 +14,25 @@
       "additionalProperties": false,
       "properties": { "mode": { "enum": ["off", "core"] } }
     },
+    "preload": {
+      "type": "object",
+      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant; {{ writes a literal brace. Checked and parsed at bake, with present secrets filled in on the device.",
+      "maxProperties": 8,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["url"],
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "method": { "type": "string", "default": "GET" },
+          "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "body": { "type": "string" },
+          "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+          "when": { "enum": ["start", "foreground"], "default": "start" }
+        }
+      }
+    },
     "launch": {
       "type": "array",
       "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Its apple/launch/*.swift is linked into the executable. Its apple/service/*.swift becomes lib<name>_service.dylib, loaded after startup.",
@@ -189,6 +208,12 @@
       "description": "What the app does, in a sentence: the web manifest's `description`, which an install prompt or a store listing can show.",
       "type": "string"
     },
+    "categories": {
+      "description": "The W3C manifest's categories, which the web manifest carries: what the app is, for a store or catalog to file it under. Each is a W3C standardized category or one of Apple's, written without public.app-category.: developer-tools, graphics-design, reference, video and the game genres (dice-games, puzzle-games, ...). The Apple bundles' LSApplicationCategoryType (iOS and macOS) is the first that Apple has: fitness and health are healthcare-fitness, photo photography, social social-networking, and books, food, government, kids, magazines, navigation, personalization, politics, security and shopping have none. Absent: a game the game shell builds (game) is filed under games, any other app under none. An Apple category of games or a game genre turns Game Mode on (host.ios.gameMode, host.macos.gameMode).",
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["books", "business", "education", "entertainment", "finance", "fitness", "food", "games", "government", "health", "kids", "lifestyle", "magazines", "medical", "music", "navigation", "news", "personalization", "photo", "politics", "productivity", "security", "shopping", "social", "sports", "travel", "utilities", "weather", "developer-tools", "graphics-design", "reference", "video", "action-games", "adventure-games", "arcade-games", "board-games", "card-games", "casino-games", "dice-games", "educational-games", "family-games", "kids-games", "music-games", "puzzle-games", "racing-games", "role-playing-games", "simulation-games", "sports-games", "strategy-games", "trivia-games", "word-games"] }
+    },
     "privacy_policy": {
       "description": "The app's privacy policy, an https: URL: the one its App Store and Google Play listings name (LLP 1133.026 D4). HealthKit requires one, and Health Connect's permission screen links to it, so an app granting device.health-read without it is refused for Android (grant-privacy-policy) and warned for iOS.",
       "type": "string",
@@ -247,7 +272,7 @@
     },
     "theme_color": { "type": "string" },
     "color_scheme_dark": {
-      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page and the iOS launch screen), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
+      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page, the iOS launch screen and the Android launch window), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
       "type": "object",
       "properties": {
         "background_color": {
@@ -267,7 +292,7 @@
     "background_color": {
       "type": "string",
       "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-      "description": "The first-frame background, the web page's and the iOS launch screen's: #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, the iOS launch screen is the platform's: systemBackground, or the grouped background where the first route scrolls a grouped list."
+      "description": "The first-frame background, the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12): #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, each is the platform's: on iOS systemBackground, or the grouped background where the first route scrolls a grouped list; on Android the theme's surface."
     },
     "lang": {
       "description": "The W3C manifest's language: a BCP 47 tag for the page's <html lang> and the web manifest. Absent is en.",
@@ -276,7 +301,7 @@
     },
     "link": {
       "type": "array",
-      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite"] },
+      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips"] },
       "uniqueItems": true,
       "description": "Capabilities a native production build links before any plan uses them (LLP 1047 D8; LLP 1047.001), so a later bundle may: an archive otherwise links what its plan uses (plus `auth_session` from `auth.session` grants and `sqlite` from `sqlite.open` grants) and nothing else, and a bundle that needs more is a new binary. Linking sqlite without sqlite.open only adds unused code: an update that adds the grant changes the compatibility identity and requires a new binary even when sqlite was linked. Development links every capability but `media_picker` and `auth_session`, which it links as production would (LLP 1047.001.000 F). Names are the runner's (`exact_runner::Capability::name`)."
     },
@@ -428,7 +453,47 @@
             },
             "description": "Optional watchOS families; defaults to the accessory families in families."
           },
-          "preview": { "type": "object" }
+          "preview": { "type": "object" },
+          "configuration": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "parameters"],
+            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string`, or an enum of exactly its values), at render as it reads the family's size; the refresh does not see them. Generated Swift, so a change needs a new binary.",
+            "properties": {
+              "title": { "type": "string", "description": "The intent's title (the Edit Widget sheet is headed by the widget's own title and description)." },
+              "description": { "type": "string", "description": "The intent's description; defaults to the title." },
+              "parameters": {
+                "type": "array",
+                "minItems": 1,
+                "description": "The sheet's rows, in order.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "title", "type", "values"],
+                  "properties": {
+                    "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "description": "The configuration shape's field that carries the chosen value." },
+                    "title": { "type": "string", "description": "The row's label." },
+                    "type": { "type": "string", "enum": ["enum"], "description": "A fixed list of choices; data-backed options are not supported." },
+                    "values": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "The choices, in the menu's order.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["value", "title"],
+                        "properties": {
+                          "value": { "type": "string", "description": "What the render reads." },
+                          "title": { "type": "string", "description": "What the menu shows." }
+                        }
+                      }
+                    },
+                    "default": { "type": "string", "description": "One of the values: before the person chooses, and in previews. Defaults to the first." }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -497,7 +562,7 @@
     },
     "intents": {
       "type": "object",
-      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, and a destroys tool's face names only the apple door (D10).",
+      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, a destroys tool's face names only the apple door (D10), and a face that reaches the web door needs a tool with a description and a name of at most 128 characters (WebMCP).",
       "additionalProperties": false,
       "properties": {
         "entities": {
@@ -526,6 +591,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "title": { "type": "string", "minLength": 1 },
+                    "description": { "type": "string", "minLength": 1, "description": "What the parameter means and what it takes, for a caller choosing a value: App Intents' parameter description, the input schema's description on the web." },
                     "entity": { "type": "string", "minLength": 1, "description": "A kind of intents.entities: the system offers that kind's entries, and passes the entry's id." },
                     "type": { "enum": ["integer"], "description": "A number parameter the system asks for as a whole number." }
                   }
@@ -689,6 +755,14 @@
                   "to": { "type": "string", "description": "Private destination under Resources/, for example Resources/data-files: `bundle:/Resources/data-files`, as on the Mac." }
                 }
               }
+            },
+            "gameMode": {
+              "type": "boolean",
+              "description": "Whether iOS may turn Game Mode on while the app runs: priority on the CPU and GPU, lower Bluetooth latency for controllers and AirPods, and less background work (LSSupportsGameMode, iOS 18.6; GCSupportsGameMode for iOS 18.0 to 18.5, written when minimumOS is below 18.6). Absent: true for a game (an Apple category of games or a game genre in categories, or a game the game shell builds), else no key. false keeps Game Mode off for a game too light to need it."
+            },
+            "increasedMemoryLimit": {
+              "type": "boolean",
+              "description": "Sign com.apple.developer.kernel.increased-memory-limit: on the iPhone and iPad models that allow it, the app may use more memory than the default limit (iOS 15). The app must still work without it; os_proc_available_memory says what it has. A device build needs a profile whose App ID has Increased Memory Limit enabled, and is refused without one. Extensions, App Clips and tvOS never take it. Absent or false: the default limit."
             },
             "webBrowser": {
               "type": "boolean",
@@ -863,6 +937,10 @@
               "enum": ["speed", "size"],
               "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. `build.mjs --optimize` overrides it."
             },
+            "gameMode": {
+              "type": "boolean",
+              "description": "Whether macOS may turn Game Mode on while the app runs: priority on the CPU and GPU, lower Bluetooth latency for controllers and AirPods, and less background work (LSSupportsGameMode, macOS 26). Absent: true for a game (an Apple category of games or a game genre in categories, or a game the game shell builds), else no key. false keeps Game Mode off for a game too light to need it."
+            },
             "oneTimeCodeAutofill": {
               "enum": ["marked"],
               "description": "\"marked\": macOS offers verification codes from Messages and Mail only in fields marked `autocomplete=\"one-time-code\"` (`NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac`). Absent: the platform's default; macOS 26 offers them in any text field."
@@ -985,7 +1063,8 @@
                 "width": { "type": "number", "minimum": 1, "maximum": 16384 },
                 "height": { "type": "number", "minimum": 1, "maximum": 16384 },
                 "minWidth": { "type": "number", "minimum": 1, "maximum": 16384 },
-                "minHeight": { "type": "number", "minimum": 1, "maximum": 16384 }
+                "minHeight": { "type": "number", "minimum": 1, "maximum": 16384 },
+                "keepRunning": { "type": "boolean", "description": "Closing the window (its close button, Alt+F4, the taskbar's Close window) hides it, and the app keeps running, its session and timers alive; launching the app again (Start, its taskbar pin, a shortcut) or a bare `focus()` shows it as it was. The app's own `close()` still ends it, as does signing out. For an app with work the person expects to go on without the window, as a chat client's or a sync's. Until the notification-area icon is built (LLP 1133.025 §14), give the person a way back and a way out of their own: a global shortcut whose action calls `focus()`, and a button whose action calls `close()`. Absent or false: the app ends with its window." }
               },
               "additionalProperties": false
             }

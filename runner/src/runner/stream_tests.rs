@@ -175,10 +175,14 @@ fn one_stream(r: &mut Runner<Scripted>) -> u64 {
     out[0].ticket
 }
 
-/// What a render's checkpoint would list now: pending, and open (LLP 1048.000 D6).
+/// What a render's checkpoint would list now: pending, and the answers open,
+/// by name (LLP 1048.000 D6).
 fn listed(r: &Runner<Scripted>) -> (Vec<String>, Vec<String>) {
     let checkpoint = r.document_checkpoint("/");
-    (checkpoint.pending, checkpoint.open)
+    let open = (checkpoint.open.iter())
+        .map(|&k| checkpoint.answers[k].0.clone())
+        .collect();
+    (checkpoint.pending, open)
 }
 
 #[test]

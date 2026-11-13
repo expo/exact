@@ -7,7 +7,7 @@ export function svgGeometry(e, name, read, style = S) {
   const attribute = memo(() => {
     const v = value();
     return typeof v === "number" ? (Number.isFinite(v) ? v : null)
-      : typeof v === "string" && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:px|%|vw|vh|vmin|vmax)?$/i.test(v.trim()) ? v : null;
+      : typeof v === "string" && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:px|%|em|rem|vw|vh|vmin|vmax)?$/i.test(v.trim()) ? v : null;
   });
   P(e, name, attribute);
   style(e, name, "px", () => attribute() == null ? value() : null);

@@ -24,6 +24,9 @@ let running = null; // the transition animating, if any
 let style = null;
 let serial = 0;
 
+// What waits for the commits a transition holds to have run (input-glue.js: a tapped file input's own picker).
+(globalThis.exact ??= {}).afterCommit = run => { if (pending) pending.after.push(run); else run(); };
+
 /** The named elements a flush may remove: those inside each region or
  * list `queue` reruns. */
 function leavers(queue) {
@@ -43,9 +46,10 @@ function leavers(queue) {
 
 /** A `-exact-layout-transition` as the group's duration, delay and timing
  * function. The row is carried as the host writes it: times in
- * milliseconds without a unit (`300 0 ease`), or with one as authored. */
+ * milliseconds without a unit (`300 0 ease`), or with one as authored, its
+ * words in any ASCII case (motion/src/word.rs). */
 export function curve(el) {
-  const text = el?.style.getPropertyValue('--exact-layout-transition').trim();
+  const text = el?.style.getPropertyValue('--exact-layout-transition').trim().replace(/[A-Z]+/g, c => c.toLowerCase());
   if (!text || text === 'none') return null;
   const decl = text.split(/,(?![^(]*\))/).pop().trim(); // the last declaration; a spring's commas are inside it
   const times = [];
@@ -114,7 +118,7 @@ export function commit(tail, queue, inflight, after) {
   // Only the pairs move: the root and unpaired leavers are not shown.
   style ??= document.head.appendChild(document.createElement('style'));
   style.textContent = ':root{view-transition-name:none}';
-  pending = [deferred()];
+  pending = Object.assign([deferred()], { after: [] });
   inflight.n++;
   let paired = false, result = true;
   const rules = [], named = [...old.keys()];
@@ -122,7 +126,7 @@ export function commit(tail, queue, inflight, after) {
     const tails = pending;
     pending = null;
     // A tail that throws skips the rest; their presses are let go all the same (focus.js).
-    try { result = tails.map(f => f())[0]; } finally { for (const f of tails) if (!f.ran) f.release(); }
+    try { result = tails.map(f => f())[0]; } finally { for (const f of tails) if (!f.ran) f.release(); for (const f of tails.after) f(); }
     // A leaver is gone, or kept only as an exit ghost (its own or an
     // ancestor's): it has left. One that stayed keeps its name and moves.
     const gone = new Map(); // name → the leavers that left

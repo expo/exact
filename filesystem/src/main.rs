@@ -161,6 +161,29 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
     if op == "retain" {
         return retain(root, input);
     }
+    if op == "inventory" {
+        let mut entries = serde_json::Map::new();
+        root.visit_files("", &mut |path, parent, leaf| {
+            let mut file = parent.file(leaf, libc::O_RDONLY)?;
+            let mut hash = Sha256::new();
+            let mut bytes = 0u64;
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+                bytes += count as u64;
+            }
+            entries.insert(
+                path.to_owned(),
+                json!({"sha256": format!("{:x}", hash.finalize()), "bytes": bytes}),
+            );
+            Ok(())
+        })?;
+        return Ok(Value::Object(entries));
+    }
     if op == "tree" || op == "names" || op == "copy" {
         let mut entries = serde_json::Map::new();
         tree(root, "", &mut entries, op != "names")?;

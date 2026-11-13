@@ -106,7 +106,10 @@ impl Module {
                     Some("Unavailable")
                         if baking && reply.get("code").and_then(Json::as_str) == Some("bake") =>
                     {
-                        DataError::DeferredAtBake(message)
+                        DataError::DeferredAtBake {
+                            message,
+                            warning: reply.get("bakeWarning").and_then(Json::as_bool) == Some(true),
+                        }
                     }
                     // What it let through, by class (LLP 1109 D3; prelude.js `failureCode`).
                     _ => FailureCode::seam_error(

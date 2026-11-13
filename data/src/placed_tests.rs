@@ -642,6 +642,44 @@ fn a_long_poll_on_a_worker_s_own_work_is_refused_before_it_runs() {
     assert!(!*ran.lock().unwrap(), "its work never ran");
 }
 
+/// LLP 1016.003 in a worker: a Rust source's two-way socket is refused by
+/// name, not opened to only listen.
+struct Subscribes;
+
+impl DataSource for Subscribes {
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        Ok(Value::Number(0.0))
+    }
+
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Later(Request::socket("wss://stream.example/ws")))
+    }
+}
+
+#[test]
+fn a_rust_socket_in_a_worker_is_refused_by_name() {
+    let mut placed = Placed::new(Subscribes, Placement::Worker);
+    placed.activate().unwrap();
+    let mut store = Store::new("", []);
+    let token = match placed.answer(&mut store, "book", &[]).unwrap() {
+        Answer::Later(request) => request.continuation.unwrap(),
+        _ => panic!("a worker answer"),
+    };
+    let outcome = send(placed.dispatch(token, &store))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let refused = crate::envelope::apply(outcome, &mut store, &mut Vec::new()).unwrap_err();
+    assert_eq!(
+        format!("{refused:?}"),
+        format!(
+            "{:?}",
+            DataError::Unavailable(
+                "Request::socket is unavailable in a worker-placed source; place it on main".into()
+            )
+        )
+    );
+}
+
 #[test]
 fn a_native_storage_change_is_reported_while_the_source_is_on_its_worker() {
     let mut placed = Placed::new(Aborting::default(), Placement::Worker);

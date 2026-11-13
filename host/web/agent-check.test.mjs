@@ -2,16 +2,17 @@
 // host/web-js/check.js's observations and a capture's pixels): one fixture view per finding class, found on the page in
 // each scheme and absent from a page that has none; and a screenshot shows a transition where it ends, unless filmed.
 import { test, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { checkOp, judge, ratio } from '../../scripts/agent-check.mjs';
-import { decodePng } from '../../scripts/png.mjs';
+import { decodePng, encodePng } from '../../scripts/png.mjs';
 import { serveBuildTree } from './serve.mjs';
 import { fileURLToPath } from 'node:url';
+import { webCompiler } from '../web-js/module.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
@@ -81,6 +82,8 @@ const CLEAN = `component CleanFixture
         text testId="detail" color="-exact-secondary-label" "Secondary detail"
       button testId="go" press=bump buttonStyle="bordered-prominent"
         text "Go"
+      button testId="start" press=bump buttonStyle="tinted" accent-color="-exact-system-green"
+        text "Start"
       row gap=8
         button testId="one" press=bump
           text "One"
@@ -349,6 +352,10 @@ test('judging: WCAG ratios, the floors, a clamp asked for, a reachable cover, th
   const paleAccent = judge(obs([{ ...white, bg: [104, 165, 254], on: 'own', onAccentFill: true }]), null);
   expect(paleAccent.map((f) => [f.kind, f.detail.need])).toEqual([['contrast', 3]]);
   expect(paleAccent[0].hint).toContain('leave the accent unsaid');
+  // White on a fill in a system hue is the platform's pair, as that hue on white is: iOS's badge, the dark scheme's label
+  // on its red (3.4:1), is held to 3:1. The same white on a red of the author's own stays 4.5:1.
+  expect(found([{ ...white, bg: [255, 66, 69], on: 'own' }], { scheme: 'dark' })).toEqual([]);
+  expect(found([{ ...white, bg: [240, 60, 60], on: 'own' }], { scheme: 'dark' })).toEqual(['contrast:1']);
   // Overlap is judged on what is presented of each box: a row its scroller cuts at y = 10 overlaps nothing below.
   const row = { id: 6, x: 0, y: 0, w: 40, h: 20, control: 'press', sized: 'platform' }, tab = { id: 7, x: 0, y: 10, w: 40, h: 20, control: 'press', sized: 'platform' };
   expect(found([row, tab])).toEqual(['overlap:6']);
@@ -414,6 +421,39 @@ test('a padded percentage width past its parent is an overflow that names its ca
   expect(ios.map((x) => [x.kind, x.detail.past, x.detail.of, x.detail.pad, x.detail.written, x.detail.unit])).toEqual([['overflow', 14, 3, 14, undefined, 'pt']]);
   // The viewport's own overflow is still there beside it, not instead: the cause is named first, once.
   expect(judge({ viewport: { w: 40, h: 20 }, scheme: 'light', target: 24, items: [{ ...padded, outX: 14 }] }, png)).toHaveLength(1);
+});
+
+test('a graphic past the viewport needs fitting or clipping, including one hidden from accessibility', async () => {
+  const nodes = new Map([
+    [1, { id: 1, type: 'Svg', props: { testId: 'chart' } }],
+    [2, { id: 2, type: 'Svg', props: { testId: 'decoration', accessibilityElementsHidden: true } }],
+    [3, { id: 3, type: 'Image', props: { testId: 'photo' } }],
+    [4, { id: 4, type: 'Control', props: { testId: 'button' } }],
+    [5, { id: 5, type: 'Text', props: { testId: 'caption' } }],
+  ]);
+  const obs = { viewport: { w: 402, h: 874 }, scheme: 'light', target: 44, items: [...nodes.keys()].map((id) => ({
+    id, x: 0, y: (id - 1) * 100, w: 420, h: 80, outX: 18, ...(id === 4 ? { control: 'button', sized: 'author' } : id === 5 ? { text: 'Caption' } : {}),
+  })) };
+  const graphic = 'fit the graphic (`width="100%"`), or clip it in its containing box (`overflow="hidden"`)';
+  const layout = 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box';
+  for (const host of ['web', 'ios']) {
+    const found = judge(obs, null, { host, nodes });
+    expect(found.map((f) => [f.kind, f.id, f.box, f.detail])).toEqual([...nodes.keys()].map((id) => [
+      'overflow', id, [0, (id - 1) * 100, 420, 80], { past: 18, width: 402, unit: host === 'web' ? 'px' : 'pt' },
+    ]));
+    expect(found.map((f) => f.hint)).toEqual([graphic, graphic, graphic, layout, layout]);
+  }
+  const png = encodePng({ width: 402, height: 874, data: new Uint8Array(402 * 874 * 4).fill(255) });
+  const session = {
+    host: 'ios',
+    op: async ({ op }) => op === 'check' ? obs : { nodes: [...nodes.values()] },
+    carrier: { screenshot: async (path) => writeFileSync(path, png) },
+    tagged: (result) => result,
+  };
+  const run = (await checkOp(session)).check[0];
+  expect(run.findings.map((f) => [f.node, f.hint])).toEqual([
+    ['chart', graphic], ['decoration', graphic], ['photo', graphic], ['button', layout], ['caption', layout],
+  ]);
 });
 
 test('two texts drawn over each other run together, unless one stands on the opaque fill of the view laid over the other', () => {
@@ -580,3 +620,105 @@ test('a screenshot shows a transition where it ends, the clock unmoved; a film\'
     expect([small.w, small.h, png.width, png.height]).toEqual([390, 844, 390, 844]);
   } finally { await session.close(); }
 }, 900000);
+
+test('folded captions over pictures use captured pixels unless their own fill covers the picture', async () => {
+  const source = `component Captions
+  view
+    column background-color="black" color="white" padding=16 gap=16
+      column position="relative" height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" testId="caption"
+          text "Caption on a picture"
+      column position="relative" height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" background-color="black" testId="opaque-caption"
+          text "Caption on its own fill"
+`;
+  const session = await open({ host: 'web', url: await built('folded-captions', source) });
+  try {
+    const display = await session.carrier.evaluate(`getComputedStyle(document.querySelector('[data-testid="caption"] [data-exact-text]')).display`);
+    expect(display).toBe('contents');
+    const ids = new Map((await session.op({ op: 'tree' })).nodes.map(n => [n.props.testId, n.id]));
+    const obs = await session.op({ op: 'check' });
+    expect(obs.items.find(it => it.text === 'Caption on a picture').bg).toBeUndefined();
+    expect(obs.items.find(it => it.text === 'Caption on its own fill')).toMatchObject({ bg: [0, 0, 0], on: ids.get('opaque-caption') });
+    const runs = (await checkOp(session, ['both'])).check;
+    expect(runs.map(run => run.findings.map(f => [f.text, f.kind]))).toEqual([
+      [['Caption on a picture', 'contrast']], [['Caption on a picture', 'contrast']],
+    ]);
+    for (const run of runs) expect(run.findings[0].detail.bg).toBe('#00ff00');
+  } finally { await session.close(); }
+}, 120_000);
+
+test('Shared Elements keeps Zoom Close painted, observed and usable after repeated flights in both schemes', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/shared-elements-agent-'));
+  let browser, server;
+  try {
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'shared-elements', '--out', dir, '--render', 'none'], {
+      cwd: root, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+      const path = new URL(req.url).pathname, file = Bun.file(resolve(dir, path === '/' ? 'index.html' : path.slice(1)));
+      return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
+    } });
+    browser = await open({ host: 'web', app: 'shared-elements', url: server.url.href, size: [420, 780] });
+    const settle = async () => expect((await browser.clock('settle')).settled).toBe(true);
+    const tap = async id => { await browser.tap(id); await settle(); };
+    const scheme = async value => { await browser.prefer({ 'prefers-color-scheme': value }); await settle(); };
+    await settle();
+    for (const appearance of ['light', 'dark', 'light', 'dark']) {
+      await scheme(appearance);
+      await tap('tab-grid'); await tap('open-p1'); await tap('close');
+      await scheme(appearance === 'light' ? 'dark' : 'light');
+      await tap('tab-cards'); await tap('card-c1'); await tap('close-card');
+      await scheme(appearance);
+      await tap('tab-tasks'); await tap('task-t1');
+      await tap('tab-zoom'); await tap('zoom-open-p1');
+      const button = (await browser.op({ op: 'tree' })).nodes.find(n => n.props.testId === 'zoom-close');
+      const bounds = await browser.carrier.evaluate(`(() => {
+        const label = document.querySelector('[data-testid="zoom-close"] [data-exact-text]');
+        const range = document.createRange(); range.selectNodeContents(label);
+        return range.getBoundingClientRect().toJSON();
+      })()`);
+      const shot = resolve(dir, 'zoom.png');
+      await browser.screenshot(shot);
+      const png = decodePng(readFileSync(shot));
+      let ink = 0;
+      for (let y = Math.ceil(bounds.top); y < Math.floor(bounds.bottom); y++) {
+        for (let x = Math.ceil(bounds.left); x < Math.floor(bounds.right); x++) {
+          const i = (y * png.width + x) * 4;
+          if (Math.min(png.data[i], png.data[i + 1], png.data[i + 2]) > 200) ink++;
+        }
+      }
+      expect(ink).toBeGreaterThan(10);
+      const checked = await browser.op({ op: 'check' });
+      expect(checked.items.some(item => item.text === 'Close' && item.of === button.id)).toBe(true);
+      await tap('zoom-close');
+      expect((await browser.op({ op: 'tree' })).nodes.some(n => n.props.testId === 'zoom-close')).toBe(false);
+    }
+    await tap('zoom-open-p1');
+    for (const [style, visible] of [
+      ['label.style.visibility = "hidden"', false],
+      ['button.style.visibility = "hidden"; label.style.visibility = "visible"', true],
+      ['button.style.opacity = "0"', false],
+      ['button.style.display = "none"', false],
+      ['button.style.contentVisibility = "hidden"', false],
+      ['button.inert = true', false],
+      ['label.style.opacity = "0"', true],
+    ]) {
+      await browser.carrier.evaluate(`(() => {
+        const button = document.querySelector('[data-testid="zoom-close"]'), label = button.querySelector('[data-exact-text]');
+        button.style.cssText = ''; button.inert = false; label.style.cssText = '';
+        ${style};
+      })()`);
+      const label = (await browser.op({ op: 'check' })).items.find(item => item.text === 'Close');
+      expect(!!label).toBe(visible);
+      if (label) expect(label.fg[3]).toBe(1);
+    }
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);

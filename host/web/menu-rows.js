@@ -10,8 +10,9 @@
 // the button that opened a popover while the popover is open (below). Loaded
 // after the first paint (glue.js); the JS target's page imports it at boot
 // when its plan has a dialog, a menu or a popover (host/web-js/build.mjs
-// `dialogs.flag`).
-import { popoverSource } from "./navigation.js";
+// `dialogs.flag`). A page rendered ahead loads either when it activates, so
+// a menu may already be open.
+import { inertAncestor, popoverSource } from "./navigation.js";
 
 /** HTML's popover commands, and what each does. */
 const POPOVER_COMMANDS = new Map([["show-popover", "show"], ["hide-popover", "hide"], ["toggle-popover", "toggle"]]);
@@ -80,8 +81,50 @@ function menuRows() {
   // `popoverSource`), as UIKit dismisses a menu with the screen that presented it: when that control leaves the page
   // or is no longer shown (its route popped, or switched away from), the popover closes. HTML ties a popover's life to
   // its own element only, so this is the one place that says it; while any is open, each frame looks. A popover
-  // removed while open is forgotten there too, since HTML's removing steps hide it with no `toggle`.
+  // removed while open is dismissed there too, since HTML's removing steps hide it with no `toggle`.
   const opened = new Map(); // popover -> the control that opened it
+  const focus = new WeakMap();
+  let focused = document.activeElement;
+  addEventListener("focusin", e => { focused = e.target; }, true);
+  const usable = el => el?.isConnected && !el.matches(':disabled, [aria-disabled="true"]')
+    && !inertAncestor(el) && el.checkVisibility({ visibilityProperty: true });
+  addEventListener("beforetoggle", e => {
+    const menu = e.target;
+    if (!menu.matches('[popover][role="menu"]')) return;
+    if (e.newState === "open") focus.set(menu, { before: document.activeElement, source: e.source });
+    else {
+      const state = focus.get(menu);
+      if (state) state.restore = menu.contains(document.activeElement);
+    }
+  }, true);
+  const menuFocus = (menu, open) => {
+    const state = focus.get(menu);
+    if (!state) return;
+    const at = document.activeElement;
+    if (open) {
+      // An authored autofocus or focus handler owns the focus it set while the menu opened.
+      if (menu.contains(at) || ![document.body, state.before, state.source].includes(at)) return;
+      const first = [...menu.querySelectorAll('button, a[href], [role^="menuitem"]')]
+        .find(el => el.closest('[role="menu"]') === menu && usable(el));
+      if (first) first.focus({ preventScroll: true });
+      else {
+        state.tabindex = menu.getAttribute("tabindex");
+        if (state.tabindex === null) menu.tabIndex = -1;
+        menu.focus({ preventScroll: true });
+      }
+    } else {
+      focus.delete(menu);
+      if (state.tabindex === null) menu.removeAttribute("tabindex");
+      // Light dismissal can already have focused another control; leave that focus where it landed.
+      if (!state.restore || at !== document.body && !menu.contains(at)) return;
+      for (const target of [state.source, state.before]) {
+        if (!usable(target)) continue;
+        target.focus({ preventScroll: true });
+        // A context menu's source may be visible without being focusable.
+        if (document.activeElement !== at) break;
+      }
+    }
+  };
   // While its popover is open a button stays pressed (neutral.css reads the mark as it reads a press); not for a
   // context menu, which the Mac opens on a button without highlighting it. A popover hidden and shown again from
   // another button in one task fires a single `toggle`, open to open, which moves the mark; a button two open popovers
@@ -96,20 +139,35 @@ function menuRows() {
   let sweeping = false;
   const sweep = () => {
     for (const [pop, source] of opened) {
-      if (!pop.isConnected || !pop.matches(":popover-open")) forget(pop);
-      else if (!source.checkVisibility({ visibilityProperty: true })) pop.hidePopover(); // its `toggle` forgets it
+      if (!pop.isConnected || !pop.matches(":popover-open")) {
+        const state = focus.get(pop);
+        // Removal resets activeElement to body before the sweep can read it.
+        if (state) state.restore ??= pop.contains(focused);
+        menuFocus(pop, false);
+        forget(pop);
+      } else if (source && !source.checkVisibility({ visibilityProperty: true })) pop.hidePopover(); // its `toggle` forgets it
     }
     sweeping = opened.size > 0;
     if (sweeping) requestAnimationFrame(sweep);
   };
-  addEventListener("toggle", e => {
-    const pop = e.target, source = popoverSource(pop);
+  const toggled = (pop, open, source = popoverSource(pop)) => {
+    menuFocus(pop, open);
     forget(pop);
-    if (e.newState !== "open" || !source) return;
-    if (marks(pop, source)) source.setAttribute("data-exact-open", "");
+    if (!open || !source && !focus.has(pop)) return;
+    if (source && marks(pop, source)) source.setAttribute("data-exact-open", "");
     opened.set(pop, source);
     if (!sweeping) { sweeping = true; requestAnimationFrame(sweep); }
-  }, true);
+  };
+  addEventListener("toggle", e => toggled(e.target, e.newState === "open"), true);
+  // A page rendered ahead opens a popover before its runtime, and so this, has loaded (opening a menu starts the
+  // runtime: capture.js, document-glue.js): its events went unheard. Its source is the focused control that names it,
+  // and a menu takes the focus now if it is still where the menu opened.
+  for (const pop of document.querySelectorAll("[popover]:popover-open")) {
+    const at = document.activeElement ?? document.body;
+    const source = popoverSource(pop) ?? (pop.id && [at.getAttribute("popovertarget"), at.getAttribute("commandfor")].includes(pop.id) ? at : null);
+    if (pop.matches('[role="menu"]') && (at === document.body || at === source)) focus.set(pop, { before: at, source });
+    toggled(pop, true, source);
+  }
 }
 
 (globalThis.exact ??= {}).menuRows = menuRows;

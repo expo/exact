@@ -47,6 +47,7 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         panels,
         resources,
         store_readers,
+        read_contents,
         now_ms,
         store,
         forgot_waiting,
@@ -58,6 +59,7 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         && data_revision == &b.data_revision
         && keeps_answers == &b.keeps_answers
         && store_readers == &b.store_readers
+        && read_contents == &b.read_contents
         && now_ms.to_bits() == b.now_ms.to_bits()
         && store == &b.store
         && forgot_waiting == &b.forgot_waiting

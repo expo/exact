@@ -308,7 +308,8 @@ pub struct Engine {
     // and the nodes whose own appearance differs from it.
     dark: bool,
     node_dark: BTreeMap<u64, bool>,
-    // Drag timelines (LLP 1057.003): sources and bound consumers.
+    // Drag, scroll and view timelines (LLP 1057.003): drag sources,
+    // scrollers' offsets and bound consumers.
     timelines: timeline::Timelines,
     // Clock timelines (LLP 1055.002): each node's, and each one's origin.
     clocks: clock::Clocks,
@@ -340,6 +341,23 @@ impl Engine {
         if self.dirty.capacity() > 2 * self.dirty.len().max(256) {
             self.dirty.shrink_to_fit();
         }
+    }
+
+    /// Whether the current declaration drives this property as a physical spring.
+    pub fn has_spring_transition(&self, node: u64, property: Property) -> bool {
+        let row = if property == Property::Layout {
+            self.layout.get(&node)
+        } else {
+            self.transitions
+                .get(&node)
+                .and_then(|t| t.matching(property))
+        };
+        row.is_some_and(|t| {
+            matches!(
+                t.governing(property).timing,
+                crate::TimingFunction::Spring(_)
+            )
+        })
     }
 
     /// Set a node's `transition` row. Governs changes observed from now on;
@@ -528,7 +546,12 @@ impl Engine {
 
         // An unchanged settled slot (most of a touched node's) changes
         // nothing; asking for it mutably would make an entry of a bit.
-        let unchanged = |slot: &Slot| slot.live.is_none() && slot.target == change.value;
+        let released = change.velocity.is_some_and(|v| v != Value::ZERO)
+            && declaration
+                .as_ref()
+                .is_some_and(|t| matches!(t.timing, crate::TimingFunction::Spring(_)));
+        let unchanged =
+            |slot: &Slot| !released && slot.live.is_none() && slot.target == change.value;
         if self.slots.get(&key).is_some_and(unchanged) {
             self.played.remove(&key);
             return Ok(());
@@ -549,7 +572,7 @@ impl Engine {
         }
         match slot.take_running() {
             None => {
-                if after == slot.target {
+                if after == slot.target && !released {
                     return Ok(());
                 }
                 slot.set_owner(None);
@@ -582,14 +605,18 @@ impl Engine {
                 slot.set_owner(None);
                 let current = running.sample(now);
                 slot.set_target(after);
-                let Some(declaration) = declaration.filter(|_| current.value != after) else {
+                let inherited = change.velocity.unwrap_or(current.velocity);
+                let Some(declaration) = declaration.filter(|t| {
+                    current.value != after
+                        || inherited != Value::ZERO
+                            && matches!(t.timing, crate::TimingFunction::Spring(_))
+                }) else {
                     slot.set_presented(after);
                     self.running.remove(&key);
                     self.pending.remove(&key);
                     self.dirty.insert(key);
                     return Ok(());
                 };
-                let inherited = change.velocity.unwrap_or(current.velocity);
                 let is_easing = matches!(
                     declaration.timing,
                     crate::transition::TimingFunction::Easing(_)
@@ -746,7 +773,10 @@ impl Engine {
         property: Property,
     ) -> Option<SpringDescriptor> {
         let running = self.slots.get(&(node, property))?.running()?;
-        let Curve::Spring { config, velocity } = &running.curve else {
+        let Curve::Spring {
+            config, velocity, ..
+        } = &running.curve
+        else {
             return None;
         };
         Some(SpringDescriptor {

@@ -8,7 +8,7 @@ import org.json.JSONObject
 
 /**
  * The session's orientation lock (LLP 1133.029 D6): the activity's `requestedOrientation`. exact2 tells the lock
- * when it changes and anew to a reader made again (request kind 13, `host/linux/src/presenter/requests.rs`): none,
+ * when it changes and anew to a reader made again (request kind 13, `host/painted/src/presenter/requests.rs`): none,
  * or the orientations its types allow as bits in the Screen Orientation API's order (portrait-primary 1,
  * portrait-secondary 2, landscape-primary 4, landscape-secondary 8), whether a holder says `natural` or `current`,
  * and each holder and its word. A set is the manifest's own mapping (`build.gradle.kts`) for that type; `current`

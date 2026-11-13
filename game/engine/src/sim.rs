@@ -6,6 +6,8 @@ mod assets;
 mod diagnostics;
 mod origin;
 mod pads;
+mod pointer;
+pub use pointer::PointerSample;
 mod paranoid;
 mod queue;
 mod snapshot;
@@ -104,6 +106,15 @@ pub trait Game: 'static {
     fn register(_world: &mut World, _args: &std::collections::BTreeMap<&str, Value>) {}
     /// Construct the world after argument decoding succeeds.
     fn setup(world: &mut World, args: &Self::Args);
+    /// Finish a new world with the canvas's size, as a launch camera framed
+    /// for the screen and its HUD needs: once for each world `setup` made,
+    /// when the canvas first reports its size (`input.viewport()`), before
+    /// the world's first tick and before its first frame is drawn. A restored
+    /// world never runs it, since its save holds what it wrote; a world given
+    /// no size before its first tick (a hostless `Sim` never sent
+    /// `Sim::viewport`) never runs it either. It writes the simulation as
+    /// `setup` does, and presentation as `setup` may not.
+    fn first_frame(_world: &mut World, _input: &Input, _args: &Self::Args) {}
     /// Stop world time while continuing to serve reads.
     fn paused(_args: &Self::Args) -> bool {
         false
@@ -161,6 +172,8 @@ pub enum Clock {
 }
 #[derive(Clone, Default, Data)]
 struct Queued {
+    #[data(skip)]
+    host_sample: bool,
     host_us: i64,
     world_us: Option<i64>,
     event: InputEvent,
@@ -222,12 +235,18 @@ impl Paranoid {
 pub struct Sim<G: Game> {
     pub(crate) world: World,
     setup_pending: bool,
+    // A world `setup` made that has not run `Game::first_frame` (`frame_first`).
+    unframed: bool,
     // The first required asset last seen not ready (`required_ready`).
     ready_hint: Option<String>,
     asset_mesh_revision: u64,
     asset_sprite_names: Vec<(crate::Entity, String)>,
     // What the renderer draws (`hold_assets`): presentation residency only.
     held: std::collections::BTreeSet<String>,
+    // What the world presents (`refresh_presented`), and the world and the
+    // Mesh, Sprite and MaterialOverrides revisions it was read at.
+    presented: std::collections::BTreeSet<String>,
+    presented_at: Option<(crate::WorldId, [u64; 3])>,
     // The textures `MaterialOverrides` named at the last asset pass.
     asset_override_names: Vec<String>,
     defer_assets: bool,
@@ -259,6 +278,7 @@ pub struct Sim<G: Game> {
     lookahead_us_hz: i128,
     // The last tick's pointer motion, for presentation between ticks only.
     last_motion: crate::Vec2,
+    pointer_samples: Vec<PointerSample>,
     paranoid: Option<fn(&mut Self)>,
     pub(crate) paranoid_mode: Paranoid,
     pub(crate) paranoid_checked: u64,
@@ -427,10 +447,13 @@ impl<G: Game> Sim<G> {
     ) -> Result<Self, String> {
         Ok(Self {
             setup_pending: !world.assets.ready(),
+            unframed: true,
             world,
             asset_mesh_revision: u64::MAX,
             asset_sprite_names: Vec::new(),
             held: Default::default(),
+            presented: Default::default(),
+            presented_at: None,
             asset_override_names: Vec::new(),
             defer_assets: false,
             textures: Default::default(),
@@ -456,6 +479,7 @@ impl<G: Game> Sim<G> {
             paused_clock: false,
             lookahead_us_hz: 0,
             last_motion: crate::Vec2::ZERO,
+            pointer_samples: Vec::new(),
             ready_hint: None,
             paranoid: Self::reconstruction(Paranoid::environment()),
             paranoid_mode: Paranoid::environment(),
@@ -538,6 +562,7 @@ impl<G: Game> Sim<G> {
                 .checked_add(1)
                 .expect("presentation generation exhausted");
             self.setup_pending = !world.assets.ready();
+            self.unframed = true;
             self.ready_hint = None;
             self.asset_mesh_revision = u64::MAX;
             self.edits_admitted |= self.world.set_seen.get();
@@ -547,6 +572,7 @@ impl<G: Game> Sim<G> {
             self.live_time = None;
             self.lookahead_us_hz = 0;
             self.queue.clear();
+            self.pointer_samples.clear();
             let viewport = self.input.viewport;
             self.input = Input::new(G::actions());
             self.input.viewport = viewport;
@@ -559,7 +585,9 @@ impl<G: Game> Sim<G> {
         }
         self.args_json = args_json;
         self.args = args;
-        if changed {
+        // A restarted world on a canvas that has its size is framed at once,
+        // which presents it.
+        if !self.frame_first() && changed {
             self.invalidate();
             // Drawn state follows the arguments it reads at once, paused or not.
             if !self.setup_pending {
@@ -573,12 +601,38 @@ impl<G: Game> Sim<G> {
         Ok(())
     }
     /// Set canvas dimensions in points, for touch regions and agent projection.
-    pub fn viewport(&mut self, width: f32, height: f32) {
+    /// The first size a new world hears runs `Game::first_frame`: true when
+    /// this call did, and the world changed.
+    pub fn viewport(&mut self, width: f32, height: f32) -> bool {
         assert!(
             width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0,
             "viewport dimensions must be positive finite points"
         );
         self.input.viewport = Vec2::new(width, height);
+        self.frame_first()
+    }
+    /// Run `Game::first_frame` on a world `setup` made, once it has run and
+    /// has a canvas size, while it is still at tick 0. True when it ran.
+    // @ref LLP 1046.003 — launch framing: setup never reads the size.
+    pub(crate) fn frame_first(&mut self) -> bool {
+        if !self.unframed
+            || self.setup_pending
+            || self.world.tick() != 0
+            || self.input.viewport.min_element() <= 0.0
+        {
+            return false;
+        }
+        self.unframed = false;
+        self.world.clear_presentation();
+        G::first_frame(&mut self.world, &self.input, &self.args);
+        if let Some(name) = self.world.presentation_written() {
+            panic!("Game::first_frame wrote presentation component `{name}`; write presentation state in Game::present, which runs right after it");
+        }
+        crate::scene::place_followers(&self.world);
+        self.world.propagate();
+        Self::present(&mut self.world, &self.args);
+        self.invalidate();
+        true
     }
     fn projected(&self, e: &Queued) -> i64 {
         e.world_us.unwrap_or_else(|| {
@@ -805,6 +859,7 @@ impl<G: Game> Sim<G> {
             self.world.spans.borrow_mut().begin(self.world.tick() + 1);
             self.world.begin_tick();
             self.input.clear_edges();
+            self.retain_pointer_samples();
             self.sync_input();
             self.world.deliver_events(&mut self.input);
             let end = (self.world.tick() as u128 + 1) * 1_000_000;
@@ -816,6 +871,7 @@ impl<G: Game> Sim<G> {
                 })
             }) {
                 let e = self.queue.pop_front().unwrap();
+                self.sample_delivered_pointer(&e.event, e.host_sample);
                 let edit = matches!(&e.event, InputEvent::Message { text, .. }
                     if crate::world::edit::command(text).is_some()
                         && self.world.apply_set(text, self.development_edits));

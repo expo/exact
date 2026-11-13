@@ -58,6 +58,17 @@ pub fn encode_optional(
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
         }
+        // A listener's connections are handles a worker's turn cannot hold,
+        // as a socket's are (LLP 1133.005); the envelope carries no listener.
+        Ok(Some(Answer::Later(request)))
+            if std::iter::once(&request)
+                .chain(&more)
+                .any(|r| r.listen.is_some()) =>
+        {
+            body["error"] = error_json(&unavailable(
+                "exactListen is unavailable in a worker-placed source; place it on main",
+            ));
+        }
         Ok(Some(Answer::Later(request))) => {
             body["request"] = request_json(&request);
             body["more"] = Json::Array(more.iter().map(request_json).collect());
@@ -169,7 +180,9 @@ fn error_json(error: &DataError) -> Json {
     let (kind, message) = match error {
         DataError::UnknownSource(m) => ("UnknownSource", m),
         DataError::BadArguments(m) => ("BadArguments", m),
-        DataError::DeferredAtBake(m) => ("DeferredAtBake", m),
+        DataError::DeferredAtBake { message, warning } => {
+            return json!({"kind": "DeferredAtBake", "message": message, "warning": warning});
+        }
         DataError::Unavailable(m) | DataError::Interface(m) => ("Unavailable", m),
         // Transient: a peer that predates it reads it as `Unavailable` (`error_from`'s catch-all).
         DataError::Overrun(m) => ("Overrun", m),
@@ -186,7 +199,10 @@ fn error_from(error: &Json) -> DataError {
     match error["kind"].as_str() {
         Some("UnknownSource") => DataError::UnknownSource(message),
         Some("BadArguments") => DataError::BadArguments(message),
-        Some("DeferredAtBake") => DataError::DeferredAtBake(message),
+        Some("DeferredAtBake") => DataError::DeferredAtBake {
+            message,
+            warning: error["warning"] == Json::Bool(true),
+        },
         Some("Overrun") => DataError::Overrun(message),
         Some("Failed") => match error["code"].as_str().and_then(FailureCode::from_name) {
             Some(code) => {
@@ -213,6 +229,7 @@ fn request_json(request: &Request) -> Json {
         "headers": request.headers,
         "body": base64(&request.body),
         "stream": request.stream,
+        "protocols": request.protocols,
         "upload_progress": request.upload_progress.then_some(true),
         "long_poll": request.long_poll.as_ref().map(|p| json!({
             "cursor": p.cursor, "from": p.from, "same_cursor_event": p.same_cursor_event,
@@ -251,13 +268,6 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         })
         .transpose()?
         .unwrap_or_default();
-    // A listener's connections are handles a worker's turn cannot hold, as
-    // a socket's are (LLP 1133.005).
-    if !json["listen"].is_null() {
-        return Err(unavailable(
-            "exactListen is unavailable in a worker-placed source; place it on main",
-        ));
-    }
     let request = Request {
         surface: None,
         // The runner stamps who asked when the request goes out.
@@ -310,6 +320,8 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
                 }))
             }
         },
+        protocols: serde_json::from_value(json["protocols"].clone())
+            .map_err(|_| unavailable("invalid socket protocols"))?,
         idle_timeout_ms: match &json["idle_timeout_ms"] {
             Json::Null => None,
             value => Some(
@@ -347,6 +359,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         wake_ms: json["wake_ms"].as_u64(),
         fetch: json["fetch"].as_u64(),
     };
+    request.check_protocols().map_err(unavailable)?;
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.
     match request
         .long_poll_refusal()
@@ -483,6 +496,17 @@ mod tests {
     }
 
     #[test]
+    fn a_bake_deferral_keeps_its_warning_class_across_the_envelope() {
+        for warning in [false, true] {
+            let error = DataError::DeferredAtBake {
+                message: "deferred call".into(),
+                warning,
+            };
+            assert_eq!(error_from(&error_json(&error)), error);
+        }
+    }
+
+    #[test]
     fn a_worker_stream_is_neither_a_socket_nor_a_byte_stream() {
         let request = Request {
             stream: true,
@@ -539,6 +563,36 @@ mod tests {
             format!("{refused:?}").contains("exactLongPoll"),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn a_listener_is_refused_by_name_before_it_crosses() {
+        let listener = || {
+            let request = Request::listen("unix:/tmp/a.sock", Default::default());
+            Request {
+                stream: true,
+                ..request
+            }
+        };
+        let fetch = Request::get("https://x.test/a");
+        for (request, more) in [
+            (listener(), vec![]),
+            (fetch.clone(), vec![fetch.clone(), listener()]),
+        ] {
+            let outcome = encode_optional(
+                Ok(Some(Answer::Later(request))),
+                more,
+                &mut Store::default(),
+                vec![],
+            );
+            let refused = apply(outcome, &mut Store::default(), &mut Vec::new()).unwrap_err();
+            assert_eq!(
+                refused,
+                unavailable(
+                    "exactListen is unavailable in a worker-placed source; place it on main"
+                )
+            );
+        }
     }
 
     #[test]

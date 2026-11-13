@@ -77,20 +77,7 @@ fn holds_route(nodes: &[Node]) -> bool {
 /// Whether `node`, or something inside it that is not a use, is a route `for`.
 fn holds_route_each(node: &Node, slot: &str) -> bool {
     is_route_each(node, slot)
-        || match node {
-            Node::Element { children, .. } => children.iter().any(|n| holds_route_each(n, slot)),
-            Node::Each { body, .. } => body.iter().any(|n| holds_route_each(n, slot)),
-            Node::When {
-                then, otherwise, ..
-            } => then
-                .iter()
-                .chain(otherwise)
-                .any(|n| holds_route_each(n, slot)),
-            Node::Match { some, none, .. } => {
-                some.1.iter().chain(none).any(|n| holds_route_each(n, slot))
-            }
-            Node::Use { .. } | Node::Children { .. } => false,
-        }
+        || !matches!(node, Node::Use { .. }) && node.children().any(|n| holds_route_each(n, slot))
 }
 
 /// The root component's view with every route `for` of the navigation root
@@ -120,15 +107,11 @@ fn wrap(nodes: &mut [Node], routes: &RoutesDecl) -> bool {
             }
             continue;
         }
-        wrapped |= match node {
-            Node::Element { children, .. } => wrap(children, routes),
-            Node::Each { body, .. } => wrap(body, routes),
-            Node::When {
-                then, otherwise, ..
-            } => wrap(then, routes) | wrap(otherwise, routes),
-            Node::Match { some, none, .. } => wrap(&mut some.1, routes) | wrap(none, routes),
-            Node::Use { .. } | Node::Children { .. } => false,
-        };
+        if !matches!(node, Node::Use { .. }) {
+            for list in node.child_lists_mut() {
+                wrapped |= wrap(list, routes);
+            }
+        }
     }
     wrapped
 }

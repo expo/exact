@@ -106,6 +106,7 @@ final class NodePoolIOSTests: XCTestCase {
         let row = try XCTUnwrap(p.views[10]), glyph = try XCTUnwrap(p.views[11]), button = try XCTUnwrap(p.views[12])
         let symbolView = try XCTUnwrap(glyph.symbolView)
         button.alpha = 0.5
+        row.fitContentHeight = 180
         XCTAssertEqual(p.chrome.named["row-10"], [10])
 
         // The runner retires row 10 and builds row 20 of the same shape.
@@ -121,6 +122,7 @@ final class NodePoolIOSTests: XCTestCase {
         XCTAssertNil(p.chrome.named["row-10"]); XCTAssertEqual(p.chrome.named["row-20"], [20])
         XCTAssertEqual(button.accessibilityLabel, "Save 20")
         XCTAssertEqual(button.alpha, 1, "presentation is a fresh view's")
+        XCTAssertNil(row.fitContentHeight)
         XCTAssertTrue(glyph.symbolView === symbolView, "the same symbol keeps its glyph view")
         XCTAssertFalse(p.pool.isParked(row))
         XCTAssertEqual(p.pool.count, 0)

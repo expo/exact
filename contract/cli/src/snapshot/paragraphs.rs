@@ -8,7 +8,7 @@ pub(super) fn check(file: &File, families: &[String]) -> Result<(), Vec<CompileE
     super::values::tree(&expanded.root.view, file, families, &mut errors);
     // Expansion errors belong to the ordinary compiler. Its surviving tree
     // still exposes every independent paragraph refusal.
-    super::visit_nodes(&expanded.root.view, &mut |node| {
+    Node::walk(&expanded.root.view).for_each(|node| {
         if matches!(node, Node::Element { tag, .. } if tag == "text" || tag == "time") {
             inline(node, false, false, file, &mut errors);
         }

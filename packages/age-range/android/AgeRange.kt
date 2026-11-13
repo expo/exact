@@ -12,6 +12,7 @@ import android.os.Build
 import com.google.android.gms.tasks.Task
 import com.google.android.play.agesignals.AgeSignalsAccessRequest
 import com.google.android.play.agesignals.AgeSignalsException
+import com.google.android.play.agesignals.AgeSignalsManager
 import com.google.android.play.agesignals.AgeSignalsManagerFactory
 import com.google.android.play.agesignals.AgeSignalsRequest
 import com.google.android.play.agesignals.AgeSignalsResult
@@ -27,7 +28,8 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-class AgeRangeModule(context: ExtensionContext) : ExactExtension(context) {
+/** [play] stands in for Play's manager in a test. */
+class AgeRangeModule(context: ExtensionContext, private val play: AgeSignalsManager? = null) : ExactExtension(context) {
     companion object {
         /** Play's default bands, inclusive (D11). */
         private val BANDS = listOf(0 to 12, 13 to 15, 16 to 17, 18 to null)
@@ -45,9 +47,11 @@ class AgeRangeModule(context: ExtensionContext) : ExactExtension(context) {
             .put("declaration", declaration).put("apple", JSONObject.NULL).put("android", android)
     }
 
-    private val manager by lazy { AgeSignalsManagerFactory.create(context.application) }
+    private val manager by lazy { play ?: AgeSignalsManagerFactory.create(context.application) }
     private var overlay = JSONObject()
     private var asking = false
+    /** The replies of requests waiting for the one Play is asked. */
+    private val waiting = ArrayDeque<(JSONObject) -> Unit>()
 
     private fun say(line: String) = context.log("age-range: $line")
 
@@ -59,9 +63,10 @@ class AgeRangeModule(context: ExtensionContext) : ExactExtension(context) {
             "requestAgeRange" -> {
                 refused(args.optJSONArray("ageGates"))?.let { return reply(JSONObject().put("error", "TypeError").put("message", it)) }
                 if (context.agent) return reply(agentRequest(preferred as? JSONObject))
-                // One request at a time: Play's prompt is one activity.
-                if (asking) return reply(JSONObject().put("error", "InvalidStateError").put("message", "a request is already showing"))
-                request(reply)
+                // One request at a time, as Play's prompt is one activity: a second waits for the first to answer
+                // and is then asked of Play (D10).
+                waiting.addLast(reply)
+                next()
             }
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
@@ -87,10 +92,20 @@ class AgeRangeModule(context: ExtensionContext) : ExactExtension(context) {
         return installer == "com.android.vending"
     }
 
-    private fun request(reply: (JSONObject) -> Unit) {
-        val activity = context.activity ?: return reply(JSONObject().put("error", "NotAllowedError").put("message", "no activity in front"))
+    /** Asks Play the first waiting request, unless one is being asked. */
+    private fun next() {
+        if (asking) return
+        val reply = waiting.removeFirstOrNull() ?: return
         asking = true
-        val done = { answer: JSONObject -> asking = false; reply(answer) }
+        request { answer ->
+            asking = false
+            reply(answer)
+            next()
+        }
+    }
+
+    private fun request(done: (JSONObject) -> Unit) {
+        val activity = context.activity ?: return done(JSONObject().put("error", "NotAllowedError").put("message", "no activity in front"))
         settle(manager.requestAgeSignalsAccess(AgeSignalsAccessRequest.builder().setActivity(activity).build()), { access ->
             when (access.ageSignalsStatus()) {
                 AgeSignalsStatus.SHARED -> settle(manager.checkAgeSignals(AgeSignalsRequest.builder().build()), { done(answer(it)) }, done)

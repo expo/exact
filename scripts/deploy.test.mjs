@@ -18,7 +18,7 @@ import { isAbsolute, join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureAssets, assetCards, copyStaticTreeIfPresent, webEnvelope, publicFileCards, listAssets, readStaticFile, readDevGeneration, retainDevGeneration } from '../host/web/serve.mjs';
 import { resolveApp, webGpuArtifacts, withAppFixture } from './app.mjs';
-import { bake, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, inspectHead, materializeSnapshot, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
+import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, inspectHead, materializeSnapshot, readAssetIndex, streamIndex, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, OriginUnavailable, sha256, webReleasePath, webRootPath } from './origin.mjs';
 // Minimal compiler receipts for origin protocol fixtures below; capability
 // behavior is tested independently with declared requirements.
@@ -112,8 +112,11 @@ async function rejects(action, matches) {
     return { json: JSON.parse(text), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
   };
   const valid = signed();
+  // The head's asset index, a blob the origin must also serve.
+  const index = streamIndex(bundle), indexPath = blobPath(index.card.sha256);
   // A host display-name change repairs metadata without losing signed capabilities.
   const renameDir=mkdtempSync(join(tmpdir(),'exact-renamed-cohort-')), renameOrigin=new DirectoryOrigin(renameDir);
+  await renameOrigin.put(indexPath,index.bytes,{immutable:true});
   await renameOrigin.putHead(stream,found(valid).bytes,{previousDigest:null});
   await renameOrigin.put(`.exact/${stream.channel}/${compatibilityId}/releases/old.json`,Buffer.from(JSON.stringify({platform:'linux',envelope:valid})),{immutable:true});
   const renamed={...app,displayName:'Renamed'}, build=fixtureBuild(compatibilityId,bundle);
@@ -133,10 +136,10 @@ async function rejects(action, matches) {
     &&independent.rows.some(r=>r.compatibilityId===foreign&&r.action==='binary')&&independent.notes.some(n=>n.includes(foreign)&&n.includes('does not verify')));
   rmSync(renameDir,{recursive:true,force:true});
   const history = Buffer.from(JSON.stringify({ envelope: valid }) + '\n');
-  const tableFor = (candidate, withHistory = true) => classify({ app, opts: { platform: [] },
+  const tableFor = (candidate, withHistory = true, withIndex = true) => classify({ app, opts: { platform: [] },
     origin: {
       kind: 'directory', describe: () => dir,
-      get: async (name) => withHistory && name.endsWith('/releases/old.json') ? history : null,
+      get: async (name) => withHistory && name.endsWith('/releases/old.json') ? history : withIndex && name === indexPath ? index.bytes : null,
       head: async () => candidate === null ? null : candidate?.bytes ? candidate : found(candidate),
       list: async (name) => withHistory && name.endsWith('/releases') ? ['old.json'] : [],
     },
@@ -169,6 +172,8 @@ async function rejects(action, matches) {
     signed((head) => { delete head.plan.bytes; }),
   ];
   const validTable = await tableFor(valid);
+  // A signed head whose asset index the origin lacks is repaired, not current.
+  const missingIndexTable = await tableFor(valid, true, false);
   const reordered = { cohort: valid.cohort, signature: valid.signature, stream: valid.stream, release: valid.release,
     plan: valid.plan, exact: valid.exact, assets: valid.assets, app: valid.app };
   const prettyBytes = Buffer.from(JSON.stringify(reordered, null, 2) + '\n');
@@ -276,7 +281,7 @@ async function rejects(action, matches) {
     && emptyHeadTable.rows[0].action === 'bundle' && emptyHeadTable.rows[0].seq === 1
     && unlistableTable.rows[0].action === 'unavailable'
     && unlistableTable.rows[0].reason.includes('cannot enumerate its authenticated release history')
-    && repaired.every((table) => table.rows[0].action === 'bundle' && table.rows[0].seq === 8
+    && [...repaired, missingIndexTable].every((table) => table.rows[0].action === 'bundle' && table.rows[0].seq === 8
       && table.rows[0].changes[0].name === 'exact.json' && table.rows[0].changes[0].change === 'repair')
     && noHistoryRefused && unknownHistoryRefused && !unknownHistoryWrote
     && badHistoryClassifyRefused.every(Boolean) && corruptHistoryPublishRefused && !corruptHistoryWrote
@@ -775,10 +780,21 @@ async function rejects(action, matches) {
   try { await publishStream(args); }
   catch (error) { reusedRefused = error.message.includes('already has an immutable record'); }
   const names = await origin.list(base);
-  const blobCards = [head.json.plan, ...head.json.assets];
+  // The head names the plan and the asset index as blobs; the index names the asset beside them.
+  const blobCards = [head.json.plan, head.json.assets];
+  const listed = readAssetIndex(head.json.assets, await origin.get(blobPath(head.json.assets.sha256)));
+  // An index the origin cannot serve now is an unavailable row, not a classification that throws.
+  const outage = Object.create(origin);
+  outage.get = async (rel) => { if (rel === blobPath(head.json.assets.sha256)) throw new OriginUnavailable('index: HTTP 503'); return origin.get(rel); };
+  const outageTable = await classify({ app, opts: { platform: [] }, origin: outage, channel: 'prod',
+    snapshot: { commit: '0'.repeat(40), dirty: false, changes: [], repo: dir }, release: 'next', web: dir, bundle,
+    builds: { linux: fixtureBuild(compatibilityId, bundle) }, compat: { linux: { id: compatibilityId, inputs: { store: { L: 'A' }, executors: [] } } },
+    platforms: ['linux'], wantOrigin: false });
+  const indexOutageUnavailable = outageTable.rows[0]?.action === 'unavailable' && outageTable.rows[0].reason.includes('HTTP 503');
   const recordBeforeHead = order.indexOf(`put ${recordPath}`) < order.indexOf('put head');
   const interrupted = [];
-  for (const moment of ['before', 'after']) for (let stop = 1; stop <= 4; stop++) {
+  // Writes: the plan, index and asset blobs, the record, then the head.
+  for (const moment of ['before', 'after']) for (let stop = 1; stop <= 5; stop++) {
     const failedDir = mkdtempSync(join(tmpdir(), `exact-stream-failure-${moment}-${stop}-`));
     const failed = new DirectoryOrigin(failedDir);
     const oldPlan = Buffer.from('old plan');
@@ -810,7 +826,7 @@ async function rejects(action, matches) {
     try { result = await publishStream({ ...args, origin: failed, release: `failed-${moment}-${stop}` }); }
     catch (error) { stopped = error.message.includes('injected'); }
     const after = await failed.head(stream);
-    interrupted.push((stop < 4
+    interrupted.push((stop < 5
       ? stopped && after.bytes.equals(oldBytes)
       : moment === 'before'
         ? stopped && after.bytes.equals(oldBytes)
@@ -821,9 +837,11 @@ async function rejects(action, matches) {
   result('stream publication commits immutable blobs and receipt before its head', recordBeforeHead
     && names.join(',') === 'exact.json,releases' && blobCards.every((card) => card.url === `../../blobs/${card.sha256}`)
     && blobCards.every((card) => existsSync(join(dir, '.exact', 'blobs', card.sha256)))
+    && listed.length === 1 && listed[0].url === `./${listed[0].sha256}` && existsSync(join(dir, '.exact', 'blobs', listed[0].sha256))
+    && canonicalBytes(record.assets).equals(await origin.get(blobPath(head.json.assets.sha256)))
     && record.head.entryDigest === createHash('sha256').update(canonicalBytes(head.json)).digest('hex')
     && record.envelope.signature.keyId === 'test' && immutableRaceHeld && reusedRefused && order.length === beforeRetry
-    && interrupted.every(Boolean));
+    && interrupted.every(Boolean) && indexOutageUnavailable, JSON.stringify(outageTable.rows[0]));
   rmSync(dir, { recursive: true, force: true });
 }
 // All origin verbs reject links at the root, intermediate, and leaf boundary.
@@ -926,12 +944,24 @@ async function rejects(action, matches) {
   const card = (name) => ({ name, bytes: Buffer.from(name), sha256: sha256(Buffer.from(name)) });
   const bundle = { plan: { bytes: planBytes, sha256: sha256(planBytes), formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [card('Logo.png'), card('logo.png')] };
   const signingRefused = await rejects(() => streamHead({ app, bundle, stream, seq: 1, release: 'names' }), (error) => /differ only by case/.test(error.message));
-  const head = streamHead({ app, bundle: { ...bundle, assets: [card('Logo.png')] }, stream, seq: 1, release: 'names' });
-  head.assets.push({ ...head.assets[0], name: 'logo.png' });
-  const bytes = Buffer.from(JSON.stringify(head));
-  const inspected = inspectHead({ bytes, json: head, sha256: sha256(bytes) }, app, stream);
+  // An index another publisher wrote with names that fold together is refused as it is read.
+  const listed = JSON.parse(streamIndex({ ...bundle, assets: [card('Logo.png')] }).bytes).assets;
+  const raw = canonicalBytes({ assets: [...listed, { ...listed[0], name: 'logo.png' }] });
+  let indexProblem = null;
+  try { readAssetIndex({ url: './x', sha256: sha256(raw), bytes: raw.length, count: 2 }, raw); } catch (error) { indexProblem = error.message; }
+  // A web root's index is read at any size (a browser loads it); a client's is bounded.
+  const huge = canonicalBytes({ assets: Array.from({ length: 34000 }, (_, i) => ({ ...listed[0], name: `assets/n${i}` })) });
+  const hugeCard = { url: './x', sha256: sha256(huge), bytes: huge.length, count: 34000 };
+  const unbounded = readAssetIndex(hugeCard, huge, { bounded: false }).length === 34000;
+  const bounded = await rejects(() => readAssetIndex(hugeCard, huge), (error) => /for 34000 assets; the most is 4096\.0 KiB/.test(error.message));
+  result('a web root reads an index over the client bound; a client refuses it', unbounded && bounded);
+  // `plans` is optional, as exact-update reads it: an index with a plan asset and no map is read.
+  const planned = canonicalBytes({ assets: [{ ...listed[0], name: 'plans/card.plan' }] });
+  let plansOptional = true;
+  try { readAssetIndex({ url: './x', sha256: sha256(planned), bytes: planned.length, count: 1 }, planned); } catch { plansOptional = false; }
+  result('an asset index without a plans map is read', plansOptional);
   result('the publisher refuses asset names a client filesystem folds together', refused.every(Boolean) && accepted
-    && signingRefused && !inspected.usable && /differ only by case/.test(inspected.problem), JSON.stringify({ refused, accepted, signingRefused, inspected: inspected.problem }));
+    && signingRefused && /differ only by case/.test(indexProblem ?? ''), JSON.stringify({ refused, accepted, signingRefused, indexProblem }));
 }
 
 // The next seq sits above everything the stream has authenticated: the head
@@ -1004,8 +1034,9 @@ async function rejects(action, matches) {
   const app = { id: 'test.widgets', displayName: 'Widgets' };
   const bundle = { plan: { bytes: Buffer.from('app'), sha256: 'b'.repeat(64), formatVersion: 5, kernelSchema: '0'.repeat(16) }, assets: [card] };
   const head = streamHead({ app, bundle, stream: { channel: 'prod', compatibilityId: 'c'.repeat(32) }, seq: 1, release: 'widgets' });
-  result('entry plans index the signed asset cards in the same stream',
-    JSON.stringify(head.plans.trains) === JSON.stringify(head.assets[0]) && head.plan.sha256 === bundle.plan.sha256);
+  const index = JSON.parse(streamIndex(bundle).bytes);
+  result('entry plans index the signed asset cards in the same stream\'s asset index',
+    JSON.stringify(index.plans.trains) === JSON.stringify(index.assets[0]) && head.assets.count === 1 && head.plans === undefined && head.plan.sha256 === bundle.plan.sha256);
 }
 
 
@@ -1022,13 +1053,12 @@ test('snapshot plans are public files and authenticated dev generation assets', 
     const id = 'test.widget', plan = Buffer.alloc(36 + id.length);
     plan.write('EXPL'); plan.writeUInt32LE(4, 4); plan.writeBigUInt64LE(1n, 16);
     plan.writeUInt32LE(id.length, 32); plan.write(id, 36);
-    const published = webEnvelope({id,displayName:'Widget'}, plan, assetCards(captured));
-    published.dev = {epoch,seq:1};
-    for (const card of published.assets) card.url = `/__dev/generation/${epoch}/1/${card.name}`;
-    captured.set('exact.json', Buffer.from(JSON.stringify(published)));
+    const sealed = sealEnvelope({ ...webEnvelope({id,displayName:'Widget'}, plan, assetCards(captured)), dev: {epoch,seq:1} }, `/__dev/generation/${epoch}/1/assets.json`);
+    captured.set('assets.json', sealed.index); captured.set('exact.json', sealed.bytes);
     retainDevGeneration(cache, epoch, 1, captured);
     const envelope = JSON.parse(readDevGeneration(cache, `/__dev/generation/${epoch}/1/exact.json`).body);
-    if (envelope.plans.card.name !== name || envelope.plans.card.sha256 !== sha256(body) || envelope.plans.card.url !== envelope.assets[0].url) throw new Error('published envelope omitted the captured entry');
+    const index = readDevGeneration(cache, envelope.assets.url).body, listed = readAssetIndex(envelope.assets, index), { plans } = JSON.parse(index);
+    if (plans.card.name !== name || plans.card.sha256 !== sha256(body) || plans.card.url !== listed[0].url) throw new Error('published index omitted the captured entry');
     if (readDevGeneration(cache, `/__dev/generation/${epoch}/1/${name}`)?.body.toString() !== 'snapshot') throw new Error('entry absent from dev generation');
   } finally { rmSync(dir, {recursive:true,force:true}); }
 });
@@ -1054,12 +1084,14 @@ test('a production web root serves every authenticated asset card, including act
       mkdirSync(dirname(join(bake, name)), {recursive:true});
       writeFileSync(join(bake, name), body);
     }
-    writeFileSync(join(bake, 'exact.json'), JSON.stringify(webEnvelope(app, readFileSync(join(bake, 'app.plan')), assetCards(captureAssets(bake)))));
+    const sealed = sealEnvelope(webEnvelope(app, readFileSync(join(bake, 'app.plan')), assetCards(captureAssets(bake))));
+    writeFileSync(join(bake, 'assets.json'), sealed.index); writeFileSync(join(bake, 'exact.json'), sealed.bytes);
     build(web, ['--production', '--plan', join(bake, 'app.plan')]);
     const published = await publishRoot({origin, row:{}, web});
     const envelope = JSON.parse(readStaticFile(origin.dir, `/${webReleasePath(published.root)}/exact.json`)?.body ?? 'null');
-    if (!envelope?.assets.some(card => card.name === 'activities/card.schema.json')) throw new Error('activity schema absent from published envelope');
-    for (const card of [envelope.plan, ...envelope.assets]) {
+    const listed = readAssetIndex(envelope.assets, readStaticFile(origin.dir, envelope.assets.url)?.body);
+    if (!listed.some(card => card.name === 'activities/card.schema.json')) throw new Error('activity schema absent from published index');
+    for (const card of [envelope.plan, ...listed.map(c => ({ ...c, url: new URL(c.url, 'http://o' + envelope.assets.url).pathname }))]) {
       const body = readStaticFile(origin.dir, card.url)?.body;
       if (!body || body.length !== card.bytes || sha256(body) !== card.sha256) throw new Error(`published card is not served: ${card.url}`);
     }

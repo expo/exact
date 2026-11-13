@@ -29,11 +29,13 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
 
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         if app?.tabBarController?(tabs, shouldSelect: controller) == false { return false }
+        // A container built from `UITab`s asks `shouldSelectTab` (TabsIOS.swift)
+        guard host?.builtTabs.isEmpty != false else { return true }
         return host?.mayShow(tabs, controller) ?? true
     }
 
     func tabBarController(_ tabs: UITabBarController, didSelect controller: UIViewController) {
-        host?.followUIKit(tabs)
+        if host?.builtTabs.isEmpty != false { host?.followUIKit(tabs) }
         app?.tabBarController?(tabs, didSelect: controller)
     }
 
@@ -93,9 +95,13 @@ extension NavigationHost {
         let holder: UIViewController = owned ?? {
             let container = UITabBarController()
             tabProxy.host = self
+            if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
+                buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
+            } else {
+                container.setViewControllers(navs, animated: false)
+                container.selectedIndex = p.at
+            }
             container.delegate = tabProxy
-            container.setViewControllers(navs, animated: false)
-            container.selectedIndex = p.at
             tablistAppearanceNone = tabs.tablist.wrote("appearance") && tabs.tablist.style["appearance"]?.string == "none"
             if ExactEnv.authoredChrome || tablistAppearanceNone { hideTabBar(container) }
             tabController = container
@@ -175,7 +181,7 @@ extension NavigationHost {
         // again keeps its selected index but shows no tab selected (iOS 26 and 27).
         guard let owned = askTabContainer(tabs, selected: routerTab) else {
             let navs = tabPanels.compactMap { tabStacks[$0] }
-            if container.viewControllers?.count != navs.count {
+            if !restoreBuiltTabs(container, navs), container.viewControllers?.count != navs.count {
                 presenter.session?.log("hatch: tabContainer took the tabs' stacks but returned no container; Exact's has them back")
                 container.setViewControllers(navs, animated: false)
                 container.selectedIndex = max(0, routerTab)
@@ -212,7 +218,7 @@ extension NavigationHost {
     /// its containers again (the router's stacks are untouched).
     func reshape(_ p: Projection) {
         let panels = p.tabs?.panels.map(\.id) ?? []
-        guard primaryOwner != nil, panels != tabPanels else { return }
+        guard primaryOwner != nil, panels != tabPanels || builtTabsChanged(p) else { return }
         presenter.session?.log("navigation: the tabs changed; the containers are built again")
         if tabOwner != nil { retireTabs() } else if let nav = primaryNavigation {
             release(nav)
@@ -246,6 +252,7 @@ extension NavigationHost {
                 tablistHidBar = hidden && !authored
             }
         }
+        followSidebar(p)
         let navs = tabs.panels.compactMap { tabStacks[$0.id] }
         guard navs.count == tabs.panels.count else { return }
         // Write each other tab's routes where UIKit holds them: in More's
@@ -343,9 +350,11 @@ extension NavigationHost {
             // a tab that never authored one is left alone.
             let had = tabItems.indices.contains(index) && !tabItems[index].hasSuffix("|")
             if face.badge != nil || had { item.badgeValue = face.badge }
+            writeBuiltTab(index, item: item, title: face.title)
         }
         tabItems = signature
         tint(tabs.tablist)
+        followSearchTab()
     }
 
     /// The tab bar's own tint, as a hand-built app tints one: the selected tab's own tint where it
@@ -435,8 +444,10 @@ extension NavigationHost {
     /// Tab `index`'s item, when Exact's tab bar shows it: a tab whose item
     /// the bar does not show is a row of More's list (iOS).
     func barItem(ofTab index: Int) -> UITabBarItem? {
-        guard let item = tabStack(index)?.tabBarItem, tabController?.tabBar.items?.contains(where: { $0 === item }) == true else { return nil }
-        return item
+        guard let item = tabStack(index)?.tabBarItem else { return nil }
+        // UIKit makes the items of a bar built from `UITab`s: Exact's item carries the tab's face and test id
+        if !builtTabs.isEmpty { return tabController != nil && builtTabInBar(index) ? item : nil }
+        return tabController?.tabBar.items?.contains(where: { $0 === item }) == true ? item : nil
     }
 
     /// The tab a route belongs to, by its tabpanel.
@@ -730,6 +741,7 @@ extension NavigationHost {
         }
         tabController = nil
         tabOwner = nil
+        builtTabs = []
         tabsHatched = false
         tabContainerAsked = false
         routerTab = -1
@@ -784,6 +796,14 @@ extension NavigationHost {
 }
 
 extension UITabBarController {
+    /// Its tabs' controllers in tab order, whether it holds them as
+    /// `viewControllers` or as `UITab`s, whose `viewControllers` is nil.
+    var tabControllers: [UIViewController]? {
+        if let viewControllers { return viewControllers }
+        guard #available(iOS 18.0, tvOS 18.0, *), !tabs.isEmpty else { return nil }
+        return tabs.compactMap(\.viewController)
+    }
+
     /// The bar the controller projects, including iPadOS's floating list of tab items.
     var projectedTabBar: UIView? {
         if #available(iOS 18.0, tvOS 18.0, *), isTabBarHidden { return nil }
@@ -808,10 +828,12 @@ extension UITabBarController {
     /// carry their items' accessibility identifiers (the tabs' test ids,
     /// `syncItems`), or their titles as labels, as the agent's aim reads
     /// them: a list of the same shape whose cells name other things (a
-    /// hatch's) is not it. Nil where the bar is UIKit's classic one, where
-    /// no such list shows, or where two would.
+    /// hatch's) is not it. A sidebar's list of tabs (`mode = .tabSidebar`,
+    /// TabsIOS.swift) has the same shape, and while it shows the floating
+    /// bar does not. Nil where the bar is UIKit's classic one, where no such
+    /// list shows, or where two would.
     var floatingTabList: UICollectionView? {
-        guard tabBar.window == nil, let controllers = viewControllers, case let items = controllers.compactMap(\.tabBarItem), !items.isEmpty, items.count == controllers.count,
+        guard tabBar.window == nil, let controllers = tabControllers, case let items = controllers.compactMap(\.tabBarItem), !items.isEmpty, items.count == controllers.count,
               let selected = selectedViewController?.viewIfLoaded else { return nil }
         func names(_ cell: UIView, _ item: UITabBarItem) -> Bool {
             let id = item.accessibilityIdentifier ?? ""

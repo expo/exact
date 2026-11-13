@@ -338,9 +338,9 @@ extension Presenter {
         CATransaction.commit()
     }
 
-    /// Every scroller between the slot and its presentation scrolls by the
-    /// least that shows it whole (`scrollIntoView`'s `nearest`), innermost
-    /// first, at once (LLP 1013.000 D5).
+    /// Every scroller between the slot and its presentation scrolls it into
+    /// view by `scrollIntoView`'s `nearest` (CSSOM View), innermost first,
+    /// at once (LLP 1013.000 D5).
     private func scrollIntoView(_ slot: UIView) {
         let root = ViewPresentation.root(of: slot)
         var ancestor = slot.superview
@@ -350,13 +350,8 @@ extension Presenter {
                 let inset = sv.adjustedContentInset
                 let visible = sv.pageBounds.inset(by: inset)
                 var offset = sv.contentOffset
-                func nearest(_ lo: CGFloat, _ hi: CGFloat, _ vlo: CGFloat, _ vhi: CGFloat) -> CGFloat {
-                    if lo >= vlo && hi <= vhi { return 0 }
-                    if hi - lo > vhi - vlo { return lo - vlo }
-                    return lo < vlo ? lo - vlo : hi - vhi
-                }
-                offset.x += nearest(r.minX, r.maxX, visible.minX, visible.maxX)
-                offset.y += nearest(r.minY, r.maxY, visible.minY, visible.maxY)
+                offset.x += IntoView.aligned("nearest", target: r.minX, r.maxX, port: visible.minX, size: visible.width) - visible.minX
+                offset.y += IntoView.aligned("nearest", target: r.minY, r.maxY, port: visible.minY, size: visible.height) - visible.minY
                 offset.x = min(max(offset.x, -inset.left), max(-inset.left, sv.contentSize.width - sv.bounds.width + inset.right))
                 offset.y = min(max(offset.y, -inset.top), max(-inset.top, sv.contentSize.height - sv.bounds.height + inset.bottom))
                 if offset != sv.contentOffset { sv.setContentOffset(PixelGrid.offset(offset, in: sv), animated: false) }

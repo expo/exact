@@ -167,7 +167,7 @@ test('compiled SVG geometry bindings render, change, unset and preserve zero', a
       try {
         svgGeometry(element, 'height', value, Sm);
         return ['calc(10vh + 10px)', 'min(10vh, 50px)', 'max(10vh, 50px)', 'clamp(10px, 10vh, 100px)',
-          'env(safe-area-inset-top, 3px)', 'env(viewport-segment-height 1 0, 25%)', '-exact-hairline', '2em', '2rem'].map(length => {
+          'env(safe-area-inset-top, 3px)', 'env(viewport-segment-height 1 0, 25%)', '-exact-hairline'].map(length => {
           commit(() => W(value, length), 'test');
           const css = length === '-exact-hairline' ? 'var(--exact-hairline, 1px)' : length;
           control.style.height = ''; control.style.height = css;
@@ -205,6 +205,78 @@ test('compiled SVG geometry bindings render, change, unset and preserve zero', a
       expect(red / (pixels.width * pixels.height)).toBeGreaterThan(0.4);
       expect(red / (pixels.width * pixels.height)).toBeLessThan(0.6);
     }
+  } finally {
+    await browser?.close();
+    server?.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30000);
+
+test('font-relative SVG attributes follow root and inherited fonts', async () => {
+  const root = resolve(import.meta.dir, '../..');
+  const dir = mkdtempSync(resolve(root, 'target/svg-rem-'));
+  const sheet = readFileSync(resolve(root, 'host/web/index.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
+  let server, browser;
+  try {
+    const compiled = spawnSync(resolve(root, 'target/debug/exact-web-js'), [
+      'js', resolve(import.meta.dir, 'conformance/svg-rem.contract'), '-o', dir,
+    ], { encoding: 'utf8' });
+    expect(compiled.status, compiled.stderr).toBe(0);
+    server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
+      const path = new URL(request.url).pathname.slice(1);
+      if (!path) return new Response(`<style>${sheet}</style><link rel="stylesheet" href="/app.css">
+        <div id="exact-root"></div><script type="module">import app from '/app.js';app();</script>`,
+      { headers: { 'content-type': 'text/html' } });
+      const bases = path.startsWith('web/') ? [resolve(root, 'host')] : [dir, import.meta.dir, resolve(root, 'host/web')];
+      const file = bases.map(base => resolve(base, path)).find(existsSync);
+      return file ? new Response(Bun.file(file)) : new Response('Not found', { status: 404 });
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(server.url.href);
+    await page.getByTestId('svg-bound').waitFor({ state: 'attached' });
+    const check = async (font, rootFont, wide = false, omitted = false) => {
+      const values = await page.evaluate(() => [...document.querySelectorAll('[data-testid$="-literal"], [data-testid$="-bound"]')].map(e => {
+        const names = e.localName === 'radialGradient' ? ['cx', 'cy', 'r'] : ['x', 'y', 'width', 'height'];
+        return { id: e.dataset.testid, attributes: names.map(name => e.getAttribute(name)),
+          lengths: names.map(name => e[name].baseVal.value) };
+      }));
+      expect(values.length).toBe(16);
+      for (const { id, attributes, lengths } of values) {
+        const literal = id.endsWith('-literal');
+        const gradient = id.startsWith('radialGradient');
+        const extent = wide ? 3 * rootFont : 2 * font;
+        const offset = wide ? font : 0.5 * rootFont;
+        if (!literal && omitted) {
+          expect(attributes, id).toEqual(gradient ? [null, null, null] : [null, null, null, null]);
+        } else {
+          expect(attributes, id).toEqual(literal ? (gradient ? ['2em', '0.5rem', '1em'] : ['0.5rem', '1em', '2em', '3rem'])
+            : gradient ? [wide ? '3rem' : '2em', wide ? '1em' : '0.5rem', wide ? '3rem' : '2em']
+              : [wide ? '1em' : '0.5rem', wide ? '1em' : '0.5rem', wide ? '3rem' : '2em', wide ? '3rem' : '2em']);
+          expect(lengths, id).toEqual(literal ? (gradient ? [2 * font, 0.5 * rootFont, font] : [0.5 * rootFont, font, 2 * font, 3 * rootFont])
+            : gradient ? [extent, offset, extent] : [offset, offset, extent, extent]);
+        }
+      }
+      expect(errors).toEqual([]);
+    };
+    await check(20, 16);
+    await page.evaluate(() => document.documentElement.style.fontSize = '24px');
+    await check(20, 24);
+    await page.getByTestId('resize').click();
+    await check(30, 24);
+    await page.getByTestId('change').click();
+    await check(30, 24, true);
+    await page.getByTestId('omit').click();
+    await check(30, 24, true, true);
+    await page.getByTestId('resize').click();
+    await page.evaluate(() => document.documentElement.style.fontSize = '18px');
+    await check(20, 18, true, true);
+    await page.getByTestId('omit').click();
+    await check(20, 18, true);
+    await page.getByTestId('change').click();
+    await check(20, 18);
   } finally {
     await browser?.close();
     server?.stop(true);

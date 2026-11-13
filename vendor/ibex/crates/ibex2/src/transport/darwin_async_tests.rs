@@ -102,6 +102,7 @@ fn get(url: &str) -> HopRequest {
         body: None,
         max_body: 1 << 20,
         timeout: Some(Duration::from_secs(5)),
+        speculative: false,
     }
 }
 
@@ -205,23 +206,33 @@ fn a_stop_at_the_head_delivers_no_body_and_still_ends() {
 }
 
 #[test]
-fn a_cancel_ends_the_exchange() {
-    let (accepted, wait) = mpsc::channel();
-    let (url, server) = server(0, move |mut stream, _| {
-        accepted.send(()).unwrap();
-        let mut byte = [0];
-        let _ = stream.read(&mut byte);
-    });
-    let lane = DarwinLane::new(0);
-    let (exchange, events) = start(&lane, get(&url), Flow::Continue);
-    wait.recv_timeout(Duration::from_secs(5)).unwrap();
-    exchange.cancel();
-    let seen = until_end(&events);
-    assert!(
-        seen.iter().any(|e| matches!(e, Event::End(Err(_)))),
-        "{seen:?}"
-    );
-    server.join().unwrap();
+fn a_cancel_or_lane_retirement_ends_an_active_exchange_with_handles_kept() {
+    for retire in [false, true] {
+        let (accepted, wait) = mpsc::channel();
+        let (url, server) = server(0, move |mut stream, _| {
+            accepted.send(()).unwrap();
+            let mut byte = [0];
+            let _ = stream.read(&mut byte);
+        });
+        let lane = DarwinLane::new(0);
+        let (exchange, events) = start(&lane, get(&url), Flow::Continue);
+        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+        if retire {
+            lane.retire();
+        } else {
+            exchange.cancel();
+        }
+        let seen = until_end(&events);
+        assert!(
+            seen.iter().any(|e| matches!(e, Event::End(Err(_)))),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.iter().filter(|e| matches!(e, Event::End(_))).count(),
+            1
+        );
+        server.join().unwrap();
+    }
 }
 
 #[test]
@@ -427,7 +438,14 @@ fn the_lane_keeps_no_cookies_and_no_cache_and_takes_its_host_limit() {
     let lane = DarwinLane::new(32);
     let (mut cookies, mut cache, mut per_host) = (-1, -1, -1);
     // SAFETY: the lane is live; the out pointers are this frame's.
-    unsafe { ibex2_darwin_lane_state(lane.lane(), &mut cookies, &mut cache, &mut per_host) };
+    unsafe {
+        ibex2_darwin_lane_state(
+            lane.lane(&mut lane.lane.lock().unwrap()),
+            &mut cookies,
+            &mut cache,
+            &mut per_host,
+        )
+    };
     assert_eq!((cookies, cache, per_host), (0, 0, 32));
 }
 
@@ -487,7 +505,7 @@ fn a_cancel_before_activation_sends_nothing_and_still_ends() {
 }
 
 #[test]
-fn a_lane_dropped_before_activation_retires_without_activation() {
+fn a_lane_retired_before_activation_ends_with_its_handles_kept() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -502,7 +520,7 @@ fn a_lane_dropped_before_activation_retires_without_activation() {
         _dropped: Dropped(drops.clone()),
     };
     let _exchange = lane.start(get(&url), Box::new(sink)).unwrap();
-    drop(lane);
+    lane.retire();
     // Cancellation/retirement itself must deliver end, without activation.
     let seen = until_end(&received);
     let ends = seen.iter().filter(|e| matches!(e, Event::End(_))).count();
@@ -513,6 +531,17 @@ fn a_lane_dropped_before_activation_retires_without_activation() {
     );
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(listener.accept().is_err(), "no connection was made");
+    assert!(!lane.created());
+    let (events, _) = mpsc::channel();
+    assert!(lane
+        .start(
+            get(&url),
+            Box::new(Recorder {
+                events,
+                flow: Flow::Continue,
+            })
+        )
+        .is_err());
 }
 
 #[test]

@@ -42,6 +42,8 @@ mod rows;
 mod said;
 #[path = "sides.rs"]
 mod sides;
+#[path = "sites.rs"]
+mod sites;
 #[path = "timers.rs"]
 mod timers;
 #[path = "trapped.rs"]
@@ -49,72 +51,11 @@ mod trapped;
 #[path = "type_descriptors.rs"]
 mod type_descriptors;
 use regions::root_slot;
+pub use sites::{Site, Sites};
 use type_descriptors::type_code;
 pub(crate) use type_descriptors::{
     surface_type_json, type_code_numeric, type_code_wire, type_json,
 };
-
-#[derive(Clone, Copy, Debug)]
-pub enum Site {
-    Node(u32),
-    Region(u32),
-}
-
-/// The plan's child sites, grouped as the runner groups them.
-pub struct Sites {
-    pub root: u32,
-    by_node: Vec<Vec<Site>>,
-    by_arm: Vec<Vec<Site>>,
-}
-
-impl Sites {
-    pub fn new(plan: &Plan) -> Result<Sites, String> {
-        let mut by_node: Vec<Vec<(u32, u8, u32, Site)>> = vec![Vec::new(); plan.nodes.len()];
-        let mut by_arm: Vec<Vec<(u32, u8, u32, Site)>> = vec![Vec::new(); plan.arms.len()];
-        let mut root = None;
-        for (i, n) in plan.nodes.iter().enumerate() {
-            let e = (n.order, 0, i as u32, Site::Node(i as u32));
-            // A site's group is (parent, arm): an arm's roots have no parent;
-            // a deeper site names its parent node and its enclosing arm.
-            match (n.parent, n.arm) {
-                (Some(p), _) => by_node[p.0 as usize].push(e),
-                (None, Some(a)) => by_arm[a.0 as usize].push(e),
-                (None, None) => {
-                    if root.replace(i as u32).is_some() {
-                        return Err("more than one root".into());
-                    }
-                }
-            }
-        }
-        for (i, r) in plan.regions.iter().enumerate() {
-            let e = (r.order, 1, i as u32, Site::Region(i as u32));
-            match (r.parent, r.arm) {
-                (Some(p), _) => by_node[p.0 as usize].push(e),
-                (None, Some(a)) => by_arm[a.0 as usize].push(e),
-                (None, None) => return Err("a region at the root".into()),
-            }
-        }
-        let sort = |v: Vec<Vec<(u32, u8, u32, Site)>>| {
-            v.into_iter()
-                .map(|mut l| {
-                    l.sort_by_key(|e| (e.0, e.1, e.2));
-                    l.into_iter().map(|e| e.3).collect()
-                })
-                .collect()
-        };
-        Ok(Sites {
-            root: root.ok_or("no root")?,
-            by_node: sort(by_node),
-            by_arm: sort(by_arm),
-        })
-    }
-    pub fn of_node(&self, n: u32) -> &[Site] {
-        &self.by_node[n as usize]
-    }
-    pub fn of_arm(&self, a: u32) -> &[Site] {
-        &self.by_arm[a as usize]
-    }
-}
 
 pub struct Output {
     pub js: String,
@@ -191,6 +132,8 @@ struct Em<'a> {
     flow: bool,
     /// Whether a virtualized list is in the plan (`list.js` is imported).
     list: bool,
+    /// Whether an ordinary scroller takes `scrollFollowEnd` (`follow.js` is imported).
+    follow: bool,
     /// Whether a `video` or `audio` is in the plan (`media.js` is installed).
     media: bool,
     /// Whether an image draws a symbol (`symbols.js`), and whether a
@@ -199,6 +142,8 @@ struct Em<'a> {
     /// Possible height and transform owners whose motion values must be observed.
     heights: std::collections::BTreeSet<u32>,
     transforms: std::collections::BTreeSet<u32>,
+    /// Whether a node can declare a drag timeline (`rows::drag_timelines`).
+    drag_timelines: bool,
     /// The `@keyframes` that animate `scale` (a pressed node plays their `-exact-press` copies).
     press_keyframes: Vec<String>,
     /// Whether a dynamic row can reference an element (`url(#…)`): nodes
@@ -222,6 +167,7 @@ const HOST_FACTS: &[&str] = &[
     "exactTime",
     "exactPage",
     "exactSurface",
+    "exactCanvasPerformance",
     "exactTransport",
     "exactMIDI",
     "exactActivities",
@@ -243,6 +189,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         None => style::project(plan, &sites, &mut warnings)?,
     };
     let paint = crate::paint::needed(plan, &parts);
+    // A look's colour needs rules for the boundaries below only where one
+    // takes a colour (`data-x-b` without its colour bit; an accent-only part
+    // sets every bit).
+    let boundaries = (parts.iter().flatten()).any(|p| {
+        (p.props.get("data-x-b"))
+            .is_some_and(|own| own.parse::<u32>().is_ok_and(|own| own & 1 == 0))
+    });
     let mut parts = parts;
     if !paint {
         for p in parts.iter_mut().flatten() {
@@ -253,6 +206,19 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             }
         }
     }
+    // A link's `rel` and `target` follow its bound `href`, `rel` or `target` (links.js); a static
+    // link's the template wrote whole (element.rs `props_of`), so a plan without a bound one never
+    // links it (LLP 1047.002 D1).
+    let links = parts.iter().zip(plan.nodes.iter()).any(|(p, n)| {
+        p.as_ref().is_some_and(|p| p.tag == "a")
+            && n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+                b.kind == BindingKind::Prop
+                    && [PropId::Href, PropId::Rel, PropId::Target]
+                        .iter()
+                        .any(|id| b.id == *id as u16)
+                    && style::literal(plan, plan.code(b.expr)).is_none()
+            })
+    });
     let mut em = Em {
         plan,
         sites: &sites,
@@ -275,10 +241,12 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         editor: false,
         flow: false,
         list: false,
+        follow: false,
         media: false,
         symbols: (false, false),
         heights: Default::default(),
         transforms: Default::default(),
+        drag_timelines: crate::timelines::drag_timelines(plan),
         press_keyframes: rows::press_keyframes(plan),
         refs: rows::can_refer(plan),
         site_attrs,
@@ -377,6 +345,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             tables.join(","),
             slot.0
         );
+        commands::locale_slot(plan, &mut body, slot.0);
+        commands::format_slot(plan, &mut body, slot.0);
     }
     // Slots, in order: an initializer reads only earlier slots.
     for (i, r) in plan.slots.iter().enumerate() {
@@ -384,8 +354,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             || r.late
             || plan.router == Some(exact_plan::SlotsId(i as u32))
             || plan.locale == Some(exact_plan::SlotsId(i as u32))
+            || plan.format == Some(exact_plan::SlotsId(i as u32))
         {
-            continue; // an owned slot lives on its instance; a late one, the router and locale elsewhere
+            continue; // an owned slot lives on its instance; a late one, the router, locale and format elsewhere
         }
         root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
     }
@@ -588,9 +559,14 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let painting = em.uses.rt("usePaint");
         let _ = write!(body, "{painting}($paint());");
     }
+    em.presence_bindings(&mut body);
     if em.media {
         let media = em.uses.rt("useMedia");
         let _ = write!(body, "{media}($media());");
+    }
+    if links {
+        let use_links = em.uses.rt("useLinks");
+        let _ = write!(body, "{use_links}($links());");
     }
     // The host commands the actions name, each commands.js's export imported
     // by that name (commands.rs).
@@ -629,6 +605,21 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|b| plan.binding(b))
                 .any(|b| b.kind == BindingKind::Prop && b.id == PropId::NavigationBack as u16)
         });
+    // A root that can present a sheet (a route whose `navigationPresentation` is, or may be,
+    // `modal`) hands the projection the sheet's frame (navigation/routes.js `sheetFrame`), which a plan
+    // without one never links (LLP 1047.002 D1).
+    let sheets = roots
+        && plan.nodes.iter().any(|n| {
+            n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+                b.kind == BindingKind::Prop
+                    && b.id == PropId::NavigationPresentation as u16
+                    && style::literal(plan, plan.code(b.expr))
+                        .is_none_or(|v| v.as_str() == Some("modal"))
+            })
+        });
+    if sheets {
+        body.push_str("$useSheets($sheetFrame);");
+    }
     if let Some(slot) = plan.router {
         let router = em.uses.rt("router");
         let _ = write!(body, "{router}(s_{},$navigation);", slot.0);
@@ -788,20 +779,28 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         } else {
             format!("import{{{}}}from\"./budget.js\";", budget.join(","))
         },
-        if roots { "import{navigation as $navigation}from\"./navigation.js\";" } else { "" },
+        match (roots, sheets) {
+            (true, true) => "import{navigation as $navigation,useSheets as $useSheets,sheetFrame as $sheetFrame}from\"./navigation.js\";",
+            (true, false) => "import{navigation as $navigation}from\"./navigation.js\";",
+            _ => "",
+        },
         if dev_reload { "import{devResource as $devRes,devSignal as $devSig}from\"./checkpoint.js\";" } else { "" },
         // Loaded pieces, imported only where the plan uses them.
         [
             (!commands.is_empty(), commands_import.as_str()),
             (paint, "import{paintUse as $paint}from\"./paint.js\";"),
             (em.list, "import{vl as $vl}from\"./list.js\";"),
+            (em.follow, "import\"./follow.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
+            (links, "import{linkUse as $links}from\"./links.js\";"),
             (midi, "import{midi as $midi}from\"./midi.js\";"),
             (transport, "import{sequence as $sequence,transport as $transport}from\"./transport.js\";"),
             (!facts.is_empty(), facts.as_str()),
             (em.symbols.0, "import{symbols as $symbols}from\"./symbols.js\";"),
             (modes.is_some(), "import{modes as $modes,Sx}from\"./modes.js\";"),
             (plan.slots.iter().any(|s| s.persist), "import{stored as $stored,keep as $keep}from\"./persist.js\";"),
+            (exact_runner::uses::chooses_locale(plan), "import{localeSlot as $localeSlot,setLocale as $setLocale}from\"./chosen.js\";"),
+            (plan.format.is_some(), "import{formats as $formats,formatSlot as $formatSlot}from\"./format-locale.js\";"),
         ]
         .iter()
         .filter(|(on, _)| *on)
@@ -835,10 +834,11 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let at = format!("[data-exact-looks=\"{}\"]", i + 1);
         css.push_str(&exact_web::host::template::look_rules(&at, looks));
         // A boundary below that its colour reaches says so (modes.js `data-x-lc`).
-        if modes.is_some() {
-            let below = format!("[data-x-lc~=\"{}\"]", i + 1);
+        if boundaries {
             css.push_str(&exact_web::host::template::look_colour_below(
-                &at, looks, &below,
+                &at,
+                looks,
+                i + 1,
             ));
         }
     }
@@ -977,6 +977,9 @@ impl Em<'_> {
         }
         let mut css = parts.css.clone();
         css.push_str(&extra);
+        if !self.drag_timelines {
+            crate::timelines::css_timelines(&mut css);
+        }
         // @ref LLP 1063 — `-exact-layout-transition` and `-exact-exit-animation` are custom
         // properties the web host's presence-glue.js reads from the element's
         // own declaration: inline, as the live host writes every row, not
@@ -1112,13 +1115,16 @@ impl Em<'_> {
             let _ = write!(self.out, "{register}({e});");
         }
         self.element_extras(&parts.tag, &e, &attrs, &parts.props);
+        if !virtualized {
+            self.end_follow(i, &e, parts.props.get("scrollFollowEnd"));
+        }
         // Its surface's inputs, named or positional (LLP 1009 D2).
         if let Some(sf) = row.surface {
             let sf = &plan.surfaces[sf.0 as usize];
             // A surface the app's GPU module draws (the build names them)
             // goes to it; any other is a Canvas 2D surface, drawn by the data module and replayed by the web host's own glue.
             let name = plan.str(sf.name);
-            let gpu = gpu_surfaces().iter().any(|s| s == name);
+            let gpu = commands::gpu_surfaces().iter().any(|s| s == name);
             let named = sf.mode == exact_plan::SurfaceArgsMode::Named;
             if !gpu {
                 // Positional values, their declared types where known, and
@@ -1223,14 +1229,18 @@ impl Em<'_> {
             if b.kind == BindingKind::Prop && b.id == PropId::FocusGuide as u16 {
                 continue;
             }
-            // Nor have the system bars (LLP 1105 D7), interactive glass or
-            // a menu's order.
+            // Nor have the system bars (LLP 1105 D7), interactive glass,
+            // a menu's order or a tip (LLP 1035.006.000 D4).
             if b.kind == BindingKind::Prop
                 && (b.id == PropId::StatusBarStyle as u16
                     || b.id == PropId::StatusBarAnimation as u16
                     || b.id == PropId::SystemBarsHidden as u16
                     || b.id == PropId::GlassInteractive as u16
-                    || b.id == PropId::MenuOrder as u16)
+                    || b.id == PropId::MenuOrder as u16
+                    || b.id == PropId::Tip as u16
+                    || b.id == PropId::TipMessage as u16
+                    || b.id == PropId::TipImage as u16
+                    || b.id == PropId::TipDone as u16)
             {
                 continue;
             }
@@ -1484,16 +1494,4 @@ impl Em<'_> {
         }
         Ok(())
     }
-}
-
-/// The surfaces the app's GPU modules draw, as the build read them from
-/// their compiled registries (`EXACT_JS_GPU_SURFACES`, comma-separated;
-/// host/web-js/build.mjs).
-fn gpu_surfaces() -> Vec<String> {
-    std::env::var("EXACT_JS_GPU_SURFACES")
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
 }

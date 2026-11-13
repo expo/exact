@@ -323,3 +323,43 @@ fn a_looks_color_is_a_token_in_both_schemes() {
         "ffffffff"
     );
 }
+
+#[test]
+fn hover_scale_is_a_presentation_row_and_leaves_the_base_unchanged() {
+    let source = "component App\n  view\n    button appearance=\"none\" scale=1 transition=\"scale 150ms ease\" testId=\"card\"\n      :hover\n        scale=1.08\n      text \"Hide controls\"\n";
+    let r = booted(contract::compile(source).unwrap());
+    let k = r.kernel();
+    let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
+    assert_eq!(node.style.scale, 1.);
+    let look = &node.looks()[0].1;
+    assert!(look.mask.has(exact_kernel::StyleId::Scale));
+    assert!((look.scale - 1.08).abs() < 1e-6);
+}
+
+/// Issue #151: `:focus-visible` takes its own `scale` beside `:hover`'s, and
+/// the base keeps its own. A computed one is refused as any look's row is,
+/// and a runner-known state still takes none.
+#[test]
+fn a_focus_scale_stands_beside_the_hovers_and_a_computed_one_is_refused() {
+    let view = "component Hover\n  view\n    button appearance=\"none\" scale=1 transition=\"scale 150ms ease\" testId=\"card\"\n      :hover\n        scale=1.08\n      :focus-visible\n        scale=1.12\n      text \"Hide controls\"\n";
+    let r = booted(contract::compile(view).unwrap_or_else(|e| panic!("{e}")));
+    let k = r.kernel();
+    let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
+    let scale = |state: u8| {
+        let (_, look) = node.looks().iter().find(|(s, _)| *s == state).unwrap();
+        assert!(look.mask.has(exact_kernel::StyleId::Scale), "{look:?}");
+        look.scale
+    };
+    assert_eq!(scale(LOOK_HOVER), 1.08);
+    assert_eq!(scale(exact_kernel::LOOK_FOCUS_VISIBLE), 1.12);
+    assert_eq!(node.style.scale, 1.0);
+    for (part, id) in [
+        (":hover\n        scale=k", "lower-state-literal"),
+        (":disabled\n        scale=0.9", "lower-state-row"),
+        (":hover\n        rotate=\"5deg\"", "lower-state-row"),
+    ] {
+        let src = format!("component App\n  state k = 1\n  view\n    box scale=1\n      {part}\n      text \"a\"\n");
+        let e = contract::compile(&src).expect_err(part).to_string();
+        assert!(e.contains(id), "{part}: {e}");
+    }
+}

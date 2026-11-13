@@ -20,6 +20,8 @@ use crate::tree::{
 use crate::util::debug::{debug_log, debug_log_node};
 use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Vec};
 
+use super::size_counts::{SizeCacheCounts, SizeCounts};
+use super::SizeCachePolicy;
 use super::memo::{Event, Kid, Memo, Recorder, NONE};
 use crate::compute::{
     compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
@@ -124,7 +126,7 @@ struct NodeData {
     /// subtree's algorithms read (`tree/memo.rs`).
     pub(crate) memo_root: bool,
 
-    /// EXACT PATCH 30: cached layout results, allocated on their first store.
+    /// EXACT PATCH 31: cached layout results, allocated on their first store.
     pub(crate) cache: super::cache::LazyCache,
 
     /// The computation result from layout algorithm
@@ -209,6 +211,10 @@ pub struct TaffyTree<NodeContext = ()> {
 
     /// Layout mode configuration
     config: TaffyConfig,
+    // EXACT PATCH 72: one count per engine entry, independent of the caller's passes.
+    layout_pass: u16,
+    size_cache_policy: SizeCachePolicy,
+    size_counts: SizeCounts,
 }
 
 /// EXACT PATCH 9: a containment candidate's record since its ancestors were
@@ -286,7 +292,17 @@ impl<NodeContext> TraverseTree for TaffyTree<NodeContext> {}
 // CacheTree impl for TaffyTree
 impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
     fn cache_get(&mut self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
-        self.nodes[node_id.into()].cache.get(input)
+        if self.size_cache_policy == SizeCachePolicy::Off && input.run_mode == RunMode::ComputeSize {
+            return None;
+        }
+        let node = &mut self.nodes[node_id.into()];
+        let output = node.cache.get(input, self.layout_pass, node.style.aspect_ratio.is_some());
+        if let Some(output) = output {
+            if self.size_counts.enabled {
+                self.size_counts.stored(node_id, input, &output, node.cache.size_answers());
+            }
+        }
+        output
     }
 
     fn cache_store(&mut self, node_id: NodeId, input: &LayoutInput, layout_output: LayoutOutput) {
@@ -295,7 +311,12 @@ impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
                 replay.record(input, layout_output);
             }
         }
-        self.nodes[node_id.into()].cache.store(input, layout_output)
+        if self.size_cache_policy != SizeCachePolicy::Off || input.run_mode != RunMode::ComputeSize {
+            self.nodes[node_id.into()].cache.store(input, layout_output, self.layout_pass, self.size_cache_policy);
+        }
+        if self.size_counts.enabled {
+            self.size_counts.stored(node_id, input, &layout_output, self.nodes[node_id.into()].cache.size_answers());
+        }
     }
 
     fn cache_clear(&mut self, node_id: NodeId) {
@@ -306,6 +327,7 @@ impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
             }
         }
         self.nodes[node_id.into()].cache.clear();
+        self.size_counts.clear(node_id);
     }
 }
 
@@ -427,6 +449,7 @@ where
                 let node_context = tree.taffy.node_context_data.get_mut(node_key);
                 let leaf = (tree.measure_function)(inputs, node_id, node_context, style);
                 if inputs.run_mode != RunMode::PerformLayout {
+                    tree.taffy.size_counts.computed(node_id, &inputs, &leaf);
                     return leaf;
                 }
                 let inputs = LayoutInput { known_dimensions: leaf.size.map(Some), ..inputs };
@@ -456,7 +479,7 @@ where
             }
 
             // Dispatch to a layout algorithm based on the node's display style and whether the node has children or not.
-            match (display_mode, has_children) {
+            let output = match (display_mode, has_children) {
                 (Display::None, _) => compute_hidden_layout(tree, node_id),
                 #[cfg(feature = "block_layout")]
                 (Display::Block, true) => compute_block_layout(tree, node_id, inputs, block_ctx),
@@ -484,7 +507,9 @@ where
                     let node_context = has_context.then(|| tree.taffy.node_context_data.get_mut(node_key)).flatten();
                     (tree.measure_function)(inputs, node_id, node_context, style)
                 }
-            }
+            };
+            tree.taffy.size_counts.computed(node_id, &inputs, &output);
+            output
         })
     }
 
@@ -544,7 +569,7 @@ where
         };
         // A leaf, a hidden or replaced box, or an answer its cache holds.
         let cached = inputs.run_mode != RunMode::PerformHiddenLayout
-            && self.taffy.nodes[node_id.into()].cache.get(&inputs).is_some();
+            && self.taffy.cache_get(node_id, &inputs).is_some();
         if cached || !self.computes(node_id, &inputs) {
             let output = self.outside(node_id, inputs, block_ctx);
             if let Some(rec) = self.rec.as_mut() {
@@ -558,6 +583,7 @@ where
             return output;
         }
         let output = self.visit(node_id, node, inputs, block_ctx);
+        self.taffy.size_counts.computed(node_id, &inputs, &output);
         self.taffy.cache_store(node_id, &inputs, output);
         if let Some(rec) = self.rec.as_mut() {
             rec.answered(node, &inputs, &output);
@@ -634,6 +660,9 @@ where
             }
             None => compute_flexbox_layout(self, root, inputs),
         };
+        if replayed.is_none() {
+            self.taffy.size_counts.computed(root, &inputs, &output);
+        }
         self.memoizing = false;
         self.taffy.memo = memo;
         output
@@ -665,6 +694,7 @@ where
                         }
                     }
                 }
+                Event::InvalidateLayout { node } => self.taffy.invalidate_final_layout_ancestors(nodes[*node as usize]),
                 Event::Layout { node, layout } => {
                     // The overflow the box gave this time, where it was asked.
                     let mut layout = *layout;
@@ -702,9 +732,15 @@ where
         // are computed again, not found in their caches (each is stored
         // again as that layout passes it: what the replay did, it does).
         if output.is_none() {
+            if self.taffy.size_counts.enabled && !stored.is_empty() { self.taffy.size_counts.counts.stopped_replays += 1; }
             for &node in &stored {
                 self.taffy.nodes[node.into()].cache.clear();
+                self.taffy.size_counts.clear(node);
             }
+        }
+        if output.is_some() && self.taffy.size_counts.enabled {
+            let most = nodes.iter().map(|&node| self.taffy.nodes[node.into()].cache.size_answers()).max().unwrap_or(0);
+            self.taffy.size_counts.counts.replayed_max_answers = self.taffy.size_counts.counts.replayed_max_answers.max(most);
         }
         memo.nodes = nodes;
         memo.overflows = overflows;
@@ -733,7 +769,7 @@ where
         // Asked for real where the box answers without its algorithm
         // running here, as the layout this replays would ask it.
         let held = match (computes, root) {
-            (true, None) => self.taffy.nodes[id.into()].cache.get(&input),
+            (true, None) => self.taffy.cache_get(id, &input),
             _ => None,
         };
         let cached = held.is_some();
@@ -884,6 +920,15 @@ where
         }
     }
 
+    fn invalidate_final_layout(&mut self, node_id: NodeId) {
+        if let Some(rec) = self.rec.as_mut() {
+            if let Some(node) = rec.index(node_id) {
+                rec.events.push(Event::InvalidateLayout { node });
+            }
+        }
+        self.taffy.invalidate_final_layout_ancestors(node_id);
+    }
+
     #[inline(always)]
     fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
         (self.taffy.calc_resolver)(val, basis)
@@ -973,7 +1018,7 @@ where
     MeasureFunction: FnMut(LayoutInput, NodeId, Option<&mut NodeContext>, &Style) -> LayoutOutput,
 {
     fn cache_get(&mut self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
-        self.taffy.nodes[node_id.into()].cache.get(input)
+        self.taffy.cache_get(node_id, input)
     }
 
     fn cache_store(&mut self, node_id: NodeId, input: &LayoutInput, layout_output: LayoutOutput) {
@@ -982,6 +1027,7 @@ where
 
     fn cache_clear(&mut self, node_id: NodeId) {
         self.taffy.nodes[node_id.into()].cache.clear();
+        self.taffy.size_counts.clear(node_id);
     }
 }
 
@@ -1102,6 +1148,73 @@ where
 
 #[allow(clippy::iter_cloned_collect)] // due to no-std support, we need to use `iter_cloned` instead of `collect`
 impl<NodeContext> TaffyTree<NodeContext> {
+    /// EXACT PATCH 72: select the size policy; clear existing answers when it changes.
+    pub fn set_size_cache_policy(&mut self, policy: SizeCachePolicy) {
+        if self.size_cache_policy != policy {
+            for node in self.nodes.values_mut() { node.cache.clear(); }
+            self.size_cache_policy = policy;
+        }
+    }
+
+    /// Enable work counts for tests. Disabled layouts do not collect questions or counts.
+    pub fn track_size_computations(&mut self, enabled: bool) {
+        self.size_counts.enabled = enabled;
+    }
+
+    /// Computations and retained answers since the last reset.
+    pub fn size_cache_counts(&self) -> SizeCacheCounts {
+        self.size_counts.counts
+    }
+
+    /// Start a caller's layout, which may call the engine several times.
+    pub fn reset_size_cache_counts(&mut self) {
+        if !self.size_counts.enabled { return; }
+        self.size_counts.counts = SizeCacheCounts::default();
+        self.size_counts.peaks.clear();
+        for (id, node) in &self.nodes {
+            let held = node.cache.size_answers();
+            if held > 0 { self.size_counts.peaks.insert(id.into(), held); }
+            self.size_counts.counts.max_answers = self.size_counts.counts.max_answers.max(held);
+        }
+    }
+
+    /// Per-node peaks since the last count reset, including answers held at that reset.
+    pub fn size_cache_peaks(&self) -> impl Iterator<Item = (NodeId, usize)> + '_ {
+        self.size_counts.peaks.iter().map(|(&node, &peak)| (node, peak))
+    }
+
+    /// Current size-answer count of each live node.
+    pub fn size_cache_occupancy(&self) -> impl Iterator<Item = (NodeId, usize)> + '_ {
+        self.nodes.iter().map(|(id, node)| (id.into(), node.cache.size_answers()))
+    }
+
+    /// Lifetime peak and distinct nodes which held more than nine answers.
+    pub fn size_cache_history(&self) -> (usize, usize) {
+        (self.size_counts.most_held, self.size_counts.over_nine.len())
+    }
+
+    /// Cache allocations retained by the live tree, including spare slots.
+    pub fn size_cache_bytes(&self) -> usize {
+        self.nodes.values().map(|node| node.cache.allocated_bytes()).sum()
+    }
+
+    fn invalidate_final_layout_ancestors(&mut self, node: NodeId) {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            self.nodes[id.into()].cache.invalidate_final_layout();
+            current = self.parent(id);
+        }
+    }
+
+    fn begin_layout_pass(&mut self) {
+        self.layout_pass = self.layout_pass.wrapping_add(1);
+        if self.layout_pass == 0 {
+            for node in self.nodes.values_mut() { node.cache.reset_pass_stamps(); }
+            self.layout_pass = 1;
+        }
+        self.size_counts.begin();
+    }
+
     /// Creates a new [`TaffyTree`]
     ///
     /// The default capacity of a [`TaffyTree`] is 16 nodes.
@@ -1121,6 +1234,9 @@ impl<NodeContext> TaffyTree<NodeContext> {
             parents: SlotMap::with_capacity(capacity),
             node_context_data: SecondaryMap::with_capacity(capacity),
             config: TaffyConfig::default(),
+            layout_pass: 0,
+            size_cache_policy: SizeCachePolicy::default(),
+            size_counts: SizeCounts::default(),
             changed_layouts: Vec::new(),
             changed_layout_indices: SecondaryMap::new(),
             layout_inputs: SecondaryMap::new(),
@@ -1211,6 +1327,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
     /// Drops all nodes in the tree
     pub fn clear(&mut self) {
         self.nodes.clear();
+        // EXACT PATCH 32: a node's context goes with it.
         self.node_context_data.clear();
         self.children.clear();
         self.parents.clear();
@@ -1245,6 +1362,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         let _ = self.children.remove(key);
         let _ = self.parents.remove(key);
         let _ = self.nodes.remove(key);
+        // EXACT PATCH 32: a node's context goes with it.
         self.node_context_data.remove(key);
         self.layout_inputs.remove(key);
         self.hoisted_absolutes.remove(key);
@@ -1584,7 +1702,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.grid_origins.get(node.into()).copied()
     }
 
-    /// Forget recorded layouts when a calc handle's environment changes.
+    /// EXACT PATCH 34: forget recorded layouts when a calc handle's environment changes.
     pub fn forget_memo(&mut self) {
         self.memo.clear();
     }
@@ -1654,6 +1772,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
     where
         MeasureFunction: FnMut(LayoutInput, NodeId, Option<&mut NodeContext>, &Style) -> LayoutOutput,
     {
+        self.begin_layout_pass();
         let mut view = TaffyView::over(self, measure_function);
         let output = LayoutPartialTree::compute_child_layout(&mut view, node, inputs);
         let mut layout = view.taffy.nodes[node.into()].unrounded_layout;
@@ -1680,6 +1799,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
     where
         MeasureFunction: FnMut(LayoutInput, NodeId, Option<&mut NodeContext>, &Style) -> LayoutOutput,
     {
+        self.begin_layout_pass();
         let use_rounding = self.config.use_rounding;
         let mut taffy_view = TaffyView::over(self, measure_function);
         compute_root_layout(&mut taffy_view, node_id, available_space);

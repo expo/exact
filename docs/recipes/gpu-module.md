@@ -2,7 +2,8 @@
 
 A `canvas surface=name(…)` that no data module draws is drawn by the app's GPU module: a crate
 `gpu/` beside app.json whose surfaces implement `exact_gpu::Surface` (wgpu), loaded after the first
-pixel (`apps/caltrain/gpu` is a whole one, with shaders).
+pixel (`apps/caltrain/gpu` is a whole one). See `gpu/README.md` for performance,
+color-space requests, grants and shader encoding.
 
 **It is Rust of the app's own, so the app writes its Cargo workspace** (LLP 1153 D1.4). Start from
 the generated one; don't write a root `Cargo.toml` by hand:
@@ -13,12 +14,12 @@ the generated one; don't write a root `Cargo.toml` by hand:
 3. Write `gpu/` (below) and add `"gpu"` to `members` in `Cargo.toml`, then run `bun exact.mjs update`
    (it settles the copied crates' paths and `<exact2>`) and `bun exact.mjs lock`.
 4. The web build's wasm-bindgen must be the version `exact setup` installed. When `lock` says the
-   GPU module links another, do what it says: write the `=` requirement it names in
-   `gpu/Cargo.toml`, then `bun exact.mjs lock` again.
+   GPU module links another, write the `=` requirement it names in `gpu/Cargo.toml` and
+   run `bun exact.mjs lock` again.
 5. Draw it from the view (below), then `bun exact.mjs web-build`, or `mac`, as any app.
 
-`gpu/Cargo.toml`. Its package is the app's name plus `-gpu` (`field-log` has `field-log-gpu`); the three
-web dependencies are required, since `module!` exports through them:
+`gpu/Cargo.toml`. Its package is the app's name plus `-gpu`; `module!` exports through the three web
+dependencies, so they are required:
 
 ```toml
 [package]

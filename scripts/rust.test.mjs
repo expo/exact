@@ -1,11 +1,57 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { prepareRustBundle, publishedSignature, rustBundle, rustCard, rustCards, rustFiles, rustReceipt, tieredBytes, tieredNative } from './rust.mjs';
+import { buildRust, rustArtifact, prepareRustBundle, publishedSignature, rustAbi, rustBundle, rustCard, rustCards, rustFiles, rustReceipt, tieredBytes, tieredNative } from './rust.mjs';
 import { rustRuntime } from '../host/web/rust-glue.js';
+
+test('the resident Rust baker builds and runs host-dev once for repeated requests', () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import { EventEmitter } from 'node:events';
+    import { resolve } from 'node:path';
+    import { PassThrough, Writable } from 'node:stream';
+    import * as processes from 'node:child_process';
+    let builds = 0, starts = 0, requests = 0;
+    const appTarget = resolve('fixture target'), target = resolve(appTarget, 'rust-tools');
+    mock.module('node:child_process', () => ({ ...processes,
+      spawnSync(command, args, options) {
+        assert.equal(command, 'cargo');
+        assert.ok(args.includes('exact-logic-bake'));
+        assert.equal(args[args.indexOf('--profile') + 1], 'host-dev');
+        assert.ok(!args.includes('--release'));
+        assert.equal(options.env.CARGO_TARGET_DIR, target);
+        builds++;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      spawn(command, args, options) {
+        assert.equal(command, resolve(target, 'host-dev/exact-logic-bake'));
+        assert.deepEqual(args, ['--serve']);
+        assert.equal(options.env.CARGO_TARGET_DIR, target);
+        starts++;
+        const child = new EventEmitter();
+        child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        child.stdin = new Writable({ write(bytes, encoding, done) {
+          assert.deepEqual(JSON.parse(String(bytes)), ['candidate', String(++requests)]);
+          queueMicrotask(() => child.stdout.write('{"ok":true}\\n')); done();
+        } });
+        child.kill = () => { child.stdout.end(); child.stderr.end(); };
+        queueMicrotask(() => child.stdout.write('{"ready":true,"pid":42}\\n'));
+        return child;
+      },
+    }));
+    const { RustBaker } = await import('./scripts/rust.mjs');
+    const baker = new RustBaker({ target: appTarget, workspace: process.cwd() }, {});
+    try { await baker.bake(['candidate', '1']); await baker.bake(['candidate', '2']); }
+    finally { baker.close(); }
+    assert.deepEqual([builds, starts, requests], [1, 1, 2]);
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 10_000 });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
 
 test('trapping module cleanup cannot throw through the resident Wasm import', () => {
   const original=globalThis.WebAssembly, log=console.error;
@@ -33,7 +79,7 @@ test('one produced Rust pair becomes exact platform assets and requirements', ()
   const app={id:'com.exact.test'}, plan=Buffer.from('plan'), bytes=Buffer.from('module');
   const compat={target:'aarch64-apple-ios',inputs:{rustMode:'wasm',grantCeiling:'fs:notes',rustGrants:'fs:notes'}};
   const receipt=rustReceipt(app,compat,plan,bytes,'wasm32-unknown-unknown','wasm');
-  assert.equal(receipt.abi,7);
+  assert.equal(receipt.abi,rustAbi());
   const produced={plan,variants:{wasm:{receipt,bytes}}};
   const cards=rustCards(rustFiles(produced));
   assert.equal(cards.wasm.module.sha256,receipt.module.sha256);
@@ -43,7 +89,7 @@ test('one produced Rust pair becomes exact platform assets and requirements', ()
   base.platforms.ios=result.bundle;
   assert.doesNotThrow(()=>JSON.stringify(base));
   assert.deepEqual(result.bundle.assets.map(a=>a.name),['rust/app.module.json','rust/app.module.wasm']);
-  assert.deepEqual(result.build.graph.artifacts[0].requires,{plan:1,rustMode:'wasm',rustAbi:7,rustTarget:'wasm32-unknown-unknown',grantCeiling:'fs:notes',rustGrants:'fs:notes'});
+  assert.deepEqual(result.build.graph.artifacts[0].requires,{plan:1,rustMode:'wasm',rustAbi:rustAbi(),rustTarget:'wasm32-unknown-unknown',grantCeiling:'fs:notes',rustGrants:'fs:notes'});
   assert.equal(result.build.graph.artifacts[2].sha256,receipt.module.sha256);
   const off=rustBundle(app,base,{...build,compat:{...compat,inputs:{rustMode:'off'}}},produced);
   assert.deepEqual(off.bundle.assets,[]);
@@ -72,9 +118,9 @@ test('publisher companion acquisition binds exact local bytes and isolates concu
     mkdirSync(releases,{recursive:true});mkdirSync(blobs,{recursive:true});
     const assets=[['rust/app.module.json',Buffer.from('{}')],['rust/app.module.wasm',Buffer.from('wasm')]].map(([name,bytes])=>{
       const card=rustCard(name,bytes);writeFileSync(resolve(blobs,card.sha256),bytes);
-      return {name,bytes:card.bytes,sha256:card.sha256,url:`../../blobs/${card.sha256}`};
+      return {name,bytes:card.bytes,sha256:card.sha256,url:`./${card.sha256}`};
     });
-    const record=resolve(releases,'1.json');writeFileSync(record,JSON.stringify({envelope:{assets}}));
+    const record=resolve(releases,'1.json');writeFileSync(record,JSON.stringify({envelope:{},assets:{assets}}));
     const app={manifest:{rust:true}};
     const env={EXACT_UPDATE_RECEIPT:record,EXACT_UPDATE_TRUST:'production',EXACT_BAKE_OUTPUT:resolve(root,'bake')};
     const a=prepareRustBundle(app,'ios','aarch64-apple-ios',env);
@@ -164,3 +210,50 @@ test.skipIf(process.platform !== 'darwin')('a published module signature stands 
     rmSync(dir,{recursive:true,force:true});
   }
 }, 120000);
+
+
+test('Rust artifact discovery accepts Cargo paths from Windows and Unix', () => {
+  const wasm = String.raw`C:\My Apps\target\rust-modules\wasm32-unknown-unknown\debug\probe.wasm`;
+  const dll = String.raw`C:\My Apps\target\rust-modules\x86_64-pc-windows-msvc\debug\probe.dll`;
+  const unix = '/my apps/target/wasm32-unknown-unknown/debug/probe.wasm';
+  assert.equal(rustArtifact([dll, wasm], 'wasm32-unknown-unknown'), wasm);
+  assert.equal(rustArtifact([wasm, dll], 'x86_64-pc-windows-msvc'), dll);
+  assert.equal(rustArtifact([dll, unix], 'wasm32-unknown-unknown'), unix);
+  assert.equal(rustArtifact([unix.replace('/wasm32-', '/not-wasm32-')], 'wasm32-unknown-unknown'), undefined);
+});
+
+for (const configuration of ['string', 'array', 'cfg', 'build', 'forced-encoded']) for (const encoded of [true, false]) test(`Rust modules build with spaces, ${encoded ? 'encoded' : 'configured'} flags and ${configuration} target flags`, async () => {
+  const root = resolve(import.meta.dir, '../target');
+  mkdirSync(root, {recursive:true});
+  const dir = mkdtempSync(resolve(root, 'rust app '));
+  try {
+    writeFileSync(resolve(dir, 'Cargo.toml'), '[workspace]\n[package]\nname="path-probe"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\ncrate-type=["cdylib"]\n');
+    writeFileSync(resolve(dir, 'lib.rs'), `#[cfg(not(${encoded && configuration !== 'forced-encoded' ? 'probe="a b"' : 'probe_config'}))] compile_error!("selected flag lost");\n#[no_mangle] pub extern "C" fn probe() -> u32 {42}\n`);
+    mkdirSync(resolve(dir, '.cargo'));
+    const configured = configuration !== 'array' ? '"--cfg=probe_config"' : '["--cfg=probe_config"]';
+    const tables = configuration === 'build' ? ['build'] : configuration === 'cfg' ? [`target.'cfg(all(any(unix, target_arch = "wasm32"), not(target_os = "windows")))'`] : ['target.wasm32-unknown-unknown', `target.${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-apple-darwin`];
+    writeFileSync(resolve(dir, '.cargo/config.toml'), configuration === 'forced-encoded' ? '[env]\nCARGO_ENCODED_RUSTFLAGS = {value="--cfg=probe_config", force=true}\n' : tables.map(table => `[${table}]\nrustflags=${configured}\n`).join(''));
+    writeFileSync(resolve(dir, 'app.contract'), '');
+    writeFileSync(resolve(dir, 'app.json'), '{}');
+    const app = {id:'com.exact.path-probe',dir,workspace:dir,target:resolve(dir,'target'),manifest:{rust:{module:{package:'path-probe'}}}};
+    const env = {...process.env, CARGO_ENCODED_RUSTFLAGS:'--cfg\x1fprobe="a b"\x1f--check-cfg=cfg(probe,values("a b"))'};
+    for (const name of Object.keys(env)) if (name === 'RUSTFLAGS' || /^CARGO_(TARGET_.*_RUSTFLAGS|BUILD_RUSTFLAGS)$/.test(name)) delete env[name];
+    if (!encoded) delete env.CARGO_ENCODED_RUSTFLAGS;
+    const built = await buildRust(app, {env, compat:{inputs:{rustGrants:'',grantCeiling:''}},
+      nativeTarget:process.platform === 'darwin' ? `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-apple-darwin` : null,
+      // This regression exercises compilation and artifact discovery; baking is independent of the paths Cargo sees.
+      baker:{bake:async args => writeFileSync(args[3], 'plan')},
+    });
+    const {instance} = await WebAssembly.instantiate(built.variants.wasm.bytes);
+    assert.equal(instance.exports.probe(), 42);
+    if (process.platform === 'darwin') assert.ok(built.variants.native.bytes.length > 0);
+    for (const target of ['wasm32-unknown-unknown', ...(process.platform === 'darwin' ? [`${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-apple-darwin`] : [])]) {
+      const fingerprints = resolve(app.target, 'rust-modules', target, 'debug/.fingerprint');
+      const crate = readdirSync(fingerprints).find(name => name.startsWith('path-probe-'));
+      const flags = JSON.parse(readFileSync(resolve(fingerprints, crate, 'lib-path_probe.json'))).rustflags;
+      assert.ok(flags.includes(`--remap-path-prefix=${app.target}/rust-modules=/rust-modules`));
+      assert.equal(flags.includes('-Clink-arg=-Wl,-install_name,@rpath/app.module.dylib'), target.includes('apple'));
+      if (target.includes('apple')) assert.ok(flags.some(flag => flag.startsWith('--cfg=exact_apple_deployment_targets=')));
+    }
+  } finally {rmSync(dir, {recursive:true,force:true});}
+}, 120_000);

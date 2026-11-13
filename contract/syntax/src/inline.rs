@@ -204,33 +204,11 @@ fn record_constructors(file: &File) -> BTreeSet<String> {
 /// Whether `e` holds a `none` or a `[]` outside an [`Expr::Typed`]: a leaf
 /// whose element type only a declaration can say.
 fn untyped_leaf(e: &Expr) -> bool {
-    use crate::ast::TemplatePart;
     match e {
         Expr::None(_) => true,
-        Expr::List(items, _) => items.is_empty() || items.iter().any(untyped_leaf),
-        Expr::Typed(..)
-        | Expr::Number(..)
-        | Expr::Str(..)
-        | Expr::Bool(..)
-        | Expr::Ident(..)
-        | Expr::Arrow { .. } => false,
-        Expr::Template(parts, _) => parts
-            .iter()
-            .any(|p| matches!(p, TemplatePart::Expr(x) if untyped_leaf(x))),
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Unary(_, x, _) => untyped_leaf(x),
-        Expr::Call(_, args, _) => args.iter().any(untyped_leaf),
-        Expr::Binary(_, a, b, _) => untyped_leaf(a) || untyped_leaf(b),
-        Expr::Ternary(a, b, c, _) => untyped_leaf(a) || untyped_leaf(b) || untyped_leaf(c),
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => untyped_leaf(subject) || untyped_leaf(some) || untyped_leaf(none),
-        Expr::Let { value, body, .. } => untyped_leaf(value) || untyped_leaf(body),
+        Expr::List(items, _) if items.is_empty() => true,
+        Expr::Typed(..) | Expr::Arrow { .. } => false,
+        _ => e.operands().any(untyped_leaf),
     }
 }
 

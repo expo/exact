@@ -364,3 +364,28 @@ fn a_replacement_chosen_is_its_own_document_and_a_save_in_a_subfolder_is_carried
     relaunch(app);
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Chosen again when the set cannot be written, a kept document stays kept:
+/// the set on disk still holds it, and the next save that does write keeps it.
+#[test]
+#[cfg(unix)]
+fn a_kept_document_chosen_again_stays_kept_when_the_set_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = scratch("unwritable");
+    let file = root.join("set/kept.json");
+    let app = "test.kept.unwritable";
+    launch(7581, app, &file);
+    let a = keep(7581, &root.join("notes/a.md"), "bm", "readwrite").unwrap();
+    let mode = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(root.join("set"), mode(0o555)).unwrap();
+    let again = keep(7581, &root.join("notes/a.md"), "bm2", "readwrite");
+    std::fs::set_permissions(root.join("set"), mode(0o755)).unwrap();
+    assert!(again.is_none(), "not written is not chosen again");
+    assert_eq!(paths(7581), std::slice::from_ref(&a), "still kept");
+    let b = keep(7581, &root.join("notes/b.md"), "", "readwrite").unwrap();
+    relaunch(app);
+    launch(7582, app, &file);
+    assert_eq!(paths(7582), [b, a], "the next save writes it");
+    relaunch(app);
+    let _ = std::fs::remove_dir_all(root);
+}

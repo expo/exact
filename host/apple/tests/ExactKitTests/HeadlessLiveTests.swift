@@ -1,5 +1,58 @@
 import XCTest
 import ExactCore
+import CExact
+#if canImport(WidgetKit)
+import ExactSnapshot
+import Observation
+import SwiftUI
+#endif
+
+private final class HeadlessReplyModule {
+    let requested = XCTestExpectation(description: "the module holds the resource's reply")
+    private let lock = NSLock()
+    private var reply: UnsafeMutableRawPointer?
+
+    func install(on session: HeadlessSession) {
+        Owner.shared.sync {
+            exact_set_app_module(session.core.runtime.rt, Self.later, nil, Unmanaged.passUnretained(self).toOpaque())
+        }
+        session.core.runtime.bindExtensions(["device"])
+    }
+
+    private static let later: ExactAppLaterFn = { ctx, body, length, reply in
+        guard let ctx, let body, let reply else { return }
+        let module = Unmanaged<HeadlessReplyModule>.fromOpaque(ctx).takeUnretainedValue()
+        let request = try? JSONSerialization.jsonObject(with: Data(bytes: body, count: length)) as? [String: Any]
+        if request?["source"] as? String == "getBattery" {
+            module.lock.withLock {
+                XCTAssertNil(module.reply, "only one resource request is in flight")
+                module.reply = reply
+            }
+            module.requested.fulfill()
+        } else {
+            Data("{}".utf8).withUnsafeBytes { bytes in
+                exact_app_reply(reply, 200, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+        }
+    }
+
+    /// Returning from the worker also orders its queued wake before a teardown on main.
+    func complete() throws {
+        let reply = try XCTUnwrap(lock.withLock {
+            defer { self.reply = nil }
+            return self.reply
+        })
+        let completed = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertFalse(Thread.isMainThread)
+            Data(#"{"level":0.42,"charging":false}"#.utf8).withUnsafeBytes { bytes in
+                exact_app_reply(reply, 200, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            completed.signal()
+        }
+        XCTAssertEqual(completed.wait(timeout: .now() + 5), .success)
+    }
+}
 
 /// A running app's headless session (LLP 1126.002 D3), as the watch drives it.
 final class HeadlessLiveTests: XCTestCase {
@@ -20,6 +73,88 @@ final class HeadlessLiveTests: XCTestCase {
         let clock = live ? HeadlessSession.liveNow() : 0
         return try HeadlessSession(plan: fixturePlan(key), size: CGSize(width: 200, height: 400),
                                    facts: SessionFacts(displayScale: 2, preferences: [], clock: clock), live: live)
+    }
+
+    func testAResourceReplyWakesOnMainAndPumpsTheLiveSession() throws {
+        let s = try session("HEADLESS_REPLY", live: true)
+        let module = HeadlessReplyModule()
+        defer { s.onWake(nil); s.close(); withExtendedLifetime(module) {} }
+        module.install(on: s)
+        try s.refresh(at: HeadlessSession.liveNow())
+        wait(for: [module.requested], timeout: 5)
+        waitForMainQueue("the activation's queued wakes")
+        XCTAssertEqual(try text("battery", in: s.snapshot()), "1")
+        XCTAssertNil(s.timerDue, "no timer can deliver this reply")
+        let delivered = expectation(description: "the wake pumps the resource's reply")
+        s.onWake { [weak s] in
+            XCTAssertTrue(Thread.isMainThread)
+            do {
+                let s = try XCTUnwrap(s)
+                XCTAssertEqual(try self.text("battery", in: s.pump(at: HeadlessSession.liveNow())), "0.42")
+            } catch { XCTFail("\(error)") }
+            delivered.fulfill()
+        }
+        try module.complete()
+        wait(for: [delivered], timeout: 5)
+        XCTAssertEqual(try text("battery", in: s.snapshot()), "0.42")
+    }
+
+    #if canImport(WidgetKit)
+    @MainActor
+    @available(iOS 17.0, macOS 14.0, visionOS 26.0, *)
+    func testTheLiveModelPublishesRepliesWhileActiveAndInactive() throws {
+        for phase in [ScenePhase.active, .inactive] {
+            let s = try session("HEADLESS_REPLY", live: true)
+            let module = HeadlessReplyModule()
+            defer { s.close(); withExtendedLifetime(module) {} }
+            module.install(on: s)
+            let model = try LiveModel(session: s, phase: .active)
+            model.firstFrame()
+            wait(for: [module.requested], timeout: 5)
+            waitForMainQueue("the activation's queued wakes")
+            model.setPhase(phase)
+            XCTAssertEqual(try text("battery", in: model.snapshot), "1")
+            XCTAssertNil(s.timerDue)
+            let published = expectation(description: "the \(phase) model publishes the reply on main")
+            withObservationTracking { _ = model.snapshot } onChange: {
+                XCTAssertTrue(Thread.isMainThread)
+                published.fulfill()
+            }
+            try module.complete()
+            wait(for: [published], timeout: 5)
+            XCTAssertEqual(try text("battery", in: model.snapshot), "0.42")
+            XCTAssertNil(model.failure)
+        }
+    }
+    #endif
+
+    func testQueuedWakesAndLateRepliesAfterCloseOrDeallocationAreHarmless() throws {
+        XCTAssertTrue(Thread.isMainThread)
+        for close in [true, false] {
+            for queued in [true, false] {
+                var s: HeadlessSession? = try session("HEADLESS_REPLY", live: true)
+                let module = HeadlessReplyModule()
+                defer { s?.close(); withExtendedLifetime(module) {} }
+                module.install(on: try XCTUnwrap(s))
+                try s?.refresh(at: HeadlessSession.liveNow())
+                wait(for: [module.requested], timeout: 5)
+                waitForMainQueue("the activation's queued wakes")
+                var wakes = 0
+                s?.onWake { wakes += 1 }
+                if queued { try module.complete() }
+                if close {
+                    s?.close()
+                    XCTAssertThrowsError(try s?.snapshot())
+                } else {
+                    weak let dropped = s
+                    s = nil
+                    XCTAssertNil(dropped, "the wake must not retain the session")
+                }
+                if !queued { try module.complete() }
+                waitForMainQueue("the completed reply's queued wake")
+                XCTAssertEqual(wakes, 0, "close=\(close), queued=\(queued)")
+            }
+        }
     }
 
     /// After twenty minutes wrist-down, the resume's one advance fires a 1 s

@@ -11,8 +11,8 @@ pub const FORMAT: u32 = 1;
 pub(crate) fn dial_text(v: &DialValue) -> String {
     match v {
         DialValue::Color(f) => f.css(),
-        DialValue::Number(n) => exact_color::number_text(*n),
-        DialValue::Length(n) => format!("{}px", exact_color::number_text(*n)),
+        DialValue::Number(n) => exact_num::js(*n),
+        DialValue::Length(n) => format!("{}px", exact_num::js(*n)),
     }
 }
 

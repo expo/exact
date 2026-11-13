@@ -190,6 +190,7 @@ inductive TaskKind where
   | every
   | after
   | frame
+  | change
   deriving Repr, BEq, Inhabited, DecidableEq
 
 structure TaskDecl where

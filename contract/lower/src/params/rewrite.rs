@@ -354,24 +354,17 @@ fn view(list: &mut [Node], visit: &mut dyn FnMut(&mut Expr, bool)) {
                 }
                 view(children, visit);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                view(then, visit);
-                view(otherwise, visit);
-            }
-            Node::Each { body, .. } => view(body, visit),
-            Node::Match { some, none, .. } => {
-                view(&mut some.1, visit);
-                view(none, visit);
-            }
             Node::Use { args, children, .. } => {
                 for a in args.iter_mut() {
                     visit(&mut a.value, true);
                 }
                 view(children, visit);
             }
-            Node::Children { .. } => {}
+            node => {
+                for list in node.child_lists_mut() {
+                    view(list, visit);
+                }
+            }
         }
     }
 }
@@ -668,17 +661,11 @@ fn owners(file: &File) -> Vec<(String, Vec<usize>)> {
                 Node::Use { children, .. } | Node::Each { body: children, .. } => {
                     classes(children, out)
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    classes(then, out);
-                    classes(otherwise, out);
+                node => {
+                    for list in node.child_lists() {
+                        classes(list, out);
+                    }
                 }
-                Node::Match { some, none, .. } => {
-                    classes(&some.1, out);
-                    classes(none, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

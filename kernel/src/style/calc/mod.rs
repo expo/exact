@@ -75,6 +75,11 @@ pub enum EnvTerm {
     /// `env(titlebar-area-<var>)` (Window Controls Overlay). No compact
     /// [`Dimension`] holds it: a length that reads it is always a tree.
     TitleBar(TitleBarVar),
+    /// `var(--exact-safe-area-inset-<edge>)` (LLP 1123 D5, D9): the local
+    /// inset of the content owner a node is in, which a host sets per
+    /// owner, so it resolves per node ([`Env::local_inset`]). A
+    /// substitution, as `env()` is; always a tree.
+    Local(Edge),
 }
 
 impl EnvTerm {
@@ -86,7 +91,27 @@ impl EnvTerm {
             EnvTerm::Segment(var, x, y) => env::resolve_wide(var, x, y, env),
             EnvTerm::Region(region, edge) => Some(f64::from(env.region_inset(region, edge))),
             EnvTerm::TitleBar(var) => env.titlebar(var).map(f64::from),
+            EnvTerm::Local(edge) => Some(f64::from(env.local_inset(edge))),
         }
+    }
+}
+
+/// `node` with every local inset (`EnvTerm::Local`) replaced by its points
+/// under `env`.
+fn localize(node: &Node, env: &Env) -> Node {
+    let all = |c: &[Node]| c.iter().map(|n| localize(n, env)).collect();
+    match node {
+        Node::Env(EnvTerm::Local(edge)) => Node::Value(f64::from(env.local_inset(*edge)), Unit::Px),
+        Node::Value(..) | Node::Env(..) => node.clone(),
+        Node::Sum(c) => Node::Sum(all(c)),
+        Node::Product(c) => Node::Product(all(c)),
+        Node::Min(c) => Node::Min(all(c)),
+        Node::Max(c) => Node::Max(all(c)),
+        Node::Negate(c) => Node::Negate(Box::new(localize(c, env))),
+        Node::Invert(c) => Node::Invert(Box::new(localize(c, env))),
+        Node::Clamp(c) => Node::Clamp(Box::new(
+            c.each_ref().map(|n| n.as_ref().map(|n| localize(n, env))),
+        )),
     }
 }
 
@@ -277,7 +302,7 @@ fn env_dimension(term: EnvTerm, plus: f32) -> Option<Dimension> {
         EnvTerm::Inset(edge) => Dimension::Env(edge, plus),
         EnvTerm::Segment(var, x, y) => Dimension::Segment(var, x, y, plus),
         EnvTerm::Region(region, edge) => Dimension::Region(region, edge, plus),
-        EnvTerm::TitleBar(_) => return None,
+        EnvTerm::TitleBar(_) | EnvTerm::Local(_) => return None,
     })
 }
 
@@ -444,7 +469,7 @@ impl Comparison {
     pub fn reads(&self, edge: Edge, env: &Env) -> bool {
         self.tree(|t| {
             t.any(&|n| {
-                matches!(n, Node::Env(EnvTerm::Inset(e) | EnvTerm::Region(Region::SafeAreaCorners, e)) if *e == edge)
+                matches!(n, Node::Env(EnvTerm::Inset(e) | EnvTerm::Local(e) | EnvTerm::Region(Region::SafeAreaCorners, e)) if *e == edge)
             })
         })
         .unwrap_or_else(|| match self.substituted(env) {
@@ -472,6 +497,38 @@ impl Comparison {
             .unwrap_or(false)
     }
 
+    /// Whether it reads a local inset (`var(--exact-safe-area-inset-*)`,
+    /// LLP 1123 D9), which resolves per node: in a tree, at a leaf; a text
+    /// whose `env()` has a fallback, wherever it names one.
+    pub(crate) fn reads_local(&self) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(_)))),
+            Entry::Text { text, .. } => text.contains(env::LOCAL_PREFIX),
+        })
+    }
+
+    /// Whether it reads the local inset at `edge`.
+    pub(crate) fn reads_local_edge(&self, edge: Edge) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(e)) if *e == edge)),
+            Entry::Text { text, .. } => {
+                text.contains(&format!("{}{}", env::LOCAL_PREFIX, edge.name()))
+            }
+        })
+    }
+
+    /// The tree with its local insets as `env` has them, in points, as the
+    /// dimension that holds it; `None` when it reads none. A tree handed to
+    /// layout, where only the window's environment is known, is localized
+    /// first (LLP 1123 D5).
+    pub(crate) fn localized(&self, env: &Env) -> Option<Dimension> {
+        self.tree(|t| {
+            t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(_))))
+                .then(|| dimension(simplify::simplify(localize(t, env))))
+        })
+        .flatten()
+    }
+
     /// Whether a `rem` stands in it, which the root font size resolves.
     pub(crate) fn reads_rem(&self) -> bool {
         self.tree(|t| t.any(&|n| matches!(n, Node::Value(_, Unit::Rem))))
@@ -493,42 +550,6 @@ impl std::fmt::Debug for Comparison {
         self.css(&mut css);
         f.debug_tuple("Comparison").field(&css).finish()
     }
-}
-
-/// Whether a row takes no negative length in CSS: sizes, padding, radii, an
-/// SVG radius and a column's width (margins and insets take one). A math
-/// function's result is clamped to 0 there (CSS Values 4 §9.1).
-pub(super) fn no_negative_lengths(style: StyleId) -> bool {
-    matches!(
-        style,
-        StyleId::Width
-            | StyleId::Height
-            | StyleId::MinWidth
-            | StyleId::MinHeight
-            | StyleId::MaxWidth
-            | StyleId::MaxHeight
-            | StyleId::PaddingTop
-            | StyleId::PaddingRight
-            | StyleId::PaddingBottom
-            | StyleId::PaddingLeft
-            | StyleId::FlexBasis
-            | StyleId::BorderRadiusTopLeft
-            | StyleId::BorderRadiusTopRight
-            | StyleId::BorderRadiusBottomRight
-            | StyleId::BorderRadiusBottomLeft
-            | StyleId::R
-            | StyleId::Rx
-            | StyleId::Ry
-            | StyleId::ColumnWidth
-            | StyleId::HitSlopTop
-            | StyleId::HitSlopRight
-            | StyleId::HitSlopBottom
-            | StyleId::HitSlopLeft
-            | StyleId::ScrollPaddingTop
-            | StyleId::ScrollPaddingRight
-            | StyleId::ScrollPaddingBottom
-            | StyleId::ScrollPaddingLeft
-    )
 }
 
 #[cfg(test)]

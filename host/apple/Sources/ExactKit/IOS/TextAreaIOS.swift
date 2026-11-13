@@ -53,6 +53,15 @@ enum ResignTrace {
 }
 
 final class TextField: UITextField {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     weak var owner: NodeView?
     // A commit that changes no text sends no editing change: a `direction`
     // that came while it was marked applies here (LLP 1001 §1).
@@ -154,6 +163,15 @@ final class TextField: UITextField {
 }
 
 package final class TextArea: UITextView {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    package override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    package override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     // UIKit already owns a specialized manager per editor. Its native text
     // undo actions require that manager; observe it without replacing it.
     private var textUndo: NativeTextUndo?
@@ -403,9 +421,14 @@ package final class TextArea: UITextView {
     /// The authored `::placeholder` colour (LLP 1104 D3); nil, UIKit's.
     var placeholderColor: UIColor?
     // A scroll view's own drawing does not move with its content: the
-    // decorations' lines are drawn again at each new offset.
+    // decorations' lines and visible placeholder are drawn again at each offset.
     package override var contentOffset: CGPoint {
-        didSet { if contentOffset != oldValue, decorations?.drawsLines == true { setNeedsDisplay() } }
+        didSet {
+            if contentOffset != oldValue,
+               decorations?.drawsLines == true || (text.isEmpty && !placeholder.isEmpty) {
+                setNeedsDisplay()
+            }
+        }
     }
     /// The placeholder it draws may be in the tint: drawn again as the tint changes
     package override func tintColorDidChange() {
@@ -418,11 +441,14 @@ package final class TextArea: UITextView {
         if text.isEmpty, !placeholder.isEmpty {
             // Where the first line of text sits, however short the content
             // box: what overflows the view is clipped, as the web clips a
-            // textarea's placeholder at its padding box. `draw(in:)` drops a
-            // line its rect cannot hold whole, so a short box drew nothing.
-            let box = bounds.inset(by: textContainerInset)
+            // textarea's placeholder at its padding box. The container starts
+            // in content coordinates; bounds.origin is the scroll offset.
+            // String drawing drops a line its rect cannot hold whole, so the
+            // rect is one line taller than what the view shows.
+            let box = CGRect(origin: .zero, size: bounds.size).inset(by: textContainerInset)
+            let font = font ?? UIFont.systemFont(ofSize: 16)
             var attributes: [NSAttributedString.Key: Any] = [
-                .font: font ?? UIFont.systemFont(ofSize: 16),
+                .font: font,
                 .foregroundColor: placeholderColor ?? ThemeRoles.color("placeholder", in: self, or: UIColor.placeholderText),
             ]
             attributes[.paragraphStyle] = typingAttributes[.paragraphStyle]
@@ -436,7 +462,10 @@ package final class TextArea: UITextView {
                 style.alignment = direction == .rightToLeft ? .right : .left
                 attributes[.paragraphStyle] = style
             }
-            (placeholder as NSString).draw(with: CGRect(x: box.minX, y: box.minY, width: max(0, box.width), height: .greatestFiniteMagnitude),
+            let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle
+            let lineHeight = max(font.lineHeight, paragraph?.minimumLineHeight ?? 0) + (paragraph?.lineSpacing ?? 0)
+            let height = max(0, bounds.height - textContainerInset.top) + lineHeight
+            (placeholder as NSString).draw(with: CGRect(x: box.minX, y: box.minY, width: max(0, box.width), height: height),
                                            options: .usesLineFragmentOrigin, attributes: attributes, context: nil)
         }
     }

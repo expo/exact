@@ -150,3 +150,64 @@ fn sixty_four_tuples_are_accepted_and_sixty_five_are_not() {
         "tamber-tuples"
     );
 }
+
+/// A hue written on a gray mixes as normal (CSS Color 4 §4.4.1), and is a
+/// relative colour's own, as Chrome folds them; a converted gray's is
+/// powerless, so the other colour's is taken.
+#[test]
+fn a_written_hue_on_a_gray_mixes() {
+    for (value, chrome) in [
+        (
+            "color-mix(in oklch, oklch(0.7 0 0), oklch(0.7 0.2 120))",
+            "oklch(0.7 0.1 60)",
+        ),
+        (
+            "color-mix(in lch, lch(50 0 0), lch(50 50 180))",
+            "lch(50 25 90)",
+        ),
+        (
+            "color-mix(in oklch, oklch(1 0 0), oklch(0.45 0.3 264))",
+            "oklch(0.725 0.15 312)",
+        ),
+        ("oklch(from oklch(0.7 0 30) l 0.1 h)", "oklch(0.7 0.1 30)"),
+        ("lch(from lch(50 0 30) l 30 h)", "lch(50 30 30)"),
+        // hsl() and hwb() in their own components, as written.
+        (
+            "color-mix(in hsl, hsl(30 0% 50%), hsl(120 50% 50%))",
+            "color(srgb 0.5625 0.625 0.375)",
+        ),
+        (
+            "color-mix(in hwb, hwb(30 60% 40%), hwb(120 20% 20%))",
+            "color(srgb 0.625 0.7 0.4)",
+        ),
+        (
+            "hsl(from hsl(30 0% 50%) h 50% l)",
+            "color(srgb 0.75 0.5 0.25)",
+        ),
+    ] {
+        // As Chrome's value, to a rounding of the last bit.
+        let wide = |t: &str| match exact_color::parse(t) {
+            Some(exact_color::Parsed::Wide(w)) => w,
+            other => panic!("{t}: {other:?}"),
+        };
+        let (got, want) = (wide(&fold(value).0), wide(chrome));
+        let near = got.c.iter().zip(want.c).all(|(g, w)| (g - w).abs() < 1e-12);
+        assert!(
+            got.space == want.space && near,
+            "{value}: {got:?}, Chrome {chrome}"
+        );
+    }
+    let white = fold("color-mix(in oklch, #fff, oklch(0.7 0.2 120))").0;
+    assert!(white.ends_with(" 120)"), "{white}");
+}
+
+/// `hwb()` clamps no whiteness or blackness above 100% (CSS Color 4 §8):
+/// Chrome's `hwb(0 200% 100%)` is rgb(170, 170, 170), 200 / 300.
+#[test]
+fn hwb_whiteness_and_blackness_are_not_clamped_above_100() {
+    assert_eq!(fold("hwb(0 200% 100%)").1, "#aaaaaaff");
+    assert_eq!(
+        fold("color-mix(in srgb, hwb(0 50% 150%), hwb(0 50% 150%))").1,
+        "#404040ff"
+    );
+}

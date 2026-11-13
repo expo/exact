@@ -56,7 +56,8 @@ component App
 A wake may not open system UI, ask the person or play sound (`share`,
 `openURL`, the pickers, …): each is refused into the journal. No timer fires
 in a wake with no window or a hidden one. A quit Mac app has no wake:
-`"keepRunning": true` under `host.macos.window` keeps it running.
+`"keepRunning": true` under `host.macos.window` (on Windows,
+`host.windows.window`) keeps it running.
 
 **Driving it:** `state.backgroundSync` lists each registration (`ref`,
 `kind`, `due`, `lastRun`); `tap @<ref>` runs it as a warm wake (refused `not

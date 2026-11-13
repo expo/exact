@@ -136,7 +136,7 @@ pub(crate) fn boot(
 fn state(r: &mut Runner<Oracle>, plan: &Plan, out: &mut Vec<String>) {
     for (i, row) in plan.slots.iter().enumerate() {
         let id = exact_plan::SlotsId(i as u32);
-        if row.owner.is_some() || plan.locale == Some(id) {
+        if row.owner.is_some() || plan.locale == Some(id) || plan.format == Some(id) {
             continue;
         }
         let name = plan.str(row.name);

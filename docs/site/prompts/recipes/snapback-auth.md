@@ -1,9 +1,9 @@
 ```prompt Add guests, personas or password sign-in
-Add identity to the Exact app in this folder, on its Snapback backend: guests, development personas or password accounts. Use https://github.com/expo/exact/blob/main/docs/recipes/snapback-auth.md as the source for each step. The exact2 checkout has the same page at docs/recipes/snapback-auth.md.
+Add identity to the Exact app in this folder, on its Snapback backend: guests, development personas or password accounts. Use https://github.com/expo/exact/blob/main/docs/recipes/snapback-auth.md as the source for each step. The Exact checkout has the same page at docs/recipes/snapback-auth.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), or it is not wired to a Snapback backend, stop and tell me: wire it first with docs/recipes/snapback.md.
 2. Ask me which identities the app allows: guests and password accounts (`use identity`), password accounts only (`use identity password`), and whether development uses personas (`use personas alice, bob`). Do not choose for me.
-3. Build from the complete mixed identity app in the exact2 checkout's snapback4/README.md ("A complete mixed identity app"): the schema, Contract, TypeScript and tests.
+3. Build from the complete mixed identity app in the Exact checkout's snapback4/README.md ("A complete mixed identity app"): the schema, Contract, TypeScript and tests.
 4. For guests, call `guest()` before a read. Keep the session with `auth: {store, key, now}` and grant `secret.keep` for that key. Use a distinct secret key for each backend origin.
 5. For personas, start with `state persona = ""` (signed out) and an explicit persona choice. Await logout before a switch of accounts. Hide retained rows until the current principal's resource answers.
 6. `serve` refuses persona headers: tell me the persona controls must go before production.

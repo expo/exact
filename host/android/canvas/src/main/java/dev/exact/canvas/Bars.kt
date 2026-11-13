@@ -21,7 +21,7 @@ import java.nio.IntBuffer
  * exact2 says what the bars are with each stream ([Native.bars], [Owner.Pub.bars]), when that is not what it last
  * said, so a bar and the page under it change in one frame: which bar, its frame in this window in pixels, and its
  * picture. A bar it leaves out is gone. A touch in a bar goes back by one call ([Exact.bar]) at the bar's own
- * pixels; exact2 knows what is there. `host/linux/src/presenter/bars.rs` is exact2's side.
+ * pixels; exact2 knows what is there. `host/painted/src/presenter/bars.rs` is exact2's side.
  *
  * A statement often arrives while the page's view is being drawn, and a bar it shows or moves must be in that same
  * frame, or the page is shown for a frame without its bar. So both views are made with the reader, in a layer of

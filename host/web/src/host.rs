@@ -30,6 +30,7 @@ mod mode;
 mod scale;
 pub(crate) use fonts::{decode_plan, plan_font_catalog};
 use fonts::{font_catalog, font_faces, font_names, font_names_for_runner};
+pub use scale::PageGeometry;
 #[path = "document.rs"]
 pub mod document;
 #[path = "element.rs"]
@@ -53,26 +54,42 @@ mod own;
 mod reorder_drag;
 #[path = "transform_drag.rs"]
 mod transform_drag;
-/// A reply as the ABI carries it, as the runner's `Outcome`. Kind 8 is one
-/// message of a stream: `event`, `id` and `coalesced` as header lines, the
-/// data as the body (LLP 1016.000).
+/// A reply as the ABI carries it, as the runner's `Outcome`. Kind 8 is a
+/// stream's messages that arrived together (LLP 1016.000 D4): a block of
+/// header lines each (`event`, `id`, `coalesced`, `protocol`, and with more
+/// than one, `length`, its data's bytes), blocks apart by an empty line, and
+/// their data one after another as the body. One block is one message.
 pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Outcome {
     match kind {
         8 => {
-            let field = |name: &str| {
-                headers
-                    .lines()
-                    .find_map(|l| l.strip_prefix(name)?.strip_prefix(": "))
-                    .unwrap_or("")
-                    .to_string()
-            };
-            Outcome::Message(exact_runner::Message {
-                event: field("event"),
-                id: field("id"),
-                coalesced: field("coalesced").parse().unwrap_or(0),
-                data: String::from_utf8_lossy(&body).into_owned(),
-                binary: None,
-            })
+            let mut at = 0usize;
+            let mut messages: Vec<_> = (headers.split("\n\n"))
+                .map(|block| {
+                    let field = |name: &str| {
+                        (block.lines())
+                            .find_map(|l| l.strip_prefix(name)?.strip_prefix(": "))
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    let end = field("length")
+                        .parse()
+                        .map_or(body.len(), |n: usize| at.saturating_add(n).min(body.len()));
+                    let data = String::from_utf8_lossy(&body[at.min(end)..end]).into_owned();
+                    at = end;
+                    exact_runner::Message {
+                        event: field("event"),
+                        protocol: field("protocol").into(),
+                        id: field("id"),
+                        coalesced: field("coalesced").parse().unwrap_or(0),
+                        data,
+                        binary: None,
+                    }
+                })
+                .collect();
+            match messages.len() {
+                1 => Outcome::Message(messages.remove(0)),
+                _ => Outcome::Messages(messages),
+            }
         }
         5 => Outcome::Storage(body),
         6 if body.len() <= exact_runner::MAX_HOST_WORK_BYTES => {
@@ -322,6 +339,7 @@ pub struct Host<D: DataSource> {
     /// The head the page was last told, and whether a commit may move it.
     head: exact_runner::Head,
     language: Option<String>,
+    large_title_size: Option<f32>,
     head_dirty: bool,
     /// While the first batch is made: what a page's projection computed for
     /// each view (LLP 1048.000 D6), taken instead of computing it again.
@@ -492,6 +510,7 @@ impl<D: DataSource> Host<D> {
             heads: Default::default(),
             head: Default::default(),
             language: None,
+            large_title_size: None,
             head_dirty: false,
             computed,
             keyframes: Default::default(),
@@ -547,7 +566,8 @@ impl<D: DataSource> Host<D> {
         for w in host.runner.take_store_writes() {
             batch.store(&w);
         }
-        batch.grants(host.runner.data().grants());
+        // The origins its declared sources carry too (LLP 1162.001 D3).
+        batch.grants(&host.runner.grants());
         host.emit_textflow(&mut batch);
         let batch = host.complete(batch, None);
         Ok((host, batch))
@@ -733,14 +753,41 @@ impl<D: DataSource> Host<D> {
     /// The size, the display preferences and the fold, in one batch.
     /// @ref LLP 1039 D2; LLP 1061 D4; LLP 1078 D6
     pub fn resize(&mut self, viewport: exact_runner::Viewport, now_ms: f64) -> String {
+        self.resize_with(viewport, now_ms, None)
+    }
+
+    /// [`Host::resize`] with the page's geometry, answered in the size's
+    /// commit (LLP 1039 D9).
+    pub fn resize_with(
+        &mut self,
+        viewport: exact_runner::Viewport,
+        now_ms: f64,
+        geometry: Option<PageGeometry>,
+    ) -> String {
         let a = self.runner.advance_timed(now_ms);
         self.now_ms = a.now_ms.max(self.now_ms);
         let mut receipts = a.receipts;
         let mut error = a.error.map(|e| format!("{e:?}"));
+        let size = Some((viewport.width, viewport.height));
+        // The geometry is checked whole before anything of the report
+        // changes: a refused part refuses it all (LLP 1039 D9).
+        let checked = match geometry.map(|g| (self.checked_view(size, &g, viewport.fold), g.2)) {
+            Some((Err(refused), _)) => {
+                let error = error.map_or(refused.clone(), |e| format!("{e}; {refused}"));
+                return self.batch_for(&receipts, Some(&error));
+            }
+            Some((Ok(env), keyboard)) => Some((env, keyboard)),
+            None => None,
+        };
+        let viewport_error = |e| format!("viewport: {e:?}");
         let answers = [
-            self.runner.set_viewport(viewport.width, viewport.height),
-            self.runner.set_preferences(viewport.preferences),
-            self.runner.set_fold(viewport.fold), // the fold rides the same report (LLP 1078 D6)
+            match checked {
+                Some((env, keyboard)) => self.put_view(env, size, keyboard),
+                None => self.runner.set_view(size, None).map_err(viewport_error),
+            },
+            (self.runner.set_preferences(viewport.preferences)).map_err(viewport_error),
+            // the fold rides the same report (LLP 1078 D6)
+            (self.runner.set_fold(viewport.fold)).map_err(viewport_error),
         ];
         for answer in answers {
             match answer {
@@ -749,8 +796,7 @@ impl<D: DataSource> Host<D> {
                     receipt,
                 }),
                 Ok(None) => {}
-                Err(e) => {
-                    let viewport_error = format!("viewport: {e:?}");
+                Err(viewport_error) => {
                     error = Some(match error {
                         Some(timer_error) => format!("{timer_error}; {viewport_error}"),
                         None => viewport_error,
@@ -1334,7 +1380,8 @@ impl<D: DataSource> Host<D> {
             .collect();
         let pairs: Vec<(&str, String)> =
             props.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-        batch.create(id, tag, &pairs, &css, &handlers);
+        let svg = node.node_type == NodeType::Svg || node.node_type.is_svg_element();
+        batch.create(id, tag, svg, &pairs, &css, &handlers);
         self.mirror.insert(
             id,
             Mirror {

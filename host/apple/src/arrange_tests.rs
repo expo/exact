@@ -1,5 +1,5 @@
 //! Arrange on the Apple host, against the web (`host/web/src/reorder_tests.rs`)
-//! and Linux (`host/linux/tests/it/arrange.rs`) sequences.
+//! and Linux (`host/painted/tests/it/arrange.rs`) sequences.
 use super::*;
 use exact_kernel::MonospaceMeasurer;
 use exact_runner::{CollectionFeedback, DataError, RowMeasurement, Value as DataValue};

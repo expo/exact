@@ -66,6 +66,7 @@ pub struct Swappable<D> {
     embedded: Option<D>,
     app_id: String,
     grants: String,
+    preloads: Vec<exact_runner::request::Preload>,
     mode: &'static str,
     loader: Option<Loader>,
     preloader: Option<Preloader>,
@@ -89,6 +90,7 @@ impl<D: DataSource> Swappable<D> {
         Self {
             app_id: embedded.app_id().into(),
             grants: embedded.grants().into(),
+            preloads: embedded.preloads().to_vec(),
             canvas_surfaces: embedded.canvas_surfaces(),
             embedded: Some(embedded),
             mode,
@@ -101,10 +103,30 @@ impl<D: DataSource> Swappable<D> {
             native: None,
         }
     }
-    /// Name the source digest (`scripts/app.mjs` `nativeSource`) the binary
+    /// The app's identity from its manifest (`app.json`'s `app.id`), for an
+    /// embedded source that names none (`DataSource::app_id`'s default). The
+    /// hosts key the app's storage roots, kept answers and persisted states by
+    /// this id; without one a native host gives the app no storage, and an
+    /// agent drive's named store (`--storage`) would be memory. A source that
+    /// names its own id keeps it: its users' files are already under it.
+    pub fn named(mut self, app: &str) -> Self {
+        if self.app_id.is_empty() {
+            self.app_id = app.into();
+        }
+        self
+    }
+    /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
+    pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
+        self.preloads = preloads.to_vec();
+        self
+    }
+
+    /// Name the source digest (`scripts/rust.mjs` `nativeSource`) the binary
     /// compiled `make`'s data crate from. A Rust candidate whose receipt names
     /// the same source is that code already: replacement makes it natively,
     /// so a module costs interpretation only while it differs from the binary.
+    /// The comparison is of source, never of the wasm module, whose bytes can
+    /// stay the same while a native-only arm changed (LLP 1030 D3a).
     pub fn with_native(mut self, source: &'static str, make: fn() -> D) -> Self {
         self.native = Some((source, make));
         self
@@ -306,6 +328,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
     fn app_id(&self) -> &str {
         &self.app_id
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &self.preloads
+    }
+
     fn grants(&self) -> &str {
         &self.grants
     }
@@ -528,7 +554,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 let embedded = embedded
                     .replacement(plan, receipt, module)
                     .map_err(|e| format!("{e:?}"))?;
-                let mut source = Self::configured(embedded, self.mode, self.loader);
+                let mut source =
+                    Self::configured(embedded, self.mode, self.loader).named(&self.app_id);
                 source.preloader = self.preloader;
                 source.native = self.native;
                 return Ok(source);
@@ -586,7 +613,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             }
             if let Some((source, make)) = self.native {
                 if meta["source"].as_str() == Some(source) {
-                    let mut native = Self::configured(make(), self.mode, self.loader);
+                    let mut native =
+                        Self::configured(make(), self.mode, self.loader).named(&self.app_id);
+                    native.preloads = self.preloads.clone();
                     native.preloader = self.preloader;
                     native.native = self.native;
                     return Ok(native);
@@ -599,6 +628,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 embedded: None,
                 app_id: self.app_id.clone(),
                 grants: self.grants.clone(),
+                preloads: self.preloads.clone(),
                 mode: self.mode,
                 loader: self.loader,
                 preloader: self.preloader,

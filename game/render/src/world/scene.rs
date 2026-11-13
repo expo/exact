@@ -4,6 +4,9 @@ use exact_game::{
 };
 use glam::{Mat4, Vec3};
 
+mod pointer;
+use pointer::CameraPointer;
+
 /// Photometric units to renderer radiance, one scale for both: 10,000 lux of sun
 /// and a 10,000 cd light seen from 1 m (10,000 lux there) map to the default key
 /// radiance of 3. Exposure applies after.
@@ -225,10 +228,7 @@ pub(super) struct Scene {
     versions: Option<[u64; 7]>,
     pub(super) attachments: Attachments,
     camera: Option<(History, Camera)>,
-    // The camera's MouseLook, its revision and camera, and its descendants.
-    look: Option<(exact_game::MouseLook, u64, Vec<History>)>,
-    /// Pointer motion the next frame's MouseLook turns by (`Sim::unshown_motion`).
-    pub(super) unshown: glam::Vec2,
+    pub(super) pointer: CameraPointer,
     sun: Option<(History, DirectionalLight)>,
     fill: Option<(History, DirectionalLight)>,
     // Point lights, then spot lights, each in entity order.
@@ -249,20 +249,11 @@ impl Scene {
             .map(|&(_, i)| self.lights[i].history.entity)
             .collect()
     }
-    pub fn trace_camera(&self, alpha: f32) -> [f64; 3] {
-        self.camera.map_or([0.; 3], |(h, _)| {
-            crate::trace::mix(
-                h.prev.position.to_array(),
-                h.curr.position.to_array(),
-                alpha,
-            )
-        })
-    }
     pub fn reset(&mut self) {
         self.versions = None;
         self.attachments.reset();
         self.camera = None;
-        self.look = None;
+        self.pointer = CameraPointer::default();
         self.sun = None;
         self.fill = None;
         self.lights.clear();
@@ -306,7 +297,13 @@ impl Scene {
         if let Some((history, _)) = &mut self.camera {
             history.update(w, next_tick, parent_changed);
         }
-        self.feed_look(w, next_tick, structure || parent_changed, parent_changed);
+        self.pointer.feed(
+            w,
+            self.camera.map(|(h, _)| h.entity),
+            next_tick,
+            structure,
+            parent_changed,
+        );
         let visibility_changed = old.is_none_or(|v| v[6] != versions[6]) || parent_changed;
         if old.is_none_or(|v| v[1] != versions[1]) || structure || visibility_changed {
             // The first two posed directional lights: the sun, then a fill.
@@ -456,53 +453,6 @@ impl Scene {
         }
         self.versions = Some(versions);
     }
-    pub(super) fn has_look(&self) -> bool {
-        self.look.is_some()
-    }
-    // The camera's MouseLook and the histories of everything under it, kept as
-    // the camera's own is; the descendants are found again when the hierarchy
-    // or the component changes.
-    fn feed_look(&mut self, w: &World, next_tick: bool, changed: bool, parent_changed: bool) {
-        let camera = self.camera.map(|(h, _)| h.entity);
-        let Some((camera, look)) =
-            camera.and_then(|e| w.get::<exact_game::MouseLook>(e).map(|l| (e, *l)))
-        else {
-            self.look = None;
-            return;
-        };
-        let revision = w.revision::<exact_game::MouseLook>();
-        if changed || self.look.as_ref().is_none_or(|(_, r, _)| *r != revision) {
-            let old = self.look.take().map_or_else(Vec::new, |(_, _, kids)| kids);
-            let mut kids = Vec::new();
-            for (e, _) in w.query::<&Parent>().iter() {
-                let mut at = e;
-                for _ in 0..=w.len() {
-                    let Some(parent) = w.get::<Parent>(at).map(|p| p.0) else {
-                        break;
-                    };
-                    if parent == camera {
-                        if let Some(t) = pose(w, e) {
-                            kids.push(
-                                old.iter()
-                                    .copied()
-                                    .find(|h| h.entity == e)
-                                    .unwrap_or(History::new(e, t)),
-                            );
-                        }
-                        break;
-                    }
-                    at = parent;
-                }
-            }
-            self.look = Some((look, revision, kids));
-        }
-        if let Some((current, _, kids)) = &mut self.look {
-            *current = look;
-            for h in kids {
-                h.update(w, next_tick, parent_changed);
-            }
-        }
-    }
     pub fn frame(
         &mut self,
         w: &World,
@@ -520,34 +470,8 @@ impl Scene {
                         c,
                     )
                 });
-        // MouseLook: the drawn camera and everything under it turn about the eye
-        // by the motion no drawn tick shows yet. Presentation only.
-        let motion = std::mem::take(&mut self.unshown);
-        if let Some((look, _, kids)) = self.look.as_ref().filter(|_| motion != glam::Vec2::ZERO) {
-            let turn = look.turn(camera_pose.rotation, motion);
-            let eye = camera_pose.position;
-            let about =
-                Mat4::from_translation(eye) * Mat4::from_quat(turn) * Mat4::from_translation(-eye);
-            camera_pose.rotation = (turn * camera_pose.rotation).normalize();
-            for h in kids {
-                let out = &mut self.attachments.output;
-                let matrix = about * displayed_matrix(out, h.entity, h.at(alpha));
-                let (scale, rotation, position) = matrix.to_scale_rotation_translation();
-                let turned = DisplayedAttachment {
-                    entity: h.entity,
-                    pose: Transform {
-                        scale,
-                        rotation,
-                        position,
-                    },
-                    matrix,
-                };
-                match out.iter_mut().find(|a| a.entity == h.entity) {
-                    Some(a) => *a = turned,
-                    None => out.push(turned),
-                }
-            }
-        }
+        self.pointer
+            .frame(&mut camera_pose, &mut self.attachments.output, alpha);
         if !pixels {
             if let exact_game::Projection::Orthographic { integer_scale, .. } =
                 &mut camera.projection

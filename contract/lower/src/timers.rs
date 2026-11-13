@@ -21,8 +21,18 @@ impl Lowerer<'_> {
                 TaskKind::Every => "every",
                 TaskKind::After => "after",
                 TaskKind::Frame => "frame",
+                TaskKind::Change => "change",
             };
-            let id = if t.kind == TaskKind::Frame {
+            let id = if t.kind == TaskKind::Change {
+                if t.key.is_none() || !t.options.is_empty() {
+                    return Err(err_one(
+                        "lower-change-task",
+                        "`change(action)` requires `task NAME [when COND] key=EXPR` and takes no scheduling options",
+                        t.span,
+                    ));
+                }
+                self.b.change_task(action)
+            } else if t.kind == TaskKind::Frame {
                 self.b.frame_timer(action)
             } else {
                 let Expr::Number(ms, _) = &t.timer.0 else {

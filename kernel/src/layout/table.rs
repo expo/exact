@@ -70,21 +70,21 @@ const LINES: u16 = i16::MAX as u16;
 fn anonymous(
     columns: u32,
     direction: taffy::style::Direction,
-    spacing: f32,
+    (across, down): (f32, f32),
 ) -> taffy::style::Style {
     let mut s = taffy::style::Style {
         display: taffy::style::Display::Grid,
         item_is_table: true,
         direction,
         padding: taffy::geometry::Rect {
-            left: length(spacing),
-            right: length(spacing),
-            top: length(spacing),
-            bottom: length(spacing),
+            left: length(across),
+            right: length(across),
+            top: length(down),
+            bottom: length(down),
         },
         gap: taffy::geometry::Size {
-            width: length(spacing),
-            height: length(spacing),
+            width: length(across),
+            height: length(down),
         },
         ..Default::default()
     };
@@ -481,7 +481,7 @@ impl LayoutTree {
                 let grid = anonymous(
                     formed.columns,
                     style.direction,
-                    crate::style::table::spacing(arena.style(table)),
+                    crate::style::table::spacing(arena.style(table), arena.env()),
                 );
                 let anon = match anon {
                     Some(anon) => {

@@ -35,6 +35,8 @@ mod arrange_group_tests;
 mod arrange_tests;
 #[path = "canvas2d.rs"]
 pub(crate) mod canvas2d;
+#[path = "canvas_performance.rs"]
+mod canvas_performance;
 #[path = "colors.rs"]
 mod colors;
 #[path = "content_region/host.rs"]
@@ -118,6 +120,11 @@ mod svg_lower;
 #[cfg(test)]
 #[path = "svg_tests.rs"]
 mod svg_tests;
+#[path = "timeline_scroll.rs"]
+mod timeline_scroll;
+#[cfg(test)]
+#[path = "timeline_scroll_tests.rs"]
+mod timeline_scroll_tests;
 #[path = "transform_drag.rs"]
 mod transform_drag;
 #[path = "transform_drag_wire.rs"]
@@ -155,6 +162,7 @@ pub(crate) struct Mirror {
     children: Box<[ViewId]>,
     frame: Option<(f32, f32, f32, f32)>,
     content: Option<(f32, f32)>,
+    fit_height: Option<f32>,
     flow: Box<[exact_kernel::FlowShape]>,
     /// Boxed: only a text field has one, and inline it was a quarter of the mirror.
     field_content: Option<Box<crate::batch::ContentBox>>,
@@ -167,6 +175,10 @@ pub(crate) struct Mirror {
 
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
+    pub(crate) preloads: Option<crate::launch_preloads::LaunchPreloads>,
+    boot_requests: Vec<RequestOut>,
+    preload_content: Vec<String>,
+    preload_accepted: bool,
     runner: Runner<D>,
     admitting_frame: bool,
     font_hook: Option<(crate::measure::FontsFn, *mut std::ffi::c_void, usize)>,
@@ -206,6 +218,8 @@ pub struct Host<D: DataSource> {
     fit_routes: Vec<(ViewId, Option<[f32; 10]>)>,
     /// Each sticky node's constraint as the presenter last heard it (LLP 1083).
     stickies: IdMap<ViewId, exact_kernel::StickyConstraint>,
+    /// The scrollers scroll and view timelines read (LLP 1057.003 D5).
+    timeline_scrolls: timeline_scroll::TimelineScrolls,
     /// Each multi-column record as the presenter last heard it (LLP 1093 D7).
     fragments: IdMap<ViewId, String>,
     ranks: IdMap<ViewId, i64>,
@@ -431,8 +445,10 @@ impl<D: DataSource> Host<D> {
         }
         let plan = plan_bytes.decode().map_err(HostError::Plan)?;
         let entry_props = match plan_bytes {
-            PlanBytes::Entry(_, _, Some(bytes)) => {
-                Some(snapshot::props(&plan, bytes).map_err(HostError::Layout)?)
+            PlanBytes::Entry(_, _, props, configuration)
+                if props.is_some() || configuration.is_some() =>
+            {
+                Some(snapshot::slots(&plan, props, configuration).map_err(HostError::Layout)?)
             }
             _ => None,
         };
@@ -513,7 +529,17 @@ impl<D: DataSource> Host<D> {
             .nodes
             .iter()
             .any(|n| n.node_type == NodeType::Head as u8);
+        let preloads = links.io.and_then(|io| (io.preloads)());
+        let (boot_requests, preload_content) = preloads
+            .as_ref()
+            .map(|p| p.settle(&mut runner))
+            .transpose()?
+            .unwrap_or_default();
         let mut host = Host {
+            preloads,
+            boot_requests,
+            preload_content,
+            preload_accepted: false,
             has_heads,
             head_title: None,
             head_edited: false,
@@ -538,6 +564,7 @@ impl<D: DataSource> Host<D> {
             in_advance: false,
             fit_routes: Vec::new(),
             stickies: IdMap::default(),
+            timeline_scrolls: Default::default(),
             fragments: IdMap::default(),
             ranks: IdMap::default(),
             roots: Vec::new(),
@@ -668,6 +695,10 @@ impl<D: DataSource> Host<D> {
             self.runner.log(note);
         }
         self.persist();
+        self.preload_accepted = true;
+        if let Some(preloads) = &self.preloads {
+            preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
+        }
     }
 
     /// The runner.
@@ -806,9 +837,10 @@ impl<D: DataSource> Host<D> {
         self.runner.release_work()
     }
 
-    /// The hosts the app may reach (LLP 1016 D6), as the data crate declares them.
+    /// The hosts the app may reach (LLP 1016 D6): the data crate's grants and
+    /// the origins its declared sources carry (LLP 1162.001 D3).
     pub fn grants(&mut self) -> String {
-        self.runner.data().grants().to_string()
+        self.runner.grants()
     }
 
     /// The app's `app:/data`, `app:/cache` and `app:/tmp`, as storage
@@ -832,7 +864,9 @@ impl<D: DataSource> Host<D> {
     /// The requests the runner handed out since the last take (LLP 1016 D2):
     /// the bridge gives them to the executor; nothing reaches the presenter.
     pub fn take_requests(&mut self) -> Vec<RequestOut> {
-        self.runner.take_requests()
+        let mut requests = std::mem::take(&mut self.boot_requests);
+        requests.extend(self.runner.take_requests());
+        requests
     }
 
     /// Admission failures remain on the runner's current tickets, not a queue.
@@ -1127,31 +1161,6 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    /// The viewport's change into `batch`, after what it holds (`set_view`).
-    fn resize_inner(
-        &mut self,
-        width: f32,
-        height: f32,
-        mut batch: Batch,
-        error: Option<String>,
-    ) -> String {
-        let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
-                                               // @ref LLP 1039 D2 — merge re-answer and relayout, once.
-        let receipt = match self.runner.set_viewport(width as f64, height as f64) {
-            Ok(receipt) => receipt,
-            Err(e) => return self.finish(batch, error.or(Some(format!("viewport: {e:?}")))),
-        };
-        self.viewport = (width, height);
-        self.height_targets_dirty = true;
-        self.presence.snap = true;
-        if let Some(receipt) = receipt {
-            let at_ms = self.now_ms;
-            return self.commit_into(&[Timed { at_ms, receipt }], error, batch);
-        }
-        let laid_out = self.layout(&mut batch).err();
-        self.finish(batch, error.or(laid_out))
-    }
-
     /// Content has settled: the tree and the motion engine give back what
     /// they hold beyond the live nodes ([`exact_kernel::Kernel::trim`]).
     pub fn trim(&mut self) {
@@ -1181,7 +1190,15 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    fn finish(&mut self, batch: Batch, error: Option<String>) -> String {
+    fn finish(&mut self, mut batch: Batch, error: Option<String>) -> String {
+        // A host's fact laid out again (a native control's measured size, an
+        // inset, the text size): a box already moving was retargeted from where
+        // it shows, and its new frame and offset go in one batch. Without the
+        // offset the presenter showed the new frame with the old offset until
+        // the next tick, which then put the box back where it started (#134).
+        if self.presence.unauthored {
+            self.present(&mut batch, false);
+        }
         // Clear the mark first: the resize handlers below commit the app's own moves
         self.presence.unauthored = false;
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
@@ -1290,6 +1307,7 @@ impl<D: DataSource> Host<D> {
             let seek = self.engine.advance(self.engine_time(t.at_ms));
             debug_assert!(seek.is_ok(), "the clock never runs backwards here");
             let mut sync = self.runner.kernel().motion_sync(&t.receipt);
+            self.presence.looks.apply(self.runner.kernel(), &mut sync);
             self.spare_exits(&mut sync);
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");

@@ -107,19 +107,7 @@ fn take(
     found: &mut Vec<(usize, Attr)>,
     errors: &mut Vec<CompileError>,
 ) {
-    let (attrs, children): (Option<&mut Vec<Attr>>, Vec<&mut Vec<Node>>) = match node {
-        Node::Element {
-            attrs, children, ..
-        } => (Some(attrs), vec![children]),
-        Node::Use { children, .. } => (None, vec![children]),
-        Node::Children { .. } => (None, Vec::new()),
-        Node::When {
-            then, otherwise, ..
-        } => (None, vec![then, otherwise]),
-        Node::Each { body, .. } => (None, vec![body]),
-        Node::Match { some, none, .. } => (None, vec![&mut some.1, none]),
-    };
-    if let Some(attrs) = attrs {
+    if let Node::Element { attrs, .. } = node {
         let mut i = 0;
         while i < attrs.len() {
             let attr = &attrs[i];
@@ -146,7 +134,7 @@ fn take(
             }
         }
     }
-    for list in children {
+    for list in node.child_lists_mut() {
         for child in list.iter_mut() {
             take(child, events, scopes, false, found, errors);
         }

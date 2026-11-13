@@ -16,7 +16,7 @@ const { unavailable } = chromium(), chromeTest = need('chrome', unavailable);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // The real `redirectOf` and `ownWithout`, for a stub `admission.js` written beside a module under test
-const realHelpers = `export { ownWithout, redirectOf, signalDeadline, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
+const realHelpers = `export { ownWithout, redirectOf, signalDeadline, socketProtocols, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
 const sets = new Map();
 const normalizers = new Map();
 function builtNormalizer(target, run = spawnSync) {
@@ -678,6 +678,11 @@ test('the JS target checks and takes the redirect mode once, as fetch is called'
     });
     void appFetch('https://x.test/events', inherited);
     expect([answering.call.stream.init === inherited, answering.call.stream.redirect, reads]).toEqual([true, 'manual', 1]);
+    answering.call = { turn: true }; reads = 0;
+    const withProtocols = Object.create(inherited, { exactProtocols: { value: ['events.v1'] } });
+    void appFetch('wss://x.test/events', withProtocols);
+    expect([answering.call.stream.init.method, answering.call.stream.init.exactStream, answering.call.stream.redirect, reads])
+      .toEqual(['POST', inherited.exactStream, 'manual', 1]);
     // An upload reads it once too, and sends the mode it read
     reads = 0;
     const once = { method: 'POST', exactBodyFrom: 'app:/data/p.jpg', get redirect() { if (reads++) throw new Error('read twice'); return 'manual'; } };
@@ -685,7 +690,6 @@ test('the JS target checks and takes the redirect mode once, as fetch is called'
     expect([globalThis.redirectSent, reads]).toEqual(['manual', 1]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-
 // @ref LLP 1108 D6 R2 — `exactBodyFrom` on the JS target: the app file is the
 // request's body, read from the page's store as a Blob (a picked entry is its
 // own File), with no Content-Type but the author's; a missing file and a path
@@ -761,7 +765,6 @@ export const answer: Answer = (source, args, store, storage, native) => sources[
     rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);
-
 // @ref LLP 1069.002 D7 — an `image` shows a file the app keeps in `app:/data`
 // on the JS target, bound or literal, and again after the page reloads
 // (recipes F9, gallery F7): the web host's file store, as an object URL.
@@ -797,7 +800,6 @@ chromeTest('an app:/data image shows from the page\'s store, after a reload too'
     rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);
-
 test("glue.js's grants arm keeps auth lines from a malformed I/O declaration and freezes the set", async () => {
   const source = hostFixtureFile(new URL('./glue.js', import.meta.url), 'utf8');
   const arm = glueCase(source, 'grants');
@@ -815,7 +817,6 @@ test("glue.js's grants arm keeps auth lines from a malformed I/O declaration and
   expect(state.loads).toEqual(['./auth-glue.js']);
   expect([Object.isFrozen(state.grantSet), Object.isFrozen(state.grantSet.entries)]).toEqual([true, true]);
 });
-
 test("glue.js surface admission uses a valid raw child line even when another I/O line is malformed", () => {
   const source = hostFixtureFile(new URL('./glue.js', import.meta.url), 'utf8');
   const declaration = source.match(/function surfaceGranted\(op\) \{[^]*?\n\}/)[0];
@@ -825,7 +826,6 @@ test("glue.js surface admission uses a valid raw child line even when another I/
   expect(admitted(grants, { mode: 'capture', name: 'world', scope: null })).toBe(true);
   expect(admitted(grants, { mode: 'capture', name: 'world', scope: 'surface.read elsewhere' })).toBe(false);
 });
-
 test('rust-data decodes an ABI child scope before the production executor refuses its parent-granted origin', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-data-'));
   const grants = 'net.fetch https://api.example\nnet.fetch https://outside.example\nsecret.keep token', set = normalized(grants);
@@ -840,10 +840,10 @@ test('rust-data decodes an ABI child scope before the production executor refuse
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(7); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(8); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
-    memory, exact_logic_abi: () => 7, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 8, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
@@ -973,7 +973,7 @@ export function answer(name, args, store, storage) {
     const stream = data.answer('stream', [], new Map());
     expect(await stream.stream(() => {}, new AbortController())).toEqual({ v: "error Refused: outside the app's grants (net.websocket)" });
     const { fetch } = await import(pathToFileURL(resolve(dir, 'ts-fetch.js')).href);
-    await expect(fetch('wss://a.example', { exactStream: e => e })).rejects.toThrow('before the answer\'s first await');
+    await expect(fetch('wss://a.example', { exactStream: e => e })).rejects.toThrow("a stream starts in its answer's own turns");
   } finally {
     delete globalThis.location;
     rmSync(dir, { recursive: true, force: true });

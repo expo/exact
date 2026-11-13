@@ -1,7 +1,7 @@
 //! What a button or a role promises a person and VoiceOver, and the
 //! element does not keep (LLP 1116.004 D4): a button with nothing to say,
 //! a button in a button, and a dialog's role on a box; and a heading's
-//! level with no heading (LLP 1115.000 D12.5).
+//! level with no heading (LLP 1115.000 D12.5), and a bar with only one tab.
 
 use super::{computed, has, literal, BOXES};
 use crate::LowerError;
@@ -67,12 +67,13 @@ fn says(nodes: &[Node], in_svg: bool) -> Says {
                     _ => Says::Words,
                 }
             }
-            Node::When {
-                then, otherwise, ..
-            } => says(then, in_svg).max(says(otherwise, in_svg)),
-            Node::Each { body, .. } => says(body, in_svg),
-            Node::Match { some, none, .. } => says(&some.1, in_svg).max(says(none, in_svg)),
             Node::Use { .. } | Node::Children { .. } => Says::Words,
+            node => node
+                .child_lists()
+                .into_iter()
+                .map(|list| says(list, in_svg))
+                .max()
+                .unwrap_or(Says::Nothing),
         })
         .max()
         .unwrap_or(Says::Nothing)
@@ -135,12 +136,8 @@ fn inner_button(nodes: &[Node]) -> Option<Span> {
         } => (tag == "button")
             .then_some(*span)
             .or_else(|| inner_button(children)),
-        Node::When {
-            then, otherwise, ..
-        } => inner_button(then).or_else(|| inner_button(otherwise)),
-        Node::Each { body, .. } => inner_button(body),
-        Node::Match { some, none, .. } => inner_button(&some.1).or_else(|| inner_button(none)),
         Node::Use { .. } | Node::Children { .. } => None,
+        node => node.child_lists().into_iter().find_map(inner_button),
     })
 }
 

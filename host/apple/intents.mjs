@@ -10,11 +10,12 @@
 // the SwiftPM build, not inside it, and needs no ExactKit module to compile
 // against.
 import { resolve } from 'node:path';
-import { existsSync, mkdirSync, rmSync, writeFileSync, cpSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { intentsMetadata as emittedIntentsMetadata } from './intents-metadata.mjs';
+import { extensionModuleCache } from './extensions.mjs';
 
-const toolchain = '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
 const gathered = ['AppIntent', 'EntityQuery', 'AppEntity', 'TransientEntity', 'AppEnum', 'AppShortcutProviding', 'AppShortcutsProvider',
   'AnyResolverProviding', 'AppIntentsPackage', 'DynamicOptionsProvider', 'OpenIntent', 'EntityStringQuery'];
@@ -68,13 +69,18 @@ enum ExactDoor {
         var localizedStringResource: LocalizedStringResource { "\\(message)" }
     }
 
-    /// Hands the host a call and awaits its answer (LLP 1111 D4's envelope).
+    /// Hands the host a call and awaits its answer (LLP 1111 D4's envelope). The system's cancellation of the
+    /// intent's task is the caller's: the host drops a call still waiting and lets one that runs finish (LLP 1133.023 D7).
     @MainActor static func call(_ tool: String, _ args: [String: Any], digest: String) async throws -> [String: Any] {
-        let answer: [String: Any] = await withCheckedContinuation { done in
-            let body = NSMutableDictionary(dictionary: ["tool": tool, "args": args, "door": "apple", "digest": digest])
-            body["reply"] = { (answer: [String: Any]) in done.resume(returning: answer) }
-            NotificationCenter.default.post(name: Notification.Name("exact.tools.call"), object: body)
-            if body["taken"] as? Bool != true { done.resume(returning: ["outcome": "refused", "message": "This app has no tool door."]) }
+        let body = NSMutableDictionary(dictionary: ["tool": tool, "args": args, "door": "apple", "digest": digest])
+        let answer: [String: Any] = await withTaskCancellationHandler {
+            await withCheckedContinuation { done in
+                body["reply"] = { (answer: [String: Any]) in done.resume(returning: answer) }
+                NotificationCenter.default.post(name: Notification.Name("exact.tools.call"), object: body)
+                if body["taken"] as? Bool != true { done.resume(returning: ["outcome": "refused", "message": "This app has no tool door."]) }
+            }
+        } onCancel: {
+            NotificationCenter.default.post(name: Notification.Name("exact.tools.cancel"), object: body)
         }
         guard answer["outcome"] as? String == "ok" else {
             let message = answer["message"] as? String ?? ""
@@ -143,8 +149,9 @@ struct Open${T}: OpenIntent {
   }
   for (const { signature, face } of faces) {
     const T = typeName(signature.name);
-    const params = signature.parameters.map(([name, planType]) => ({ name, ...swiftType(planType, face.parameters?.[name]), title: face.parameters?.[name]?.title ?? name }));
-    const fields = params.map(p => `    @Parameter(title: ${literal(p.title)}) var ${p.name}: ${p.type}${p.optional ? '?' : ''}`).join('\n');
+    const params = signature.parameters.map(([name, planType]) => ({ name, ...swiftType(planType, face.parameters?.[name]), title: face.parameters?.[name]?.title ?? name,
+      description: face.parameters?.[name]?.description }));
+    const fields = params.map(p => `    @Parameter(title: ${literal(p.title)}${p.description ? `, description: ${literal(p.description)}` : ''}) var ${p.name}: ${p.type}${p.optional ? '?' : ''}`).join('\n');
     const value = (p) => p.entity ? `${p.name}${p.optional ? '?' : ''}.id` : p.name;
     const args = params.length ? `[${params.map(p => `${literal(p.name)}: ${p.optional ? `${value(p)} as Any? ?? NSNull()` : value(p)}`).join(', ')}]` : '[:]';
     out.push(`
@@ -194,6 +201,45 @@ export function shortcutKeys(app, platform) {
     UIApplicationShortcutItemUserInfo: { url: item.url } })) };
 }
 
+/** The compiler flags that write the constant values the metadata pass reads, into `values`. */
+export const constValueArgs = (values, dir) => {
+  writeFileSync(resolve(dir, 'protocols.json'), JSON.stringify(gathered));
+  return ['-emit-const-values-path', values, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', resolve(dir, 'protocols.json')];
+};
+
+const xcrunFind = tool => spawnSync('xcrun', ['--find', tool], { encoding: 'utf8' });
+
+/** Xcode's App Intents metadata pass over a compiled module: writes `dir/Metadata.appintents`, which the bundle
+ * that holds the binary carries in its resources, or throws. The processor is the one of the Xcode that compiled
+ * the module, found as `swiftc` is (`xcrun` honours `DEVELOPER_DIR` and `xcode-select`); its toolchain is the
+ * directory that holds its `usr/bin`. */
+export function intentsMetadata({ moduleName, dir, sdk, triple, platform, deployment, binary, sources, values, runApple, find = xcrunFind }) {
+  const metadata = resolve(dir, 'Metadata.appintents');
+  // Linux has no Xcode and no processor: the portable emitter writes the same file from the module's constant values.
+  if (process.platform === 'linux') {
+    const major = parseInt(JSON.parse(readFileSync(resolve(sdk, 'SDKSettings.json'), 'utf8')).Version);
+    const actions = emittedIntentsMetadata(JSON.parse(readFileSync(values, 'utf8')), major, { module: moduleName });
+    mkdirSync(metadata, { recursive: true });
+    writeFileSync(resolve(metadata, 'extract.actionsdata'), JSON.stringify(actions));
+    writeFileSync(resolve(metadata, 'version.json'), JSON.stringify({ toolsVersion: 'exact-1', version: '3.0' }));
+    return metadata;
+  }
+  const found = find('appintentsmetadataprocessor'), processor = found.status === 0 ? found.stdout.trim() : '';
+  if (!processor) throw new Error(`host/apple: intents: xcrun finds no appintentsmetadataprocessor: ${(found.stderr ?? found.error?.message ?? '').trim()}`);
+  const toolchain = resolve(processor, '../../..');
+  writeFileSync(resolve(dir, 'sources.txt'), sources.join('\n') + '\n');
+  writeFileSync(resolve(dir, 'values.txt'), values + '\n');
+  writeFileSync(resolve(dir, 'none.txt'), '');
+  const xcode = /Build version (\S+)/.exec(spawnSync('xcodebuild', ['-version'], { encoding: 'utf8' }).stdout ?? '')?.[1] ?? '';
+  runApple(processor, ['--toolchain-dir', toolchain, '--module-name', moduleName, '--sdk-root', sdk,
+    '--xcode-version', xcode, '--platform-family', platform === 'macos' ? 'macOS' : platform === 'watchos' ? 'watchOS' : 'iOS', '--deployment-target', deployment, '--target-triple', triple,
+    '--output', dir, '--binary-file', binary, '--source-file-list', resolve(dir, 'sources.txt'), '--swift-const-vals-list', resolve(dir, 'values.txt'),
+    '--metadata-file-list', resolve(dir, 'none.txt'), '--static-metadata-file-list', resolve(dir, 'none.txt'),
+    '--compile-time-extraction', '--deployment-aware-processing', '--no-app-shortcuts-localization'], { stdio: 'ignore' });
+  if (!existsSync(resolve(metadata, 'extract.actionsdata'))) throw new Error(`host/apple: intents: the metadata pass wrote no ${metadata}/extract.actionsdata`);
+  return metadata;
+}
+
 /** The floor of what the generated code uses: App Shortcuts' short titles and symbols are iOS 17 and macOS 14 (D17). */
 const floor = { ios: 17, macos: 14 };
 
@@ -206,29 +252,20 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
   if (!faces.length) return null;
   if (parseFloat(deployment) < floor[platform]) throw new Error(`host/apple: intents: a faced tool needs ${platform === 'ios' ? 'iOS' : 'macOS'} ${floor[platform]} or later, and app.json's host.${platform}.minimumOS is ${deployment}`);
   const source = intentsSource(faces, app.manifest.intents?.entities ?? {});
-  const digest = createHash('sha256').update(JSON.stringify([source, swiftc, triple, sdk])).digest('hex').slice(0, 16);
+  const emitter = process.platform === 'linux' ? readFileSync(new URL('./intents-metadata.mjs', import.meta.url)) : '';
+  const digest = createHash('sha256').update(JSON.stringify([source, swiftc, triple, sdk])).update(emitter).digest('hex').slice(0, 16);
   const dir = resolve(directory, digest), object = resolve(dir, 'ExactIntents.o'), metadata = resolve(dir, 'Metadata.appintents');
   if (!existsSync(resolve(metadata, 'extract.actionsdata'))) {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     const file = resolve(dir, 'ExactIntents.swift'), values = resolve(dir, 'ExactIntents.swiftconstvalues');
     writeFileSync(file, source);
-    writeFileSync(resolve(dir, 'protocols.json'), JSON.stringify(gathered));
     const started = Date.now();
     runApple('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-wmo', '-O', '-swift-version', '5', '-module-name', 'ExactIntents',
-      '-module-cache-path', resolve(directory, 'module-cache'), '-target', triple, '-sdk', sdk,
-      '-emit-const-values-path', values, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', resolve(dir, 'protocols.json'),
+      '-module-cache-path', extensionModuleCache, '-target', triple, '-sdk', sdk,
+      ...constValueArgs(values, dir),
       '-c', file, '-o', object]);
-    writeFileSync(resolve(dir, 'sources.txt'), file + '\n');
-    writeFileSync(resolve(dir, 'values.txt'), values + '\n');
-    writeFileSync(resolve(dir, 'none.txt'), '');
-    const xcode = /Build version (\S+)/.exec(spawnSync('xcodebuild', ['-version'], { encoding: 'utf8' }).stdout ?? '')?.[1] ?? '';
-    runApple(resolve(toolchain, 'usr/bin/appintentsmetadataprocessor'), ['--toolchain-dir', toolchain, '--module-name', 'ExactIntents', '--sdk-root', sdk,
-      '--xcode-version', xcode, '--platform-family', platform === 'macos' ? 'macOS' : 'iOS', '--deployment-target', deployment, '--target-triple', triple,
-      '--output', dir, '--binary-file', object, '--source-file-list', resolve(dir, 'sources.txt'), '--swift-const-vals-list', resolve(dir, 'values.txt'),
-      '--metadata-file-list', resolve(dir, 'none.txt'), '--static-metadata-file-list', resolve(dir, 'none.txt'),
-      '--compile-time-extraction', '--deployment-aware-processing', '--no-app-shortcuts-localization'], { stdio: 'ignore' });
-    if (!existsSync(resolve(metadata, 'extract.actionsdata'))) throw new Error(`host/apple: intents: the metadata pass wrote no ${metadata}/extract.actionsdata`);
+    intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
     console.log(`host/apple: intents: ${faces.length} faced tool${faces.length === 1 ? '' : 's'} compiled with their metadata (${Date.now() - started} ms)`);
   }
   return {

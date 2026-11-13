@@ -12,7 +12,7 @@ include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 // The packages' Linux implementations the build composes (`exact_packages()`).
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 fn main() {
-    let composed = exact_linux::Composed {
+    let composed = exact_painted::Composed {
         packages: exact_packages(),
         ..Default::default()
     };

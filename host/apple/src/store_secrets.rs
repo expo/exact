@@ -8,6 +8,7 @@ impl Backend for SecretBackend {
         self.0.get(name).map_err(|error| error.to_string())
     }
     fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        crate::launch_preloads::drop_secret(name);
         match value {
             Some(value) => self.0.set(name, value),
             None => self.0.forget(name),
@@ -54,4 +55,43 @@ pub(super) fn secret_directory(app: &str) -> Option<std::path::PathBuf> {
         .then(|| crate::picker::agent_secret_root(app))
         .flatten()
         .map(|root| root.join("secrets"))
+}
+
+/// Read only plain secrets named by launch definitions, once each (LLP 1162.000 D2).
+pub(crate) fn launch_secrets(
+    grants: &str,
+    app: &str,
+    definitions: &[exact_runner::request::Preload],
+) -> std::collections::BTreeMap<String, String> {
+    let Ok(bindings) = super::endow_for(grants, app) else {
+        return Default::default();
+    };
+    read_launch_secrets(&bindings, grants, definitions)
+}
+
+pub(crate) fn read_launch_secrets(
+    bindings: &ibex2::host::Bindings,
+    grants: &str,
+    definitions: &[exact_runner::request::Preload],
+) -> std::collections::BTreeMap<String, String> {
+    let guarded: std::collections::BTreeSet<_> = crate::presence_secrets::lines(grants)
+        .into_iter()
+        .filter_map(|(name, policy)| policy.map(|_| name))
+        .collect();
+    let names: std::collections::BTreeSet<_> = definitions
+        .iter()
+        .flat_map(|d| d.secrets.iter().copied())
+        .collect();
+    let backend = SecretBackend(bindings.secrets.clone(), None);
+    names
+        .into_iter()
+        .filter(|name| !guarded.contains(*name))
+        .filter_map(|name| {
+            backend
+                .read(name)
+                .ok()
+                .flatten()
+                .map(|value| (name.into(), value))
+        })
+        .collect()
 }

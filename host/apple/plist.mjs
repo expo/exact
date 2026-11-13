@@ -5,6 +5,67 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 
+// Python's standard plistlib handles Apple's XML and binary encodings on a Linux builder.
+const PLIST_TOOL = String.raw`
+import base64, datetime, json, pathlib, plistlib, re, sys
+
+def json_value(value):
+    if isinstance(value, bytes): return base64.b64encode(value).decode('ascii')
+    if isinstance(value, datetime.datetime): return value.isoformat() + ('Z' if value.tzinfo is None else '')
+    raise ValueError('unsupported plist value')
+
+def main(args):
+    operation = args.pop(0)
+    key = args.pop(0) if operation in ['-extract', '-insert', '-replace', '-remove'] else None
+    kind = args.pop(0) if operation in ['-convert', '-extract', '-insert', '-replace'] else None
+    value = args.pop(0) if operation in ['-insert', '-replace'] else None
+    output = None
+    if '-o' in args:
+        at = args.index('-o'); output = args[at + 1]; del args[at:at + 2]
+    if args[:1] == ['--']: args.pop(0)
+    if len(args) != 1: raise ValueError('expected one plist file')
+    path = pathlib.Path(args[0]); data = sys.stdin.buffer.read() if args[0] == '-' else path.read_bytes()
+    try: document = plistlib.loads(data)
+    except plistlib.InvalidFileException: document = json.loads(data)
+    result = document
+    if key is not None:
+        keys = [word.replace(r'\.', '.').replace(r'\\', '\\') for word in re.split(r'(?<!\\)\.', key)]
+        parent = document
+        for word in keys[:-1]: parent = parent[int(word) if isinstance(parent, list) else word]
+        leaf = int(keys[-1]) if isinstance(parent, list) else keys[-1]
+        if operation == '-extract': result = parent[leaf]
+        elif operation == '-remove': del parent[leaf]
+        else:
+            if operation == '-insert' and not isinstance(parent, list) and leaf in parent: raise ValueError('key already exists')
+            if kind == '-string': parsed = value
+            elif kind == '-bool':
+                if value.lower() not in ['true', 'false', 'yes', 'no', '1', '0']: raise ValueError('invalid boolean')
+                parsed = value.lower() in ['true', 'yes', '1']
+            elif kind == '-integer': parsed = int(value)
+            elif kind == '-float': parsed = float(value)
+            elif kind == '-json': parsed = json.loads(value)
+            else: raise ValueError('unsupported plist mutation type')
+            if operation == '-insert' and isinstance(parent, list): parent.insert(leaf, parsed)
+            else: parent[leaf] = parsed
+    if operation not in ['-convert', '-extract', '-insert', '-replace', '-remove']: raise ValueError('unsupported plist operation')
+    if operation in ['-insert', '-replace', '-remove']:
+        fmt = plistlib.FMT_BINARY if data.startswith(b'bplist') else plistlib.FMT_XML
+        path.write_bytes(plistlib.dumps(document, fmt=fmt, sort_keys=False)); return
+    if kind == 'json': encoded = json.dumps(result, default=json_value, ensure_ascii=False, allow_nan=False).encode()
+    elif kind in ['xml1', 'binary1']: encoded = plistlib.dumps(result, fmt=plistlib.FMT_XML if kind == 'xml1' else plistlib.FMT_BINARY, sort_keys=False)
+    elif kind == 'raw' and isinstance(result, (str, int, float, bool)):
+        encoded = (str(result).lower() if isinstance(result, bool) else str(result)).encode()
+    else: raise ValueError('unsupported plist output type')
+    if output == '-': sys.stdout.buffer.write(encoded)
+    else: pathlib.Path(output or path).write_bytes(encoded)
+
+try: main(sys.argv[1:])
+except Exception as error:
+    print('plist: ' + str(error), file=sys.stderr); sys.exit(1)
+`;
+
+export const plistCommand = args => ['python3', ['-c', PLIST_TOOL, ...args]];
+
 // The global exceptions narrower than `NSAllowsArbitraryLoads`: ATS ignores that key when any of them is present
 // (Apple, "NSAllowsArbitraryLoads"), and it already allows what each of them would.
 const NARROWER = ['NSAllowsArbitraryLoadsForMedia', 'NSAllowsArbitraryLoadsInWebContent', 'NSAllowsLocalNetworking'];
@@ -48,6 +109,55 @@ export const startLocation = ({ manifest: { start_url: at }, origin: declared })
  * Mac's row is Exact's `ExactUserInterfaceStyle`, which ExactMac sets as `NSApp.appearance` before its first window. */
 export const interfaceStyle = ({ manifest: { userInterfaceStyle: style } }, mac = false) =>
   style === 'light' || style === 'dark' ? (mac ? { ExactUserInterfaceStyle: style } : { UIUserInterfaceStyle: style === 'dark' ? 'Dark' : 'Light' }) : {};
+
+/** Each value `categories` admits, with the category Apple files it under (`LSApplicationCategoryType`'s values,
+ * without `public.app-category.`), or null where Apple has none. The W3C's standardized categories (the manifest
+ * wiki's "Categories" page) come first; the rest are Apple's own, each a category the W3C list has no name for. The
+ * schema's enum is this list (`store-keys.test.mjs`). */
+export const CATEGORIES = new Map([
+  ...['business', 'education', 'entertainment', 'finance', 'games', 'lifestyle', 'medical', 'music', 'news', 'productivity', 'sports', 'travel', 'utilities', 'weather'].map((c) => [c, c]),
+  ['fitness', 'healthcare-fitness'], ['health', 'healthcare-fitness'], ['photo', 'photography'], ['social', 'social-networking'],
+  ...['books', 'food', 'government', 'kids', 'magazines', 'navigation', 'personalization', 'politics', 'security', 'shopping'].map((c) => [c, null]),
+  ...['developer-tools', 'graphics-design', 'reference', 'video'].map((c) => [c, c]),
+  ...['action', 'adventure', 'arcade', 'board', 'card', 'casino', 'dice', 'educational', 'family', 'kids', 'music', 'puzzle', 'racing', 'role-playing', 'simulation', 'sports', 'strategy', 'trivia', 'word'].map((g) => [`${g}-games`, `${g}-games`]),
+]);
+
+/** Apple's category for the manifest: its first `categories` entry Apple has one for, else `games` for a game the
+ * game shell builds (`game`), else none. */
+export function appleCategory({ categories = [], game }) {
+  const named = categories.map((c) => CATEGORIES.get(c)).find(Boolean);
+  return named ?? (game ? 'games' : null);
+}
+
+const atLeast = (version, floor) => {
+  const [a, b] = [String(version), floor].map((v) => v.split('.').map(Number));
+  return (a[0] - b[0] || (a[1] ?? 0) - (b[1] ?? 0) || (a[2] ?? 0) - (b[2] ?? 0)) >= 0;
+};
+
+/** The rows that file the app under its category and offer Game Mode, on `platform` (`ios` or `macos`).
+ * `LSApplicationCategoryType` is the category the Mac App Store, Finder and Launchpad file the app under, and the one
+ * App Store Connect requires of a Mac upload; Apple documents it for macOS, and the iOS bundle carries it too. Game
+ * Mode (Apple, "LSSupportsGameMode": iOS 18.6, macOS 26) gives a game priority on the CPU and GPU and lower Bluetooth
+ * latency, and a game without the key "might not" get it: so a game (an Apple category of `games` or a genre of game)
+ * is written `YES` unless `host.<platform>.gameMode` is false, and any app may ask for it. iOS 18.0 to 18.5 read
+ * `GCSupportsGameMode` instead, which an app whose `minimumOS` is below 18.6 carries too. */
+export function storeKeys({ manifest }, platform) {
+  const category = appleCategory(manifest), section = manifest.host?.[platform] ?? {};
+  const game = category === 'games' || !!category?.endsWith('-games');
+  const mode = section.gameMode ?? (game ? true : undefined);
+  const older = platform === 'ios' && mode !== undefined && !atLeast(section.minimumOS ?? '17.0', '18.6');
+  return { ...(category ? { LSApplicationCategoryType: `public.app-category.${category}` } : {}),
+    ...(mode !== undefined ? { LSSupportsGameMode: mode } : {}), ...(older ? { GCSupportsGameMode: mode } : {}) };
+}
+
+export const MEMORY_ENTITLEMENT = 'com.apple.developer.kernel.increased-memory-limit';
+
+/** `host.ios.increasedMemoryLimit`'s entitlement, which lets the app exceed the default memory limit on the iPhone
+ * and iPad models that allow it (Apple, "Increased Memory Limit", iOS 15). The app's own: not an extension's or an App
+ * Clip's, and not tvOS's, which Apple does not list for it. It is a capability of the App ID, so a device build's
+ * profile must grant it. */
+export const memoryEntitlements = (app) => app.manifest.host?.ios?.increasedMemoryLimit === true
+  && !app.widgetTV && !app.widgetHost && !app.widgetAppId && !app.clipParent ? [MEMORY_ENTITLEMENT] : [];
 
 /** When a downloaded update applies and how often the app checks (`deploy.activate`, `deploy.check.interval`). */
 export const updateActivation = (app) => ({ ...(app.manifest.deploy?.activate ? { ExactUpdateActivate: app.manifest.deploy.activate } : {}),
@@ -122,7 +232,8 @@ export const modulePlist = (app, reach, target, extensions, contractSources = []
   if (dictionaries.length) {
     const base = reach?.base ?? 'en', strings = JSON.parse(readFileSync(resolve(app.dir, `strings/${base}.json`), 'utf8'));
     for (const { extension, key, keys } of dictionaries) packages.push({ extension, key, value: Object.fromEntries(keys.map((k) => {
-      if (typeof strings[k] !== 'string') throw new Error(`host/apple: ${key} names "${k}", which strings/${base}.json lacks`);
+      // A blank text is no purpose, as for a grant's (bake/src/reach.rs).
+      if (typeof strings[k] !== 'string' || !strings[k].trim()) throw new Error(`host/apple: ${key} names "${k}", which strings/${base}.json lacks or leaves blank`);
       return [k, strings[k]];
     })) });
   }

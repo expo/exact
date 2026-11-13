@@ -397,8 +397,10 @@ impl Server {
 
     /// The app's synthetic tokens: every expression over tokens its rows
     /// write, folding or not, as the compiler finds them (the plan keeps
-    /// only those that fold), and the plan's retention beside them. Read
-    /// again when a Contract source or what resolved its imports changes, or
+    /// only those that fold), with the view retention and native-param
+    /// roots beside them. The params' closure is recomputed by `plan` from
+    /// the current design. Read again when a Contract source or what
+    /// resolved its imports changes, or
     /// what of the app's or a package's design can move them does
     /// (`walk::retention_key`): an edit of a value that names nothing
     /// keeps them; one that moves an alias, a `params` entry or a component's

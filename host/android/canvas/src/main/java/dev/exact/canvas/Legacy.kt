@@ -27,7 +27,7 @@ import java.nio.ByteBuffer
 object Legacy {
     /** A JPEG, GIF or WebP (an animation's first frame) from exact2's Rust where `AImageDecoder` (API 30) is missing:
      * the same platform decoder by its Java face, as the Rust asks that one, scaled to [width] by [height], cropped to
-     * [w] by [h] at ([x], [y]), into software ARGB_8888 pixels (`host/linux/src/canvas/legacy.rs`). [source] is the
+     * [w] by [h] at ([x], [y]), into software ARGB_8888 pixels (`host/painted/src/canvas/legacy.rs`). [source] is the
      * file, read in place during the call. Called on the Rust's decode threads. */
     @JvmStatic fun decode(source: ByteBuffer, width: Int, height: Int, x: Int, y: Int, w: Int, h: Int): Bitmap =
         ImageDecoder.decodeBitmap(ImageDecoder.createSource(source)) { d, _, _ ->
@@ -66,6 +66,15 @@ object Legacy {
         val mask = status or navigation
         v.systemUiVisibility = (v.systemUiVisibility and mask.inv()) or
             (if (statusLight) status else 0) or (if (navigationLight) navigation else 0)
+    }
+
+    /** The system bars hidden, or shown again, before `WindowInsetsController` (API 30): sticky immersive mode, where a
+     * swipe from an edge shows them over the page for a moment. */
+    internal fun hideBars(window: Window, hidden: Boolean) {
+        val v = window.decorView
+        val bits = View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        v.systemUiVisibility = if (hidden) v.systemUiVisibility or bits else v.systemUiVisibility and bits.inv()
     }
 
     /** [ExactActivity]'s four insets from what API 29 has (`WindowInsets.Type` is API 30), read from the root's

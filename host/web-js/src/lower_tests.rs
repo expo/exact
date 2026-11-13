@@ -68,6 +68,11 @@ fn an_enumerated_node_lowers_to_one_class_write() {
 }
 
 #[test]
+fn an_enumerated_colour_above_a_symbol_lowers_to_one_class_write() {
+    lowered("column color=(s == \"a\" ? \"#000000\" : \"#007AFF\")\n        image \"symbol:star\"");
+}
+
+#[test]
 fn the_bounded_feeds_text_run_lowers_with_seven_arms_and_ten_rows() {
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),

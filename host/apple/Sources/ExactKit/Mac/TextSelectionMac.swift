@@ -1008,7 +1008,7 @@ package final class TextSelection {
                 var line = rebuilt[offset]
                 let range = NSRange(location: ranges[offset].location, length: ranges[offset].length)
                 let fragment = paragraph.fragments.isEmpty ? nil : paragraph.fragments[index]
-                let width = fragment.map { Double($0.available) } ?? Double(box.width)
+                let width = fragment.map { Double($0.available) } ?? Double(box.width - paragraph.insets.at(range.location).width)
                 let flowClamped = fragment.map { $0.end < (paragraph.shape?.preparedFlow().utf8Count ?? source.string.utf8.count) && paint.lineClamp > 0 } ?? false
                 if index == paragraph.lines.count - 1, paragraph.clampedRange != nil || flowClamped {
                     line = TextEngine.clampedLine(source, range: range, width: width) ?? line

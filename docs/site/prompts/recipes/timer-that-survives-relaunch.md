@@ -1,5 +1,5 @@
 ```prompt Keep a timer running across a relaunch
-Make a timer in the Exact app in this folder keep running, and keep its time, when the app closes and opens again. Use https://github.com/expo/exact/blob/main/docs/recipes/timer-that-survives-relaunch.md as the source for each step. The exact2 checkout has the same page at docs/recipes/timer-that-survives-relaunch.md.
+Make a timer in the Exact app in this folder keep running, and keep its time, when the app closes and opens again. Use https://github.com/expo/exact/blob/main/docs/recipes/timer-that-survives-relaunch.md as the source for each step. The Exact checkout has the same page at docs/recipes/timer-that-survives-relaunch.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If the app has no timer, or I did not say which one, ask me before you write code.

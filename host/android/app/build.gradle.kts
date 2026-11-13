@@ -48,10 +48,13 @@ android {
         applicationId = (identity["id"] as String).replace('-', '_')
         minSdk = minimumApi
         targetSdk = 36
-        versionCode = 1
+        // CI's version inputs are shared with Apple builds (LLP 1030.003 D6).
+        versionCode = providers.environmentVariable("EXACT_BUILD_NUMBER").orElse("1").get().toInt().also {
+            require(it in 1..2100000000) { "EXACT_BUILD_NUMBER must be an integer from 1 to 2100000000" }
+        }
         // -PidSuffix=.dev: a side-by-side build (another package) that leaves the installed one alone.
         (project.findProperty("idSuffix") as String?)?.let { applicationIdSuffix = it }
-        versionName = "1"
+        versionName = providers.environmentVariable("EXACT_VERSION").orElse("0.1.0").get()
         ndk { abiFilters += "arm64-v8a" }
         manifestPlaceholders["appName"] = identity["name"] as String
         manifestPlaceholders["screenOrientation"] = screenOrientation
@@ -61,13 +64,24 @@ android {
         // shows the shell's plain one (res/drawable/banner.xml).
         manifestPlaceholders["appIcon"] = providers.gradleProperty("appIcon").orNull ?: "@null"
         manifestPlaceholders["appBanner"] = providers.gradleProperty("appBanner").orNull ?: "@drawable/banner"
+        // The launch window in the manifest's `background_color` (agent-android.mjs `androidLaunch`); without one the
+        // reader's, the platform's surface (LLP 1115.001 D3.6).
+        manifestPlaceholders["appTheme"] = providers.gradleProperty("appTheme").orNull ?: "@style/ExactLaunch"
+    }
+    val upload = providers.environmentVariable("EXACT_KEYSTORE").orNull?.let { path ->
+        signingConfigs.create("upload") {
+            storeFile = file(path)
+            storePassword = providers.environmentVariable("EXACT_KEYSTORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("EXACT_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("EXACT_KEY_PASSWORD").get()
+        }
     }
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (minimumApi < 31) proguardFiles("proguard-legacy.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = upload ?: signingConfigs.getByName("debug")
         }
     }
     // The app's Rust library (as libexactcanvas.so) and its assets (the reader copies `app/` out of the APK once).
@@ -75,6 +89,7 @@ android {
     sourceSets["main"].assets.directories.add(out.resolve("rust/assets").path)
     // The icon and banner agent-android.mjs makes from the manifest's `icons` (LLP 1163 D6).
     sourceSets["main"].res.directories.add(out.resolve("icons/res").path)
+    sourceSets["main"].res.directories.add(out.resolve("launch/res").path)
     sourceSets["main"].kotlin.directories.add(if (compose) "src/compose/java" else "src/nocompose/java")
     // The app's Kotlin hatches and module roster (LLP 1115.001.000 D4) in its `modules/android`; -PmodulesDir lets a
     // component fixture compile the app's actual provider without copying its Kotlin.
@@ -211,13 +226,14 @@ android {
         buildFeatures { this.compose = true }
         sourceSets["test"].kotlin.directories.add("src/composeTest/java")
     }
-    // An app's GPU module (-PgpuModule=<file>) is opened by path from the extracted library directory and checked
-    // against the digest its bake recorded, so it is extracted and left unstripped.
-    val gpuModule = providers.gradleProperty("gpuModule").orNull
+    // An app's GPU modules (-PgpuModules=<file>,<file>…: the primary and each named one) are opened by path from the
+    // extracted library directory and checked against the digests their bake recorded, so they are extracted and left
+    // unstripped.
+    val gpuModules = providers.gradleProperty("gpuModules").orNull?.split(',')?.filter { it.isNotEmpty() }.orEmpty()
     packaging {
         jniLibs {
-            useLegacyPackaging = gpuModule != null
-            gpuModule?.let { keepDebugSymbols += "**/$it" }
+            useLegacyPackaging = gpuModules.isNotEmpty()
+            gpuModules.forEach { keepDebugSymbols += "**/$it" }
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

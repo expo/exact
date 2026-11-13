@@ -39,7 +39,7 @@ theme
   warnEdge="light-dark(#f5c6c0, #5d302a)" // its border
   warnInk="light-dark(#8a1c12, #f0a89c)" // its text
 
-use Run, Cell, Block, Runs, SchemeButton from "@exact/reading"
+use Run, Cell, Block, Runs, ColumnSizer, SchemeButton from "@exact/reading"
 use speak, cancelSpeech, pauseSpeech, resumeSpeech, speechSynthesisState, speechUtterance, SpeechUtteranceInfo, SpeechSynthesisState, SpeechUtterance from "@exact/speech-synthesis"
 
 shape Entry
@@ -371,25 +371,23 @@ component Blocks
                 view testId=`block-${block.id}` width="100%" max-width=740 margin-left="auto" margin-right="auto" padding-left=32 padding-right=32 padding-top=22 padding-bottom=24 box-sizing="border-box"
                   view width="100%" height=1 background-color="edge"
               else
-                // A table is one block and one grid, as a browser lays out a
-                // table: every row shares the columns, which `auto` tracks
-                // size from the cells of all rows, never narrower than their
-                // longest words, and which share what is left of the reading
-                // column (`depth` columns; the first `depth` cells are the
-                // header's). One whose words are wider than the reading column
-                // scrolls sideways inside it, as GitHub's tables do, rather
-                // than running past its edge or breaking its words.
+                // Groups share the whole table's intrinsic sizing text,
+                // keeping native grids below their row limit. A table stays
+                // one reading block and scrolls sideways when its words need it.
                 if block.kind == "table"
                   view testId=`block-${block.id}` width="100%" max-width=740 margin-left="auto" margin-right="auto" padding-left=32 padding-right=32 padding-bottom=2 box-sizing="border-box"
                     scroll testId=`table-${block.id}` width="100%" overflow-x="auto" overflow-y="hidden"
-                      view display="grid" grid-template-columns=`repeat(${block.depth}, auto)`
-                        for c, i in block.cells key=c.id
-                          if i < block.depth
-                            text padding=8 border-bottom-style="solid" border-bottom-width=1 border-color="edge" color="strongInk" line-height="20px"
-                              Runs(runs=c.runs, size=13, weight=700)
-                          else
-                            text padding=8 border-bottom-style="solid" border-bottom-width=1 border-color="edge" color="ink" line-height="20px"
-                              Runs(runs=c.runs, size=13, weight=400)
+                      for g in block.tableGroups key=g.id
+                        view display="grid" grid-template-columns=`repeat(${block.depth}, minmax(min-content, auto))`
+                          for s in block.tableSizers key=s.id
+                            ColumnSizer(sizer=s, cells=block.cells, size=13)
+                          for c, i in block.cells.slice(g.start, g.end) key=c.id
+                            if g.start + i < block.depth
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color="edge" color="strongInk" line-height="20px"
+                                Runs(runs=c.runs, size=13, weight=700)
+                            else
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color="edge" color="ink" line-height="20px"
+                                Runs(runs=c.runs, size=13, weight=400)
                 else
                   if block.kind == "image"
                     // A `<p>` or `<div>` `align` places it in the column as `text-align` places an inline image.

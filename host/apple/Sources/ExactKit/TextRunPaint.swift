@@ -129,7 +129,8 @@ extension TextLinePaint {
             let a = CTRunGetAttributes(run) as NSDictionary
             if a[NSAttributedString.Key.exactHidden] as? Bool == true { return .nothing }
             if let font = a[kCTFontAttributeName], CTFontGetSymbolicTraits(font as! CTFont).contains(.traitColorGlyphs) { return .own }
-            let alpha = (a[NSAttributedString.Key.foregroundColor] as? PlatformColor)?.cgColor.alpha ?? 1
+            let alpha = (a[NSAttributedString.Key.foregroundColor] as? PlatformColor)?.cgColor.alpha
+                ?? (a[kCTForegroundColorAttributeName] as! CGColor?)?.alpha ?? 1
             if alpha == 0, !transparentInk { return .nothing }
             solid[i] = alpha == 1
             let lined = { (key: NSAttributedString.Key) in (a[key] as? NSNumber)?.doubleValue ?? 0 != 0 }
@@ -173,6 +174,13 @@ extension TextLinePaint {
         }
         ctx.setFillColor(ink)
         for (i, run) in runs.enumerated() {
+            if let icon = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactAtomIcon] as? TextAtomIcon {
+                if !icon.tinted || paints[i] != .nothing {
+                    let own = !icon.tinted || paints[i] == .own || paints[i] == .keptLined
+                    TextAtomIcon.draw(run, in: ctx, ink: own ? nil : ink)
+                }
+                continue
+            }
             switch paints[i] {
             case .nothing, .keptLined: continue
             case .own:
@@ -265,6 +273,7 @@ extension TextLinePaint {
             ctx.textPosition = .zero
             CTLineDraw(line, ctx)
             ctx.restoreGState()
+            for run in shown { TextAtomIcon.draw(run, in: ctx) }
         }
         switch pass {
         case .all: break

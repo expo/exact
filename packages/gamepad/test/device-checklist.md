@@ -45,7 +45,7 @@ step's result and the OS version.
 
 | Platform | Built here | Rumble | Light bar | Notes |
 | --- | --- | --- | --- | --- |
-| Linux (desktop or the NucBox) | yes: evdev `FF_RUMBLE`, the registry in `host/linux/src/pads.rs` | yes, where `/dev/input/event*` opens read-write (the `input` group) | no: `setLight` answers `NotSupportedError` | A pad opened read-only lists no effects; check that `effects` is empty then. |
+| Linux (desktop or the NucBox) | yes: evdev `FF_RUMBLE`, the registry in `host/painted/src/pads.rs` | yes, where `/dev/input/event*` opens read-write (the `input` group) | no: `setLight` answers `NotSupportedError` | A pad opened read-only lists no effects; check that `effects` is empty then. |
 | Windows (x64, ARM64) | yes: XInput, `host/windows/src/pads.rs` | yes, on an XInput pad (the Xbox pad) | no | The DualSense is not an XInput pad: it lists no pad on Windows. |
 | Web (Chrome, Edge) | yes: `web/index.js` | yes, through `vibrationActuator` | no | Safari and Firefox list no effects. |
 | macOS, iOS, iPadOS, tvOS | yes: `apple/Gamepad.swift` over `GCController`, the slot table shared with the canvas (`ExactPads`) | yes, through each handle's Core Haptics engine (`GCDeviceHaptics`); the DualSense's triggers take `trigger-rumble` | yes on the DualSense and DualShock 4 (`GCDeviceLight`); the colour before the app's first write comes back on `setLight()`, at the background and when the session ends | The prompt shows the button's SF Symbol beside its name (step 2). An Xbox pad lists `dual-rumble` only. |

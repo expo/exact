@@ -54,6 +54,7 @@ theme
   graphite="-exact-tertiary-background"
   pewter="-exact-fill"
   signal="AccentColor"
+  signalInk="light-dark(#ffffff, #000000)"
   clear="#00000000" // no dot: a read thread's
   lockDusk="#1d1d22" // the top of the lock screen's gradient
   homeDusk="#141418" // the top of the home screen's gradient
@@ -420,7 +421,7 @@ component Expose
                     text `${intelligence.modelName} · via OpenRouter` font-size=12 class=Muted
                     if not intelligence.hasKey
                       button press=openPage("intelligence") testId="thread-add-key" -exact-press-scale=0.97 margin-top=4 height=34 padding-left=14 padding-right=14 border-radius=17 background-color="signal" display="flex" flex-direction="row" align-items="center"
-                        text "Add an OpenRouter key" font-size=14 font-weight=600 color="AccentColorText"
+                        text "Add an OpenRouter key" font-size=14 font-weight=600 color="signalInk"
                 else
                   text (thread == "mom" ? "Saturday 6:02 PM" : thread == "builds" ? "Yesterday 11:20 PM" : "Today 8:20 AM") font-size=12 font-weight=500 class=Muted text-align="center" padding-bottom=10
                 for m in chat.messages key=m.id
@@ -440,7 +441,7 @@ component Expose
                 if draft.trim() != "" and chat.kind == "assistant"
                   button press=sendDraft testId="send" aria-label="Send" -exact-press-scale=0.9 width=28 height=28 border-radius=14 background-color="signal" display="flex" flex-direction="row" align-items="center" justify-content="center"
                     svg viewBox="0 0 24 24" width=16 height=16
-                      path d="M12 19V6M6 12l6-6 6 6" fill="none" stroke="AccentColorText" stroke-width=2.6 stroke-linecap="round" stroke-linejoin="round"
+                      path d="M12 19V6M6 12l6-6 6 6" fill="none" stroke="signalInk" stroke-width=2.6 stroke-linecap="round" stroke-linejoin="round"
             HomeBar(tone="statusInk", press=go("home"))
 
       // -------------------------------------------------------------- reader
@@ -564,7 +565,7 @@ component Expose
                     row align-items="center" gap=8
                       input appearance="none" id="key" testId="key" type="password" value=keyDraft input=writeKey submit=saveKey placeholder="sk-or-v1-…" aria-label="OpenRouter key" flex=1 min-width=0 height=40 padding-left=12 padding-right=12 border-radius="radiusWell" border-style="solid" border-width=1 border-color="fieldRim" font-size=16 color="fore" background-color="reverse"
                       button press=saveKey testId="save-key" disabled=(keyDraft.trim() == "") -exact-press-scale=0.95 height=40 padding-left=14 padding-right=14 border-radius="radiusWell" background-color=(keyDraft.trim() == "" ? "disabledGround" : "signal") display="flex" flex-direction="row" align-items="center"
-                        text "Save" font-size=15 font-weight=600 color=(keyDraft.trim() == "" ? "disabledInk" : "AccentColorText")
+                        text "Save" font-size=15 font-weight=600 color=(keyDraft.trim() == "" ? "disabledInk" : "signalInk")
                     if keySaved
                       text "Saved. Expose will use this key from now on." font-size=13 color="signal"
                     if intelligence.keySource == "settings"

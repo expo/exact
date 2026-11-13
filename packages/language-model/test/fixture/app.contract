@@ -2,7 +2,7 @@
 // read and sent as an app would, each answer shown by testId for the suite.
 // A session made here lists a tool, `findNotes`, which app.ts answers; data
 // code's own session (`ask`) is made and prompted in app.ts.
-use languageModelAvailability, createLanguageModel, prompt, promptStreaming, languageModelResponse, abortLanguageModelResponse, destroyLanguageModel, LanguageModelTool, LanguageModelExpected, LanguageModelMessage, LanguageModelAvailability, LanguageModelInfo, LanguageModelResponseInfo, LanguageModelResponse, LanguageModelDone from "@exact/language-model"
+use languageModelAvailability, createLanguageModel, prompt, promptStreaming, languageModelResponse, abortLanguageModelResponse, appendLanguageModel, cloneLanguageModel, destroyLanguageModel, LanguageModelTool, LanguageModelExpected, LanguageModelMessage, LanguageModelAvailability, LanguageModelInfo, LanguageModelSessionInfo, LanguageModelResponseInfo, LanguageModelResponse, LanguageModelDone from "@exact/language-model"
 
 shape Title
   title: string
@@ -21,12 +21,18 @@ component Fixture
   mutation created as shape LanguageModelInfo
   mutation titled as shape Title
   mutation started as shape LanguageModelResponseInfo
+  mutation unobserved as shape LanguageModelResponseInfo
   mutation stopped as shape LanguageModelDone
   mutation asked as shape Line
   mutation prepared as shape Line
   mutation reentered as shape Line
+  mutation appended as shape LanguageModelSessionInfo
+  mutation cloned as shape LanguageModelInfo
+  mutation destroyed as shape LanguageModelDone
   derive session = match created { case some(c) => c.id, case none => "" }
+  derive cloneId = match cloned { case some(c) => c.id, case none => "" }
   derive responseId = match started { case some(s) => s.id, case none => "" }
+  derive unobservedId = match unobserved { case some(s) => s.id, case none => "" }
   resource reply = languageModelResponse(response=responseId) as shape LanguageModelResponse else empty()
   action create
     send created = createLanguageModel(initialPrompts=[LanguageModelMessage(role="system", content="You answer in one sentence.")], tools=[LanguageModelTool(name="findNotes", description="Finds the person's notes about a topic", inputSchema="NoteQuery")])
@@ -34,8 +40,20 @@ component Fixture
     send titled = prompt(session=session, input="Suggest a title for a conversation about Rust lifetimes.", responseConstraint="Title")
   action stream
     send started = promptStreaming(session=session, input=draft)
+  action streamUnobserved
+    send unobserved = promptStreaming(session=session, input=draft)
   action stop
     send stopped = abortLanguageModelResponse(response=responseId)
+  action stopUnobserved
+    send stopped = abortLanguageModelResponse(response=unobservedId)
+  action append
+    send appended = appendLanguageModel(session=session, input="A private appended turn.")
+  action clone
+    send cloned = cloneLanguageModel(session=session)
+  action destroy
+    send destroyed = destroyLanguageModel(session=session)
+  action destroyClone
+    send destroyed = destroyLanguageModel(session=cloneId)
   action edit(v: string)
     draft = v
   action again
@@ -85,8 +103,20 @@ component Fixture
       input value=draft input=edit testId="draft"
       button press=stream testId="stream"
         text "Stream"
+      button press=streamUnobserved testId="stream-unobserved"
+        text "Stream without a reader"
       button press=stop testId="stop"
         text "Stop"
+      button press=stopUnobserved testId="stop-unobserved"
+        text "Stop without a reader"
+      button press=append testId="append"
+        text "Append"
+      button press=clone testId="clone"
+        text "Clone"
+      button press=destroy testId="destroy"
+        text "Destroy"
+      button press=destroyClone testId="destroy-clone"
+        text "Destroy clone"
       button press=again testId="ask"
         text "Ask from data code"
       match prepared

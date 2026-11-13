@@ -40,13 +40,17 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
 
 ```sh
 bun <exact2>/scripts/exact.mjs new ~/groceries && cd ~/groceries
-bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; source: docs/patterns/<name>/app.contract in exact2
+bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; source: docs/patterns/<name>/app.contract in Exact
 bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in the background; it names iOS in app.json
 ```
 
 `new` also takes `--name Groceries --bundle-id com.yourcompany.groceries --with ios,android`. The folder's name is lowercase with hyphens, not `exact` or ending `-web`, `-apple`, `-linux`, `-gpu`.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
+
+On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
+first. `ios` builds a simulator bundle without installing it; `ios --prebuild` does so
+in the background. Running an iOS simulator, including `verify ios` and `agent ios`, needs macOS.
 
 Start from the nearest pattern. The screen `exact new` writes, and its tests in
 `app.test.contract`, are placeholders: replace both. `exact.mjs` runs from any
@@ -55,7 +59,7 @@ which it took. Your shell commands have no such help, so keep one directory.
 |`bun exact.mjs …`|What it does|
 |---|---|
 |`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` to include warnings); it rewrites the types `app.ts` imports and type-checks it.|
-|`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix, with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
+|`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
 |`agent web --storage s1 "clock data" "tap add" "check both"`|Drives the app by hand, to see why something fails; `--keep-storage` reopens saved data.|
 |`web`, `ios --run`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; a window (from SSH, on the signed-in desktop).|
 |`share`|For a person to try an iPhone app on their own phone: prints an AppDrop link that installs it. Run it when the app is ready for them, and again after each change they should see; send the link it prints.|
@@ -97,7 +101,7 @@ required tool, device or simulator is unavailable, report that target as unteste
 |iOS|`bun exact.mjs verify ios`|`bun exact.mjs ios --run`|
 |Android|`bun exact.mjs verify android`|`bun exact.mjs android --run`|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
-|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos "screenshot mac.png"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
+|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
 |Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
 
 There is no `verify macos` or `verify linux`. Inspect the launched native app for
@@ -118,6 +122,8 @@ bun exact.mjs contract vocab for match persist grouped-form choice   # keywords,
 bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day's log
 ```
 
+For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md).
+
 |Pattern|Already has|
 |---|---|
 |`one-screen`|a tracker: a total, quick-add buttons, a dated log in a file|
@@ -132,6 +138,7 @@ bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day'
 |an entry or settings form|`grouped-form`|
 |a sheet that edits the row tapped, filled with its values|`edit-sheet`|
 |rows added and removed in a form|`editable-rows`|
+|JSON from an HTTP endpoint (a `GET`, a GraphQL query) with no data module, so no JavaScript engine|`declared-source`|
 |a write that may be refused|`after-a-write`|
 |a failure the person must acknowledge (an alert with OK)|`error-alert`|
 |tabular digits: numeric columns or values changing in place|`numeric-readout`|
@@ -140,6 +147,7 @@ bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day'
 |a chat that opens at its newest message|`chat-thread`|
 |a long list or grid that loads more|`long-lists`|
 |a welcome at first launch|`first-launch`|
+|a tip that teaches a control until it is used (TipKit)|`tips`|
 |records kept across launches, a saved library (`state` holds values, not records): a JSON file, SQLite, grants|`files-and-grants`|
 |dice, a shuffle, a random pick or name (Contract has no `random()`: copy the recipe's `roll`)|`random-rolls`, `random-and-shuffle`|
 |location, or anything the person must allow|`permissions`|
@@ -181,8 +189,8 @@ fragment is the same screen: `/item/7#moves` opens at its `id="moves"` once its 
 and a `link href="#moves"` goes there. Every host, the web
 too, hides a stack's covered routes itself (not the page under a sheet, nor a wide split's list
 beside its detail); `for e in stack(nav)` keeps them mounted with their scroll, which `[top(nav)]`
-loses. A query follows the path:
-`` path("home") + `?q=${v}` ``. This list takes the scroll's place:
+loses. A query follows the path, its value encoded:
+`` path("home") + `?q=${encodeURIComponent(v)}` ``. This list takes the scroll's place:
 
 ```contract
 shape Item
@@ -249,7 +257,10 @@ component Groceries
   (`first(xs)`, `round(n)`). What differs: no truthiness; absence is an option (`none`,
   `some(x)`, `match`), not `null`; a value never changes (`xs.concat([x])`, a record copy
   `Shape(old, field=value)`); `==` compares lists and records by value; a stored number is
-  finite (a `NaN` refuses the commit). A presentation order by one key is
+  finite (a `NaN` refuses the commit). Write `n = n - 1` in an action, not `--n`;
+  double negation is `-(-n)` or `- -n`. Numeric literals are decimal without leading
+  zeroes (`0.5` is valid); write `8`, not `010` or `0o10`.
+  A presentation order by one key is
   `sortBy(xs, x => x.name)`, stable (`"desc"` third; a second key is an earlier `sortBy`), not
   `sort`; grouping, joining and a stored or locale order are the data module's, and the view
   names the order it relies on where it reads it (`resource tasks = loadTasksByDueDate()`).

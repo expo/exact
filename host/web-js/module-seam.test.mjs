@@ -1,9 +1,11 @@
 import { test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { open } from '../../scripts/agent.mjs';
+import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 
 // The module seam's general pieces on the JS target (LLP 1133.002 D14; LLP
 // 1133.008 D8 item 9; LLP 1133.009 D10 items 3, 7, 10-12), through an
@@ -13,6 +15,71 @@ import { open } from '../../scripts/agent.mjs';
 // driven by the agent.
 
 const root = resolve(import.meta.dir, '../..');
+
+test.each([false, true])('a view validates and delivers its agent vocabulary (substitute source: %p)', async withSource => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } });
+    if (path.endsWith('/names.js')) return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
+    const local = resolve(root, '.' + path);
+    const file = existsSync(local) ? local : resolve(root, 'host/web', path.split('/').at(-1));
+    return existsSync(file) ? new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } }) : new Response('Not found', { status: 404 });
+  } });
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async withSource => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const seen = [];
+      const loader = async () => ({
+        implementation: () => ({ preferred(values) { seen.push(values); } }),
+        roster: { 'words-panel': { view: class {} } },
+      });
+      const words = { heard: 'string', levels: 'number[]', enabled: 'bool', status: 'string' };
+      const rows = withSource ? { status: ['words.status', false, { default: { available: false }, agent: words }, { available: 'b' }] } : {};
+      modules(rows, { words: loader }, { 'words-panel': ['words', false, [], words] });
+      const prefer = extension => exact.extensions.prefer({ extension });
+      const before = prefer({ 'words.heard': 'hello' });
+      if (before.error) throw new Error(before.error);
+      await exact.packageViews.make('words-panel', {});
+      const initial = seen.at(-1);
+      const errors = [
+        prefer({ 'words.heard': 7 }), prefer({ 'words.levels': [1, 'two'] }),
+        prefer({ 'words.enabled': 'true' }), prefer({ 'words.unknown': 'hello' }),
+        prefer({ 'unknown.heard': 'hello' }),
+      ];
+      await prefer({ 'words.heard': 'again', 'words.levels': [1, 2], 'words.enabled': true });
+      const updated = seen.at(-1);
+      await prefer({ 'words.heard': 'clear' });
+      const cleared = seen.at(-1), count = seen.length;
+      const source = withSource ? await prefer({ 'words.status': { available: true } }) : null;
+      const sourceError = withSource ? prefer({ 'words.status': 'a string' }) : null;
+      return { before, initial, updated, errors, cleared, source, sourceError, sourceTold: count !== seen.length, state: exact.extensions.state() };
+    }, withSource);
+    expect(result.before.error).toBeUndefined();
+    expect(result.initial).toEqual({ heard: 'hello' });
+    expect(result.updated).toEqual({ heard: 'again', levels: [1, 2], enabled: true });
+    expect(result.errors.map(e => e.error)).toEqual([
+      'prefer extension: `words.heard` is a string',
+      'prefer extension: `words.levels` is a number[]',
+      'prefer extension: `words.enabled` is a bool',
+      `prefer extension: no source \`words.unknown\` in this app; its module sources are ${withSource ? 'words.status' : 'none'}`,
+      `prefer extension: no source \`unknown.heard\` in this app; its module sources are ${withSource ? 'words.status' : 'none'}`,
+    ]);
+    expect(result.cleared).toEqual({ levels: [1, 2], enabled: true });
+    expect(result.sourceTold).toBe(false);
+    if (withSource) {
+      expect(result.source.error).toBeUndefined();
+      expect(result.sourceError.error).toContain('type its JSON');
+    }
+    expect(result.state.words.preferred).toEqual({ ...result.cleared, ...(withSource ? { status: { available: true } } : {}) });
+  } finally { await browser?.close(); server.stop(true); }
+});
+
 const run = (cmd, args, cwd) => {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')}: ${r.stdout}\n${r.stderr}`);

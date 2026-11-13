@@ -50,7 +50,8 @@ function backdrop(png, scale, it) {
 
 /** The contrast a text needs (WCAG 1.4.3, and LLP 1115's platform answers): 4.5:1; 3:1 for large text (24 px, or 18.66 px bold), for a
  *  control's label on its own fill (D3's ink rule), for ink the platform chose (a tab bar's item) and for text in a platform colour (the
- *  secondary label, system red: the platform's palette, as a hand-built app draws it), and for text on an accent fill (LLP 1116.020 D7: a sent
+ *  secondary label, system red: the platform's palette, as a hand-built app draws it) or on a fill in a system hue (the same pair
+ *  turned over: iOS's badge, white on its red), and for text on an accent fill (LLP 1116.020 D7: a sent
  *  bubble's white is a filled button's label; a pale accent still fails). The platform's tertiary and quaternary labels and its placeholders are its own and not judged,
  *  nor is a disabled control's label (WCAG's inactive component), nor a tinted button's label in a system hue: UIKit draws the hue on
  *  a pale fill of itself (the Clock's green Start, 1.9:1 in light; `RoundButton`'s, LLP 1116.019 D3), and Increase Contrast darkens it. */
@@ -60,6 +61,7 @@ function floor(it, scheme, palette) {
   if (r && /^(tertiary|quaternary)-label$|^placeholder$|^GrayText$/.test(r)) return null;
   if (it.tinted && r && /^system-/.test(r)) return null;
   if (it.size >= 24 || (it.size >= 18.66 && it.weight >= 700) || it.label || it.platformInk || it.onAccentFill || (r && /^secondary-label$|^system-|^link$|^LinkText$|^AccentColor$|^ButtonText$/.test(r))) return 3;
+  if (/^system-/.test(drawnRole(it.bg, scheme, palette) ?? '')) return 3;
   return 4.5;
 }
 /** The platform role an ink is, by its value in this scheme as its host draws it (`paletteOf`): UIKit's own labels carry
@@ -81,8 +83,9 @@ const shown = (it, kb) => { const v = it.vis ? { ...it, ...it.vis } : it; return
 const covers = (it, kb) => { const v = shown(it, kb); return v.w <= 0 || v.h <= 0; };
 const holds = (a, b) => a.x <= b.x + 0.5 && a.y <= b.y + 0.5 && a.x + a.w >= b.x + b.w - 0.5 && a.y + a.h >= b.y + b.h - 0.5;
 
-/** The findings for one observation (`obs`, the host's reply) and its capture (`png`, decoded; null skips what needs pixels). */
-export function judge(obs, png, { host = 'web' } = {}) {
+/** The findings for one observation (`obs`, the host's reply) and its capture (`png`, decoded; null skips what needs pixels),
+ *  with node types from the tree shown in the same scheme (`nodes`, by id). */
+export function judge(obs, png, { host = 'web', nodes = new Map() } = {}) {
   const vp = obs.viewport, scale = png ? png.width / (obs.capture?.w ?? vp.w) : 1, items = obs.items ?? [], found = [], palette = paletteOf(obs);
   const add = (kind, it, detail, hint) => found.push({ kind, id: it.id ?? null, ...(it.of != null ? { of: it.of } : {}), name: it.name, text: it.text, box: [r0(it.x), r0(it.y), r0(it.w), r0(it.h)], detail, ...(hint ? { hint } : {}) });
   const unit = host === 'web' ? 'px' : 'pt';
@@ -104,7 +107,9 @@ export function judge(obs, png, { host = 'web' } = {}) {
     } else if (it.text && it.cut) add('clipped', it, { cut: [r0(it.cut.dx), r0(it.cut.dy)], by: it.cut.by, edge: it.cut.edge, unit }, it.cut.edge ? OFFSCREEN : 'the clipping box is smaller than its content: let it grow, or scroll');
     // LLP 1116.009 D5: a written percentage width and the padding it does not include, past what its parent gives it: the cause, named.
     if (it.padded) add('overflow', it, { past: r0(it.padded.dx), of: it.padded.by, pad: r0(it.padded.pad), written: it.padded.width, unit }, 'drop the width (a block or a stretched flex item fills its parent) or say `box-sizing="border-box"`');
-    else if (it.outX) add('overflow', it, { past: r0(it.outX), width: vp.w, unit }, 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box');
+    else if (it.outX) add('overflow', it, { past: r0(it.outX), width: vp.w, unit }, ['Svg', 'SvgViewport', 'Image'].includes(nodes.get(it.id)?.type)
+      ? 'fit the graphic (`width="100%"`), or clip it in its containing box (`overflow="hidden"`)'
+      : 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box');
     else if (it.spill) add('overflow', it, { past: r0(it.spill.dx), of: it.spill.by, unit }, 'a flex item\'s width stops at its content: let it shrink (`min-width: 0`, a smaller `padding`), or let the row wrap (`flex-wrap: wrap`) or scroll');
     // A target the author sized under the platform's minimum (on the web 44 px on a touch device, `any-pointer: coarse`, and otherwise WCAG 2.5.8's 24 px, with its spacing exception; 44 pt on iOS).
     if (it.control && it.sized === 'author' && !it.inline && !it.disabled && !covers(it, obs.keyboard) && (it.w < obs.target - 0.5 || it.h < obs.target - 0.5)) {
@@ -268,9 +273,10 @@ export async function checkOp(s, args = [], { shots, accept = [] } = {}) {
       const path = shots?.(obs.viewport, scheme) ?? resolve(dir, `${scheme}.png`);
       const taken = await s.carrier.screenshot(path, obs.capture?.window === true); // iOS observes in the window's points: a sheet is not in the viewport's picture
       const png = decodePng(readFileSync(path));
-      runs.push({ scheme: obs.scheme, asked: scheme, target: obs.target, viewport: obs.viewport, findings: judge(obs, png, { host: s.host === 'web' ? 'web' : 'ios' }), ...(obs.advice ? { advice: obs.advice } : {}) });
       // The tree as this scheme shows it: a view only one scheme shows is named, and accepted, by its own testId.
-      trees.push(new Map(((await s.op({ op: 'tree' })).nodes ?? []).map((n) => [n.id, n])));
+      const nodes = new Map(((await s.op({ op: 'tree' })).nodes ?? []).map((n) => [n.id, n]));
+      trees.push(nodes);
+      runs.push({ scheme: obs.scheme, asked: scheme, target: obs.target, viewport: obs.viewport, findings: judge(obs, png, { host: s.host === 'web' ? 'web' : 'ios', nodes }), ...(obs.advice ? { advice: obs.advice } : {}) });
       // A capture kept for a person or an agent to look at is a pixel a point once judged, as `agent`'s are: a third of an iPhone's pixels each way.
       if (shots && taken?.scale > 1) writeFileSync(path, encodePng(shrink(png, Math.round(png.width / taken.scale), Math.round(png.height / taken.scale))));
     }

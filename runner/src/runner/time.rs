@@ -5,6 +5,17 @@ use crate::time::{Place, WallTime, SOURCE};
 use exact_kernel::CommitReceipt;
 use exact_plan::{TypeKind, Value};
 
+/// The store's name for the language the app chose (`setLocale`), beside
+/// its persisted state: no state is named `#locale`, which is the locale
+/// slot's name. JSON text, as a persisted string is.
+pub(crate) const CHOSEN: &str = "exact.state.#locale";
+
+/// A tag `setLocale` takes: what [`crate::time::Place::validate`] takes for
+/// the viewer's locale.
+fn valid_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag.len() <= 64 && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 impl<D: DataSource> Runner<D> {
     /// What the host last said about the date.
     pub fn wall_time(&self) -> WallTime {
@@ -121,21 +132,17 @@ impl<D: DataSource> Runner<D> {
             place,
             SOURCE,
             |r, _, mut readers| {
-                // The locale slot is part of this fact's commit (LLP 1060 D4).
-                let written = r.plan.locale.and_then(|slot| {
-                    let i = slot.0 as usize;
-                    let resolved = r.plan.resolve_locale(&r.place.locale)?;
-                    let value = Value::str(resolved);
-                    (r.slots[i] != value).then(|| (i, std::mem::replace(&mut r.slots[i], value)))
-                });
-                if written.is_some() && readers.is_empty() {
+                // The locale slot is part of this fact's commit (LLP 1060 D4):
+                // the table the app's choice resolves to, else the viewer's.
+                let written = r.write_locale();
+                if !written.is_empty() && readers.is_empty() {
                     readers = r
                         .resource_rows()
                         .enumerate()
                         .filter_map(|(i, row)| (r.plan.str(row.source) == SOURCE).then_some(i))
                         .collect();
                 }
-                let result = if readers.is_empty() && written.is_none() {
+                let result = if readers.is_empty() && written.is_empty() {
                     if r.live_times.is_empty() {
                         Ok(None)
                     } else {
@@ -145,13 +152,118 @@ impl<D: DataSource> Runner<D> {
                     r.commit_again(readers, "place").map(Some)
                 };
                 if result.is_err() {
-                    if let Some((i, old)) = written {
+                    for (i, old) in written {
                         r.slots[i] = old;
                     }
                 }
                 result
             },
         )
+    }
+
+    /// The language the app chose with `setLocale`, kept across launches;
+    /// `None` while it follows the host's, and for a plan that never runs
+    /// `setLocale` (a choice an earlier version kept chooses nothing).
+    pub fn chosen_locale(&self) -> Option<String> {
+        let text = self.store.kept(CHOSEN)?;
+        let tag = super::persist::decode_string(text).filter(|t| valid_tag(t))?;
+        crate::uses::chooses_locale(&self.plan).then_some(tag)
+    }
+
+    /// The tag the strings table is resolved from: the app's choice, else
+    /// the viewer's locale.
+    pub(super) fn requested_locale(&self) -> String {
+        self.chosen_locale()
+            .unwrap_or_else(|| self.place.locale.clone())
+    }
+
+    /// Write the table [`Runner::requested_locale`] resolves to into the
+    /// locale slot, and the format locale into the format slot: the index
+    /// and old value of each slot that changed.
+    fn write_locale(&mut self) -> Vec<(usize, Value)> {
+        let mut changed = Vec::new();
+        let Some(i) = self.plan.locale.map(|s| s.0 as usize) else {
+            return changed;
+        };
+        let requested = self.requested_locale();
+        let Some(table) = self.plan.resolve_locale(&requested) else {
+            return changed;
+        };
+        let value = Value::str(table);
+        if self.slots[i] != value {
+            changed.push((i, std::mem::replace(&mut self.slots[i], value)));
+        }
+        if let Some(f) = self.plan.format.map(|s| s.0 as usize) {
+            let value = Value::str(&self.format_locale_of(i));
+            if self.slots[f] != value {
+                changed.push((f, std::mem::replace(&mut self.slots[f], value)));
+            }
+        }
+        changed
+    }
+
+    /// The format locale (LLP 1054.000.003 D6): the table in the locale slot
+    /// `i`, with the hour cycle the viewer's regional format forces.
+    pub(super) fn format_locale_of(&self, i: usize) -> String {
+        let table = self.slots[i].as_str().unwrap_or_default();
+        let place = &self.place;
+        let format = if place.format_locale.is_empty() {
+            &place.locale
+        } else {
+            &place.format_locale
+        };
+        exact_plan::strings::format_tag(table, format)
+    }
+
+    /// The commit's `setLocale`s from `from` on, each applied and taken
+    /// out, before its settlement: the app's choice is kept in the store
+    /// (so the next launch's first frame reads it), the locale slot takes
+    /// the table it resolves to, and every `exactTime` is asked again for
+    /// `resolvedLocale`. `setLocale("")` forgets the choice. No host is
+    /// told: each reads the resolved table after the commit, as after
+    /// `set_place`.
+    pub(super) fn take_set_locale(&mut self, from: usize) {
+        let mut i = from;
+        while i < self.commands.len() {
+            if self.commands[i].name != "setLocale" {
+                i += 1;
+                continue;
+            }
+            let args = self.commands.remove(i).args;
+            let Some(tag) = (match &args[..] {
+                [tag] => tag.as_str().filter(|t| t.is_empty() || valid_tag(t)),
+                _ => None,
+            }) else {
+                let mut said = String::new();
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        said.push_str(", ");
+                    }
+                    crate::agent::untyped_json(a, &mut said);
+                }
+                self.log(format!(
+                    "setLocale({said}) refused: a BCP 47 tag (\"de\", \"pt-BR\"), or \"\" for the host's locale"
+                ));
+                continue;
+            };
+            if tag.is_empty() {
+                self.store.forget_kept(CHOSEN);
+            } else {
+                let mut text = String::new();
+                crate::agent::quote(tag, &mut text);
+                self.store.keep(CHOSEN, text.into_bytes());
+            }
+            if !self.write_locale().is_empty() {
+                let readers: Vec<usize> = self
+                    .resource_rows()
+                    .enumerate()
+                    .filter_map(|(i, row)| (self.plan.str(row.source) == SOURCE).then_some(i))
+                    .collect();
+                for r in readers {
+                    self.force_refresh(r);
+                }
+            }
+        }
     }
 
     /// Take the topics the source's native module announces (LLP 1016.002),

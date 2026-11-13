@@ -245,7 +245,11 @@ fn entry(name: &str) -> Option<Entry> {
         .or_else(|| vocab::compile_attr(name).map(compile_attr_json));
     let value_of: Vec<&'static str> = vocab::attrs()
         .into_iter()
-        .filter(|(n, a)| rows_of(n, a).iter().any(|r| r.enum_names().contains(&name)))
+        .filter(|(n, a)| {
+            rows_of(n, a)
+                .iter()
+                .any(|r| vocab::authored_names(*r).contains(&name))
+        })
         .map(|(n, _)| n)
         .collect();
     let concept = concepts::concept(name);
@@ -527,7 +531,7 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
             println!("  on any element (LLP 1133.029). While the element is mounted and displayed (by `wakelock`'s rule) and outside every `dialog` and popover, the window keeps to the orientations it names: a Screen Orientation API lock type (\"portrait\", \"landscape\", \"portrait-primary\", \"portrait-secondary\", \"landscape-primary\", \"landscape-secondary\", \"natural\", \"any\"), or \"current\", the orientation the window has when the lock begins (a game steered by tilt); \"none\", the default, holds nothing. Bind it to state: `orientationlock=(tilt ? \"current\" : \"none\")`. The topmost sheet that holds wins over what it covers, a descendant's lock replaces its ancestor's (\"any\" there frees a subtree), and unrelated locks intersect; locks that share no orientation hold none and are journaled. A type only narrows the manifest's `orientation`: a literal outside it, or one inside a `dialog` or popover, is refused. iOS and Android (on a tablet only \"current\" holds), the web in fullscreen where the browser locks, Windows' auto-rotation preference; macOS, tvOS and Linux have no screen orientation and journal it once. The agent's `state.orientationlock` is `{{held, by, words, lock, conflict, applied}}`, `applied` the host's readback.");
         }
         if name == "navigationSplit" {
-            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when it draws the disclosure, an `image \"symbol:forward-chevron\"` (the chevron an iOS list draws) in a `link`, or in a `button` or pressable whose action writes the router (`push`, `open`, `go`); a chevron on a row that only selects is decoration, and its route is left unsplit, `navigationSplit=\"none\"` said for you. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a phone pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
+            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. An action that writes the router only to go back or open a sheet looks the same, so say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a phone pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
         }
         if matches!(
             name,
@@ -833,7 +837,7 @@ const MIDI_SOURCE: &str = "reserved source, `resource midi = exactMIDI() as shap
 
 /// `@exact/notifications`' names (LLP 1133.004), which a package declares and
 /// no table of the compiler's holds.
-const NOTIFICATIONS: &str = "a name of the standard module `@exact/notifications` (LLP 1133.004): `exact add notifications`, then `use showNotification, notificationclick, NotificationEvent from \"@exact/notifications\"` and the grant `device.notifications purpose.notifications`. A post is a statement in an action, `showNotification(title=\"Build finished\", tag=t, silent=true, data=\"/thread/3\")`; `closeNotification(tag=t)` takes it away. Its click is `notificationclick=opened` on the root component's outermost node (`action opened(tag: string, e: NotificationEvent)`, `e.data`); with `navigate=\"/thread/3\"` the click opens that route. `setAppBadge(contents=3)`, `setAppBadge()` (a flag) and `clearAppBadge()` set the app icon's badge; `notificationStatus()` reads the permission and `requestNotificationPermission()` asks. Data code calls the same names through the package's binding. Under the agent `state.notifications` lists each post, `tap @ref` clicks one, and `state.badge` is the badge (docs/reference.md#notifications)";
+const NOTIFICATIONS: &str = "a name of the standard module `@exact/notifications` (LLP 1133.004): `bun exact.mjs add notifications`, then `use showNotification, notificationclick, NotificationEvent from \"@exact/notifications\"` and the grant `device.notifications purpose.notifications`. A post is a statement in an action, `showNotification(title=\"Build finished\", tag=t, silent=true, data=\"/thread/3\")`; `closeNotification(tag=t)` takes it away. Its click is `notificationclick=opened` on the root component's outermost node (`action opened(tag: string, e: NotificationEvent)`, `e.data`); with `navigate=\"/thread/3\"` the click opens that route. `actions=[NotificationAction(action=\"approve\", title=\"Approve\", foreground=false, destructive=false, authenticationRequired=true, placeholder=none)]`, written out, gives a post its buttons (a push names the list by `aps.category`, \"approve\"); a choice is the click with `e.action` and `e.reply`, and one with `foreground=false` runs its handler in the background, its work held to completion. `setAppBadge(contents=3)`, `setAppBadge()` (a flag) and `clearAppBadge()` set the app icon's badge; `notificationStatus()` reads the permission and `requestNotificationPermission()` asks. Data code calls the same names through the package's binding. Under the agent `state.notifications` lists each post, `tap @ref` clicks one (`tap @ref approve` chooses an action), and `state.badge` is the badge (docs/reference.md#notifications)";
 
 /// A host command: an action statement, never a value.
 fn command_text(name: &str) -> String {
@@ -845,6 +849,8 @@ fn command_text(name: &str) -> String {
         "setPageZoom" => "; `setPageZoom(factor)` sets the window's page zoom, as View ▸ Zoom In does and Electron's `webContents.setZoomFactor`: CSS px per point, so the viewport, media queries, `px` and `rem` all follow (`setPageZoom(1)` is Actual Size). The Mac's own; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1)",
         "exitFullscreen" => "; `exitFullscreen()`: the document leaves full screen, as the web's `document.exitFullscreen()`; on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s). iOS, Linux and Windows refuse it in the journal (LLP 1069.010)",
         "setWindowOpacity" => "; `setWindowOpacity(opacity)` draws the session's window at that opacity, 0 (unseen, still key and still hearing keys) to 1, as Electron's `BrowserWindow.setOpacity`: what an app's own quit hold does before it quits. The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1069.010)",
+        "setLocale" => "; `setLocale(\"de\")` makes the app's `t(…)` texts read the strings table that tag resolves to (the same lookup as the host's locale: `de-AT`, then `de`, then the base), with `lang`, `dir` and `exactTime().resolvedLocale`; `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and read before the first frame; `setLocale(\"\")` forgets it and follows the host's locale again. An app with strings tables only",
+        "hideWindow" => "; `hideWindow()` puts the session's window away and keeps the app running, as the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed, and as Electron's `BrowserWindow.hide`: `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and bare `focus()`, a Dock click or the status item's own press shows it again as a restore (`restores`). For the menu-bar utility whose window goes once its work is done; `close()` still closes and ends the app. The Mac's, refused in the journal where the app would not keep running (no `keepRunning`, no status item placed, a `navigate-new` app); iOS, Linux, Windows, Android and the web refuse it in the journal (LLP 1133.025 D4)",
         "setRootFontSize" => "; `setRootFontSize(px)` sets CSS's `:root { font-size }`, the size every `rem` follows (px above 0), over the host's own; `setRootFontSize(\"125%\")` sets a percentage of the host's size that keeps following it (Dynamic Type, the browser's setting); `setRootFontSize(\"medium\")` hands it back (LLP 1069.000 D3, LLP 1121 D6)",
         _ => frames::command(name).unwrap_or(""),
     };
@@ -959,9 +965,13 @@ fn row_json(row: StyleId) -> Value {
     let mut doc = json!({
         "row": row.name(),
         "codec": vocab::codec(row),
-        "values": row.enum_names(),
+        "values": vocab::authored_names(row),
         "default": vocab::default(row),
     });
+    // LLP 1043.000 §3 D1: keywords the wire keeps and the compiler refuses.
+    if !row.refused_enum_names().is_empty() {
+        doc["refused"] = row.refused_enum_names().into();
+    }
     // Only a row with entries has the key: none recorded is not "every host draws it".
     let hosts = vocab::style_hosts(row);
     if !hosts.is_empty() {
@@ -1087,6 +1097,7 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
         doc["note"] = GRID_TRACKS.into();
     }
     if name == "buttonStyle" {
+        doc["values"] = exact_kernel::generated::BUTTON_STYLES.into();
         doc["note"] = vocab::BUTTON_DEFAULT_NOTE.into();
     }
     if name == "appearance" {
@@ -1154,12 +1165,15 @@ fn tag_text(t: &Tag) -> String {
 /// One row's codec, values and default, as one phrase.
 fn row_text(row: StyleId) -> String {
     let mut text = vocab::codec(row);
-    let values = row.enum_names();
+    let values = vocab::authored_names(row);
     if !values.is_empty() {
         text += &format!(" {}", values.join("|"));
     }
     if let Some(default) = vocab::default(row) {
         text += &format!(", default {default}");
+    }
+    if !row.refused_enum_names().is_empty() {
+        text += &format!("; refused: {}", row.refused_enum_names().join("|"));
     }
     text
 }

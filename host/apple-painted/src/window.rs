@@ -1,6 +1,6 @@
 use exact_ink::counters;
 use exact_ink::device::apple::{trace_mark, BootTicks, DisplayLink, Layer, Trace};
-use exact_linux::{
+use exact_painted::{
     app::{self, Config},
     Presenter,
 };
@@ -41,7 +41,7 @@ struct App<D: DataSource> {
     layer: Option<Layer>,
     display: Option<DisplayLink>,
     presenter: Option<Presenter<D>>,
-    first_frame: Option<exact_linux::presenter::SubmittedAppleFrame>,
+    first_frame: Option<exact_painted::presenter::SubmittedAppleFrame>,
     agent: Option<super::agent::Agent>,
     started: Instant,
     tick_pending: Arc<AtomicBool>,
@@ -136,7 +136,7 @@ pub fn run<D: DataSource + Default + 'static>(name: &str, plan: &[u8], compat: &
     };
     let proxy = events.create_proxy();
     let wake = proxy.clone();
-    exact_linux::set_event_waker(Some(Arc::new(move || {
+    exact_painted::set_event_waker(Some(Arc::new(move || {
         let _ = wake.send_event(Event::Wake);
     })));
     let state = Rc::new(RefCell::new(App::<D> {
@@ -212,7 +212,7 @@ pub fn run<D: DataSource + Default + 'static>(name: &str, plan: &[u8], compat: &
     }
     drop(boot_ticks);
     let mut state = state.borrow_mut();
-    exact_linux::set_event_waker(None);
+    exact_painted::set_event_waker(None);
     if state.frames > 0 {
         eprintln!(
             "exact-apple-painted: {} frames, mean paint {:.3} ms (benchmark carrier)",
@@ -220,7 +220,7 @@ pub fn run<D: DataSource + Default + 'static>(name: &str, plan: &[u8], compat: &
             state.paint_ms / state.frames as f64
         );
     }
-    if !exact_linux::host::drain_store_writes(Duration::from_secs(5)) {
+    if !exact_painted::host::drain_store_writes(Duration::from_secs(5)) {
         eprintln!("painted carrier: store writes did not drain");
         state.failed = true;
     }
@@ -518,7 +518,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for App<D> {
             }));
             let presenter_trace = Trace::new(c"boot presenter");
             let (mut p, warning) = if self.config.painter()
-                == exact_linux::presenter::PainterChoice::Ink
+                == exact_painted::presenter::PainterChoice::Ink
                 && std::env::var("EXACT_INK_DEVICE").as_deref() == Ok("metal")
             {
                 let proxy = self.proxy.clone();
@@ -538,7 +538,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for App<D> {
             p.set_system_scheme(layer.dark_appearance());
             p.host_mut().runner_mut().set_row_reuse(true);
             if self.live {
-                p.set_live_clock(Some(exact_linux::presenter::wall_since(self.started)));
+                p.set_live_clock(Some(exact_painted::presenter::wall_since(self.started)));
             }
             p.attach_apple_layer(layer.clone())?;
             trace_mark(c"boot layer attached", || 0.);
@@ -623,7 +623,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for App<D> {
                         self.first_frame = None;
                     }
                     if request["op"] == "state" && request["counters"] == true {
-                        let _ = reply.send(exact_linux::ink::counter_state().to_string());
+                        let _ = reply.send(exact_painted::ink::counter_state().to_string());
                         return;
                     }
                     if matches!(
@@ -651,7 +651,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for App<D> {
                         return;
                     }
                     let mut answer: serde_json::Value =
-                        serde_json::from_str(&exact_linux::agent::handle_for_window(p, &line))
+                        serde_json::from_str(&exact_painted::agent::handle_for_window(p, &line))
                             .unwrap_or_default();
                     if request["op"] == "state" {
                         answer["carrier"] = serde_json::json!({"name":"exact-apple-painted","benchmark":true,"shipping":false,"scale":self.scale,"frames":self.frames,"paintMs":self.paint_ms,"wheelPhase":self.wheel_phases[0],"momentumPhase":self.wheel_phases[1],"ime":false,"accessibility":false});
@@ -1021,7 +1021,7 @@ fn service<D: DataSource>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exact_linux::presenter::PainterChoice;
+    use exact_painted::presenter::PainterChoice;
 
     #[test]
     fn acquisition_and_cpu_blit_failures_replace_a_retained_frame() {
@@ -1139,7 +1139,7 @@ mod tests {
         assert!(error.is_none(), "{error:?}");
         p.frame();
         for op in ["state", "tree", "layout", "logs"] {
-            let answer = exact_linux::agent::handle_for_window(
+            let answer = exact_painted::agent::handle_for_window(
                 &mut p,
                 &serde_json::json!({"op":op}).to_string(),
             );
@@ -1148,12 +1148,12 @@ mod tests {
         }
         let key = p.host().kernel().find_by_test_id("increment")[0];
         let id = p.host().kernel().node_by_key(key).unwrap().id;
-        exact_linux::agent::handle_for_window(
+        exact_painted::agent::handle_for_window(
             &mut p,
             &serde_json::json!({"op":"tap","id":id}).to_string(),
         );
         assert!(p.dirty(), "a tap leaves its changed frame for the window");
-        exact_linux::agent::handle_for_window(&mut p, "{\"op\":\"layout\"}");
+        exact_painted::agent::handle_for_window(&mut p, "{\"op\":\"layout\"}");
         assert!(p.dirty(), "geometry must preserve existing window damage");
         p.frame();
         assert!(!p.dirty());

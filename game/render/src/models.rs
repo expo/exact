@@ -96,9 +96,12 @@ mod prepare;
 pub(crate) use poses::Moved;
 pub(crate) use prepare::{caster, depth, ModelFrame};
 mod textures;
+#[cfg(not(target_arch = "wasm32"))]
+mod uploads;
 mod variants;
-use textures::upload_texture;
 pub(crate) use textures::Texture;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use uploads::Uploads;
 struct PoseHistory {
     entity: exact_game::Entity,
     saved: Option<(u64, u64, [exact_game::Transform; 2])>,
@@ -736,53 +739,6 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
             }
         }
     }
-    /// Reuse a name only when its content digest matches. CPU mips may be dropped.
-    pub fn add_texture(&mut self, name: &str, data: &TextureData) -> Result<(), RenderError> {
-        let digest = exact_game::hash::of(data);
-        if let Some(texture) = self
-            .models
-            .textures
-            .get_mut(name)
-            .filter(|t| t.digest == digest)
-        {
-            texture.active = true;
-            return Ok(());
-        }
-        data.validate().map_err(RenderError::scene)?;
-        let sprite = self
-            .models
-            .textures
-            .get(name)
-            .is_some_and(|texture| texture.sprite_bind.is_some());
-        let mut texture =
-            upload_texture(&self.device, &self.queue, data, &mut self.models.samplers)?;
-        texture.digest = digest;
-        if sprite {
-            texture.sprite_bind = Some(self.quads.sprite_bind(&self.device, &texture));
-        }
-        self.models.textures.insert(name.into(), texture);
-        self.models.uploads += 1;
-        for material in &mut self.models.materials {
-            if material.bind.is_some()
-                && material.names.iter().flatten().any(|n| n == name)
-                && material
-                    .names
-                    .iter()
-                    .flatten()
-                    .all(|n| self.models.textures.contains_key(n))
-            {
-                *material = material_bind(
-                    &self.device,
-                    &self.queue,
-                    &self.pipelines.models.as_ref().unwrap().material,
-                    (&material.data, &material.names),
-                    &self.models.textures,
-                    None,
-                );
-            }
-        }
-        Ok(())
-    }
     /// Cumulative model pipeline creations and asset texture uploads, for diagnostics.
     pub fn asset_work(&self) -> (usize, u64) {
         (
@@ -799,6 +755,10 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
     /// Resident texture bytes and formats, as JSON for the world state.
     pub(crate) fn texture_summary(&self) -> String {
         textures::summary(&self.models.textures)
+    }
+    /// Device bytes of the delivered textures held, retired ones included.
+    pub(crate) fn texture_bytes(&self) -> u64 {
+        textures::resident_bytes(&self.models.textures)
     }
     pub(crate) fn residency_work(&self) -> crate::world::assets::Work {
         let (pipelines, textures) = self.asset_work();
@@ -1471,6 +1431,9 @@ impl<P: crate::Executor> crate::Executor for ModelExecutor<P> {
     }
     fn suspend(&mut self, suspended: bool) {
         self.inner.suspend(suspended);
+    }
+    fn audio_state(&self) -> Option<&'static str> {
+        self.inner.audio_state()
     }
     fn sync(&mut self, world: &exact_game::World, generation: u64, playing: bool, seekable: bool) {
         self.inner.sync(world, generation, playing, seekable);

@@ -206,6 +206,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         presenter?.onScrolled?(nil, Double(scrollView.contentOffset.x), Double(scrollView.contentOffset.y))
+        presenter?.tipsScrolled()
         FrameSampler.scrolled(scrollView, in: presenter?.session, person: false)
         presenter?.session?.frameHealth.trackScrolled(scrollView)
         if let p = presenter, p.documentFixed {

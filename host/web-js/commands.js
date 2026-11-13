@@ -74,6 +74,8 @@ export const setRootFontSize = say => v => v === "medium" || (typeof v === "numb
 // The document's own full screen ends, as `document.exitFullscreen()`; a page cannot fade its window (LLP 1069.010).
 export const exitFullscreen = say => () => { if (document.fullscreenElement) document.exitFullscreen().catch(e => say(`exitFullscreen: refused: ${e.name}`)); };
 export const setWindowOpacity = say => () => say("setWindowOpacity refused: a page cannot change its window's opacity");
+// A page cannot put its window away and keep running (LLP 1133.025 D4).
+export const hideWindow = say => () => say("hideWindow refused: a page cannot hide its window");
 // A page cannot set the browser's zoom, which is the person's (LLP 1021 §5.3.1).
 export const setPageZoom = say => () => say("setPageZoom refused: the browser's zoom is the person's; a page cannot set it");
 // A recording of frames is the Apple hosts'; the browser's performance panel records the page.

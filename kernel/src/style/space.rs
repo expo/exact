@@ -3,7 +3,18 @@
 //! engine animates; its axis is a row of its own, which the `rotate`
 //! attribute sets beside it, each row taking its part of one value.
 
-use super::{parse_pixel_length, Vec2};
+use super::{parse_pixel_length, StyleId, StyleValueError, Vec2};
+
+pub(super) fn velocity(text: &str) -> Result<Vec2, StyleValueError> {
+    let mut numbers = text.split_whitespace().map(str::parse::<f32>);
+    match (numbers.next(), numbers.next(), numbers.next()) {
+        (Some(Ok(x)), Some(Ok(y)), None) if x.is_finite() && y.is_finite() => Ok(Vec2 { x, y }),
+        _ => Err(StyleValueError::WrongKind {
+            style: StyleId::TranslateVelocity,
+            expected: "two finite numbers, x and y velocity in CSS px/s",
+        }),
+    }
+}
 
 /// The axis a `rotate` turns about, as authored (not normalised): `z` for
 /// a bare angle, CSS's initial.

@@ -10,20 +10,34 @@
 //! - Output reports are `write(2)`, feature reports `HIDIOCSFEATURE` and `HIDIOCGFEATURE` (the kernel's
 //!   hidraw.rst).
 //! - The painted presenter draws no chooser (D2): `requestDevice` fails `NotSupportedError`.
+//! - A close ends the read: the reader polls its node beside a socket whose other end the open holds, so dropping
+//!   the open wakes it, and it announces nothing once stopped.
 //!
-//! The package names only `exact_linux` and `std`, so the ioctls are declared here.
+//! The package names only `exact_painted` and `std`, so the ioctls and `poll` are declared here.
 
-use exact_linux::package::{json, Context, Json, Notifier, Package, Reply};
+use exact_painted::package::{json, Context, Json, Notifier, Package, Reply};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 extern "C" {
     fn ioctl(fd: i32, request: u64, ...) -> i32;
+    fn poll(fds: *mut PollFd, count: std::ffi::c_ulong, timeout: i32) -> i32;
 }
+
+/// `struct pollfd` (poll(2)).
+#[repr(C)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+const POLLIN: i16 = 1;
 
 /// `_IOC(_IOC_WRITE | _IOC_READ, 'H', nr, len)`, the hidraw feature report ioctls.
 fn hid_ioc(nr: u64, len: usize) -> u64 {
@@ -157,6 +171,8 @@ struct Open {
     file: Arc<File>,
     log: Arc<Mutex<Log>>,
     stop: Arc<AtomicBool>,
+    /// The reader polls the other end: dropping this one wakes it.
+    _wake: UnixStream,
     leases: usize,
 }
 
@@ -174,11 +190,31 @@ pub struct Hid {
     remembered: Vec<String>,
 }
 
-fn read_loop(file: Arc<File>, log: Arc<Mutex<Log>>, stop: Arc<AtomicBool>, device: Device, notifier: Notifier, epoch: std::time::Instant) {
+/// Whether `file` has a report to read, waiting for one; false once `wake`'s other end is gone.
+fn readable(file: &File, wake: &UnixStream) -> bool {
+    loop {
+        let mut fds = [file.as_raw_fd(), wake.as_raw_fd()].map(|fd| PollFd { fd, events: POLLIN, revents: 0 });
+        // SAFETY: poll reads and writes the two entries of `fds`, which outlive the call.
+        if unsafe { poll(fds.as_mut_ptr(), 2, -1) } >= 0 {
+            return fds[1].revents == 0;
+        }
+        if std::io::Error::last_os_error().kind() != ErrorKind::Interrupted {
+            // The read then reports what is wrong with the node.
+            return true;
+        }
+    }
+}
+
+fn read_loop(file: Arc<File>, wake: UnixStream, log: Arc<Mutex<Log>>, stop: Arc<AtomicBool>, device: Device, notifier: Notifier, epoch: std::time::Instant) {
     let numbered = device.collections.iter().any(|c| !c.reports.is_empty());
     let mut buf = [0u8; 4096];
-    while !stop.load(Ordering::Relaxed) {
-        match (&*file).read(&mut buf) {
+    while readable(&file, &wake) {
+        let read = (&*file).read(&mut buf);
+        // Closed while the report arrived: nothing is announced for a closed connection.
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match read {
             Ok(0) | Err(_) => {
                 log.lock().unwrap_or_else(|e| e.into_inner()).gone = true;
                 notifier.changed("hid.inputReports");
@@ -249,11 +285,15 @@ impl Hid {
                 Err(e) if e.kind() == ErrorKind::PermissionDenied => return json!({ "error": "NotAllowedError", "message": e.to_string() }),
                 Err(e) => return json!({ "error": "NetworkError", "message": e.to_string() }),
             };
+            let (wake, woken) = match UnixStream::pair() {
+                Ok(pair) => pair,
+                Err(e) => return json!({ "error": "NetworkError", "message": e.to_string() }),
+            };
             let (log, stop) = (Arc::new(Mutex::new(Log::default())), Arc::new(AtomicBool::new(false)));
             let (f, l, s, d, n) = (file.clone(), log.clone(), stop.clone(), device.clone(), self.context.notifier());
             let epoch = std::time::Instant::now();
-            std::thread::spawn(move || read_loop(f, l, s, d, n, epoch));
-            self.opens.insert(id.to_owned(), Open { file, log, stop, leases: 0 });
+            std::thread::spawn(move || read_loop(f, woken, l, s, d, n, epoch));
+            self.opens.insert(id.to_owned(), Open { file, log, stop, _wake: wake, leases: 0 });
         }
         self.opens.get_mut(id).expect("just opened").leases += 1;
         self.next += 1;
@@ -324,6 +364,7 @@ impl Hid {
         if let Some(o) = self.opens.get_mut(&id) {
             o.leases -= 1;
             if o.leases == 0 {
+                // Stopped before woken: the reader then announces nothing.
                 o.stop.store(true, Ordering::Relaxed);
                 self.opens.remove(&id);
             }
@@ -402,6 +443,7 @@ impl Package for Hid {
         for o in self.opens.values() {
             o.stop.store(true, Ordering::Relaxed);
         }
+        self.opens.clear();
     }
 }
 

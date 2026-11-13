@@ -30,6 +30,8 @@ component Beacons
   state levelY = 0
   state levelZ = 9.80665
   resource hud = exactSurface("world") as shape Hud
+  resource preference = bindingPreference() as shape string
+  mutation savedPreference as shape string refreshes preference
   resource motion = motionStatus() as shape MotionStatus
   // Contract has no resource of a child or a conditional one: the level's
   // reading is the root's, read while the game runs.
@@ -44,6 +46,9 @@ component Beacons
 
   action play
     playing = true
+
+  action setJumpKey(useJ: bool)
+    send savedPreference = saveBindingPreference(useJ)
 
   // The input follows the pause: a paused world queues no samples, and a
   // resumed one starts on a fresh grid.
@@ -86,12 +91,17 @@ component Beacons
   view
     main width="100%" height="100%" background-color="#202731" color="#ffffff"
       if playing
-        canvas surface=world(seed=7, paused=paused, restart=again) testId="world" width="100%" height="100%" position="relative" orientationlock=(tilt ? "current" : "none") message=heard
+        canvas surface=world(seed=7, paused=paused, restart=again, bindings=preference) testId="world" width="100%" height="100%" position="relative" orientationlock=(tilt ? "current" : "none") message=heard
           text `Beacons ${hud.lit} / 3` aria-live="polite" testId="hud-lit" position="absolute" top=24 left=24 padding=12 background-color="#202731"
           button press=togglePause aria-label=(paused ? "Resume" : "Pause") testId="pause" position="absolute" top=24 right=24 padding=12 border-radius=8 background-color="#202731"
             text (paused ? "Resume" : "Pause") color="#ffffff"
           if paused and motion.available
             TiltPanel(tilt=tilt, state=motion.state, x=g.x - levelX, y=g.y - levelY, gx=g.x, gy=g.y, gz=g.z, angles=angles, setTilt=setTilt, setLevel=setLevel)
+          if paused
+            column position="absolute" bottom=160 left=24 gap=12 padding=12 background-color="#202731"
+              BindingPreference(useJ=preference != "", busy=pending(preference) or pending(savedPreference), failed=failed(preference) or failed(savedPreference), setJumpKey=setJumpKey)
+              button press=restart disabled=(pending(preference) or pending(savedPreference) or failed(preference)) testId="new-game"
+                text "New game"
           if hud.near != "" and padWord != ""
             row position="absolute" top=76 left=24 padding=12 gap=8 align-items="center" background-color="#202731"
               if padSymbol != ""
@@ -117,9 +127,25 @@ component Beacons
         column height="100%" align-items="center" justify-content="center" gap=24
           text "BEACONS" font-size=56 font-weight=600 color="#f1ce8b"
           text "A quiet field. Three lights to find." font-size=20 color="#ceddd8"
-          text "WASD / arrows to move · Space to jump · E to light" font-size=16 color="#ceddd8"
-          button press=play autofocus aria-label="Play" testId="play" padding=16 background-color="#e8ad61"
+          text (preference == "" ? "WASD / arrows to move · Space to jump · E to light" : "WASD / arrows to move · J to jump · E to light") font-size=16 color="#ceddd8"
+          BindingPreference(useJ=preference != "", busy=pending(preference) or pending(savedPreference), failed=failed(preference) or failed(savedPreference), setJumpKey=setJumpKey)
+          button press=play disabled=(pending(preference) or pending(savedPreference) or failed(preference)) autofocus aria-label="Play" testId="play" padding=16 background-color="#e8ad61"
             text "Play" font-size=20 color="#202731"
+
+component BindingPreference
+  props
+    useJ: bool
+    busy: bool
+    failed: bool
+    setJumpKey: action
+  view
+    column gap=8
+      row gap=12 align-items="center"
+        text "Use J to jump in new games"
+        input type="checkbox" switch checked=useJ disabled=busy change=setJumpKey testId="jump-preference" aria-label="Use J to jump in new games"
+      text "Current games and saves keep their controls." font-size=14
+      if failed
+        text "Could not load or save the jump preference." role="alert" testId="binding-error"
 
 component TiltPanel
   props

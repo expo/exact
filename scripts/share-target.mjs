@@ -88,14 +88,19 @@ export function driverShare(href, base) {
 }
 
 /** Where the web delivers a share (D6): its GET member's location, with a link joined to the text when no `url`
- * member is mapped, as the hosts' claim joins it. A file is refused: web file shares wait for a service worker. */
+ * member is mapped, as the hosts' claim joins it. As a browser composes it (Web Share Target, "Handling incoming
+ * shares") and the runner's `location` does: the members, form-encoded, replace the action's query, and its fragment
+ * is kept. A file is refused: web file shares wait for a service worker. */
 export function webShareLocation(target, share) {
   if (share.files?.length) throw new Error('share: the web takes text and links only; a file share waits for a service worker (LLP 1133.024 §19 question 4)');
   const { title, text, url } = target.params ?? {};
   let body = share.text;
   if (!url && share.url) body = !body ? share.url : body.includes(share.url) ? body : `${body}\n${share.url}`;
   const pairs = [[title, share.title], [text, body], [url, share.url]].filter(([name, value]) => name && value);
-  return pairs.length ? `${target.action}?${pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')}` : target.action;
+  const hash = target.action.indexOf('#'), fragment = hash < 0 ? '' : target.action.slice(hash);
+  const path = target.action.slice(0, hash < 0 ? undefined : hash).split('?', 1)[0];
+  const query = new URLSearchParams(pairs).toString();
+  return `${path}${query ? `?${query}` : ''}${fragment}`;
 }
 
 /** Android's intent filters (D5): `SEND text/plain` when text or a link is mapped, and `SEND` and `SEND_MULTIPLE`

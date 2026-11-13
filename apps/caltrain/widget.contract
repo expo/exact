@@ -14,9 +14,13 @@ shape WidgetViewport
   width: number
   height: number
 
+shape WidgetConfiguration
+  rows: enum<"one", "two">
+
 component NextTrains
   inject
     snapshot_viewport: WidgetViewport
+    snapshot_configuration: WidgetConfiguration
   props
     station: string
     departures: WidgetDeparture[]
@@ -36,7 +40,7 @@ component NextTrains
       else
         column gap=(snapshot_viewport.height < 70 ? 4 : 8)
           text station font-weight=600 line-clamp=1
-          for departure in departures key=departure.id
+          for departure in departures.slice(0, snapshot_configuration.rows == "one" ? 1 : 2) key=departure.id
             row gap=8
               text departure.headsign flex=1 line-clamp=1
               time datetime=departure.at format="countdown" font-variant-numeric="tabular-nums"

@@ -1,19 +1,20 @@
 //! Input: evdev, read directly — pointer motion, buttons, wheels, keys,
 //! gamepads — with a US keymap for typing. No libinput (nothing to link), so no
 //! pointer acceleration, touchpad gestures, or hotplug: the trades LLP 1015
-//! §7 declares.
+//! §7 declares. A touchpad's finger moves the pointer by its travel.
 //!
 //! @ref LLP 1015 §6
 
 #![allow(unsafe_code)]
 
 use evdev::{
-    AbsoluteAxisCode, Device, EventSummary, EventType, RelativeAxisCode, SynchronizationCode,
+    AbsoluteAxisCode, Device, EventSummary, EventType, KeyCode, PropType, RelativeAxisCode,
+    SynchronizationCode,
 };
 use std::os::fd::AsRawFd;
 
 mod pad;
-pub use crate::gamepad::Reading as PadReading;
+pub use exact_painted::gamepad::Reading as PadReading;
 pub use pad::MAX_PADS;
 
 /// One thing the user did.
@@ -108,15 +109,99 @@ pub const LINE: f32 = 40.0;
 /// An absolute device's (min, max) per axis, x then y.
 type Ranges = [(i32, i32); 2];
 
+/// How an absolute device's ABS_X and ABS_Y move the pointer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Absolute {
+    /// To the same fraction of the screen: a touch screen, a drawing
+    /// tablet, a KVM's mouse.
+    Screen(Ranges),
+    /// By the finger's travel: a touchpad.
+    Pad(Glide),
+}
+
+/// Device pixels a touchpad finger's millimetre of travel moves the
+/// pointer: libinput's flat profile, which counts a touchpad's travel at
+/// 1000 dpi and slows it by 0.2968 (`TP_MAGIC_SLOWDOWN`).
+const PAD_PIXELS_PER_MM: f32 = 1000.0 / 25.4 * 0.2968;
+
+/// A touchpad read as relative motion. The kernel reports the touch's
+/// place on the pad (`ABS_X`, `ABS_Y`) and sends an axis only when it
+/// changes, so `at` is always the pad's current place. While a finger
+/// touches, each report moves the pointer by its change; in a report where
+/// a finger lands or the fingers change, the place moves and the pointer
+/// does not, since the kernel's single point then jumps to the new touch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Glide {
+    /// Device pixels per pad unit, x then y.
+    scale: [f32; 2],
+    at: [i32; 2],
+    touching: bool,
+    landing: bool,
+}
+
+impl Glide {
+    /// A pad with these axes (`input_absinfo`): its place, its range, and
+    /// its resolution in units per millimetre. A driver that reports no
+    /// resolution (0) is taken to have a pad 100 mm wide.
+    fn new(axes: [(i32, (i32, i32), i32); 2]) -> Glide {
+        let width = (axes[0].1 .1 - axes[0].1 .0).max(1) as f32;
+        let per_mm = |(_, _, resolution): (i32, (i32, i32), i32)| {
+            if resolution > 0 {
+                resolution as f32
+            } else {
+                width / 100.0
+            }
+        };
+        Glide {
+            scale: axes.map(|a| PAD_PIXELS_PER_MM / per_mm(a)),
+            at: axes.map(|a| a.0),
+            touching: false,
+            landing: false,
+        }
+    }
+
+    /// The pointer's move, in device pixels, for the place `value` on
+    /// `axis` (0 for x, 1 for y).
+    fn axis(&mut self, axis: usize, value: i32) -> f32 {
+        let moved = (value - self.at[axis]) as f32 * self.scale[axis];
+        self.at[axis] = value;
+        if self.touching && !self.landing {
+            moved
+        } else {
+            0.0
+        }
+    }
+
+    /// `BTN_TOUCH`: a finger came down (`true`) or the last one lifted.
+    fn touch(&mut self, down: bool) {
+        self.touching = down;
+        self.landing = true;
+    }
+
+    /// A `BTN_TOOL_*` finger count changed, or events were dropped: the
+    /// next place is a new start.
+    fn restart(&mut self) {
+        self.landing = true;
+    }
+
+    /// `SYN_REPORT`: the report is whole.
+    fn report(&mut self) {
+        self.landing = false;
+    }
+}
+
 /// A pad's identity and motors, as the registry takes them.
-type Registering = (crate::pads::Identity, Option<Box<dyn crate::pads::Output>>);
+type Registering = (
+    exact_painted::pads::Identity,
+    Option<Box<dyn exact_painted::pads::Output>>,
+);
 
 /// Every device that points, types or plays.
 pub struct Input {
-    devices: Vec<(Device, Option<Ranges>)>,
+    devices: Vec<(Device, Option<Absolute>)>,
     // A pad, its index, its state, and whether its connection was reported.
-    pads: Vec<(Device, crate::gamepad::Opened)>,
-    /// Each pad's identity and motors, for the registry (`crate::pads`)
+    pads: Vec<(Device, exact_painted::gamepad::Opened)>,
+    /// Each pad's identity and motors, for the registry (`exact_painted::pads`)
     /// when it is first read, by index; `None` once it is there.
     to_register: Vec<Option<Registering>>,
     keyboard: Keyboard,
@@ -141,7 +226,7 @@ impl Input {
                     let announced = false;
                     pads.push((
                         d,
-                        crate::gamepad::Opened {
+                        exact_painted::gamepad::Opened {
                             index,
                             state,
                             announced,
@@ -151,10 +236,21 @@ impl Input {
                 continue;
             }
             let pointer = d.supported_events().contains(EventType::RELATIVE);
-            // An absolute pointer: ABS_X/ABS_Y with their ranges (a KVM's
-            // mouse, a tablet, a USB touchscreen). Multitouch slots are
-            // not tracked; ABS_MT_POSITION_* is the same point as ABS_X/Y
-            // on the single-contact devices we open.
+            let keys = d.supported_keys();
+            let has = |code| keys.is_some_and(|k| k.contains(code));
+            // A touchpad, as udev's `input_id` tells one: fingers and no
+            // pen, on a device not mapped to the screen. The kernel's
+            // "Device properties" (docs.kernel.org/input/event-codes.html)
+            // set INPUT_PROP_DIRECT on a touch screen or drawing tablet and
+            // INPUT_PROP_POINTER on a new touchpad; with neither, the type
+            // is deduced from the events, as here.
+            let touchpad = has(KeyCode::BTN_TOOL_FINGER)
+                && !has(KeyCode::BTN_TOOL_PEN)
+                && !d.properties().contains(PropType::DIRECT);
+            // An absolute pointer: ABS_X/ABS_Y. Multitouch slots are not
+            // tracked; ABS_MT_POSITION_* is the same point as ABS_X/Y on
+            // the single-contact screens we open, and a touchpad's
+            // ABS_X/Y is its first finger.
             let absolute = d
                 .supported_absolute_axes()
                 .is_some_and(|a| {
@@ -163,22 +259,26 @@ impl Input {
                 .then(|| d.get_abs_state().ok())
                 .flatten()
                 .map(|abs| {
-                    let x = abs[AbsoluteAxisCode::ABS_X.0 as usize];
-                    let y = abs[AbsoluteAxisCode::ABS_Y.0 as usize];
-                    [(x.minimum, x.maximum), (y.minimum, y.maximum)]
+                    let [x, y] = [AbsoluteAxisCode::ABS_X, AbsoluteAxisCode::ABS_Y]
+                        .map(|axis| abs[axis.0 as usize]);
+                    if touchpad {
+                        Absolute::Pad(Glide::new(
+                            [x, y].map(|a| (a.value, (a.minimum, a.maximum), a.resolution)),
+                        ))
+                    } else {
+                        Absolute::Screen([(x.minimum, x.maximum), (y.minimum, y.maximum)])
+                    }
                 });
-            let keyboard = d.supported_keys().is_some_and(|k| {
-                k.contains(evdev::KeyCode::KEY_A) || k.contains(evdev::KeyCode::BTN_LEFT)
-            });
+            let keyboard = has(KeyCode::KEY_A) || has(KeyCode::BTN_LEFT);
             if !(pointer || absolute.is_some() || keyboard) {
                 continue;
             }
-            let keys = d.supported_keys();
-            pointing.push(crate::presenter::Pointing {
-                relative: pointer,
-                absolute: absolute.is_some(),
-                touch: keys.is_some_and(|k| k.contains(evdev::KeyCode::BTN_TOUCH)),
-                left: keys.is_some_and(|k| k.contains(evdev::KeyCode::BTN_LEFT)),
+            let pad = matches!(absolute, Some(Absolute::Pad(_)));
+            pointing.push(exact_painted::presenter::Pointing {
+                relative: pointer || pad,
+                absolute: absolute.is_some() && !pad,
+                touch: has(KeyCode::BTN_TOUCH),
+                left: has(KeyCode::BTN_LEFT),
             });
             nonblocking(&d);
             devices.push((d, absolute));
@@ -188,12 +288,12 @@ impl Input {
             pads,
             to_register,
             keyboard: Keyboard::default(),
-            touch_only: crate::presenter::touch_only(&pointing),
+            touch_only: exact_painted::presenter::touch_only(&pointing),
         }
     }
 
     /// Whether a touch screen is the only pointing device open
-    /// ([`crate::presenter::touch_only`]).
+    /// ([`exact_painted::presenter::touch_only`]).
     pub fn touch_only(&self) -> bool {
         self.touch_only
     }
@@ -219,41 +319,42 @@ impl Input {
     /// reports' times moved into the host's clock by `now_ms`, its time at
     /// this read.
     fn read_pads(&mut self, now_ms: f64, out: &mut Vec<InputEvent>) {
-        use crate::gamepad::{change, Fetch};
+        use exact_painted::gamepad::{change, Fetch};
         let epoch_ms = |t: std::time::SystemTime| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .map_or(0., |d| d.as_secs_f64() * 1000.)
         };
         let now = (epoch_ms(std::time::SystemTime::now()), now_ms);
-        let readings = crate::gamepad::read(&mut self.pads, now, |d| match d.fetch_events() {
-            Ok(events) => Fetch::Changes(
-                events
-                    .filter_map(|e| {
-                        let at = epoch_ms(e.timestamp());
-                        Some((change(e.event_type().0, e.code(), e.value())?, at))
-                    })
-                    .collect(),
-            ),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                Fetch::Nothing
-            }
-            Err(_) => Fetch::Gone,
-        });
+        let readings =
+            exact_painted::gamepad::read(&mut self.pads, now, |d| match d.fetch_events() {
+                Ok(events) => Fetch::Changes(
+                    events
+                        .filter_map(|e| {
+                            let at = epoch_ms(e.timestamp());
+                            Some((change(e.event_type().0, e.code(), e.value())?, at))
+                        })
+                        .collect(),
+                ),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    Fetch::Nothing
+                }
+                Err(_) => Fetch::Gone,
+            });
         for (index, reading, at) in readings {
             // The registry a package reads has the same pads by index.
             match (reading, self.to_register.get_mut(index as usize)) {
                 (Some(r), Some(waiting)) => {
                     if let Some((identity, motors)) = waiting.take() {
-                        crate::pads::connect(index, identity, motors);
+                        exact_painted::pads::connect(index, identity, motors);
                     }
-                    crate::pads::read(index, r);
+                    exact_painted::pads::read(index, r);
                 }
-                (None, _) => crate::pads::disconnect(index),
+                (None, _) => exact_painted::pads::disconnect(index),
                 _ => {}
             }
             out.push(InputEvent::Pad {
@@ -313,31 +414,71 @@ impl Input {
                 ) {
                     pointer.flush(&mut out);
                 }
-                match summary {
-                    EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_X, v)
-                    | EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v) => {
-                        if let Some(r) = absolute {
+                let (screen, glide) = match absolute {
+                    Some(Absolute::Screen(r)) => (Some(*r), None),
+                    Some(Absolute::Pad(glide)) => (None, Some(glide)),
+                    None => (None, None),
+                };
+                match (summary, glide) {
+                    (EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_X, v), Some(g)) => {
+                        pointer.relative.0 += g.axis(0, v);
+                    }
+                    (EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_Y, v), Some(g)) => {
+                        pointer.relative.1 += g.axis(1, v);
+                    }
+                    // A touch on the pad is not a press: its click is BTN_LEFT.
+                    (EventSummary::Key(_, KeyCode::BTN_TOUCH, value), Some(g)) => {
+                        g.touch(value != 0);
+                    }
+                    (
+                        EventSummary::Key(
+                            _,
+                            KeyCode::BTN_TOOL_FINGER
+                            | KeyCode::BTN_TOOL_DOUBLETAP
+                            | KeyCode::BTN_TOOL_TRIPLETAP
+                            | KeyCode::BTN_TOOL_QUADTAP
+                            | KeyCode::BTN_TOOL_QUINTTAP,
+                            _,
+                        ),
+                        Some(g),
+                    ) => g.restart(),
+                    (
+                        EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _),
+                        Some(g),
+                    ) => {
+                        g.report();
+                    }
+                    (EventSummary::AbsoluteAxis(..), Some(_)) => {}
+                    (
+                        EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_X, v)
+                        | EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v),
+                        _,
+                    ) => {
+                        if let Some(r) = screen {
                             pointer.absolute.0 = Some(fraction(r[0], v));
                         }
                     }
-                    EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_Y, v)
-                    | EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_Y, v) => {
-                        if let Some(r) = absolute {
+                    (
+                        EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_Y, v)
+                        | EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_Y, v),
+                        _,
+                    ) => {
+                        if let Some(r) = screen {
                             pointer.absolute.1 = Some(fraction(r[1], v));
                         }
                     }
-                    EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X, v) => {
+                    (EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X, v), _) => {
                         pointer.relative.0 += v as f32;
                     }
-                    EventSummary::RelativeAxis(_, RelativeAxisCode::REL_Y, v) => {
+                    (EventSummary::RelativeAxis(_, RelativeAxisCode::REL_Y, v), _) => {
                         pointer.relative.1 += v as f32;
                     }
-                    EventSummary::RelativeAxis(_, code, v) => {
+                    (EventSummary::RelativeAxis(_, code, v), _) => {
                         if let Some(event) = wheels.event(code, v) {
                             out.push(event);
                         }
                     }
-                    EventSummary::Key(_, code, value) => {
+                    (EventSummary::Key(_, code, value), _) => {
                         let code = code.0;
                         let down = value != 0;
                         match code {
@@ -359,7 +500,10 @@ impl Input {
                             }
                         }
                     }
-                    EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _) => {
+                    (EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _), g) => {
+                        if let Some(g) = g {
+                            g.restart();
+                        }
                         out.push(InputEvent::Cancel)
                     }
                     _ => {}
@@ -665,6 +809,16 @@ mod tests {
             );
         }
         assert_eq!(keyboard.event(17, 3, None), None);
+        // What the painted host's WASD test types (`surface_controls_tests.rs` there).
+        assert_eq!(
+            [17, 30, 31, 32].map(|code| key(code, false)),
+            [
+                Some(("KeyW", "w")),
+                Some(("KeyA", "a")),
+                Some(("KeyS", "s")),
+                Some(("KeyD", "d")),
+            ]
+        );
         assert_eq!(keyboard.event(0xffff, 1, None), None);
         assert_eq!(key(59, false), Some(("F1", "F1")));
         assert_eq!(key(87, false), Some(("F11", "F11")));
@@ -738,6 +892,35 @@ mod tests {
 #[cfg(test)]
 mod pointer_tests {
     use super::*;
+
+    /// A finger on a touchpad moves the pointer by its travel; landing,
+    /// another finger joining and lifting move nothing.
+    #[test]
+    fn a_touchpad_moves_by_the_fingers_travel_and_never_jumps() {
+        // 10 units per millimetre, the pad's place at (500, 300).
+        let mut g = Glide::new([(500, (0, 1000), 10), (300, (0, 600), 10)]);
+        let px = PAD_PIXELS_PER_MM / 10.0;
+        assert_eq!(g.axis(0, 520), 0.0, "no finger touches");
+        g.report();
+        g.touch(true);
+        assert_eq!(g.axis(0, 900), 0.0, "a finger lands across the pad");
+        assert_eq!(g.axis(1, 100), 0.0);
+        g.report();
+        assert_eq!(g.axis(0, 920), 20.0 * px);
+        assert_eq!(g.axis(1, 90), -10.0 * px);
+        g.report();
+        g.restart();
+        assert_eq!(g.axis(0, 100), 0.0, "a second finger joins");
+        g.report();
+        assert_eq!(g.axis(0, 110), 10.0 * px);
+        g.report();
+        g.touch(false);
+        assert_eq!(g.axis(0, 500), 0.0, "lifted");
+        g.report();
+        assert_eq!(g.axis(0, 510), 0.0);
+        let unknown = Glide::new([(0, (0, 2000), 0), (0, (0, 1000), 0)]);
+        assert_eq!(unknown.scale, [PAD_PIXELS_PER_MM / 20.0; 2], "100 mm wide");
+    }
     #[test]
     fn a_report_keeps_diagonal_intent_atomic_and_boundaries_separate() {
         let mut report = PointerReport::default();

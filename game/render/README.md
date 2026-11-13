@@ -697,6 +697,33 @@ derivatives; baked models contain no tangent arrays. The shader reads a normal
 map's XY and rebuilds Z (`sqrt(1 − x² − y²)`), so RGBA8, BC5 and two-channel ASTC
 draw alike. Material UV transforms apply separately to every texture.
 
+### Contract performance
+
+Contract's opt-in `exactCanvasPerformance("surface")` read receives a bounded
+snapshot at most once per second. The renderer reports the last submitted frame's
+actual pixels, render scale, effective pixel ratio, MSAA and submitted work counts.
+Frame counts and CPU tick/feed/encode means and maxima cover the window since the
+previous snapshot. Late/missed frames and the longest gap describe inter-frame
+intervals completed in that window; an interval may start before its snapshot window.
+An idle poll has no completed interval to report. Enabling, restarting the scene
+or restoring a save starts a fresh window; disabling drops these counters.
+`windowMs` measures monotonic time since the previous snapshot; `fps` is submitted
+frames per second over that window, not display or compositor FPS. An idle window
+reports zero. The first snapshot, virtual-clock snapshots and the first after a
+clock-mode change leave these fields unavailable. A clock-mode change discards the
+open measurement window. Delayed snapshots use their actual elapsed time.
+The cadence comparison honors the canvas frame cap and excludes virtual time and
+the first frame after rest. `quality`, `maxFps` and `idle` are
+read when the snapshot is taken, not over the window (`thermalState` is the last
+drawn frame's, absent from a window with no drawn frame), as are `textureMemoryBytes`
+(the delivered textures the renderer holds, retired ones included, render
+targets excluded) and
+`geometryMemoryBytes` (the shared vertex and index buffers' allocated bytes);
+the GPU module adds the process's footprint and, on the web, its own heap. `audioState` is the game audio output's (`running`, `suspended`,
+`interrupted`, `closed`) where the target has a player. CPU encoding is distinct
+from queue submission and GPU execution; unsupported timing, memory and audio
+fields stay unavailable. No simulation state, save or hash contains these readings.
+
 ### Texture families
 
 A `.tex` record is RGBA8, BC4, BC5, BC7 or ASTC 4×4 (`TextureData.format`,
@@ -1010,9 +1037,10 @@ until it has, and the driver asks again.
   so a look frame with particles draws its translucency in a pass of its own, as
   soft particles do, over the attachments the live frame draws into: the HDR
   image, or a direct frame's target, with the direct frame's format, blending and
-  resolve (its colour and depth kept between the two passes in attachments of the
-  look frame's own, released at the next live frame, so the live frame's stay
-  transient). build.rs assembles every quad module, validates it with naga, and
+  resolve. Particle counting keeps any transient colour or depth in retained
+  attachments of the look frame's own, released at the next live frame. HDR
+  looks share the live resolve image and tone binding, preserving effect
+  bindings. build.rs assembles every quad module, validates it with naga, and
   reflects the probe variants' counter group, from which the renderer takes its
   layout, binding numbers and entry points. Limits, each a gap or a stated
   meaning, not an approximation: GL has no fragment storage writes, and a scene
@@ -1067,9 +1095,10 @@ until it has, and the driver asks again.
   outside the view by the quad's own extent about its anchor, or drawn. An
   entity's word combines all of its drawables: when an opaque part drew, that
   part's word (`drawn`, `custom-material`, `outside-cascade <n>`); when only a
-  blended part, a sprite or an emitter drew, `drawn`, the reason naming which;
+  blended part, a sprite or an emitter drew, `drawn`;
   when none drew, the first one's word (the mesh's, then the sprite's, then the
-  emitter's), the reason naming the others'.
+  emitter's). For multiple drawables, the reason lists each drawable's word and
+  explanation in that order.
 - **Views**: the game's camera; an orbit at a yaw, pitch and distance from the
   centre of the scene; or an orthographic plan from above. An orbit or plan first
   reads a camera frame for the scene's bounds: the cull's sphere of every item it

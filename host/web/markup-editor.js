@@ -13,6 +13,10 @@ const KINDS = { historyUndo: 1, historyRedo: 2, formatBold: 3, formatItalic: 4, 
   insertText: 8, insertReplacementText: 9, insertFromPaste: 10, insertFromDrop: 10, insertFromYank: 10, deleteContentBackward: 11, deleteContentForward: 12,
   deleteWordBackward: 15, deleteWordForward: 16 };
 const HISTORY = { undo: 'historyUndo', redo: 'historyRedo' };
+// The command key is ⌘ on an Apple platform, where Control with a letter is
+// the text system's own Emacs binding (⌃A, ⌃K, ⌃Y; "Text System Defaults and
+// Key Bindings"), and Control elsewhere.
+const APPLE = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 const kindOf = t => KINDS[t] ?? (t.startsWith('format') ? 6 : !t.startsWith('delete') ? 0 : /Backward|^deleteByCut$|^deleteContent$/.test(t) ? 13 : 14);
 const STYLES = [[1, 'md-b'], [2, 'md-i'], [4, 'md-c'], [8, 'md-s'], [16, 'md-a'], [64, 'md-m']];
 const CSS = `
@@ -47,7 +51,9 @@ const CSS = `
 `;
 
 let wasm;
-const utf16 = new TextDecoder('utf-16le');
+// Without `ignoreBOM` a leading U+FEFF is dropped, and the copy read back would be
+// one unit shorter than the source every editor offset counts.
+const utf16 = new TextDecoder('utf-16le', { ignoreBOM: true });
 /** Write a string into the editor's input buffer; returns its length. */
 function put(s) {
   const at = wasm.mde_input(s.length), m = new Uint16Array(wasm.memory.buffer, at, s.length);
@@ -164,6 +170,8 @@ function installMarkupEditor(textarea, host) {
   let destroyed = false, composing = false, notifying = false, pointer = false, pendingValue, pendingSync = false;
   let nativeHidden = null, direction = 'none', told = null, reported = '', moving = false, reread = false, atomStyles = {}, atomKinds = {}, atomed = null;
   let dragDelete = null, dragTimer, dropPoint = NONE;
+  // What ⌃K deleted last, for ⌃Y: the browser's kill buffer stays empty when the editor cancels its delete.
+  let killed = '';
   // The app's `paragraphDirs` words; whether they still wait to be placed by
   // line number; each line's text and word as drawn; and the drawn words as
   // the editor last kept them for its undo steps (LLP 1045 D11).
@@ -623,7 +631,16 @@ function installMarkupEditor(textarea, host) {
     if (!drop) finishDrag();
     const target = (drop || kind === 9 || kind >= 11) && e.getTargetRanges?.()[0];
     if (target) { const x = toSource(target.startContainer, target.startOffset), y = toSource(target.endContainer, target.endOffset); a = Math.min(x, y); b = Math.max(x, y); }
-    const dt = e.dataTransfer, data = e.data ?? (dt && (dt.getData('text/markdown') || dt.getData('text/plain'))) ?? '';
+    if (e.inputType === 'deleteHardLineForward') {
+      // ⌃K (deleteToEndOfParagraph:) deletes the selection, else to the
+      // line's end, else the line break. Chromium's target range runs on to
+      // the same offset in the next line.
+      const [x, y] = sel(), end = source.indexOf('\n', Math.max(x, y));
+      [a, b] = x !== y ? [Math.min(x, y), Math.max(x, y)] : [x, end < 0 ? source.length : end === x ? x + 1 : end];
+      killed = source.slice(a, b);
+    }
+    const yank = e.inputType === 'insertFromYank' && !e.data ? killed : null;
+    const dt = e.dataTransfer, data = yank ?? e.data ?? (dt && (dt.getData('text/markdown') || dt.getData('text/plain'))) ?? '';
     if (e.inputType === 'deleteByDrag') {
       e.preventDefault();
       dragDelete = [...(target ? [a, b] : sel()), dropPoint];
@@ -668,7 +685,7 @@ function installMarkupEditor(textarea, host) {
   });
   el.addEventListener('keydown', e => {
     if (e.isComposing || destroyed || e.defaultPrevented || e.exactStopped || e.$stopped) return;
-    const mod = e.metaKey || e.ctrlKey, key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const mod = APPLE ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey, key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let command = null;
     if (mod && !e.altKey) {
       if (key === 'a' && !e.shiftKey) {

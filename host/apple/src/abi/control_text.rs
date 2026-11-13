@@ -68,7 +68,8 @@ impl<D: DataSource> Bridge<D> {
     /// and height (nonpositive clears it), the insets top, right, bottom and
     /// left, the viewport's width and height, the regions' count (20, or 0
     /// when every region is the safe area) and their insets, then, with 16,
-    /// the segments' count and their `x y w h`.
+    /// the segments' count and their `x y w h`, then, with 32, the software
+    /// keyboard's overlap (LLP 1039 D9).
     pub fn view(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let word = |i: usize| {
@@ -89,7 +90,7 @@ impl<D: DataSource> Bridge<D> {
         };
         let length = rects.and_then(|n| {
             n.checked_mul(4)?
-                .checked_add(10 + count + usize::from(given(16)))?
+                .checked_add(10 + count + usize::from(given(16)) + usize::from(given(32)))?
                 .checked_mul(4)
         });
         if (count != 0 && count != 20) || length != Some(bytes.len()) {
@@ -102,10 +103,12 @@ impl<D: DataSource> Bridge<D> {
         let size = given(8).then(|| (float(7), float(8)));
         let values: Vec<f32> = (10..10 + count).map(float).collect();
         let regions = given(4).then(|| crate::Host::<D>::regions_from(&values));
+        let last = bytes.len() - usize::from(given(32)) * 4;
         let segments = given(16)
-            .then(|| super::segments::segment_rects(&bytes[(11 + count) * 4..], rects as u32));
+            .then(|| super::segments::segment_rects(&bytes[(11 + count) * 4..last], rects as u32));
+        let keyboard = given(32).then(|| float(last / 4));
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.set_view(screen, insets, regions, size, segments)
+            h.set_view(screen, insets, regions, size, segments, keyboard)
         });
         self.emit(out)
     }

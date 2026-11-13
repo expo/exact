@@ -82,7 +82,7 @@ Recent list. Left:
   it, driven on each host.
 - **The Linux file chooser on a desktop**: `showOpenFilePicker`,
   `showDirectoryPicker` and `showSaveFilePicker` ask the desktop portal's
-  `FileChooser` and keep what it answers (`host/linux/src/portal.rs`), tested
+  `FileChooser` and keep what it answers (`host/painted/src/portal.rs`), tested
   against a stand-in session bus only. Left: a pick on a real Linux desktop
   (GNOME's and KDE's portals), and the chooser's types, since a Linux binary
   does not carry the manifest's `file_handlers`.

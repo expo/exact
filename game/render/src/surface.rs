@@ -1,6 +1,7 @@
 mod args;
 mod input;
 mod look;
+pub(crate) mod performance;
 mod render;
 mod textures;
 
@@ -40,6 +41,10 @@ pub trait Executor: Default {
     }
     /// Called synchronously on key/pointer down, within the browser's gesture.
     fn unlock(&mut self) {}
+    /// The audio output's state for a performance snapshot; `None` without one.
+    fn audio_state(&self) -> Option<&'static str> {
+        None
+    }
 }
 impl Executor for () {}
 
@@ -89,12 +94,21 @@ pub struct WorldSurface<G: Game, P: Executor = (), const ASSETS: bool = false, H
     rung: Option<crate::quality::Rung>,
     /// Drawing stopped at rest (`Game::render_idle`); the next live frame wakes the clock.
     resting: bool,
+    /// The last frame asked for no next one: the canvas draws again only on a change.
+    still: bool,
     /// The tick the world was first seen idle at, while it stays idle.
     idle_tick: Option<u64>,
     /// The scene samples the renderer was made with (`Game::samples`).
     samples: Option<exact_game::SceneSamples>,
     /// This frame's timing facts (`Surface::timing`), for the hooks' `FrameView.time`.
     timing: exact_gpu::FrameTiming,
+    /// Delivered textures a live renderer prepares later (`prepare_now`).
+    waiting: std::collections::BTreeMap<String, exact_game::asset::TextureData>,
+    /// Models a live preparation left for a later frame.
+    held_back: bool,
+    /// Texture uploads off the presenting thread, under the live clock.
+    #[cfg(not(target_arch = "wasm32"))]
+    uploads: Option<crate::models::Uploads>,
 }
 impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, P, ASSETS, H> {
     /// Bake-owned development capability; production modules refuse live edits.
@@ -172,7 +186,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         self.dirty = true;
         self.error = None;
         self.reported = false;
-        self.perf = Perf::default();
+        self.perf.restart();
         self.gpu_timing = None;
         Ok(())
     }
@@ -267,6 +281,9 @@ fn observer<'a, const ASSETS: bool>(
             if left < 240 {
                 let ms = start.elapsed();
                 perf.tick.push(ms);
+                if let Some(report) = &mut perf.reporting {
+                    report.phases[0].push(ms);
+                }
                 if let Some(trace) = trace {
                     trace.times[0] += ms;
                 }
@@ -292,6 +309,9 @@ fn observer<'a, const ASSETS: bool>(
                 if let Some(upload) = upload {
                     let ms = upload.elapsed();
                     perf.feed.push(ms);
+                    if let Some(report) = &mut perf.reporting {
+                        report.phases[1].push(ms);
+                    }
                     if let Some(trace) = trace {
                         trace.times[1] += ms;
                     }
@@ -318,11 +338,23 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     fn timing(&mut self, timing: &exact_gpu::FrameTiming) {
         self.timing = *timing;
     }
+    fn size(&mut self, width: f32, height: f32) -> bool {
+        self.look.points = (width, height);
+        let framed = self
+            .sim
+            .as_mut()
+            .is_some_and(|sim| sim.viewport(width, height));
+        self.dirty |= framed;
+        framed
+    }
     fn retier(&mut self) -> bool {
         self.retier_rung()
     }
     fn clock(&mut self, seekable: bool) {
         self.seekable = seekable;
+        if let Some(report) = &mut self.perf.reporting {
+            report.clock(seekable);
+        }
         self.resting = false;
         self.idle_tick = None;
         self.presentation.clock(seekable);
@@ -482,6 +514,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                 // unless the replacement fetches another texture family.
                 if family_changed {
                     sim.take_textures();
+                    self.waiting.clear();
                 }
                 if family_changed || (!self.device && !self.device_assets_invalidated) {
                     sim.invalidate_device_assets();
@@ -501,6 +534,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.device = false;
         self.render = None;
         self.ready_work = None;
+        // The replacement device's textures are delivered again.
+        self.waiting.clear();
+        self.held_back = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.uploads = None;
+        }
         self.format = None;
         self.storage_limit = 0;
         if ASSETS && !self.device_assets_invalidated {
@@ -537,13 +577,29 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.perf.live = !frame.seekable;
         self.perf.rendering = true;
         let wants = self.render_frame(frame, device, queue, encoder, target, format);
+        // Natively the module draws an incomplete frame again (gpu/src/frame.rs);
+        // the web's host draws only what the surface asks for.
+        self.still = !wants && (cfg!(target_arch = "wasm32") || self.frame_ready);
         self.perf.rendering = false;
+        if self.encoded.is_some() && self.perf.reporting.is_some() {
+            let scale = self.raster_scale();
+            let samples = self.samples.map_or(1, exact_game::SceneSamples::count);
+            let cap = self.max_fps();
+            if let Some(report) = &mut self.perf.reporting {
+                report.encoded(frame, &self.timing, scale, samples, self.perf.stats, cap);
+            }
+        }
         drop(timing);
         self.perf.pipeline_pending += crate::perf::pipeline_ms();
         wants
     }
     fn frame_ready(&self) -> bool {
         self.frame_ready
+    }
+    // A restarted or restored world is a new picture: its canvas's
+    // `presented` waits for a frame of it.
+    fn generation(&self) -> u64 {
+        self.sim.as_ref().map_or(0, Sim::generation)
     }
     fn submitted(&mut self) {
         self.frame_submitted();
@@ -589,6 +645,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     fn wants_input(&self) -> bool {
         true
     }
+    fn wants_pads(&self) -> bool {
+        self.sim.as_ref().is_some_and(Sim::reads_pads)
+    }
     fn input(&mut self, event: &InputEvent) {
         self.reported = false;
         use exact_gpu::PointerPhase as Q;
@@ -610,6 +669,31 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
             return;
         }
         sim.input(e);
+    }
+    fn set_performance_reporting(&mut self, enabled: bool) {
+        if enabled {
+            self.perf
+                .reporting
+                .get_or_insert_with(Default::default)
+                .clock(self.seekable);
+        } else {
+            self.perf.reporting = None;
+        }
+    }
+    fn take_performance(&mut self, now_ms: f64) -> Option<String> {
+        self.perf.reporting.as_ref()?;
+        let live = performance::Live {
+            thermal: self.timing.thermal_state,
+            quality: self.rung.map(|rung| rung.level.keyword()),
+            max_fps: self.max_fps(),
+            idle: self.still,
+            audio: performance::audio(self.presentation.audio_state(), self.interrupted),
+            memory: (self.render.as_ref())
+                .map(|(renderer, _)| (renderer.texture_bytes(), renderer.mesh_buffer_bytes())),
+        };
+        let report = self.perf.reporting.as_mut()?;
+        report.clock(self.seekable);
+        report.take(now_ms, &live)
     }
     fn published(&mut self) -> Option<String> {
         self.sim.as_mut().and_then(Sim::take_published)

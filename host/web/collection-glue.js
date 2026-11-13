@@ -1,5 +1,5 @@
 // Virtualized collections' DOM controller (@ref LLP 1010 §6), the list
-// engine's browser half: an after-paint piece, fetched when a batch first
+// engine's browser half: an after-paint piece, activated when a batch first
 // commits a collection (LLP 1047 D5); navigation.js stands in until then.
 // `fill` (LLP 1050.000 §6): `velocity` in CSS px/s toward the end, and
 // `limit`, the rows past what the report owes it may build (null: any);
@@ -358,11 +358,18 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
       // the index's. A row never notified, or notified at no size (unrendered, or empty), is read here.
       const reflowed = g && s.dimensions !== null && dimensionsOf(g) !== s.dimensions, mainOf = o => +o.split(',')[A.size === 'height' ? 1 : 0];
       const known = row => { const o = reflowed || s.written.has(row.el) ? null : s.observed.get(row.el); return o && mainOf(o) > 0 ? o : null; };
+      // A wrapper hidden with its root, as a list with a gap hides one (sizing.rs `sync_undisplayed`), is a row of no
+      // extent, not one unrendered: it has no rects, and the rest of the window is measured without it.
+      const none = new Set(!g ? [] : s.rows.filter(row => {
+        const top = views.get(row.root);
+        return !!row.el?.isConnected && !!top && row.el.contains(top) && getComputedStyle(row.el).display === 'none' && getComputedStyle(top).display === 'none';
+      }));
       const visible = g && g.portMain > 0 && g.cross > 0
-        && s.rows.every(row => row.el.isConnected && (known(row) || row.el.getClientRects().length));
+        && s.rows.every(row => row.el.isConnected && (none.has(row) || known(row) || row.el.getClientRects().length));
       if (visible) {
         const origin = g.portStart - g.raw;
         measurements = s.rows.map(row => {
+          if (none.has(row)) { const start = origin + row.start; rects.push({ [A.start]: start, [A.end]: start }); return { view: row.view, epoch: row.epoch, size: 0 }; }
           const o = known(row);
           if (o) { const size = mainOf(o), start = origin + row.start; rects.push({ [A.start]: start, [A.end]: start + size }); measuredSizes.set(row.el, o); return { view: row.view, epoch: row.epoch, size }; }
           const rect = row.el.getBoundingClientRect();

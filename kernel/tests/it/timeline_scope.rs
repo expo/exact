@@ -7,13 +7,15 @@
 //! Then re-resolution: a node inserted, removed or moved, or a row set on
 //! another node, changes what a consumer follows, and the receipt names it.
 
+use exact_kernel::timeline::Found;
 use exact_kernel::{
     motion_node, CommitReceipt, Kernel, NodeType, Op, StyleId, StyleProps, StyleValue,
 };
-use exact_motion::{Engine, NamedTimeline, Property, Value};
+use exact_motion::{Engine, Property, Value};
 
 /// A tree, one node a line, two spaces a level, under an implicit root:
-/// a label, then `drag=`, `scope=` and `follow=` rows (a consumer follows
+/// a label, then `drag=`, `scroll=` (`scroll-timeline-name`), `view=`
+/// (`view-timeline-name`), `scope=` and `follow=` rows (a consumer follows
 /// over 0–100 px). The consumer is `c`.
 struct Tree {
     k: Kernel,
@@ -27,6 +29,8 @@ fn rows(spec: &[&str]) -> Box<StyleProps> {
         let (key, value) = row.split_once('=').expect("key=value");
         let (id, value) = match key {
             "drag" => (StyleId::DragTimeline, value.to_string()),
+            "scroll" => (StyleId::ScrollTimelineName, value.to_string()),
+            "view" => (StyleId::ViewTimelineName, value.to_string()),
             "scope" => (StyleId::TimelineScope, value.replace(',', ", ")),
             "follow" => {
                 s.set_dynamic(
@@ -97,19 +101,24 @@ impl Tree {
         motion_node(self.k.node(self.id(label)).unwrap().key)
     }
 
-    /// What `c` follows: a label, `inactive` or `missing`.
+    /// What `c` follows: a label (a scroll timeline's with `:scroll`, a
+    /// view timeline's with `:view`), `inactive` or `missing`.
     fn answer(&self) -> String {
         let key = self.k.node(self.id("c")).unwrap().key;
-        match self.k.timeline_of(key).expect("c follows a name") {
-            NamedTimeline::Source(n) => self
-                .labels
-                .iter()
+        let label = |n: u64| {
+            (self.labels.iter())
                 .find(|l| self.k.node(l.1).map(|v| motion_node(v.key)) == Some(n))
                 .unwrap()
                 .0
-                .clone(),
-            NamedTimeline::Inactive => "inactive".into(),
-            NamedTimeline::Missing => "missing".into(),
+                .clone()
+        };
+        match self.k.timeline_found(key).expect("c follows a name") {
+            Found::Drag(n) => label(n),
+            Found::Scroll(k) => format!("{}:scroll", label(motion_node(k))),
+            Found::View(k) => format!("{}:view", label(motion_node(k))),
+            Found::Anonymous => "anonymous".into(),
+            Found::Inactive => "inactive".into(),
+            Found::Missing => "missing".into(),
         }
     }
 
@@ -260,6 +269,40 @@ fn a_name_resolves_as_chrome_resolves_it() {
             "all-nested-named",
             "x scope=all\n  y scope=--t\n    s30 drag=--t\n  c follow=--t\n",
             "missing",
+        ),
+        // Scroll and view timelines share the lookup (LLP 1057.003 D5). On
+        // one node a scroll timeline comes before a view timeline, and both
+        // before a drag; a scope that captures two of any kind is inactive.
+        (
+            "scroll-ancestor",
+            "s40 scroll=--t\n  c follow=--t\n",
+            "s40:scroll",
+        ),
+        ("view-self", "c view=--t follow=--t\n", "c:view"),
+        (
+            "scroll-before-view",
+            "s40 view=--t scroll=--t\n  c follow=--t\n",
+            "s40:scroll",
+        ),
+        (
+            "view-before-drag",
+            "s40 drag=--t view=--t\n  c follow=--t\n",
+            "s40:view",
+        ),
+        (
+            "nearest-of-any-kind",
+            "s20 scroll=--t\n  s40 drag=--t\n    c follow=--t\n",
+            "s40",
+        ),
+        (
+            "scope1-view",
+            "x scope=--t\n  s30 view=--t\n  c follow=--t\n",
+            "s30:view",
+        ),
+        (
+            "scope2-mixed",
+            "x scope=--t\n  s30 view=--t\n  s70 drag=--t\n  c follow=--t\n",
+            "inactive",
         ),
     ];
     let mut wrong = Vec::new();

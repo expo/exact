@@ -1,4 +1,6 @@
-//! Optional persistent Vulkan pipeline data, shared by a module's renderers.
+//! Optional persistent native pipelines, shared by a module's renderers.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+mod metal;
 use crate::wgpu;
 #[cfg(not(target_arch = "wasm32"))]
 use std::{
@@ -23,7 +25,19 @@ struct Shared {
     _device: wgpu::Device,
     identity: usize,
     handle: Option<wgpu::PipelineCache>,
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+    metal: Option<Arc<wgpu::hal::metal::BinaryArchive>>,
     disk: Mutex<Persistence>,
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Shared {
+    fn drop(&mut self) {
+        for disk in &mut self.disk.get_mut().unwrap().disks {
+            disk.reap(true);
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        metal::uninstall(&self._device, self.metal.as_ref());
+    }
 }
 #[cfg(not(target_arch = "wasm32"))]
 static CACHES: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
@@ -56,7 +70,7 @@ impl Persistence {
             disk.reap(true);
             if let Err(error) = std::fs::remove_file(&disk.path) {
                 if error.kind() != io::ErrorKind::NotFound {
-                    eprintln!("game pipeline cache removal failed: {error}");
+                    eprintln!("GPU module pipeline cache removal failed: {error}");
                 }
             }
         }
@@ -66,6 +80,7 @@ impl Persistence {
 #[cfg(not(target_arch = "wasm32"))]
 struct Disk {
     path: PathBuf,
+    seed: Option<PathBuf>,
     key: u64,
     work: u64,
     saved: u64,
@@ -78,6 +93,7 @@ impl Disk {
     fn new(path: PathBuf, key: u64) -> Self {
         Self {
             path,
+            seed: None,
             key,
             work: 0,
             saved: 0,
@@ -176,11 +192,18 @@ impl PipelineCache {
             .find(|c| c.identity == identity)
             .unwrap_or_else(|| {
                 let disk = disk.take();
-                let bytes = disk.as_ref().and_then(|d| std::fs::read(&d.path).ok());
-                let data = bytes
-                    .as_deref()
-                    .zip(disk.as_ref())
-                    .and_then(|(b, d)| unpack(b, d.key));
+                let bytes = disk.as_ref().and_then(|d| {
+                    [&Some(d.path.clone()), &d.seed]
+                        .into_iter()
+                        .flatten()
+                        .find_map(|path| {
+                            let bytes = std::fs::read(path).ok()?;
+                            unpack(&bytes, d.key).map(<[u8]>::to_vec)
+                        })
+                });
+                let data = bytes.as_deref();
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                let metal = metal::install(device, data);
                 let handle = device
                     .features()
                     .contains(wgpu::Features::PIPELINE_CACHE)
@@ -199,21 +222,33 @@ impl PipelineCache {
                     })
                     .flatten();
                 if disk.is_some() {
-                    eprintln!(
-                        "game pipeline cache: {}",
-                        if handle.is_none() {
+                    eprintln!("GPU module pipeline cache: {}", {
+                        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                        let (available, loaded) = metal.as_ref().map_or(
+                            (handle.is_some(), handle.is_some() && data.is_some()),
+                            |archive| (true, archive.restored()),
+                        );
+                        #[cfg(not(any(
+                            target_os = "macos",
+                            target_os = "ios",
+                            target_os = "tvos"
+                        )))]
+                        let (available, loaded) = (handle.is_some(), data.is_some());
+                        if !available {
                             "unavailable"
-                        } else if data.is_some() {
-                            "hit"
+                        } else if loaded {
+                            "loaded"
                         } else {
                             "miss"
                         }
-                    );
+                    });
                 }
                 let shared = Arc::new(Shared {
                     _device: device.clone(),
                     identity,
                     handle,
+                    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                    metal,
                     disk: Mutex::new(Persistence {
                         disks: disk.into_iter().collect(),
                         invalidated: false,
@@ -237,6 +272,8 @@ impl PipelineCache {
     pub(crate) fn invalidate(&self) {
         if let Some(shared) = &self.shared {
             shared.disk.lock().unwrap().invalidate();
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+            metal::uninstall(&shared._device, shared.metal.as_ref());
         }
     }
 
@@ -244,12 +281,22 @@ impl PipelineCache {
     /// attempts per generation, separated by 60 submitted frames.
     pub fn save(&mut self, work: u64) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let (Some(cache), Some(shared)) = (&self.handle, &self.shared) {
+        if let Some(shared) = &self.shared {
             let added = work.saturating_sub(self.observed);
             self.observed = work;
             for disk in &mut shared.disk.lock().unwrap().disks {
-                let cache = cache.clone();
-                disk.save(added, move || cache.get_data());
+                let device = shared._device.clone();
+                let cache = self.handle.clone();
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                let metal = shared.metal.clone();
+                disk.save(added, move || {
+                    let _device = device;
+                    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                    if let Some(metal) = metal {
+                        return metal.data();
+                    }
+                    cache.and_then(|c| c.get_data())
+                });
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -291,7 +338,7 @@ fn optional_cache<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Optio
     let mut failed = false;
     for scope in scopes.into_iter().rev() {
         if let Some(error) = crate::block_on(scope.pop()) {
-            eprintln!("game pipeline cache unavailable: {error}");
+            eprintln!("GPU module pipeline cache unavailable: {error}");
             failed = true;
         }
     }
@@ -301,6 +348,10 @@ fn optional_cache<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Optio
 
 #[cfg(not(target_arch = "wasm32"))]
 fn disk_for(device: &wgpu::Device, artifact: u64) -> Option<Disk> {
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+    if device.adapter_info().backend == wgpu::Backend::Metal {
+        return metal::disk(device, artifact);
+    }
     let dir = std::env::var_os("XDG_CACHE_HOME")?;
     let app = std::env::var("EXACT_GPU_CACHE_KEY").ok()?;
     let info = device.adapter_info();
@@ -394,7 +445,7 @@ fn unpack(bytes: &[u8], key: u64) -> Option<&[u8]> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    fn directory() -> PathBuf {
+    pub(super) fn directory() -> PathBuf {
         static ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "exact-cache-test-{}-{}",

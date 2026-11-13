@@ -363,9 +363,9 @@ fn transform(s: PathSeg, m: Matrix) -> PathSeg {
 }
 
 impl Context2d {
-    fn paint_path(&self, path: &Path2d, op: Op, operands: &[f64], clip: bool) {
+    fn paint_path(&self, path: &Path2d, op: Op, operands: &[f64]) {
         let mut g = self.g();
-        if !clip && !g.paints() {
+        if !g.paints() {
             return;
         }
         let m = g.state.transform;
@@ -388,12 +388,12 @@ impl Context2d {
 
     /// `fill(path, rule)`.
     pub fn fill_with_path_2d_and_winding(&self, path: &Path2d, rule: CanvasWindingRule) {
-        self.paint_path(path, Op::FillPath, &[rule.code()], false)
+        self.paint_path(path, Op::FillPath, &[rule.code()])
     }
 
     /// `stroke(path)`.
     pub fn stroke_with_path(&self, path: &Path2d) {
-        self.paint_path(path, Op::StrokePath, &[], false)
+        self.paint_path(path, Op::StrokePath, &[])
     }
 
     /// `clip(path)`.
@@ -403,7 +403,7 @@ impl Context2d {
 
     /// `clip(path, rule)`.
     pub fn clip_with_path_2d_and_winding(&self, path: &Path2d, rule: CanvasWindingRule) {
-        self.paint_path(path, Op::ClipPath, &[rule.code()], true)
+        self.paint_path(path, Op::ClipPath, &[rule.code()])
     }
 }
 

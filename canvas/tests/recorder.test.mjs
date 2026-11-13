@@ -10,12 +10,22 @@ test('the shared cases hold for the TypeScript recorder', () => {
 });
 
 test('colours serialise as Chrome serialises them', () => {
-  const c = (s) => { const v = parseColor(s); return v === 'current' ? 'current' : v ? serializeColor(v) : 'none'; };
+  const c = (s) => { const v = parseColor(s); return v === 'current' ? 'current' : v ? v.text ?? serializeColor(v) : 'none'; };
   expect(c('rgba(0,0,0,0.123456)')).toBe('rgba(0, 0, 0, 0.12)');
   expect(c('rgb(1 2 3 / 0.999)')).toBe('#010203');
   expect(c('hsl(120 50 50)')).toBe('#40bf40');
   expect(c('hsl(120, 50, 50)')).toBe('none');
   expect(c('#abcd')).toBe('rgba(170, 187, 204, 0.867)');
+  // hwb() has no upper bound on whiteness or blackness: Chrome's rgb(170, 170, 170), 200 / 300.
+  expect(c('hwb(0 200% 100%)')).toBe('#aaaaaa');
+  expect(c('hwb(0 50% 150%)')).toBe('#404040');
+  expect(c('hwb(200 120% 30%)')).toBe('#cccccc');
+  expect(c('hsl(200 50% 150%)')).toBe('#ffffff');
+  // A component written `none` reads back as `none` (Chrome 156).
+  expect(c('oklch(0.7 0 none)')).toBe('oklch(0.7 0 none)');
+  expect(c('lab(none 20 20)')).toBe('lab(none 20 20)');
+  expect(c('oklch(0.7 0.1 120 / none)')).toBe('oklch(0.7 0.1 120 / none)');
+  expect(c('color(srgb none 0.5 0.5)')).toBe('color(srgb none 0.5 0.5)');
 });
 
 // A list's records as [code, operands] (canvas/src/list.rs).

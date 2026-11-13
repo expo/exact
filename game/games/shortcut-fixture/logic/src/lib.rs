@@ -2,7 +2,7 @@ use exact_game::*;
 
 /// What reached the world: the HUD's Buy button (`action="buy"`, which
 /// declares `aria-keyshortcuts="1"`), the world's own Digit1 binding and
-/// its Space.
+/// its Space. East counts as `ones` on a tap and `jumps` after a 200 ms hold.
 #[derive(Default, Resource)]
 pub struct Shop {
     pub buys: u32,
@@ -25,6 +25,8 @@ impl Game for ShortcutFixture {
             .button("one", &["Digit1"])
             .button("forward", &["KeyW"])
             .button("jump", &["Space"])
+            .tap("dash", &["GamepadEast"])
+            .hold("charge", &["GamepadEast"], 0.2)
     }
     fn setup(w: &mut World, _: &()) {
         w.insert_resource(Environment {
@@ -54,8 +56,8 @@ impl Game for ShortcutFixture {
     fn tick(w: &mut World, input: &Input, _: &()) {
         let mut shop = w.resource_mut::<Shop>();
         shop.buys += u32::from(input.pressed("buy"));
-        shop.ones += u32::from(input.pressed("one"));
-        shop.jumps += u32::from(input.pressed("jump"));
+        shop.ones += u32::from(input.pressed("one") || input.pressed("dash"));
+        shop.jumps += u32::from(input.pressed("jump") || input.pressed("charge"));
         let buys = shop.buys;
         w.publish_record(&Hud { buys });
     }

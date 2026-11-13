@@ -1,5 +1,5 @@
 import { viewChildren, inertAncestor } from './navigation.js';
-import { carryRouter, clock, launchLocation, res, sig } from './rt.js';
+import { carryRouter, clock, data, launchLocation, res, sig } from './rt.js';
 import { offerAll } from './focus.js';
 
 // A render's checkpoint answers (LLP 1048.000 D6), as
@@ -16,18 +16,33 @@ function encode(v, t) {
   if (Array.isArray(t)) return `[${v.map(x => encode(x, t[1])).join(',')}]`;
   return `{"r":[${Object.keys(t).map((k, i) => encode(v[i], t[k])).join(',')}]}`;
 }
+/** The page's checkpoint answers as JSON text (`answers`), with the indices in them of those the reader's page shows
+ * and asks again (`open`) and of those that read the store (`readers`).
+ * `resources` are the plan's declared resources in plan order, as `types` are, and a list writes each element's answer
+ * in the list's order. */
 export function answers(resources, types, sourceTypes) {
-  const out = [];
-  resources.forEach((g, i) => {
-    // A declared list keeps its settled aggregate with no arguments; its members have no checkpoint rows.
-    const r = g.r, args = r.each ? (g.p() ? undefined : []) : r.settled;
-    // A runner's own source (the date, the viewport) is the reader's device: the runtime asks it again, as
-    // `Runner::document_checkpoint` leaves it out.
-    if (args === undefined || r.owned) return;
+  const out = [], open = [], readers = [];
+  const write = (r, type) => {
+    // Leave out an answer not yet given, and a runner's own source (the date, the viewport), which is the reader's
+    // device: the runtime asks it again, as `Runner::document_checkpoint` leaves it out
+    if (r.settled === undefined || r.owned) {
+      return;
+    }
     const params = sourceTypes[r.source]?.[0] ?? [];
-    out.push(`[${JSON.stringify(r.name)},${JSON.stringify(r.source)},[${args.map((a, k) => encode(a, params[k] ?? 's')).join(',')}],${encode(r.value, types[i])}]`);
-  });
-  return `[${out.join(',')}]`;
+    // List in `open`, for the reader's page to ask again, an answer whose work goes on past the render: a ticket kept
+    // (an open stream, rt.js `land`, or a request still pending; one not yet sent leaves the page to `revalidate`), a
+    // watch, or a source refused storage (ts-data.js `refuseInRender`); a watch and a refusal by the resource's name,
+    // which a list's elements share
+    if (r.ticket || data.watchedInRender?.has(r.name) || data.refusedInRender?.has(r.name)) {
+      open.push(out.length);
+    }
+    if (r.store) {
+      readers.push(out.length);
+    }
+    out.push(`[${JSON.stringify(r.name)},${JSON.stringify(r.source)},[${r.settled.map((a, k) => encode(a, params[k] ?? 's')).join(',')}],${encode(r.value, type)}]`);
+  };
+  resources.forEach(({ r }, i) => r.each ? r.members().forEach(element => write(element, types[i][1])) : write(r, types[i]));
+  return { answers: `[${out.join(',')}]`, open, readers };
 }
 
 // The JS dev loop's one-load checkpoint. Its separate MIME type keeps rt.js's

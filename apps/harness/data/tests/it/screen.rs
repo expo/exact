@@ -99,3 +99,76 @@ fn an_inline_burst_reaches_scrollback_in_bounded_batches() {
     }
     assert_eq!(vt.unanswered(), 0);
 }
+
+/// The busy line's figures, `(seconds, tokens)`, as `vt` shows them.
+fn busy_line(vt: &Vt) -> Option<(String, String)> {
+    let text = vt.text(false);
+    let line = text.lines().find(|l| l.ends_with("esc to interrupt)"))?;
+    let (_, figures) = line.rsplit_once(" (")?;
+    let (seconds, rest) = figures.split_once(" · ↓ ")?;
+    let (tokens, _) = rest.split_once(" tokens")?;
+    Some((seconds.to_string(), tokens.to_string()))
+}
+
+#[test]
+fn each_turn_counts_its_own_seconds_and_tokens() {
+    use exact_terminal::host::Key;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../terminal.contract");
+    let plan = contract::compile_path_terminal(&path).unwrap();
+    let mut harness = Harness::with_options(Options::offline(None));
+    let mut host = Host::boot(plan, harness.clone(), Mode::Inline, 100, 30).unwrap();
+    host.listen(std::sync::Arc::new(|| {}));
+    let mut vt = Vt::new(&mut host);
+    let session = |h: &Harness| Session::from_value(&h.session()).unwrap();
+    // The prompt has the focus; a key reaches what a drawn frame showed.
+    let send = |host: &mut Host<Harness>, vt: &mut Vt, now: f64, text: &str| {
+        host.tick(now);
+        vt.render(host);
+        host.read_at = host.frames;
+        for c in text.chars() {
+            host.key(Key::Char(c));
+        }
+        host.key(Key::Named("Enter"));
+        host.announced();
+    };
+    let mut now = 0.0;
+    // The first turn runs 2.6 s on the app's clock and writes its answer,
+    // then is interrupted.
+    send(&mut host, &mut vt, now, "hello");
+    assert!(session(&harness).busy, "the first turn started");
+    while now < 2600.0 {
+        now += 100.0;
+        host.tick(now);
+        host.announced();
+    }
+    vt.render(&mut host);
+    assert_eq!(busy_line(&vt).map(|l| l.0).as_deref(), Some("2s"));
+    let start = std::time::Instant::now();
+    while session(&harness).tokens_out == 0.0 {
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    harness.query("interrupt", &[]).unwrap();
+    while session(&harness).busy {
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // What the data module changed lands at the next announcement.
+    while busy_line(&vt).is_some() || host.by_test_id("approval").is_some() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        host.announced();
+        vt.render(&mut host);
+    }
+    // The second counts from its own send, whatever the first took.
+    now += 5000.0;
+    send(&mut host, &mut vt, now, "again");
+    assert!(session(&harness).busy, "the second turn started");
+    for _ in 0..3 {
+        now += 100.0;
+        host.tick(now);
+        host.announced();
+    }
+    vt.render(&mut host);
+    assert_eq!(busy_line(&vt), Some(("0s".into(), "0".into())));
+}

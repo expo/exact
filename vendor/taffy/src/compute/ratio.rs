@@ -217,6 +217,7 @@ pub(crate) fn percentage_height(style: &impl CoreStyle, pb: Size<f32>, width: Op
 /// The automatic inline minimum of a non-replaced ratio box combines its
 /// min-content width with the definite height's transfer, capped by max-width.
 /// A flexed border-box height replaces the preferred height when supplied.
+/// An auto-height content probe retains the maximum transferred from height.
 pub(crate) fn minimum_ratio_width(
     tree: &mut impl crate::LayoutPartialTree,
     node: crate::NodeId,
@@ -245,10 +246,11 @@ pub(crate) fn minimum_ratio_width(
             .map(|height| (height + adjustment.height).maybe_clamp(min_height, max.height))
     })?;
     let transferred = ratio.width(height);
+    let content_height = if style.size().height.is_auto() { None } else { Some(height) };
     drop(style);
-    // EXACT PATCH 64: leaves and containers both use the supplied height
-    // as an inline floor while measuring content beyond its transferred cap.
-    let known = Size { width: None, height: Some(height) };
+    // A flexed auto height supplies the ratio transfer without making the
+    // intrinsic content probe definite and discarding its transferred cap.
+    let known = Size { width: None, height: content_height };
     let intrinsic = tree.measure_child_size(
         node,
         known,

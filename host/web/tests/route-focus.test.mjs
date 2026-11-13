@@ -40,6 +40,7 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
           <button id="row-far" data-exact-router-press="true" style="height:60px">Far</button>
         </div>
         <div id="menu" role="menu" popover="auto"><button id="m-1">Open</button><button id="m-2" disabled>Share</button><a id="m-3" href="#x">Copy</a><button id="m-4">Remove</button></div>
+        <button id="menu-open" popovertarget="menu">Actions</button>
         <div id="chooser" role="alertdialog" aria-label="Open in" popover="auto"><button id="c-1" data-exact-on="press">Maps</button><button id="c-2" data-exact-on="press">Google Maps</button><button id="c-cancel">Cancel</button></div>
         <div id="bar-menu" role="menu" popover="auto"><button id="b-1">Bump</button><button id="b-open-in" popovertarget="chooser" popovertargetaction="show">Open in…</button></div>
         <button id="chooser-open" popovertarget="chooser">Open in</button>
@@ -99,7 +100,7 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 async function serve() {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    const file = ['navigation.js', 'input-glue.js', 'agent-input.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
+    const file = ['navigation.js', 'input-glue.js', 'menu-rows.js', 'agent-input.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
     if (!file) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, file)));
   });
@@ -190,6 +191,34 @@ check('on a push the focus moves to the new route\'s heading, and on Back to the
   expect(await evaluate(`document.getElementById('scroller').scrollTop = 0; pop(); focus()`)).toEqual(['row-far', false, 0, 0]);
 }), 60000);
 
+check('keyboard arrivals outline headings and route containers unless the author removes the outline', () => inChrome(async (evaluate, press, key) => {
+  const outlined = () => evaluate(`(() => {
+    const a = document.activeElement, s = getComputedStyle(a);
+    return [a.id, a.matches(':focus-visible') && s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0];
+  })()`);
+  for (const [opener, target] of [['row-1', 'title-1'], ['bare', 'route-bare']]) {
+    await evaluate(`document.getElementById('${opener}').focus()`);
+    await enter(key);
+    expect(await outlined()).toEqual([target, true]);
+    await evaluate('pop()');
+    expect(await outlined()).toEqual([opener, true]);
+    // Back falls back to the route's heading when its opener cannot take focus.
+    await enter(key);
+    await evaluate(`document.getElementById('${opener}').inert = true; pop()`);
+    expect(await outlined()).toEqual(['list-title', true]);
+    await evaluate(`document.getElementById('${opener}').inert = false; document.activeElement.blur()`);
+    await press(opener);
+    expect(await outlined()).toEqual([target, false]);
+    await evaluate('pop()');
+    expect(await outlined()).toEqual([opener, false]);
+    await evaluate(`then = () => document.getElementById('${target}').style.outline = 'none'; document.getElementById('${opener}').focus()`);
+    await enter(key);
+    expect(await evaluate('focus().slice(0, 2)')).toEqual([target, true]);
+    expect(await outlined()).toEqual([target, false]);
+    await evaluate('pop()');
+  }
+}));
+
 check('a focus the commit set is left alone, and another tab is no arrival', () => inChrome(async (evaluate, press) => {
   // The pressed control's action focuses a field in the new route (an `autofocus`, a `focus()` command): it stays.
   await evaluate(`withField = true; then = () => document.getElementById('field-add').focus()`);
@@ -250,6 +279,19 @@ check('a modal route is a dialog to assistive technology: the focus moves in, an
   // A route that is no longer modal is no longer a dialog, and a pushed route never was.
   expect(await evaluate(`document.getElementById('route-bare').removeAttribute('navigationPresentation'); show(); ${sheet('bare')}`)).toEqual([null, null, null, null]);
   expect(await evaluate(`pop(); push('1', '/item/1'); ${sheet('1')}`)).toEqual([null, null, null, null]);
+}), 60000);
+
+check('a keyboard-opened menu focuses its first usable item and Escape restores its opener', () => inChrome(async (evaluate, press, key) => {
+  await evaluate(`import('./menu-rows.js').then(() => exact.menuRows())`);
+  await evaluate(`document.getElementById('menu').prepend(Object.assign(document.createElement('button'), { disabled: true, textContent: 'Unavailable' })); document.getElementById('menu-open').focus()`);
+  await enter(key);
+  await evaluate(`new Promise(resolve => document.getElementById('menu').matches(':popover-open') && document.activeElement.id === 'm-1' ? resolve() : document.getElementById('menu').addEventListener('toggle', resolve, { once: true }))`);
+  expect(await evaluate('focus()[0]')).toBe('m-1');
+  await key('ArrowDown', 'ArrowDown', 40);
+  expect(await evaluate('focus()[0]')).toBe('m-3');
+  await key('Escape', 'Escape', 27);
+  await evaluate('new Promise(requestAnimationFrame)');
+  expect(await evaluate(`[focus()[0], document.getElementById('menu').matches(':popover-open')]`)).toEqual(['menu-open', false]);
 }), 60000);
 
 check('a tablist\'s tabs and a menu\'s items move by the arrow keys', () => inChrome(async (evaluate, press, key, move) => {

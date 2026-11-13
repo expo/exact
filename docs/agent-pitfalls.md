@@ -1,4 +1,4 @@
-# Pitfalls when writing exact2 apps
+# Pitfalls when writing Exact apps
 
 **Adding an entry:** only a pitfall you hit and reproduced on current `main`, written
 as symptom → cause → what to do, with where it was found. Delete the entry in the
@@ -12,6 +12,12 @@ diagnose it. **Candidate diagnostic** marks one that could become a check cheapl
 This list holds what the [agent guide](contract-for-agents.md)'s rules don't make obvious.
 
 ## Layout
+
+- **A search field pushes a header button off a phone.** Under `--chrome agent`,
+  the authored header lays out in the page. A search field with no width constraint
+  can keep its intrinsic width even when the heading has `flex=1`. Give the field
+  `flex=1 min-width=0` so it takes the space left by the heading and buttons.
+  (Agents, 402-point iOS simulator, 2026-11-12.)
 
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
@@ -57,14 +63,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
   (Web split metadata fixtures, `lower-zero-size`, 2026-10-14.)
 
-- **A px `width` beside text in a role does not grow with Dynamic Type.** A `text` whose
-  font is a role (`-exact-body`, or a `rem`/`em` size) scales with the person's text size,
-  and a box the author sized in px does not, so at accessibility sizes the text runs past
-  it (a day label under its icon, "Low" and "High" run together). That is CSS too. Fix: say
-  the width in `rem` or `em` (`width="3rem"`), size columns with a grid of `auto` tracks,
-  or let the row wrap (`flex-wrap="wrap"`). The compiler warns `lower-text-px-width`
-  where it can prove the box keeps its px width around such text, and is silent where it
-  cannot. (Bake-off round 13, weather; LLP 1116.011 D2.4.)
+- **A computed px `width` beside text in a role does not grow with Dynamic Type.** The
+  compiler warns `lower-text-px-width` of a literal px width around text that scales with
+  the person's text size; of a computed one (`width=(narrow ? 48 : 60)`) it says nothing,
+  and at accessibility sizes the text runs past it. Fix: the width in `rem`
+  (`width="3rem"`), a grid of `auto` tracks, or `flex-wrap="wrap"` on the row. (Bake-off
+  round 13, weather; LLP 1116.011 D2.4.)
 
 - **A border on one cell of a grid of `flex=1` cells pushes its column out of line.**
   A border adds to a box's outer size (CSS's `content-box`, and `border-box` too: a
@@ -108,15 +112,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `progress` with no `width` or `flex` beside a `text` in a `row`. (Wave 2 of
   LLP 1115.000, Chrome 154 and the kernel alike, 2026-10-11.)
 
-- **A heading's lines are a screen apart with `line-height=28`.** Cause: a bare
-  number is CSS's unitless `line-height`, a multiple of the font size (at 22 px,
-  28 × 22 = 616 px), unlike a bare number on a length row such as `font-size` or
-  `width`, which means pixels. Fix: write `line-height="28px"`, or a ratio such as
-  `line-height=1.3` (28.6 px at 22 px). A bare 4 or more is warned
-  (`lower-line-height-multiplier`), and a quoted `line-height="28"` is refused
-  with the `px` form. (Authoring bench, LLP 1087: three Codex
-  builders, caught only by a screenshot, 2026-10-05; the euxy port, 2026-10-16.)
-
 - **A `\n` in a text runs its two lines together.** ``text `${ref}\nResults rounded.` ``
   showed one line on the web and in an iOS grouped footer. Cause: `white-space:
   normal` (CSS's default) collapses a line feed to a space, as a `<div>` does. Fix:
@@ -142,11 +137,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `scroll flex=1` inside with it. Cause: CSS `min-height: auto` on the column. Fix:
   `min-height=0` on the column, as `lower-scroll-grows` says; `layout <scroll>` shows the
   height. A UIKit sheet sizes nothing for you here. (euxy port 14, FRICTION 9.)
-- **A `symbol:` image's `-exact-tint-color` does nothing.** A symbol is drawn in its
-  computed `color` on every host (LLP 1081 stage 2); `-exact-tint-color` colours a
-  raster image only, and a native button's face symbol. Write
-  `image "symbol:forward-chevron" color="-exact-tertiary-label"`. The build warns
-  (`lower-symbol-tint`).
 - **`color-scheme="light dark"` is refused.** Contract accepts only `light` or
   `dark` to fix a subtree's scheme. Leave it unsaid to follow the surrounding
   scheme; put `color-scheme="dark"` on a media viewer itself, not its shared
@@ -159,20 +149,20 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   holds the whole app in light as `overrideUserInterfaceStyle` does. (Shelf port,
   2026-10-09.)
 
-- **The app is wider than the window, and its tests still pass.** A root with
-  `width="100%"` and `padding=24` is 48 points too wide: sizes are `content-box`, as
-  on the web, so padding adds to the width. Buttons at the right edge are cut off,
-  and an `expect` never sees it. Fix: `box-sizing="border-box"` on any box sized in
-  percent that also has padding or a border (`exact new`'s template does), and
-  `min-width=0` on a `flex=1` input in a row. Look at a screenshot on each host.
-  (Fresh-agent README trial, 2026-10-04.)
+- **The app is wider than the window, and its tests still pass.** A box with
+  `width="100%"` and padding is wider than its parent by the padding (`content-box`, as
+  in CSS without a reset), and an `expect` never sees it. The compiler warns
+  (`lower-width-padding`) when the width and the padding are literal; a computed width or
+  padding, and `height="100%"` with padding, it does not. Fix: `box-sizing="border-box"`
+  on the box, or drop `width`: a box in a block or a `column` already fills the width.
+  Look at a screenshot on each host. (Fresh-agent README trial, 2026-10-04.)
 
 - **A list of buttons is ragged: each is only as wide as its text.** A `button`
   directly in a `scroll` or another block container shrinks to fit, so a row's
   `flex-grow` title never grows and its trailing columns sit right after it.
-  Cause: as on the web, a button is `inline-block`; only a flex item, or one given
-  a width, fills its line. Fix: `width="100%"` on the button, or put the rows in
-  a `column`. (The LLP terminal reader's document tree, 2026-10-08.)
+  Cause: a button is a block that shrinks to fit (HTML's is `inline-block`); only a
+  flex item, or one given a width, fills its line. Fix: `width="100%"` on the button,
+  or put the rows in a `column`. (The LLP terminal reader's document tree, 2026-10-08.)
 
 - **A raised `z-index` leaves a dragged card under the next column.** A card at
   `position="relative" z-index=10`, dragged over a neighbouring column, paints
@@ -213,16 +203,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   is the size), or no `flex` and `flex-shrink=0`. (Stocks DIARY, about 15
   minutes; reproduced on the web and macOS, 2026-10-04.)
 
-- **A `width="100%"` box with padding runs past its parent.** A full-width column
-  with `padding=16` measured 1,232 px in a 1,200 px window; an inbox row's time
-  painted off the right edge of a phone. Cause: a box is `box-sizing: content-box`,
-  as in CSS without a reset, so padding and border add to `width` (and to
-  `height="100%"`). Fix: `box-sizing="border-box"` on the padded box or its style;
-  or drop `width`, since a box in a block or a `column` already fills the width.
-  (Chat2 and Workout DIARY, Gallery's `height`; reproduced on the web, 2026-10-04.)
-  **Diagnosed:** the compiler warns (`lower-width-padding`) for a content-box
-  container with `width="100%"` and horizontal padding or a border, and `check`
-  names the box that runs past its parent by its padding (LLP 1116.009 D5).
+- **A package view with `height=44` can shrink to zero in a crowded column.**
+  CSS's default `flex-shrink: 1` lets an overfull fixed-height column compress
+  its children, and `min-height: auto` holds a box only at its content's size:
+  a native leaf such as `exact-sign-in-button` has none, so it goes to 0, as an
+  empty `<div>` does on the web. Put the content in an auto-height column
+  inside a viewport-sized `scroll`, or give the leaf `flex-shrink=0`.
+  (Auth Fixture's provider buttons, iOS simulator, 2026-11-12.)
 
 - **A one-edge border draws a frame, and a drawer closed to `height=0` stays open
   a few pixels.** `border-top-width=1 border-style="solid"` on a 60 × 20 box drew a
@@ -423,14 +410,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`kernel/src/handoff.rs`); a push keeps the screen beneath in the stack, so the card is
   never destroyed and the product's photo lands without a flight. The platform's way is the
   zoom: `navigationSource=` on the pushed route's `navigationKey` column, naming the `id`
-  on the card's `image` and on the route's own (`ZoomPushIOS.swift`, iOS 18 and later). The
-  agent's filmed screenshots skip UIKit's push and zoom: record the simulator
-  (`xcrun simctl io booted recordVideo`) and read its frames.
+  on the card's `image` and on the route's own (`ZoomPushIOS.swift`, iOS 18 and later). Film
+  on the agent's clock skips UIKit's push and zoom, which run on their own: film them under
+  `--timing platform`, whose frames are sampled on the wall clock and not reproducible, or
+  record the simulator (`xcrun simctl io booted recordVideo`) and read its frames.
 
 - **A cold launch flashes the wrong colour, and no screenshot shows it.** The launch
   screen is `host.ios.launchImage` centred on `background_color` (`color_scheme_dark`'s
   `background_color` in dark mode); unset, the platform's background (the grouped grey
-  under a first route that scrolls a grouped list). It is gone before a screenshot can be taken: record one
+  under a first route that scrolls a grouped list). Android's launch window takes the same
+  two colours. It is gone before a screenshot can be taken: record one
   (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl launch`) and read its
   frames (the euxy port's white launch, 2026-10-21).
 
@@ -464,9 +453,10 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the scroller right after the route's `header`. Fix: a `scroll flex=1 min-height=0`
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
-  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route's large
-  title opens collapsed over its scroller and expands on a pull (QUEUE.md); keep
-  large titles for a stack's first screen. The compiler refuses a name nothing in the
+  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route whose
+  content is a plain `list` (its rows built in slices) still opens its large title
+  collapsed (issues/20261112-pushed-screen-large-title-bar-is-54-points.md).
+  The compiler refuses a name nothing in the
   route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
   compiler could refuse a named scroller that is not right after the `header` (an
   iOS-only rule today, so not refused); the hosts could journal a route whose
@@ -589,10 +579,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `tabindex` is now an attribute on every element and module tag's box (LLP
   1088 D7.3), with no DOM-property alias. Fix: write `tabindex` (x2apps paint,
   2026-10-04).
-- **With `viewport-fit="cover"`, route content goes under the native bar.** Cause:
-  the bar's cover is added to the route's padding, but a cover-fit root has no top
-  safe area. Fix: put `env(safe-area-inset-top)` on the route column, not on each
-  authored header. (Signal Clone, build 5.)
+- **Under `viewport-fit="cover"`, a route clears its insets twice.** A route
+  is cleared of its whole safe area, the status bar and the home indicator
+  included (LLP 1123 D3), and the clearance adds to padding that does not read
+  the inset: `env(safe-area-inset-top)` on a header or a box inside the route adds
+  the status bar a second time. Fix: pad the route column itself with
+  `env()` or `var(--exact-safe-area-inset-*)` (credited, so it counts once), drop the
+  inner padding, or opt those edges out with `-exact-safe-area` on the route and keep
+  padding them yourself, as the web needs (`-exact-safe-area="left right"` for a page
+  whose boxes pad the sensor housing). (Signal Clone, build 5; LLP 1123 D3,
+  2026-11-12.)
 - **A banner at the root of a tabbed app stays under the status bar on iOS.** A
   root-level `position="absolute" top=0` box padded with `env(safe-area-inset-top)`
   is drawn at y 0, and one at `top="calc(env(safe-area-inset-top) + 8px)"` at y 8.
@@ -601,13 +597,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   bars reach under the status bar, but `env()` stays 0; the host clears each route's
   content of the status bar and its bars instead, by padding the route or by UIKit's
   inset on its scroller (LLP 1123 D1). The same `env()` padding inside a route only
-  seems to work: it adds 0 to that clearance. A box outside every route has no inset
-  to read until LLP 1123 D9's `var(--exact-safe-area-inset-top)` is built. Until
-  then, put the banner in the route that shows it, where the host pads that route's
-  top: an absolutely positioned child at `top=0` then starts below the status bar and
-  any bar. A route whose scroller starts at its top or right under its header is
-  inset by UIKit instead, and a box at its `top=0` is under the bars. (euxy port's
-  "COPY SAVED" notice, 2026-10-21.)
+  seems to work: it adds 0 to that clearance. Fix: pad or place the banner with
+  `var(--exact-safe-area-inset-top)`, which outside every route is the screen's
+  inset and inside a route that route's own, its bars included (LLP 1123 D9):
+  `top="calc(var(--exact-safe-area-inset-top) + 8px)"`. (euxy port's "COPY SAVED"
+  notice, 2026-10-21.)
 
 - **After a relaunch on iOS, a form opens with old values and ignores the fresh answer.**
   While the data module is not ready, a native host (and the wasm web target) can make
@@ -627,7 +621,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`apps/shelf`'s Progress and Yearly Goal rows), which the sheet keeps 15 from the
   card and the separator, or make the row itself a `column`, which stacks its children
   (LLP 1116 D2); to choose that space write the row's `padding-top`/`padding-bottom`
-  only, which replaces the column's. (Shelf recipe, 2026-10-10.)
+  only, which replaces the column's. A plain column of one or two texts becomes
+  a standard subtitle cell on iOS. An authored height, background colour or
+  corner radius on the row or column keeps its views; a subtitle column's
+  `min-height` does too, as does `align-items` or `justify-content` on either
+  a nested column or a row laid out as a column. Such nested columns get no
+  subtitle block padding for a literal box value or a ternary arm that writes
+  one; a `none` arm keeps the platform padding. Other expressions keep that
+  padding because they may evaluate to `none`; write explicit padding to control it.
+  The platform's interline gap stays. A column with `height=300` and no authored
+  padding or border has a 300 pt border box. Classes count too. (Shelf recipe; grouped tile, #327.)
 - **On iOS, a custom grouped row's leading symbol and line differ from a standard row's
   right to left or at an accessibility size.** Cause: a row the platform's cell can't
   express (a badge before its chevron) is its own views carried into the cell; iOS draws
@@ -649,7 +652,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 What a port writes from habit, what the compiler says, and what to write (the euxy port,
 2026-10-17: 19 of 50 compiles refused, most of them these). A warning builds; fix it anyway.
 
-| React Native writes | exact2 says | Write |
+| React Native writes | Exact says | Write |
 |---|---|---|
 | `line-height=20` | `lower-line-height-multiplier` (warning) | `line-height="20px"`: a bare number is a multiplier, as in CSS |
 | `color="rgba(0,0,0,0.5)"`, `"#00000080"` | `lower-colour-one-scheme` (warning) | a role (`-exact-secondary-label`, `-exact-fill`), `light-dark(<light>, <dark>)`, or nothing |
@@ -666,6 +669,7 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `font-weight="bold"`, `"600"` | `lower-attr-value` | `font-weight=700`, `font-weight=600` |
 | `fontSize: 16` | nothing; `verify` lists it as a fixed size | `font-size="1rem"` (16 ÷ 16), or a text style (`font="-exact-body"`): React Native's `fontSize` follows Dynamic Type by default (`allowFontScaling`), and a bare number here is points that do not (LLP 1115.000 D12) |
 | `transform="rotate(-2deg)"` | `lower-attr-tag` | `rotate="-2deg"`, `translate="0px 25px"`, `scale=0.8` |
+| Expo's `NativeTabs.Trigger role="search"`, SwiftUI's `Tab(role: .search)` | `lower-attr-value` on `role="search"` | `rel="search"` on the root tab, written last; `autofocus` on its root's header search field sets it apart on iOS 26 (`contract vocab search`) |
 | a `ScrollView` in a `flex: 1` `View`: `column flex=1` › `scroll flex=1` | `lower-scroll-grows` (warning) | `min-height=0` on the column; the scroller alone needs none |
 | `alignItems`, `justifyContent`, `gap` on a `View` (a flex column in RN) | `lower-flex-on-block` (warning) | `column` or `row`: a `view` is `display: block`, as a `<div>` is |
 | `flexDirection="row"` on a `Pressable` with content | `lower-flex-on-block` (warning) | `button display="flex"`, and `text-align="left"` where its text is not centred: a `button` is a block with centred text, as `<button>` is |
@@ -698,7 +702,7 @@ screen, 2026-10-16.)
   Lane sheet, scrolled to its end, left 58 points under Delete lane where the original
   left 24. Cause: a React Native `ScrollView` does not inset its content on iOS
   (`contentInsetAdjustmentBehavior` is `never`), so its `paddingBottom: 24` was the whole
-  gap and the last row sat over the home indicator. A route's last scroller in exact2 is
+  gap and the last row sat over the home indicator. A route's last scroller in Exact is
   inset by UIKit as a hand-built one is (`automatic`: the home indicator's 34 points, and
   the tab bar's height on a tab; a dialog sheet's outer scroller is `always`), and the
   ported padding adds to that. That inset is the platform's, as a hand-built table view in
@@ -824,8 +828,8 @@ screen, 2026-10-16.)
 - **A glyph sits at the left of its round button.** euxy's clear and dice glyphs and its
   BPM − and + sat 10 points left of centre in buttons with `align-items="center"
   justify-content="center"`. Cause: every React Native `View` is a flex container; a
-  `button` is `inline-block` and a `view` is `block`, as on the web, so those two do
-  nothing there (a button centres its content vertically on its own, as browsers do).
+  `button` and a `view` are blocks, so those two do nothing there (a button centres its
+  content vertically on its own, as browsers do).
   Fix: `display="flex"` on the button or view.
 - **`display="flex" align-items="center"` centres up and down, not across.** A ported
   `alignItems: 'center'` on a `view` left its icon and label at the left edge, centred
@@ -855,6 +859,27 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Actions
 
+- **A command-line run ends while the data module still works on a thread.**
+  A terminal entry run once from a shell (`--print`, or stdout a pipe) exits
+  when nothing holds it: no request in flight, no one-shot timer armed and no
+  node `aria-busy` (LLP 1101.003 D2). A thread the module started after
+  answering a send is none of these, so the run settles and prints before
+  the work is done. Keep a node `aria-busy` from the send until the thread
+  has finished, as the harness's live column does with `session.busy`
+  (`apps/harness/terminal.contract`). (The harness's `--print`, 2026-11-12.)
+
+- **A Rust update takes the other arm of a `#[cfg(target_os)]` branch.** Where a
+  replaced Rust module runs as wasm (iOS by default; `tiered` or `wasm` mode
+  elsewhere), the update is the data crate built for `wasm32-unknown-unknown`,
+  whose `target_os` is `"unknown"` and `target_family` `"wasm"` (`rustc --print cfg
+  --target wasm32-unknown-unknown`). A `#[cfg(target_os = "ios")]` arm the binary
+  ran is gone, and a `not(…)` arm or the `wasm32` one runs in its place. The bake
+  accepts the branch, since the source digest reads every arm (LLP 1030 D3a,
+  amended 2026-11-12). Branch only on `target_arch = "wasm32"`, as Markdown, Exact
+  Live and Update Lab do for what has no worker or thread there. (A crate with
+  `macos`, `ios` and `wasm32` arms, built for wasm32, ran the `wasm32` one;
+  2026-11-12.)
+
 - **App resources belong in the root component.** A child can declare a reserved
   viewport reader, but an app source there fails with `type-child-resource`.
   Declare the resource in the root and pass the value the child needs as a prop.
@@ -877,11 +902,6 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 - **An action call also names a host command.** `setMode(value)` is ambiguous
   when an action is also named `setMode` (`syntax-call-ambiguous`). Rename the
   action and its bindings, for example to `chooseMode`.
-
-- **`nav` read after it is assigned in the same action is the old value.** State
-  writes land when the action ends (`analyze-read-after-assign`), so `nav = push(nav,
-  "/d")` then `top(nav)` still sees the route before it. Fix: `let next = push(nav,
-  "/d")`, `nav = next`, and read `next`. (euxy port, three times, 2026-10-15.)
 
 - **A scalar resource cannot use `empty("idle")`.** `empty()` takes named
   fields only for a record shape; a string's `empty()` is `""`. Use a pure
@@ -930,13 +950,6 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   a web build sends that request from a server (`docs/contract-for-agents.md`,
   "An app's own sign-in screens").
 
-- **Resetting a mutation beside its send can discard the new reply.** For a
-  mutation without `queue`, `saved = none` in the action that sends `saved`
-  forgets its in-flight reply even when the reset is written first: assignments
-  commit after sends. Fix: keep the slot and hide a previous error while
-  `pending(saved)`. `none` means no reply, not a failed write; inspect
-  `failure(saved)` or the shaped reply. See [after a write](recipes/after-a-write.md).
-
 - **`Date.now()` in a data module passes its Bun tests and fails on the
   device.** Since 2026-10-05 the build refuses a direct use by file and line
   (`Date.now()`, `new Date()`, `Math.random()`, `setInterval` and the frame
@@ -965,6 +978,22 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`agent macos --seed 7 …`), or drive against the stand-in
   (`bun exact.mjs docs convex live queries`). A launch outside the driver draws
   the system's entropy. (LLP 1157 §6, 2026-11-10.)
+
+- **A sign-out that also fetches leaves Convex signed in.** `cx.setAuth(undefined)`
+  and then a `fetch` (an auth provider's sign-out) in one synchronous mutation
+  source: the runner refuses it (`a mutation cannot both send on a socket and
+  fetch`), so its `Authenticate` never leaves and the socket stays the
+  person's. Cause: `setAuth` sends on the socket. Fix: an `async` source that
+  awaits the fetch, then calls `setAuth`. The module gives no answer and runs
+  no mutation as the wrong person meanwhile (`bun exact.mjs docs convex live
+  queries`). (expo/exact#54, 2026-11-12.)
+
+- **An upload of a picked file under the agent fails only when it runs.** The
+  `pick` succeeds, and the upload's `exactBodyFrom app:/…` fails with `storage
+  is unavailable in agent mode unless the drive names a scratch store`: a
+  picked file is a copy in app storage, which a web drive has only with
+  `--storage <name>`. Fix: name one on any drive that uploads what it picks.
+  (expo/exact#54, 2026-11-12.)
 
 - **A helper action does not see what its caller just assigned.** `sel = next`
   then `follow()`, with `follow` reading `sel`, would read the old `sel`: a call
@@ -1075,17 +1104,19 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   longer exists (declared in LLP 1005). Fix: keep the pressed node across the state
   change (change its contents, not which branch renders it).
   **Candidate diagnostic:** the runtime could log a dropped up in development.
-- **A `transformDragFor` handle does nothing.** No pinch or drag follows and
-  nothing is logged. Cause: the binding resolves only for a strict shape and
-  otherwise returns none silently (`kernel/src/transform.rs`; only the agent's
-  transform-drag command reports "no photo binding"). The target, the handle's one
-  ancestor with that `id`, needs
+- **A `transformDragFor` handle does nothing.** The binding resolves only for a
+  strict shape (`kernel/src/transform.rs`). The compiler warns with
+  `lower-transform-drag-ineligible` when it can prove a target, clip or path
+  violates that shape, naming the element and repair. Dynamic values and host
+  geometry remain runtime checks; the agent's transform-drag command reports
+  "no photo binding" when those fail. The target, the handle's one
+  ancestor with that `id`, must be a plain view (`column` or `box`) with
   `width="100%" height="100%" box-sizing="border-box"`, no padding, border,
-  margin or offsets, and its direct parent needs `overflow="hidden"` on both axes
-  and no padding or border; every other ancestor must be untransformed. (Signal
-  Clone, build 11: the photo viewer lacked `overflow="hidden"` and
-  `box-sizing`.) **Candidate diagnostic:** the compiler or a development log
-  could name the failed condition.
+  margin or offsets. Its direct parent must also be a plain view, with
+  `overflow="hidden"` on both axes and no padding or border. The handle and every
+  ancestor must be displayed, enabled and non-inert; all except the target must
+  be untransformed. (Signal Clone, build 11: the photo viewer lacked
+  `overflow="hidden"` and `box-sizing`.)
 
 - **A field normalized while the person types fights the typing.** A `task … when
   people != "${count}"` (or a timer, or an `input` action) that rewrites an
@@ -1242,6 +1273,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Driving and testing
 
+- **An Android APK drive needs an awake, unlocked screen.** The relay checks and
+  wakes it and dismisses an insecure keyguard before launching. A secure lock
+  screen fails at once: unlock the device and run the drive again. A readiness
+  timeout includes the screen state observed before launch. Headless drives do
+  not need the display. (expo/exact#365; covered with stubbed adb calls.)
+
 - **A production bake does not open an agent socket.** Its baked
   `embedded.trust="production"` makes the host ignore `EXACT_AGENT` and
   `EXACT_AGENT_*`, including `EXACT_AGENT_SOCKET` and `EXACT_AGENT_LIVE`,
@@ -1284,7 +1321,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`EXACT_VISION_FIXTURE`, `packages/barcode-detection/test/agent.mjs`). (LLP
   1133.027, 2026-10-26.)
 
-- **A host timing bug on iOS is chased with `NSLog` and rebuilds of exact2.** A
+- **A host timing bug on iOS is chased with `NSLog` and rebuilds of Exact.** A
   development build already journals what the host did: `logs` has `host:` lines for
   navigation (`willShow`, `didShow`, and whether the app, UIKit's Back or the edge swipe
   started it), sheets presented and dismissed, autofocus applied or skipped with what holds
@@ -1386,7 +1423,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   the agent's own `screenshot`, which targets the app's simulator. (Authoring
   bench, LLP 1087, t9-profile, 2026-10-07.)
 
-- **`axe tap` misses on an exact2 app about one time in three.** Its default
+- **`axe tap` misses on an Exact app about one time in three.** Its default
   style (FBSimulator `tapAt`) sometimes lands as nothing: a mute button toggled
   1 of 3, a drawer button did not open, and the app looked frozen until
   relaunched. Fix: `axe tap … --tap-style physical` (a real touch down and up),
@@ -1532,14 +1569,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `.nonactivatingPanel` in an XCTest (it becomes key without activating the app)
   and read its pixels with `CGWindowListCreateImage`. (Issue #179, 2026-10-07.)
 
-- **A drive script kept in the app folder makes the build stale.** Editing
-  `verify.mjs` beside `app.contract` made the driver refuse the next drive until
-  `bun exact.mjs web-build`. Cause: a file in the app folder counts as a build input
-  unless it is an output (a screenshot, a log) or git-ignored outside the input trees
-  (`data/`, `web/`, `assets/` and the like count even when ignored); any `.json`
-  counts, since the bake captures it. Fix: keep drive scripts, evidence, logs and
-  runtime files in the app's `.exact/` (no build, dev-loop watcher or freshness
-  check reads a dot directory at the app's root), or outside the app folder.
+- **A drive script kept in the app folder makes the build stale.** A `drive.py` beside
+  `app.contract` made the driver refuse the next drive until `bun exact.mjs web-build`.
+  Cause: a file in the app folder counts as a build input unless no build reads it: an
+  output (a screenshot, a log), a `.sh` or `.ops` helper, anything under `tools/`,
+  `shots/` or `repros/`, a file git ignores outside the input trees (`data/`, `web/`,
+  `assets/` and the like count even when ignored), and a script or `.json` that `app.ts`
+  never imports (with no `app.ts`, every one counts). Fix: keep drive scripts, evidence,
+  logs and runtime files in the app's `.exact/` (no build, dev-loop watcher or freshness
+  check reads a dot directory at the app's root), in `tools/`, or outside the app folder.
   (Authoring bench, LLP 1087: five builders, 2026-10-05; Depot's evidence JSON,
   2026-10-05.)
 
@@ -1814,8 +1852,8 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   content (`for e in t.stack`) destroys nothing on a push. Keep each route's `navigationKey`
   column mounted (the host's Back needs the route beneath) and put its content under
   `if inApp or e.id == top(nav).id`: in a browser the card leaves as the product arrives, and
-  `shared.js` runs a view transition. A Back or Forward lands at once, without the flight
-  (`issues/20261103-web-history-traversal-forgoes-shared-element-flight.md`).
+  `shared.js` runs a view transition. A Back or Forward flies too, unless the browser
+  animated it itself (`hasUAVisualTransition`: a phone browser's swipe back can).
 
 - **`pages=` on a `render=build` route renders no pages in an app without a Rust render
   entry.** A route `product "/product/:id" render=build pages=productPages()` compiles, and
@@ -1836,7 +1874,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
 
-## Working on exact2 itself
+## Working on Exact itself
 
 - **A CDP adapter re-sends known children and Styles stays empty.**
   `DOM.setChildNodes` replaces the frontend's node objects. Repeating it for
@@ -2039,24 +2077,18 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   and its assets with it, only when `app.ts` imports it: import its driver even if the app
   uses nothing from it yet. (LLP 1154, 2026-10-31.)
 
-- **An edit to a `file:` package inside the app does not reach the app.** Bun (1.4.2) copies
-  a `file:` package whose path is inside the app's directory (`file:./packages/p`) into
-  `node_modules`, each file keeping its modification time, and every build reads it there:
-  an edit or an added file is not in the copy, and a removed file is still in it, until the
-  next `bun install`, which copies the package again and drops removed files. A `file:`
-  package outside the app's directory, as `exact add` writes for a standard package, is
-  installed as links to each file: an edit reaches the build at once. A file the build opens
-  under `node_modules` (an `exact.json`, a shim, a Swift or Kotlin source it names) is not
-  there when added, and is a broken link when removed, until `bun install`; a file reached
-  from one already opened (a Rust module beside the root, a Contract file a `use` names) is
-  the source's own. `ls -l node_modules/<package>/<file>` shows which you have: `->` is a
-  link, anything else a copy. After changing a copied package, run `bun install` in the app.
-  (#115, 2026-11-11.)
-
 ## Games
 
+- **`exact new --game` refuses `--name` and `--bundle-id`.** Those flags name an app.
+  Create the game with `exact new <path> --game`, then set `app.name` and `app.id`
+  in its generated `app.json` before the first build. (Camera fixture, 2026-11-12.)
+
+- **Game wrappers under `.shells/` are regenerated.** Edit the root `app.json`,
+  `app.contract` and `logic/`, or an authored `render/` crate. Put added logic
+  dependencies in `logic/Cargo.toml`, not `.shells/logic/Cargo.toml`.
+
 A game's pitfalls (the world and its saves, game input, its tests, proof and setup)
-are in [Pitfalls when writing exact2 games](game-pitfalls.md).
+are in [Pitfalls when writing Exact games](game-pitfalls.md).
 
 
 ## Access hatches
@@ -2174,9 +2206,18 @@ leave a binding on every page or list row. The JS target resolves `transformDrag
 `heightDragFor` and `reorderFor` after each commit against current ancestor IDs.
 Each binding must name exactly one strict ancestor; self, siblings and duplicate
 matching ancestors do not qualify. Changing the binding or ancestor ID cancels a
-drag whose target is no longer valid. The runtime journal names
-each passed-over target view and the owner once, then reports it again only after
-its valid bindings disappear and return. Read it with
+drag whose target is no longer valid. The compiler's `lower-transform-drag-owners`
+warning marks competing binding sites, including targets repeated by a `for`
+template. Guards over literal row values or indices that admit at most one
+iteration do not count as repetition; an index equality can also select one row
+of a dynamic list.
+Several handles for one target and mutually exclusive branches do not compete,
+including branches inside rows when their condition is shared across rows.
+Statically unreachable `if` and `match` arms are excluded, as are targets hidden
+by a static class or inline `display="none"`. Inline attributes override the
+class. Computed names it cannot resolve stay
+unknown. The runtime journal names each passed-over target view and the owner
+once, then reports it again only after its valid bindings disappear and return. Read it with
 `bun scripts/agent.mjs web logs` (or the native host).
 
 - The root file's first component is the app root. A fixture component placed

@@ -24,7 +24,7 @@ import { appDigest, driveStore, newerThan, notBuildInput, receiptChanges, webSto
 import { storeBase, sweepTestStores } from './agent-test.mjs';
 import { copyAppleStaticTrees, rebuildArgs } from '../host/apple/build.mjs';
 import { developmentLaunchEnvironment, deviceLaunchArgs } from '../host/apple/devices.mjs';
-import { classify, publishRoot, webRelease } from './deploy.mjs';
+import { classify, publishRoot, readAssetIndex, sealEnvelope, webRelease } from './deploy.mjs';
 import { DirectoryOrigin, webRootPath, webReleasePath, sha256 } from './origin.mjs';
 const CAPS = join(dirname(fileURLToPath(import.meta.url)), 'caps.mjs');
 const BOOT = join(dirname(fileURLToPath(import.meta.url)), 'boot.mjs');
@@ -136,6 +136,16 @@ const cases = [
     { 'rules/RULES.md': GOOD_RULES, 'docs/recipes/money.md': 'x'.repeat(3073) }, 'cap:recipe'],
   ['a recipe of exactly 3,072 bytes passes',
     { 'rules/RULES.md': GOOD_RULES, 'docs/recipes/money.md': 'x'.repeat(3072) }, null],
+  ['a file named for a Windows device, with an extension, fails',
+    { 'rules/RULES.md': GOOD_RULES, 'js/tests/fixtures/nul.ts': '' }, 'path:windows'],
+  ['a directory named for a Windows device fails',
+    { 'rules/RULES.md': GOOD_RULES, 'src/COM1/a.rs': '' }, 'path:windows'],
+  ['a name with a character Windows reserves fails',
+    { 'rules/RULES.md': GOOD_RULES, 'src/a:b.txt': '' }, 'path:windows'],
+  ['a name ending in a period fails',
+    { 'rules/RULES.md': GOOD_RULES, 'src/notes.': '' }, 'path:windows'],
+  ['names that only begin with a device name pass',
+    { 'rules/RULES.md': GOOD_RULES, 'js/tests/fixtures/nul-byte.ts': '', 'src/console.ts': '', 'src/aux_data.rs': '', 'src/com10.md': '' }, null],
   ['the recipe cap counts bytes, not characters',
     { 'rules/RULES.md': GOOD_RULES, 'docs/recipes/money.md': '’'.repeat(1025) }, 'cap:recipe'],
   ['navigation-stack and rest-backend may run to 5,120 bytes',
@@ -261,8 +271,9 @@ for (const [name, html, files, expectCode, expect] of [
   const files = (seq) => {
     const plan = Buffer.from('plan'), page = Buffer.from(`guest ${seq}`);
     const card = (body) => ({ bytes: body.length, sha256: sha256(body) });
-    return new Map([['app.plan', plan], ['deck/nested/page.html', page], ['exact.json', Buffer.from(JSON.stringify({
-      exact: 1, dev: { epoch, seq }, plan: card(plan), assets: [{ name: 'deck/nested/page.html', ...card(page) }],
+    const index = Buffer.from(JSON.stringify({ assets: [{ name: 'deck/nested/page.html', url: './deck/nested/page.html', ...card(page) }] }));
+    return new Map([['app.plan', plan], ['deck/nested/page.html', page], ['assets.json', index], ['exact.json', Buffer.from(JSON.stringify({
+      exact: 1, dev: { epoch, seq }, plan: card(plan), assets: { url: 'assets.json', ...card(index), count: 1 },
     }))]]);
   };
   const first = files(1); retainDevGeneration(cache, epoch, 1, first);
@@ -281,8 +292,12 @@ for (const [name, html, files, expectCode, expect] of [
   rmSync(join(cache, epoch, '7', 'app.plan'));
   writeFileSync(join(cache, epoch, '6', 'app.plan'), 'broken');
   writeFileSync(join(cache, epoch, '5', 'exact.json'), '{');
-  result('damaged dev cache payloads and envelopes fail closed after restart',
+  writeFileSync(join(cache, epoch, '4', 'assets.json'), '{"assets":[]}');
+  result('damaged dev cache payloads, indexes and envelopes fail closed after restart',
     readDevGeneration(cache, `/__dev/generation/${epoch}/7/app.plan`) === null
+      && readDevGeneration(cache, `/__dev/generation/${epoch}/4/deck/nested/page.html`) === null
+      && readDevGeneration(cache, `/__dev/generation/${epoch}/3/deck/nested/page.html`)?.body.toString() === 'guest 3'
+      && readDevGeneration(cache, `/__dev/generation/${epoch}/3/assets.json`)?.body.length > 0
       && readDevGeneration(cache, `/__dev/generation/${epoch}/6/app.plan`) === null
       && readDevGeneration(cache, `/__dev/generation/${epoch}/5/exact.json`) === null
       && readDevGeneration(cache, prefix + 'app.plan')?.body.toString() === 'plan');
@@ -406,12 +421,15 @@ for (const [name, html, files, expectCode, expect] of [
     module: Object.fromEntries(['native', 'receipt', 'web'].map(key => [key, { bytes: body.length, sha256: sha256(body) }])),
     plan: { bytes: body.length, sha256: sha256(body) } };
   const identity = { epoch: 'a'.repeat(32), seq: 1, generation: sha256(Buffer.from(JSON.stringify(canonical))), program: 'b'.repeat(64) };
-  const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets, module };
+  // The cards are in the index the envelope names, fetched before the queue.
+  const index = Buffer.from(JSON.stringify({ assets }));
+  const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets: { url: origin + 'assets.json', bytes: index.length, sha256: sha256(index), count: 5 }, module };
   let pending = [], peak = 0, count = 0, corrupt = false;
   const context = { TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
     fetch: async url => {
       if (url === origin + 'exact.json') return new Response(JSON.stringify(envelope));
+      if (url === origin + 'assets.json') return new Response(index);
       count++;
       return await new Promise(resolve => {
         pending.push(() => resolve(new Response(corrupt && url === origin + 'web' ? 'damaged' : body)));
@@ -452,11 +470,12 @@ for (const [name, html, files, expectCode, expect] of [
   // Named in any order: the identity is over UTF-8 order, as a client sorts them.
   const generation = devGenerationDigest({ bytes: body.length, sha256: sha256(body) }, [...assets].reverse(), module);
   const identity = { epoch: 'a'.repeat(32), seq: 1, generation, program: 'b'.repeat(64) };
-  const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'),
-    assets: assets.map(a => ({ ...a, url: origin + a.name })), module: Object.fromEntries(Object.keys(module).map(key => [key, card(key)])) };
+  // The index as a build writes it: cards relative to the index's own URL.
+  const { envelope: sealed, index } = sealEnvelope({ exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets,
+    module: Object.fromEntries(Object.keys(module).map(key => [key, card(key)])) }, origin + 'assets.json');
   const context = { TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
-    fetch: async url => new Response(url === origin + 'exact.json' ? JSON.stringify(envelope) : body) };
+    fetch: async url => new Response(url === origin + 'exact.json' ? JSON.stringify(sealed) : url === origin + 'assets.json' ? index : body) };
   runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
   const got = await context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal).then(value => ({ value }), error => ({ error }));
   result('a dev generation named from cards captured on disk binds the manifest a client checks',
@@ -598,7 +617,9 @@ for (const [name, html, files, expectCode, expect] of [
       writeFileSync(join(root, '.well-known/apple-app-site-association'), 'association');
     }
     const card = (name) => { const body = readFileSync(join(root, name)); return { name, url: './' + name, sha256: sha256(body), bytes: body.length }; };
-    writeFileSync(join(root, 'exact.json'), JSON.stringify({ exact: 1, plan: card('app.plan'), assets: listPublicFiles(root).filter((n) => n.startsWith('assets/')).map(card) }));
+    // A bake's roster has portable names only; `space #?.txt` is a public file it does not name.
+    const sealed = sealEnvelope({ exact: 1, plan: card('app.plan'), assets: listPublicFiles(root).filter((n) => /^assets\/[a-z.]+$/.test(n)).map(card) });
+    writeFileSync(join(root, 'assets.json'), sealed.index); writeFileSync(join(root, 'exact.json'), sealed.bytes);
     return root;
   };
   const oldWeb = makeWeb('old'), newWeb = makeWeb('new');
@@ -668,9 +689,12 @@ for (const [name, html, files, expectCode, expect] of [
     }));
     const envelopeResponse = await fetch(url, { headers: { accept: 'application/vnd.exact.envelope+json' } });
     const envelope = await envelopeResponse.json();
-    for (const card of [envelope.plan, ...envelope.assets]) {
-      const response = await fetch(url + card.url), bytes = Buffer.from(await response.arrayBuffer());
-      payload.push(response.ok && card.url.startsWith('/.exact/root/web/releases/') && sha256(bytes) === card.sha256 && bytes.length === card.bytes);
+    const indexURL = new URL(envelope.assets.url, url), listed = readAssetIndex(envelope.assets, Buffer.from(await (await fetch(indexURL)).arrayBuffer()));
+    payload.push(envelope.assets.url.startsWith('/.exact/root/web/releases/'));
+    for (const card of [envelope.plan, ...listed]) {
+      const at = new URL(card.url, card === envelope.plan ? url : indexURL);
+      const response = await fetch(at), bytes = Buffer.from(await response.arrayBuffer());
+      payload.push(response.ok && at.pathname.startsWith('/.exact/root/web/releases/') && sha256(bytes) === card.sha256 && bytes.length === card.bytes);
     }
     rounds++;
     return expected && payload.every(Boolean) && envelopeResponse.headers.get('vary') === 'Accept';

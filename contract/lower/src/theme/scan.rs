@@ -152,25 +152,10 @@ fn grouped_list(file: &File, tag: &str, attrs: &[Attr]) -> bool {
 /// lowers them (depth first, in order): a style's row is keyed by the element
 /// applying it, and refused once for its first, as the build refuses it.
 fn order(nodes: &[Node], out: &mut std::collections::HashMap<usize, usize>) {
-    for node in nodes {
+    for node in Node::walk(nodes) {
         if matches!(node, Node::Element { .. }) {
             let next = out.len() + 1;
             out.insert(node as *const Node as usize, next);
-        }
-        match node {
-            Node::Element { children, .. } | Node::Use { children, .. } => order(children, out),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                order(then, out);
-                order(otherwise, out);
-            }
-            Node::Each { body, .. } => order(body, out),
-            Node::Match { some, none, .. } => {
-                order(&some.1, out);
-                order(none, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }
@@ -212,19 +197,7 @@ fn grouped_refused(file: &File, tag: &str, attrs: &[Attr]) -> bool {
 
 /// The address of `node` and of every node inside it, into `out`.
 fn addresses(node: &Node, out: &mut std::collections::HashSet<usize>) {
-    out.insert(node as *const Node as usize);
-    let inner: Vec<&Node> = match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => children.iter().collect(),
-        Node::When {
-            then, otherwise, ..
-        } => then.iter().chain(otherwise).collect(),
-        Node::Each { body, .. } => body.iter().collect(),
-        Node::Match { some, none, .. } => some.1.iter().chain(none).collect(),
-        Node::Children { .. } => Vec::new(),
-    };
-    for n in inner {
-        addresses(n, out);
-    }
+    out.extend(Node::walk(std::slice::from_ref(node)).map(|n| n as *const Node as usize));
 }
 
 /// Whether `attrs`' class gives the element a `font-family`.
@@ -327,7 +300,9 @@ impl Said {
                 if colour {
                     values(&a.value, &mut literals);
                 }
-                exprs(&a.value, &mut |e| strings(e, false, &mut literals));
+                a.value
+                    .walk()
+                    .for_each(|e| strings(e, false, &mut literals));
             }
         };
         for s in &file.styles {
@@ -715,7 +690,7 @@ impl Said {
         }
         // A computed row may read a `fn`, a state, a derive or what an
         // action assigns: their literals too.
-        let mut loose = |e: &Expr| exprs(e, &mut |e| strings(e, false, &mut literals));
+        let mut loose = |e: &Expr| e.walk().for_each(|e| strings(e, false, &mut literals));
         let bindings = root.derives.iter().chain(&root.states);
         for e in file
             .fns
@@ -856,52 +831,6 @@ fn strings(e: &Expr, strict: bool, out: &mut Vec<(String, Span, bool)>) {
             }
         }
         _ => {}
-    }
-}
-
-/// Visit `e` and every expression inside it.
-pub(crate) fn exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
-    f(e);
-    match e {
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) | Expr::Ident(..) => {}
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    exprs(x, f);
-                }
-            }
-        }
-        Expr::List(items, _) => items.iter().for_each(|a| exprs(a, f)),
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => exprs(x, f),
-        Expr::Call(_, args, _) => args.iter().for_each(|a| exprs(a, f)),
-        Expr::Binary(_, a, b, _) => {
-            exprs(a, f);
-            exprs(b, f);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            exprs(a, f);
-            exprs(b, f);
-            exprs(c, f);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            exprs(subject, f);
-            exprs(some, f);
-            exprs(none, f);
-        }
-        Expr::Let { value, body, .. } => {
-            exprs(value, f);
-            exprs(body, f);
-        }
-        Expr::Arrow { body, .. } => exprs(body, f),
     }
 }
 

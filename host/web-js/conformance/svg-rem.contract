@@ -1,0 +1,48 @@
+// Font-relative geometry must follow the browser's root and inherited fonts,
+// including SVG elements whose geometry is read only from attributes.
+component App
+  state large = false
+  state wide = false
+  state omitted = false
+  derive size = large ? 30 : 20
+  derive extent = wide ? "3rem" : "2em"
+  derive offset = wide ? "1em" : "0.5rem"
+  action resize
+    large = not large
+  action change
+    wide = not wide
+  action omit
+    omitted = not omitted
+  view
+    column font-size=size
+      row
+        button "Font" press=resize testId="resize"
+        button "Geometry" press=change testId="change"
+        button "Omit" press=omit testId="omit"
+      svg width=400 height=200 testId="outer"
+        defs
+          symbol id="shape" viewBox="0 0 10 10"
+            rect width=10 height=10 fill="#0ea5e9"
+          mask testId="mask-literal" x="0.5rem" y="1em" width="2em" height="3rem"
+          mask testId="mask-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent)
+          pattern testId="pattern-literal" x="0.5rem" y="1em" width="2em" height="3rem"
+          pattern testId="pattern-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent)
+          filter testId="filter-literal" x="0.5rem" y="1em" width="2em" height="3rem"
+          filter testId="filter-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent)
+          filter
+            feFlood testId="feFlood-literal" x="0.5rem" y="1em" width="2em" height="3rem"
+            feFlood testId="feFlood-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent)
+          radialGradient testId="radialGradient-literal" cx="2em" cy="0.5rem" r="1em"
+            stop offset="0%" stop-color="#14b8a6"
+          radialGradient testId="radialGradient-bound" cx=(omitted ? none : extent) cy=(omitted ? none : offset) r=(omitted ? none : extent)
+            stop offset="0%" stop-color="#14b8a6"
+        svg testId="svg-literal" x="0.5rem" y="1em" width="2em" height="3rem"
+          rect width="100%" height="100%" fill="#14b8a6"
+        svg testId="svg-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent)
+          rect width="100%" height="100%" fill="#14b8a6"
+        use testId="use-literal" x="0.5rem" y="1em" width="2em" height="3rem" href="#shape"
+        use testId="use-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent) href="#shape"
+        foreignObject testId="foreignObject-literal" x="0.5rem" y="1em" width="2em" height="3rem"
+          view width="100%" height="100%" background-color="#f59e0b"
+        foreignObject testId="foreignObject-bound" x=(omitted ? none : offset) y=(omitted ? none : offset) width=(omitted ? none : extent) height=(omitted ? none : extent)
+          view width="100%" height="100%" background-color="#f59e0b"

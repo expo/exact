@@ -110,6 +110,7 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
         Some(regions),
         Some((402., 874.)),
         None,
+        None,
     );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(frames(&together), frames(&apart));
@@ -119,7 +120,7 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
     );
     assert_eq!(padding_left(&together, "margins"), 20.);
     // Only what is given changes: the insets alone.
-    together.set_view(None, Some([0., 0., 0., 0.]), None, None, None);
+    together.set_view(None, Some([0., 0., 0., 0.]), None, None, None, None);
     apart.set_insets(0., 0., 0., 0.);
     assert_eq!(frames(&together), frames(&apart));
     // A keyboard folded like a laptop: the viewport and the lower segment's
@@ -135,17 +136,128 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
     together.set_segments(1, 1, 2, stacked(434.));
     apart.resize(402., 455.);
     apart.set_segments(1, 1, 2, stacked(15.));
-    let batch = together.set_view(None, None, None, Some((402., 455.)), Some(stacked(15.)));
+    let batch = together.set_view(
+        None,
+        None,
+        None,
+        Some((402., 455.)),
+        Some(stacked(15.)),
+        None,
+    );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(frames(&together), frames(&apart));
     assert_eq!(
         together.runner().kernel().env(),
         apart.runner().kernel().env()
     );
-    let refused = together.set_view(None, None, None, None, Some(stacked(15.)[..1].to_vec()));
+    let refused = together.set_view(
+        None,
+        None,
+        None,
+        None,
+        Some(stacked(15.)[..1].to_vec()),
+        None,
+    );
     assert!(refused.contains("segments off the grid"), "{refused}");
     assert_eq!(
         together.runner().kernel().env(),
         apart.runner().kernel().env()
     );
+}
+
+#[test]
+fn numeric_safe_area_and_css_environment_move_together_and_rollback() {
+    let source = r#"shape Viewport
+  safeAreaLeft: number
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive quotient = 1 / (24 - viewport.safeAreaLeft)
+  view
+    column
+      column testId="margins" width="100%" padding-left="env(safe-area-inset-left)"
+        column testId="margins-child" height=10
+      column testId="numeric" width=viewport.safeAreaLeft height=10
+      text `${quotient}`
+"#;
+    let plan = contract::compile(source).unwrap().encode();
+    let (mut h, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        800.,
+    )
+    .unwrap();
+    let width = |h: &Host<NoData>| {
+        let k = h.runner().kernel();
+        k.node_by_key(k.find_by_test_id("numeric")[0])
+            .unwrap()
+            .frame
+            .width
+    };
+    h.set_insets(0., 0., 0., 12.);
+    assert_eq!(padding_left(&h, "margins"), 12.);
+    assert_eq!(width(&h), 12.);
+    let refused = h.set_insets(0., 0., 0., 24.);
+    assert!(refused.contains("viewport geometry"), "{refused}");
+    assert_eq!(padding_left(&h, "margins"), 12.);
+    assert_eq!(width(&h), 12.);
+    let refused = h.set_view(
+        None,
+        Some([0., 0., 0., 24.]),
+        None,
+        Some((500., 900.)),
+        None,
+        None,
+    );
+    assert!(refused.contains("viewport:"), "{refused}");
+    assert_eq!(padding_left(&h, "margins"), 12.);
+    assert_eq!(width(&h), 12.);
+    let before = h.runner().kernel().env();
+    let viewport = h.runner().viewport();
+    for (insets, size) in [
+        (Some([0., 0., 0., 18.]), Some((f32::NAN, 900.))),
+        (Some([f32::NAN, 0., 0., 18.]), Some((500., 900.))),
+    ] {
+        let refused = h.set_view(None, insets, None, size, None, None);
+        assert!(refused.contains("error"), "{refused}");
+        assert_eq!(h.runner().kernel().env(), before);
+        assert_eq!(h.runner().viewport(), viewport);
+    }
+    h.set_view(None, Some([0., 0., 0., 16.]), None, None, None, None);
+    assert_eq!(padding_left(&h, "margins"), 16.);
+    assert_eq!(width(&h), 16.);
+}
+
+/// LLP 1039 D9: the keyboard's overlap rides the view's change: with the
+/// viewport it shrinks in one commit, or alone; every reader sees it, and
+/// a negative one is refused, changing nothing.
+#[test]
+fn the_keyboard_rides_the_view() {
+    let source = "shape V\n  height: number\n  keyboardHeight: number\ncomponent App\n  resource v = exactViewport() as shape V\n  view\n    column width=\"100%\" height=100\n";
+    let plan = contract::compile(source).unwrap().encode();
+    let measurer = Box::new(MonospaceMeasurer::default());
+    let (mut h, _) = Host::boot(&plan, NoData, measurer, 402., 874.).unwrap();
+    let read = |h: &Host<NoData>| {
+        let state: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::state(h.runner())).unwrap();
+        state["resources"]["v"].clone()
+    };
+    let batch = h.set_view(None, None, None, Some((402., 538.)), None, Some(336.));
+    assert!(!batch.contains("\"error\":\""), "{batch}");
+    assert_eq!(
+        read(&h),
+        serde_json::json!({"height": 538, "keyboardHeight": 336})
+    );
+    let logs = exact_runner::agent::logs(h.runner(), 0);
+    assert_eq!(
+        logs.matches("viewport (1 asked again)").count(),
+        1,
+        "{logs}"
+    );
+    h.set_view(None, None, None, None, None, Some(0.));
+    assert_eq!(read(&h)["keyboardHeight"], 0);
+    let refused = h.set_view(None, None, None, None, None, Some(-1.));
+    assert!(refused.contains("viewport:"), "{refused}");
+    assert_eq!(read(&h)["keyboardHeight"], 0);
 }

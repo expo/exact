@@ -599,6 +599,7 @@ fn a_replacement_runner_asks_a_resource_a_write_showed_in() {
 
 fn message() -> Outcome {
     Outcome::Message(Message {
+        protocol: Box::default(),
         event: String::new(),
         id: String::new(),
         data: "{}".into(),

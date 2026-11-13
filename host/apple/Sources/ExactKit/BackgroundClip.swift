@@ -28,6 +28,13 @@ extension NodeView {
         let inset = clip == "content-box"
             ? [content.minY - bounds.minY, bounds.maxX - content.maxX, bounds.maxY - content.maxY, content.minX - bounds.minX]
             : ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
+        return innerOutline(inset, in: area)
+    }
+
+    /// The outline `inset` (top, right, bottom, left) inside the border box
+    /// `area`, its corners the border's radii less the inset (CSS Backgrounds
+    /// 3 §5.3). Inset by the border widths it is the padding edge.
+    func innerOutline(_ inset: [CGFloat], in area: CGRect) -> CGPath {
         let inner = CGRect(x: area.minX + inset[3], y: area.minY + inset[0], width: max(0, area.width - inset[1] - inset[3]),
                            height: max(0, area.height - inset[0] - inset[2]))
         let outer = BorderPaint.reduced(BorderPaint.radii(style, in: area), in: area)

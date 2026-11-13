@@ -11,6 +11,8 @@
 // grouped list (LLP 1084, `contract/corpus/grouped-touch.contract`, in
 // Caltrain's bundle): a real tap on a row's switch, detail button or row
 // lands on the cell or accessory UIKit draws, not the hidden authored node.
+// Long presses on ordinary and projected sources open UIKit's context menu;
+// selecting an action and tapping outside each dismiss it.
 // The final activity archive phase requires --build for its gallery variant;
 // without it, an installed app without the gallery skips that phase with a reason.
 //   bun scripts/smoke-touch.mjs [--build] [--sim <udid|name>]
@@ -197,6 +199,48 @@ for (const timing of ['agent', 'platform']) {
       check(state.slots.removes === 1 && state.navigation.popover == null, `grouped modal (${touch}): confirm removes once and closes`);
       console.log(`grouped modal (${touch}): ${tap.delivery}, removes ${state.slots.removes}`);
     } catch (error) { check(false, `grouped modal (${touch}): ${error.message}`); }
+    finally { await s.close(); }
+  }
+  // The ordinary source and the projected cell each give UIKit one context
+  // dispatch per long press. Choosing and tapping outside both retire its menu.
+  if (c.status === 0) for (const timing of ['agent', 'platform']) for (const target of ['context-source', 'open']) {
+    const s = await open({ host: 'ios', app: 'caltrain', plan, touch: 'platform', timing });
+    const name = `context (${timing}, ${target})`;
+    try {
+      await s.clock('settle');
+      const source = await s.find(target);
+      const list = await s.find('list');
+      const hold = async (count) => {
+        const r = await s.tap(target, { drag: { dx: 0, dy: 0, press: 1000 } });
+        await s.clock('settle');
+        const state = await s.state(), menu = state.navigation.popover;
+        check(r.delivery === 'platform' && r.touch?.type === 'direct' && r.touch.ended - r.touch.began >= 0.9,
+          `${name}: the long press was not a held real touch: ${JSON.stringify(r)}`);
+        if (target === 'open') check(r.landed?.node === list.id, `${name}: the touch must land on the projected cell: ${JSON.stringify(r.landed)}`);
+        check(state.slots.contexts === count && state.slots.opens === 0 && menu?.kind === 'contextmenu' && menu.source === source.id && menu.phase === 'open',
+          `${name}: one context dispatch opens the native menu without a primary press: ${JSON.stringify({slots:state.slots, menu})}`);
+        const shot = await s.screenshot(resolve(plan, '..', `${timing}-${target}-${count}.png`), true);
+        check(shot.presented === 'menu', `${name}: the capture must show UIKit's menu: ${JSON.stringify(shot)}`);
+      };
+      await hold(1);
+      const choice = await s.tap('context-choice');
+      await s.clock('settle');
+      let state = await s.state();
+      check(choice.delivery === 'platform' && choice.native?.kind === 'menuItem' && choice.landed?.node == null &&
+        state.slots.contexts === 1 && state.slots.choices === 1 && state.navigation.popover == null,
+        `${name}: a native action runs once and dismisses: ${JSON.stringify({choice, slots:state.slots, menu:state.navigation.popover})}`);
+      await hold(2);
+      const root = (await s.layout()).nodes.find(n => n.testId === 'root');
+      const dismissed = await s.tap('root', { at: [root.w / 2, root.h - 100] });
+      await s.clock('settle');
+      state = await s.state();
+      check(dismissed.delivery === 'platform' && dismissed.native?.kind === 'contextMenuDismissal' &&
+        state.slots.contexts === 2 && state.slots.choices === 1 && state.slots.opens === 0 && state.navigation.popover == null,
+        `${name}: a real outside tap dismisses without choosing: ${JSON.stringify({dismissed, slots:state.slots, menu:state.navigation.popover})}`);
+      const stale = await s.carrier.ask({ op: 'tap', id: (await s.find('context-choice')).id, aim: true });
+      check(!!stale.error, `${name}: a dismissed menu's row remains aimable: ${JSON.stringify(stale)}`);
+      console.log(`${name}: native long press, action and outside dismissal`);
+    } catch (error) { check(false, `${name}: ${error.message}`); }
     finally { await s.close(); }
   }
 }

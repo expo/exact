@@ -690,6 +690,15 @@ pub fn arm<D: DataSource>(
     web_origin: Option<&str>,
 ) -> Arm {
     let ticket = out.ticket;
+    if out.request.reach.origin == crate::CallOrigin::Action {
+        settle(
+            runner,
+            ticket,
+            403,
+            "auth sessions are refused during a background action",
+        );
+        return Arm::Settled;
+    }
     let body = String::from_utf8_lossy(&out.request.body).into_owned();
     let session = match Session::from_json(&body) {
         Ok(s) => s,
