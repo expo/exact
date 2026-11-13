@@ -236,6 +236,7 @@ fn main() {
         "heap",
         "snapshot",
         "context",
+        "canvas-capture",
         "network",
         "walk",
         "presence",

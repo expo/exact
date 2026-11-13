@@ -1,0 +1,33 @@
+shape Captured
+  record: string
+  path: string
+component App
+  state shown = true
+  state step = 0
+  state wide = false
+  mutation captured as shape Captured
+  action take(resize: bool)
+    step = step + 1
+    wide = resize
+    send captured = capture("captureOrder", `app:/tmp/session-capture-${step}.png`)
+  action hide
+    shown = false
+  action change
+    step = step + 1
+  view
+    column
+      if shown
+        canvas surface=captureOrder(step) width=(wide ? 60 : 40) height=30 testId="canvas"
+      button press=take(false) testId="capture"
+        text "Draw and capture"
+      button press=take(true) testId="resize"
+        text "Resize and capture"
+      button press=hide testId="hide"
+        text "Hide canvas"
+      button press=change testId="change"
+        text "Change drawing"
+      match captured
+        case some(c)
+          text c.record testId="result"
+        case none
+          text "" testId="result"

@@ -1800,6 +1800,12 @@ it is redrawn as a Canvas 2D surface in Caltrain's data crate, so one fewer GPU
 path exists after than before. Still refused: a drawing language in Contract
 (SVG is the declarative one), readback (`getImageData`, `toDataURL`,
 `toBlob`), `ctx.filter`, and an app-visible `OffscreenCanvas`.
+  - **Expanded (Charlie, 2026-11-12, expo/exact#188; take waived):**
+    `captureCanvas(surface, path)`, the asynchronous form: the host writes the
+    canvas's kept bitmap as a PNG to an `app:/` file and answers its path and
+    size (LLP 1056 D9). Unblocks
+    a screenshot annotation tool that exports what its canvas shows. Synchronous
+    readback stays refused.
 **Expanded (Seth Webster, 2026-09-26, for grnl; LLP 1061–1064):** paint motion
 on boxes — `transition` and keyframes on `background-color`, `color`, borders,
 `-exact-tint-color` and `box-shadow`, `light-dark()` pairs moving with the appearance —

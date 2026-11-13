@@ -78,6 +78,7 @@ final class Canvas2DHost: Canvas2DEnv {
     private var gpus: [UInt32: Canvas2DGpuCanvas] = [:]
     /// CanvasesHost whose fresh bitmap has had no lists yet (replay queue).
     private var undrawn: Set<UInt32> = []
+    private var completed: [UInt32: UInt64] = [:]
     /// Tests (and the parity smoke, EXACT_CANVAS_RECORD=always) record every
     /// canvas the policy allows, animating or not.
     static var recordAlways = ProcessInfo.processInfo.environment["EXACT_CANVAS_RECORD"] == "always"
@@ -91,14 +92,21 @@ final class Canvas2DHost: Canvas2DEnv {
     /// pixels land when the replay ends, a frame later at most, and the
     /// agent's settle waits for them (`loadingCount`).
     ///
-    /// A canvas has at most one replay waiting behind the one running. Lists
-    /// that arrive while one waits join it (one replay, one image), and a
+    /// Between captures a canvas has at most one replay waiting behind the
+    /// one running. Lists arriving while one waits join it, and a
     /// fresh bitmap's lists replace it, since a new bitmap discards what was
     /// drawn before. While one waits the runner holds the canvas's frame
     /// request (`onHeld`), as a browser's animation frame waits for the last
     /// one to present: an animation drops frames instead of queueing them,
     /// and the newest replay done always shows.
-    private let replay = DispatchQueue(label: "exact.canvas2d.replay", qos: .userInitiated)
+    #if DEBUG
+    var beforeCaptureCopy: (() -> Void)?
+    var beforeCaptureEncode: (() -> Void)?
+    #endif
+    private let replay: DispatchQueue
+    init(replay: DispatchQueue = DispatchQueue(label: "exact.canvas2d.replay", qos: .userInitiated)) {
+        self.replay = replay
+    }
     /// Replays dispatched and not yet shown (`loadingCount`); each one's end,
     /// shown or dropped, tells `onReplayEnded`.
     private var pending = 0 { didSet { if pending < oldValue { onReplayEnded?() } } }
@@ -235,6 +243,7 @@ final class Canvas2DHost: Canvas2DEnv {
         sequence[id] = seq
         let job = Canvas2DJob(fresh: fresh, w: w, h: h, scale: scale, lifetime: lifetime, generation: generation,
                               lists: lists, images: images, fonts: fonts, seq: seq)
+        job.drawing = (payload["seq"] as? NSNumber)?.uint64Value ?? 0
         // The draw asked for the next frame: it animates.
         job.animating = (payload["animating"] as? NSNumber)?.boolValue == true || Canvas2DHost.recordAlways
         job.stretch = (payload["stretch"] as? NSNumber)?.boolValue == true
@@ -247,13 +256,14 @@ final class Canvas2DHost: Canvas2DEnv {
         if joined { return }
         pending += 1
         onHeld?(id, true)
-        replay.async { [weak self] in self?.run(id) }
+        replay.async { [weak self] in self?.run(id, job) }
     }
 
-    /// The replay queue: take `id`'s waiting replay and run it.
-    private func run(_ id: UInt32) {
+    /// A queued snapshot separates replay jobs on this serial queue.
+    private func run(_ id: UInt32, _ job: Canvas2DJob) {
         lock.lock()
-        let taken = waiting.removeValue(forKey: id)
+        if waiting[id] === job { waiting.removeValue(forKey: id) }
+        let cancelled = job.cancelled
         lock.unlock()
         DispatchQueue.main.async { [weak self] in
             // Released unless another replay has come to wait since.
@@ -261,11 +271,12 @@ final class Canvas2DHost: Canvas2DEnv {
             self.lock.lock(); let still = self.waiting[id] != nil; self.lock.unlock()
             if !still { self.onHeld?(id, false) }
         }
-        guard let job = taken else {
+        guard !cancelled else {
             DispatchQueue.main.async { [weak self] in self?.pending -= 1 }
             return
         }
         if job.fresh {
+            completed[id] = nil
             replayers[id] = nil
             let t = Canvas2DReplayer(trackingWidth: job.w, height: job.h, scale: job.scale, lifetime: job.lifetime, generation: job.generation)
             t.space = job.space
@@ -275,6 +286,7 @@ final class Canvas2DHost: Canvas2DEnv {
             DispatchQueue.main.async { [weak self] in self?.pending -= 1 }
             return
         }
+        defer { if job.drawing > 0 { completed[id] = job.drawing } }
         let env = Canvas2DSnapshot(images: job.images, fonts: job.fonts)
         var unreadable = 0
         let lists = job.lists.compactMap { $0 }
@@ -351,11 +363,11 @@ final class Canvas2DHost: Canvas2DEnv {
         var contents: Any?, recording: Canvas2DRecordLayer.Frame?
         if record, let start = k.start {
             replayers[id] = nil
-            k.recording = true
             recording = .init(lists: k.lists, start: start, env: keptEnv, width: job.w, height: job.h, scale: job.scale, space: job.space)
+            k.recording = recording
         } else {
             let r: Canvas2DReplayer
-            if let existing = replayers[id], !k.recording {
+            if let existing = replayers[id], k.recording == nil {
                 r = existing
                 r.env = env
                 for data in lists where !r.apply(data) { unreadable += 1 }
@@ -372,14 +384,14 @@ final class Canvas2DHost: Canvas2DEnv {
                     for data in lists where !r.apply(data) { unreadable += 1 }
                 }
                 replayers[id] = r
-                k.recording = false
+                k.recording = nil
             }
             r.env = nil
             contents = r.image()
         }
         // Kept only while it may be recorded: a canvas that does not animate,
         // or kept past the bound, starts again at its next cover.
-        if !k.bounded || (!job.animating && !k.recording) { k.drop() }
+        if !k.bounded || (!job.animating && k.recording == nil) { k.drop() }
         withExtendedLifetime(env) {}
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -399,6 +411,55 @@ final class Canvas2DHost: Canvas2DEnv {
                 self.recorders[id]?.hide()
             }
         }
+    }
+
+    /// A capture (LLP 1056 D9, as amended for #188): the bitmap of `id` the
+    /// presenter keeps, as a PNG, made on the replay queue after every replay
+    /// already dispatched. The replay queue waits while `snapshot` copies on
+    /// the runtime owner and marks the job; only then may it encode. `done`
+    /// hears the PNG on main, nil when copying or encoding was refused.
+    func capture(_ id: UInt32, lifetime: UInt64, generation: UInt32, sequence: UInt64, width: Int, height: Int, snapshot: @escaping (() -> Bool) -> Bool = { $0() }, done: @escaping (Data?) -> Void) {
+        // A later resize must not replace lists the capture is waiting to read.
+        lock.lock(); waiting.removeValue(forKey: id); lock.unlock()
+        replay.async { [weak self] in
+            #if DEBUG
+            self?.beforeCaptureCopy?()
+            #endif
+            var image: CGImage?
+            let copied = snapshot {
+                image = self?.captureImage(id, lifetime: lifetime, generation: generation, sequence: sequence, width: width, height: height)
+                return image != nil
+            }
+            #if DEBUG
+            if copied { self?.beforeCaptureEncode?() }
+            #endif
+            let png = copied ? image.flatMap(canvas2DPNG) : nil
+            DispatchQueue.main.async { done(png) }
+        }
+    }
+
+    /// What shows for `id`: the GPU's surface, the Core Graphics bitmap, or,
+    /// for a canvas Core Animation records, its kept lists replayed into a
+    /// bitmap, which is what the recording draws. An unavailable generation refuses.
+    private func captureImage(_ id: UInt32, lifetime: UInt64, generation: UInt32, sequence: UInt64, width: Int, height: Int) -> CGImage? {
+        guard sequence > 0, (completed[id] ?? 0) >= sequence else { return nil }
+        let current = { (l: UInt64, g: UInt32) in l == lifetime && g == generation }
+        var image: CGImage?
+        if let g = gpus[id], current(g.lifetime, g.generation), let surface = g.current {
+            image = canvas2DImage(of: surface, p3: g.p3)
+        } else if let r = replayers[id], current(r.lifetime, r.generation) {
+            image = r.image()
+        } else if let k = kept[id], let frame = k.recording, current(k.tracker.lifetime, k.tracker.generation) {
+            let r = Canvas2DReplayer(width: width, height: height, scale: frame.scale, lifetime: lifetime,
+                                     generation: generation, space: frame.space)
+            r.env = frame.env
+            image = withExtendedLifetime(frame) {
+                r.restore(frame.start)
+                for data in frame.lists { _ = r.apply(data) }
+                return r.image()
+            }
+        }
+        return image
     }
 
     /// An agent's picture waits for the replays already dispatched to show.
@@ -437,7 +498,7 @@ final class Canvas2DHost: Canvas2DEnv {
         guard sequence.removeValue(forKey: id) != nil else { return }
         shown.removeValue(forKey: id)
         born.removeValue(forKey: id)
-        lock.lock(); waiting.removeValue(forKey: id); lock.unlock()
+        lock.lock(); waiting.removeValue(forKey: id)?.cancelled = true; lock.unlock()
         recorders.removeValue(forKey: id)
         let retired = lifetimes.removeValue(forKey: id)
         replay.async { [weak self] in
@@ -445,7 +506,7 @@ final class Canvas2DHost: Canvas2DEnv {
             if self.replayers[id]?.lifetime == retired { self.replayers.removeValue(forKey: id) }
             if self.kept[id]?.tracker.lifetime == retired { self.kept.removeValue(forKey: id) }
             if self.gpus[id]?.lifetime == retired { self.gpus.removeValue(forKey: id) }
-            if self.kept[id] == nil { self.undrawn.remove(id) }
+            if self.kept[id] == nil { self.undrawn.remove(id); self.completed.removeValue(forKey: id) }
         }
         layers.removeValue(forKey: id)?.removeFromSuperlayer()
     }
@@ -454,12 +515,14 @@ final class Canvas2DHost: Canvas2DEnv {
 /// One canvas's replay not yet started: its lists in order, with what they
 /// read.
 private final class Canvas2DJob {
+    var cancelled = false
     var fresh: Bool
     var w: Int, h: Int, scale: Double, lifetime: UInt64, generation: UInt32
     var lists: [Data?]
     var images: [String: CGImage]
     var fonts: [Canvas2DFont: CTFont]
     var seq: Int
+    var drawing: UInt64 = 0
     /// The draw asked for the next frame.
     var animating = false
     /// An explicit bitmap, stretched to the box.
@@ -484,6 +547,7 @@ private final class Canvas2DJob {
         }
         images = later.images
         seq = later.seq
+        drawing = later.drawing
         animating = later.animating
         stretch = later.stretch
         space = later.space

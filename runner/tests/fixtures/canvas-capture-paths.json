@@ -1,0 +1,23 @@
+[
+  ["app:/tmp/shot.png", true],
+  ["app://tmp/shot.png", true],
+  ["app:////data//folder///shot.png", true],
+  ["app:/cache/shot.png", true],
+  ["app:/tmp/a\\b.png", true],
+  ["app:/tmp/é.png", true],
+  ["app:/tmp/.hidden", true],
+  ["app:/tmp/..png", true],
+  ["app:/tmp", false],
+  ["app:/tmp/", false],
+  ["app:////tmp///", false],
+  ["app:/tmp/shot.png/", false],
+  ["app:/tmp/./shot.png", false],
+  ["app:/tmp/../shot.png", false],
+  ["app:/tmp/a/..", false],
+  ["app:/tmp/a/.", false],
+  ["app:/other/shot.png", false],
+  ["app:/tmp/a\u0000.png", false],
+  ["/tmp/shot.png", false],
+  ["doc:/1/shot.png", false],
+  ["app:tmp/shot.png", false]
+]

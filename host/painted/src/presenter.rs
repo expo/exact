@@ -809,7 +809,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// Whether the picture is stale.
     pub fn dirty(&self) -> bool {
-        self.dirty
+        self.dirty || !self.surfaces.captures.is_empty()
     }
 
     /// Where the pointer is drawn (`None` draws none).

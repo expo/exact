@@ -546,6 +546,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                     w.string(name);
                     bytes(w, payload);
                 }
+                SurfaceRequest::Canvas { name, path, .. } => {
+                    w.u8(16);
+                    w.string(name);
+                    w.string(path);
+                }
             }
             w.u8(u8::from(r.grants.is_some()));
             w.string(r.grants.as_deref().unwrap_or(""));
@@ -703,8 +708,13 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             Ok(Answer::Later(request))
         }
-        tag @ (7 | 8) => {
+        tag @ (7 | 8 | 16) => {
             let name = r.string().map_err(error)?;
+            let path = if tag == 16 {
+                Some(r.string().map_err(error)?)
+            } else {
+                None
+            };
             let payload = if tag == 8 {
                 Some(read_bytes(r)?.to_vec())
             } else {
@@ -712,9 +722,10 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             let present = r.u8().map_err(error)?;
             let scope = r.string().map_err(error)?;
-            let mut request = match payload {
-                Some(bytes) => Request::restore_surface(name, bytes),
-                None => Request::capture_surface(name),
+            let mut request = match (payload, path) {
+                (Some(bytes), _) => Request::restore_surface(name, bytes),
+                (None, Some(path)) => Request::capture_canvas(name, path),
+                (None, None) => Request::capture_surface(name),
             };
             request.grants = match present {
                 0 => None,

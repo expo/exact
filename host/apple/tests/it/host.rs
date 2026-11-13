@@ -6,7 +6,7 @@
 use exact_apple::abi::Bridge;
 use exact_apple::measure::{CFontCatalog, CMetrics, CRequest, MAX_CONTENT};
 use exact_apple::Host;
-use exact_kernel::MonospaceMeasurer;
+use exact_kernel::{MonospaceMeasurer, NodeType};
 use exact_runner::{DataError, DataSource, Event, Value};
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -212,7 +212,14 @@ fn the_first_batch_creates_places_and_sizes_the_whole_tree() {
         (0.0, 0.0, 390.0, 844.0),
         "{root:?}"
     );
-    let scroll = content_of(&batch, 3);
+    let kernel = host.runner().kernel();
+    let mut scroll = kernel.node(view(&host, "home-screen")).unwrap();
+    while scroll.node_type != NodeType::ScrollView {
+        scroll = kernel
+            .node(scroll.parent.expect("home has a scroller"))
+            .unwrap();
+    }
+    let scroll = content_of(&batch, scroll.id);
     assert!(
         scroll.1 > 844.0,
         "the page is taller than the viewport: {scroll:?}"
@@ -238,12 +245,11 @@ fn later_batches_carry_only_what_changed_and_frames_follow() {
     let tick = host.advance(61_000.0);
     assert!(count(&tick, "props") > 0, "countdowns changed: {tick}");
     assert_eq!(count(&tick, "create"), 0);
+    let home = view(&host, "home-screen");
     let swap = host.dispatch_at(view(&host, "change-station"), Event::Press, 61_000.0);
-    assert!(
-        count(&swap, "destroy") > 0 && count(&swap, "create") > 0,
-        "{}",
-        &swap[..200]
-    );
+    assert_eq!(count(&swap, "destroy"), 0, "home stays mounted");
+    assert_eq!(view(&host, "home-screen"), home);
+    assert!(count(&swap, "create") > 0, "the picker is created");
     assert!(count(&swap, "frame") > 0, "new nodes are placed");
     assert_eq!(
         count(&swap, "present"),
@@ -259,6 +265,10 @@ fn later_batches_carry_only_what_changed_and_frames_follow() {
     let wider = host.resize(600.0, 844.0);
     assert_eq!(frame_of(&wider, 1).2, 600.0);
     assert!(count(&wider, "frame") > 1, "children reflow");
+    let back = host.dispatch_at(view(&host, "stations-back"), Event::Press, 61_000.0);
+    assert_eq!(view(&host, "home-screen"), home);
+    assert_eq!(count(&back, "create"), 0, "Back reveals the retained home");
+    assert!(count(&back, "destroy") > 0, "Back removes the picker");
 }
 
 #[test]

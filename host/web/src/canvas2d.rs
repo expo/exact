@@ -14,6 +14,8 @@ use exact_runner::Geometry;
 #[derive(Default)]
 pub(crate) struct Watch {
     watched: SortedSet<ViewId>,
+    pub(crate) captures: SortedMap<u64, RequestOut>,
+    pub(crate) snapshotting: SortedMap<u64, exact_runner::canvas_capture::CanvasCapture>,
     frames: bool,
     /// The lists the last two batches with lists named by address: the glue
     /// reads them in place while it applies the batch (a batch applied
@@ -22,11 +24,40 @@ pub(crate) struct Watch {
 }
 
 impl<D: DataSource> Host<D> {
+    /// Route captures through browser geometry before snapshotting their drawing.
+    pub(crate) fn canvas_capture_request(
+        &mut self,
+        r: RequestOut,
+        batch: &mut Batch,
+        immediate: &mut Vec<(u64, Outcome)>,
+    ) -> Option<RequestOut> {
+        if matches!(
+            r.request.surface.as_deref(),
+            Some(exact_runner::SurfaceRequest::Canvas { .. })
+        ) && !self.runner.plan().surfaces.is_empty()
+        {
+            batch.canvas_capture_prepare(r.ticket);
+            self.canvas2d.captures.insert(r.ticket, r);
+            return None;
+        }
+        match r.request.take_canvas_capture() {
+            Some(Ok(c)) => batch.canvas_capture(r.ticket, &c, r.request.grants.as_deref()),
+            Some(Err(refusal)) => immediate.push((r.ticket, refusal)),
+            None => return Some(r),
+        }
+        None
+    }
+
     /// This turn's canvas work: new canvases to watch, due draws and their
     /// lists, and whether frames are wanted.
     pub(crate) fn canvas_turn(&mut self, batch: &mut Batch) {
+        self.canvas_draw_turn(batch, false);
+    }
+
+    /// Retain all lists when several draw turns share one browser batch.
+    fn canvas_draw_turn(&mut self, batch: &mut Batch, continuing: bool) -> bool {
         if self.runner.plan().surfaces.is_empty() {
-            return;
+            return false;
         }
         let live = self.runner.canvas_views();
         for view in &live {
@@ -49,9 +80,18 @@ impl<D: DataSource> Host<D> {
         for c in &lists {
             batch.canvas2d(c);
         }
-        if !lists.is_empty() {
-            self.canvas2d.kept.swap(0, 1);
-            self.canvas2d.kept[1] = lists;
+        let drew = !lists.is_empty();
+        if drew {
+            if !continuing {
+                self.canvas2d.kept.swap(0, 1);
+                self.canvas2d.kept[1].clear();
+            }
+            self.canvas2d.kept[1].extend(lists);
+        }
+        for (ticket, r) in &self.canvas2d.captures {
+            if !r.request.canvas_capture_pending() {
+                batch.canvas_capture_prepare(*ticket);
+            }
         }
         // Handles a Rust draw asked for: the page loads them (LLP 1056 D9).
         let images = self.runner.take_canvas_image_requests();
@@ -63,6 +103,61 @@ impl<D: DataSource> Host<D> {
             self.canvas2d.frames = frames;
             batch.canvas2d_frames(frames);
         }
+        drew
+    }
+
+    /// The browser copied the completed drawing; encoding may finish later.
+    pub fn canvas_snapshotted(&mut self, ticket: u64) -> bool {
+        self.canvas2d
+            .snapshotting
+            .remove(&ticket)
+            .is_some_and(|c| c.snapshotted().is_ok())
+    }
+
+    /// The page has reported this commit's geometry and applied its draws.
+    pub fn canvas_capture_ready(&mut self, ticket: u64) -> String {
+        let mut batch = Batch::new();
+        if let Some(r) = self.canvas2d.captures.remove(&ticket) {
+            if self.runner.holds(ticket) {
+                let mut drew = false;
+                for turn in 0..16 {
+                    drew = self.canvas_draw_turn(&mut batch, turn != 0);
+                    if !r.request.canvas_capture_pending() || !drew {
+                        break;
+                    }
+                }
+                self.runner.fail_stalled_canvas_capture(&r.request);
+                if r.request.canvas_capture_pending() {
+                    if drew {
+                        batch.canvas_capture_prepare(ticket);
+                    }
+                    self.canvas2d.captures.insert(ticket, r);
+                    return self.finish(batch, None);
+                }
+                match r.request.take_canvas_capture() {
+                    Some(Ok(c)) => {
+                        batch.canvas_capture(ticket, &c, r.request.grants.as_deref());
+                        self.canvas2d.snapshotting.insert(ticket, c);
+                    }
+                    Some(Err(outcome)) => {
+                        return match self.runner.fulfill(ticket, outcome) {
+                            Ok(Some(receipt)) => self.batch_from(
+                                batch,
+                                &[Timed {
+                                    at_ms: self.now_ms,
+                                    receipt,
+                                }],
+                                None,
+                            ),
+                            Ok(None) => self.finish(batch, None),
+                            Err(e) => self.finish(batch, Some(&format!("{e:?}"))),
+                        };
+                    }
+                    None => unreachable!("only canvas captures wait for browser geometry"),
+                }
+            }
+        }
+        self.finish(batch, None)
     }
 
     /// A 2D canvas's content box (CSS px) and device scale, from the page's
@@ -122,4 +217,61 @@ impl<D: DataSource> Host<D> {
         self.canvas_turn(&mut batch);
         self.finish(batch, None)
     }
+}
+
+/// GPU surfaces' export group (LLP 1047 D3), beside [`crate::host!`]: the generated
+/// entry invokes it when the plan has a canvas with a surface, and the glue
+/// calls it only for one.
+#[macro_export]
+macro_rules! surface_exports {
+    () => {
+        /// A 2D canvas's content box and device scale (LLP 1056 D4), from
+        /// the page's `ResizeObserver`; returns the batch length.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_geometry(
+            view: u32,
+            width: f64,
+            height: f64,
+            scale: f64,
+        ) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_geometry(view, width, height, scale))
+        }
+
+        /// Confirm the browser copied a completed drawing.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_snapshotted(ticket: f64) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_snapshotted(ticket as u64) as u32)
+        }
+
+        /// Finish a capture after the page reports this commit's canvas boxes.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_capture_ready(ticket: f64) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_capture_ready(ticket as u64))
+        }
+
+        /// A Canvas 2D image handle loaded or failed (LLP 1056 D9); the
+        /// payload is in the input buffer. Returns the batch length.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_image(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_image(len as usize))
+        }
+
+        /// A font finished loading (LLP 1056 D8); returns the batch length.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_fonts() -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_fonts())
+        }
+
+        /// Publish or clear a named surface record; returns the batch length.
+        #[no_mangle]
+        pub extern "C" fn exact_surface_record(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| {
+                let Ok(mut bridge) = b.try_borrow_mut() else {
+                    eprintln!("exact_surface_record refused: nested bridge export");
+                    return 0;
+                };
+                bridge.surface_record(len as usize)
+            })
+        }
+    };
 }

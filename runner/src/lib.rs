@@ -44,6 +44,7 @@ pub mod activation;
 pub mod agent;
 pub mod auth;
 pub mod bridge;
+pub mod canvas_capture;
 pub use bridge::icon_of;
 pub mod commands;
 pub mod compare;

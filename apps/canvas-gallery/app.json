@@ -37,5 +37,10 @@
       "ios": "0",
       "linux": "0"
     }
+  },
+  "rust": {
+    "module": {
+      "package": "canvas-gallery-logic"
+    }
   }
 }

@@ -202,6 +202,8 @@ impl<D: DataSource> Presenter<D> {
         if self.display.blocked() {
             return None;
         }
+        // Sample and replay this display tick before captures and the ownership snapshot.
+        self.sync_surfaces_with_canvas_tick(true);
         // Keep A's owners alive for replay/failure during B's paint; swapping
         // afterward moves B into its receipt, without deep-copying any payload.
         let old_paint = self.brush.presentation();
@@ -212,7 +214,9 @@ impl<D: DataSource> Presenter<D> {
         self.boxes_serial += 1;
         self.display.active = true;
         self.display.rendering = true;
-        let pixels = self.frame();
+        let pixels = self
+            .frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
+            .expect("capture has pixels or a CPU fallback");
         self.display.menu = None;
         self.display.rendering = false;
         let identity = Rc::new(Identity {

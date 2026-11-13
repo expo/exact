@@ -311,7 +311,7 @@ impl<D: DataSource> Bridge<D> {
                     let refusal = oversized
                         .then(|| "surface restore exceeds 16 MiB".to_string())
                         .or_else(|| r.request.check_surface_grant(&admitted).err());
-                    presenter.surface_work(&r, refusal.as_deref());
+                    h.surface_work(&mut presenter, &r, refusal.as_deref());
                     continue;
                 }
                 let dispatch = match r.request.continuation {
@@ -379,6 +379,13 @@ impl<D: DataSource> Bridge<D> {
         })
     }
 
+    /// The presenter owns this capture's pixels, before asynchronous encoding.
+    pub fn canvas_snapshotted(&mut self, ticket: u64) -> bool {
+        self.host
+            .as_mut()
+            .is_some_and(|host| host.canvas_snapshotted(ticket))
+    }
+
     /// A surface operation completed on the presenter thread.
     pub fn fulfill_surface(&mut self, ticket: u64, kind: u32, len: usize, now_ms: f64) -> u32 {
         let body = self.input[..len.min(self.input.len())].to_vec();
@@ -387,6 +394,11 @@ impl<D: DataSource> Bridge<D> {
                 Outcome::Surface(SurfaceOutcome::Captured(body))
             }
             7 if body.is_empty() => Outcome::Surface(SurfaceOutcome::Restored),
+            8 if self.host.is_some() => self
+                .host
+                .as_mut()
+                .expect("booted")
+                .canvas_captured(ticket, &body),
             2..=4 => Outcome::Failed {
                 kind: match kind {
                     2 => FailureKind::Refused,

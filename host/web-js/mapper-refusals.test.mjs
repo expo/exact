@@ -13,7 +13,7 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 import { asyncContextHelper } from '../../js/bake/src/typescript.mjs';
 
 const root = resolve(import.meta.dir, '../..');
-const GLOBALS = ['location', 'exact', '__exact_async_context', '__exact_ordinary', 'fixture'];
+const GLOBALS = ['location', 'exact', '__exact_async_context', '__exact_ordinary', 'fixture', 'captureCanvas'];
 let dir, data, journal, kept;
 // What left the page: requests, writes and socket sends.
 const fixture = { fetched: [], written: [], sent: [] };
@@ -31,7 +31,7 @@ export const hasGrant = () => true;
 export const fetchWith = (set, input) => { globalThis.fixture.fetched.push(String(input)); return Promise.resolve(new Response('asset')); };\n`);
   writeFileSync(resolve(dir, 'admission-data.js'), "import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(null);\n");
   writeFileSync(resolve(dir, 'storage-fs.js'), 'export const createFileSystem = () => ({ writeFile: async path => { globalThis.fixture.written.push(path); } });\n');
-  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n');
+  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>{throw new Error("unexpected capture")};\n');
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes = {};\n');
   // Each kind's transport: one message (an upload's progress; a socket's `open` and a message), then its end.
@@ -73,6 +73,7 @@ export function answer(name, args, store, storage) {
   const [url, init] = STREAMS[args[0]];
   const calls = socket => ({
     fetch: tried(() => fetch('https://example.test/asset').then(r => r.text())),
+    capture: tried(() => captureCanvas('ink', 'app:/tmp/ink.png')),
     storage: tried(() => storage.fs.writeFile('app:/data/m.txt', 'kept')),
     timer: tried(() => setTimeout(() => {}, 1)),
     ...(socket ? { send: tried(() => socket.send('reply')) } : {}),
@@ -112,8 +113,9 @@ test('a TypeScript upload transport rejection answers with a failure outcome', a
 const STREAM = "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream";
 const SOCKET = "fetch() is unavailable in a socket's mapper: it answers each frame now";
 const STORAGE = "storage.writeFile() called in a stream's mapper: it was never run. Start storage inside an answer";
+const CAPTURE = "captureCanvas() is unavailable in a stream's mapper: capture in the answer that opens the stream";
 const TIMER = "setTimeout() is unavailable here: a timer belongs to the answer that arms it, and none is running (module initialization, a stream's mapper, background work, or an answer that has given its value or was let go). A cache needs no timer to expire: fetch keeps each answer as long as its HTTP headers allow";
-const refused = (type, fetchNow = STREAM) => ({ type, 'fetch now': fetchNow, 'storage now': STORAGE, 'timer now': TIMER, 'fetch later': STREAM, 'storage later': STORAGE, 'timer later': TIMER });
+const refused = (type, fetchNow = STREAM) => ({ type, 'capture now': CAPTURE, 'capture later': CAPTURE, 'fetch now': fetchNow, 'storage now': STORAGE, 'timer now': TIMER, 'fetch later': STREAM, 'storage later': STORAGE, 'timer later': TIMER });
 
 const KINDS = [['events', 'an event stream', ['message', 'error']], ['bytes', 'a byte stream', ['message', 'error']],
   ['longPoll', 'a long poll', ['message', 'error']], ['upload', 'an upload', ['progress', 'load']]];

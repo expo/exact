@@ -579,37 +579,27 @@ source as it is.
    `decide +kernel` for given operands. `native_decide` is not used (it
    adds an axiom).
 
-Worked example: Type Tour's `screen` is a string and
-`go(target: string)` writes any string it is given, yet the phone is only
-ever on one of its five screens, because every handler that names `go`
-passes a literal screen.
+Type Tour declares routes for its six screens. Its generated embedding also
+contains the not-found route. The proof checks the names and the parent chains
+used by direct Display and conversation links:
 
 ```lean
-def screens : List String := ["lock", "home", "settings", "display", "messages"]
-def ScreenOK (v : Value) : Prop := ∃ s ∈ screens, v = .str s
+def screens : List String := ["lock", "home", "messages", "thread", "settings", "display", "notfound"]
 
-theorem screen_always : ∀ c, Reachable typeTour c → SlotIn "screen" ScreenOK c.slots := by
-  refine Reachable.slotIn screen_boot ?_
-    (fun _ a ha => by simp [typeTour, clockActions, thenActions] at ha)
-  intro c ev a args env ls vs payload rows _ hh hvs
-  refine BodyKeeps.of_wp fun ad had hname => ?_
-  subst hname
-  simp only [typeTour, List.mem_cons, List.mem_nil_iff, or_false] at had
-  rcases had with rfl | rfl | … <;> simp only [wp, assignPre] <;>
-    simp [Keeps, Effects.write, Effects.rowWrite, Effects.command, ScreenOK, screens]
-  -- left: `go`, whose argument `go_handler` (checked over the view by
-  -- `decide`) says is a literal screen
-  …
+theorem route_names : ∀ r ∈ typeTour.routes, r.name ∈ screens := by decide
+
+theorem display_parents :
+    (Route.chain typeTour.routes "/settings/display").map (·.name) =
+      ["lock", "home", "settings", "display"] := by decide +kernel
 ```
 
-`screen_boot` unfolds `typeTour.states` to see `screen` starts as
-`"lock"`; tasks are none; every action but `go` is dismissed by `simp`
-over its `wp`. The whole proof is `Apps/Proofs/TypeTour.lean`. What is
+The proofs are in `Apps/Proofs/TypeTour.lean`. What is
 proved, by app:
 
 | App | Theorem | Says |
 |---|---|---|
-| Type Tour | `TypeTour.screen_always` | `screen` is always one of the five screens. |
+| Type Tour | `TypeTour.route_names` | Every declared route names one of the seven screens, including not-found. |
+| Type Tour | `TypeTour.display_parents`, `TypeTour.thread_parents` | Direct Display and conversation links include Settings and Messages respectively. |
 | Update Lab | `UpdateLab.advance_keeps_user_state` | Moving the clock (the 250 ms probe) never changes `counter`, `note` or `live`. |
 | Update Lab | `UpdateLab.results_shape` | The three result slots always hold `none` or `some` answer. |
 | Update Lab | `UpdateLab.increment_adds_one` | A committed `increment` leaves `counter` at its old value plus one. |

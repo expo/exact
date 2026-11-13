@@ -46,16 +46,16 @@ fn the_app_compiles_deterministically_and_bakes_its_first_frame() {
     let b = caltrain::compile().unwrap();
     assert_eq!(a.encode(), b.encode(), "compiling twice is byte-identical");
     assert_eq!(a.kernel_schema_digest, exact_kernel::SCHEMA_DIGEST);
-    // seededEpoch, nowMs, screen, stationId, query; material, deck, focus (LLP 1014: the
+    // seededEpoch, nowMs, stationId, query; material, deck, focus (LLP 1014: the
     // sky's material, the card deck and its focus); sky (whether the app is
     // inside the aurora canvas at all — a phone's frame-rate switch);
     // hoverId, hoverOn, searchFocused, lastKey (the events beyond press and
     // change, LLP 1005 §3); deckLoaded, deckLoads, and deckMessage (the
     // iframe fixture, @ref LLP 1020 M1); and `nav`, the routes table's
-    // location (LLP 1038 D2), there for `render=build` (LLP 1048.003 D5);
+    // location (LLP 1038 D2);
     // and the activity's delay, whether one is followed, and the mutation
     // replies, and whether a service alert is followed (LLP 1126.001 WP9, WP14).
-    assert_eq!(a.slots.len(), 22);
+    assert_eq!(a.slots.len(), 21);
     // Seven data-crate resources, `delivery` — the runner's own
     // `exactDelivery` (LLP 1030 D7), read by the update banner — and
     // `viewport`, whose `pointer` says a TV, `exactActivities`, and
@@ -63,7 +63,7 @@ fn the_app_compiles_deterministically_and_bakes_its_first_frame() {
     assert_eq!(a.resources.len(), 11);
     // …and `activateUpdate`, the banner's `deliveryActivate`, and
     // `reloadApp`, the header's Reload, and the departure and service-alert actions.
-    assert_eq!(a.actions.len(), 24);
+    assert_eq!(a.actions.len(), 25);
     assert_eq!(a.timers.len(), 1);
     assert!(
         a.resources.iter().all(|r| r.initial.len == 0),
@@ -110,6 +110,26 @@ fn the_first_frame_needs_no_data_source() {
         Some("Mountain View")
     );
     assert!(r.kernel().live_count() > 20);
+}
+
+#[test]
+fn screen_urls_boot_the_picker_and_the_deck() {
+    let plan = caltrain::build().unwrap();
+    for (url, target) in [
+        ("/stations", "stations-screen"),
+        ("/web-deck", "deck-screen"),
+    ] {
+        let mut r = Runner::boot(
+            plan.clone(),
+            caltrain_data::Caltrain,
+            Kernel::with_monospace(),
+            Default::default(),
+            url,
+        )
+        .unwrap();
+        assert_eq!(r.take_router_change().unwrap().url, url);
+        assert_eq!(r.kernel().find_by_test_id(target).len(), 1);
+    }
 }
 
 #[test]
@@ -198,7 +218,7 @@ fn changing_station_re_requests_the_boards_and_search_filters_by_key() {
     let mut r = caltrain::boot(caltrain::build().unwrap(), Kernel::with_monospace()).unwrap();
     r.dispatch(view_of(&r, "change-station"), Event::Press)
         .unwrap();
-    assert_eq!(r.slot("screen"), Some(&Value::str("stations")));
+    assert_eq!(r.take_router_change().unwrap().url, "/stations");
     let nearest = ids_with_prefix(&r, "station-");
     assert_eq!(
         &nearest[..3],
@@ -214,7 +234,7 @@ fn changing_station_re_requests_the_boards_and_search_filters_by_key() {
 
     r.dispatch(view_of(&r, "station-sf"), Event::Press).unwrap();
     assert_eq!(r.slot("stationId"), Some(&Value::some(Value::str("sf"))));
-    assert_eq!(r.slot("screen"), Some(&Value::str("home")));
+    assert_eq!(r.take_router_change().unwrap().url, "/");
     assert_eq!(r.slot("query"), Some(&Value::str("")));
     assert_eq!(
         text_of(&r, "station-name").as_deref(),
@@ -272,7 +292,7 @@ fn a_reload_keeps_its_place_and_re_requests_only_what_changed() {
         Some("San Francisco")
     );
     let carried = r.carry();
-    assert_eq!(carried.slots.len(), 22);
+    assert_eq!(carried.slots.len(), 21);
     assert_eq!(carried.now_ms, 30_000.0);
 
     // The edited plan: unbaked (no compiled data) and with a visible change.
@@ -294,7 +314,7 @@ fn a_reload_keeps_its_place_and_re_requests_only_what_changed() {
         again.slot("stationId"),
         Some(&Value::some(Value::str("sf")))
     );
-    assert_eq!(again.slot("screen"), Some(&Value::str("home")));
+    assert_eq!(again.take_router_change().unwrap().url, "/");
     assert_eq!(
         text_of(&again, "station-name").as_deref(),
         Some("San Francisco")

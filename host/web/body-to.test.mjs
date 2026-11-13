@@ -207,3 +207,37 @@ test('the JS target writes a 2xx body to the app file, says what it wrote, and r
     expect(site.seen).not.toContain('/never');
   } finally { await browser.close(); site.server.stop(true); }
 }, 120_000);
+
+// The wasm carrier must keep the capture's ticket through the file lock, not just through PNG encoding.
+test('a wasm canvas capture cancelled while its file waits preserves the destination', async () => {
+  const site = serve(), grants = normalized('fs.write app:/data');
+  const browser = await suiteBrowser();
+  const arm = glueCase(readFileSync(new URL('./glue.js', import.meta.url), 'utf8'), 'canvasCapture');
+  try {
+    const page = await browser.newPage();
+    await page.goto(site.origin);
+    const kept = await page.evaluate(async ({ arm, grants }) => {
+      globalThis.exact = {};
+      const { createFileStore, lockPaths } = await import('/web/storage-fs.js');
+      const { createStorageRequests } = await import('/web/storage-request.js');
+      const { createGrantSet, scopedGrantSet } = await import('/web/grant-admission.js');
+      const set = createGrantSet(grants), store = createFileStore('canvas-held');
+      await store.writeFile('app:/data/shot.png', new TextEncoder().encode('keep'));
+      const release = await lockPaths('canvas-held', ['app:/data/shot.png']);
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+      const blob = await new Promise(resolve => canvas.toBlob(resolve));
+      let active = true;
+      const tracked = [], storage = createStorageRequests('canvas-held', set);
+      const bindings = { host: { incarnation: 7, grantSet: set }, holds: () => active,
+        encoder: new TextEncoder(), safelyFulfill() {}, track: p => tracked.push(p), scopedGrantSet,
+        storageService: async () => storage, pieces: { canvas2d: op => op.resolve(blob) } };
+      const apply = new Function(...Object.keys(bindings), 'op', `switch (op.op) { ${arm} }`);
+      apply(...Object.values(bindings), { op: 'canvasCapture', ticket: 9, path: 'app:/data/shot.png', w: 1, h: 1, scale: 1 });
+      while (!(await navigator.locks.query()).pending.length) await new Promise(r => setTimeout(r, 0));
+      active = false;
+      await release(); await Promise.all(tracked);
+      return new TextDecoder().decode(await store.readFile('app:/data/shot.png'));
+    }, { arm, grants });
+    expect(kept).toBe('keep');
+  } finally { await browser.close(); site.server.stop(true); }
+}, 30_000);

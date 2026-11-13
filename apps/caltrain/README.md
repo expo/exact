@@ -5,6 +5,10 @@ with a station picker, search, nearby stations and a line map. It runs from one
 `app.contract` on the web, macOS, iOS, tvOS and Linux, and every other host is
 measured against it.
 
+The departures are at `/`, the station picker at `/stations`, and the driven
+iframe fixture at `/web-deck`. Each URL opens directly and survives a browser
+reload; Back returns to the preceding route.
+
 There is no TypeScript here. The data is a Rust crate, so this is the app to read
 for a Rust data source, authored tests, routes and an optional GPU module.
 

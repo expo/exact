@@ -14,7 +14,12 @@
 // 3. Caltrain's line map (LLP 1056 §8, the take): with the sky off, the
 //    map's own pixels — the part of its canvas no child covers: background
 //    and the train — on each native host against Chrome's.
-// 4. Probes: every canvas drew and none is pending; the throwing fixture
+// 4. Captures (LLP 1056 D9, page 6): each PNG `captureCanvas` wrote, shown
+//    by an `image` beside its canvas, against the host's own screenshot of
+//    that canvas: an image with text, again after strokes accumulated, an
+//    empty canvas, and the refusals of a path outside the grant and of a
+//    surface not mounted.
+// 5. Probes: every canvas drew and none is pending; the throwing fixture
 //    reports its error at odd steps and kept what it drew; the resizing one's
 //    generation is its step; the explicit bitmap is 40 × 25, stretched.
 //
@@ -132,18 +137,82 @@ function over(img, rgb, pad) {
   return { width, height, data };
 }
 
-/** An app's web build in its own dist (`target/web-dist/<app>`), so the
+/** An app's web build in its own dist (`target/web-dist-<target>/<app>`), so the
  * smoke leaves `host/web/dist` to the web smoke; built here when missing
  * (`EXACT_CANVAS_REBUILD=1` builds it again). */
-function webBuild(app) {
-  const dist = resolve(ROOT, 'target/web-dist-js', app);
+function webBuild(app, target = 'js') {
+  const dist = resolve(ROOT, `target/web-dist-${target}`, app);
   if (process.env.EXACT_CANVAS_REBUILD === '1' || !existsSync(resolve(dist, '.exact-build.json'))) {
     mkdirSync(dirname(dist), { recursive: true });
-    // The web the app ships (LLP 1071: the JS target), whose replay is the web host's own glue.
-    const b = spawnSync('bun', [resolve(ROOT, 'host/web/build.mjs'), `${app}-web`, '--js'], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist }, stdio: 'inherit' });
+    // The web the app ships (LLP 1071: the JS target), whose replay is the web host's own glue; `wasm` the wasm target.
+    const b = spawnSync('bun', [resolve(ROOT, 'host/web/build.mjs'), `${app}-web`, `--${target}`], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist }, stdio: 'inherit' });
     if (b.status !== 0) throw new Error(`the ${app} web build failed`);
   }
   return dist;
+}
+
+/** 4: the captures on one host, checked against its own screenshots. */
+async function captures(open, host, dir, check, env) {
+  const label = env?.EXACT_PAINTER ? `${host}-${env.EXACT_PAINTER}` : host;
+  // `web-wasm` is the web's wasm target, whose runner is Rust's (LLP 1071 §7).
+  const web = host === 'web' ? { webDist: webBuild('canvas-gallery') } : host === 'web-wasm' ? { webDist: webBuild('canvas-gallery', 'wasm') } : {};
+  if (host === 'web-wasm') host = 'web';
+  const s = await open({ host, app: 'canvas-gallery', env, storage: `canvas-capture-${label}-${process.pid}`, ...web });
+  const said = async () => (await s.tree()).nodes.find((n) => n.props?.testId === 'captured')?.props.text ?? '';
+  const take = async (button, key) => {
+    await s.tap(button);
+    await s.clock('settle');
+    return { record: await said(), view: await shot(s, host, dir, `${label}-capture-${key}`) };
+  };
+  // The file against its canvas at device pixels. Linux's GPU painter samples
+  // an `image` with a filter (its top row blends with what is above it, and
+  // glyph edges soften), so the file is shown a little blurred there.
+  const band = env?.EXACT_PAINTER === 'gpu' ? { mean: 2.5, off: 0.025 } : { mean: 1, off: 0.01 };
+  const same = (view, canvas, key) => {
+    const crops = boxes(view, { prefix: 'cap-', slop: 0, native: true });
+    const a = crops[canvas], b = crops['cap-file'];
+    if (!check(a && b && a.width === b.width && a.height === b.height, `${label} capture ${key}: no boxes to compare`)) return null;
+    const best = register(a, b, { slop: 0, band: BAND });
+    if (!check(best.mean <= band.mean && best.off <= band.off, `${label} capture ${key}: the file is not its canvas (mean |Δ| ${best.mean.toFixed(2)}, ${(best.off * 100).toFixed(2)}% off)`)) {
+      writeFileSync(resolve(dir, `${label}-capture-${key}-canvas.png`), encodePng(a));
+      writeFileSync(resolve(dir, `${label}-capture-${key}-file.png`), encodePng(b));
+    }
+    return b;
+  };
+  try {
+    await s.tap('page-6');
+    await s.clock('settle');
+    const first = await take('capture-annotate', 'annotate');
+    const size = first.record.match(/^app:\/tmp\/annotate-\d+\.png (\d+)x(\d+) @([\d.]+)$/);
+    check(size && +size[1] === Math.round(150 * first.view.k) && +size[2] === Math.round(100 * first.view.k) && +size[3] === first.view.k, `${label} capture: answered ${JSON.stringify(first.record)} at ${first.view.k}x`);
+    const before = same(first.view, 'cap-annotate', 'annotate');
+    await s.tap('step');
+    await s.tap('step');
+    await s.clock('settle');
+    const later = await take('capture-annotate', 'accumulated');
+    const after = same(later.view, 'cap-annotate', 'accumulated');
+    if (before && after) check(register(before, after, { slop: 0, band: BAND }).off > 0.005, `${label} capture: the later file has no strokes the first lacks`);
+    let captureWidth = 150;
+    for (const button of ['capture-turn', 'capture-resize', 'capture-rust']) {
+      if (button !== 'capture-turn') captureWidth += 10;
+      const taken = await take(button, button);
+      const size = taken.record.match(/^app:\/tmp\/(?:rust|turn)-\d+\.png (\d+)x(\d+) @([\d.]+)$/);
+      check(size && +size[1] === Math.round(captureWidth * taken.view.k) && +size[2] === Math.round(100 * taken.view.k) && +size[3] === taken.view.k,
+        `${label} ${button}: expected ${captureWidth}x100 at ${taken.view.k}x, got ${JSON.stringify(taken.record)}`);
+      same(taken.view, 'cap-annotate', button);
+    }
+    const rustRefused = await take('capture-rust-refused', 'rust-refused');
+    check(rustRefused.record.startsWith('NotAllowedError: '), `${label} Rust capture outside the grant: ${JSON.stringify(rustRefused.record)}`);
+    const blank = await take('capture-blank', 'blank');
+    check(/^app:\/tmp\/blank\.png \d+x\d+ @/.test(blank.record), `${label} capture blank: ${JSON.stringify(blank.record)}`);
+    same(blank.view, 'cap-blank', 'blank');
+    const refused = await take('capture-refused', 'refused');
+    check(refused.record.startsWith('NotAllowedError: '), `${label} capture outside the grant: ${JSON.stringify(refused.record)}`);
+    const missing = await take('capture-missing', 'missing');
+    check(missing.record.startsWith('NotFoundError: '), `${label} capture of no canvas: ${JSON.stringify(missing.record)}`);
+  } finally {
+    await s.close?.();
+  }
 }
 
 /** Caltrain's line map with the sky off: `{ crop, record }` of its canvas's
@@ -217,7 +286,7 @@ async function gallery({ open, check, dir, record, runs }) {
 }
 
 /** Run the smoke; `check(ok, what)` records a failure. `only: 'caltrain'`
- * runs the Caltrain map alone. */
+ * runs the Caltrain map alone, `only: 'capture'` the captures alone. */
 export async function canvasParity({ open, check, hosts, only }) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-canvas-parity-'));
   const rows = [];
@@ -238,6 +307,10 @@ export async function canvasParity({ open, check, hosts, only }) {
   // EXACT_CANVAS_RECORD): a simulator sees only what is passed.
   const apple = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('EXACT_CANVAS_')));
   const runs = hosts.flatMap((host) => (host === 'linux' ? [['linux', { EXACT_PAINTER: 'cpu' }], ['linux', { EXACT_PAINTER: 'gpu' }]] : [[host, Object.keys(apple).length ? apple : undefined]]));
+  for (const [host, env] of only === 'caltrain' ? [] : [['web'], ['web-wasm'], ...runs]) {
+    try { await captures(open, host, dir, check, env); } catch (error) { check(false, `${host} captures: ${error.message}`); }
+  }
+  if (only === 'capture') return console.log(`canvas parity: captures in ${dir}`);
   if (only !== 'caltrain') await gallery({ open, check, dir, record, runs });
   // 3. Caltrain's line map against Chrome's.
   let chromeMap = null;

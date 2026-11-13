@@ -37,6 +37,7 @@ struct Log {
     p3: Vec<bool>,
     /// Reply with a list that does not read.
     malformed: bool,
+    large: bool,
     /// Each draw's `currentColor`.
     colors: Vec<Option<exact_canvas::Rgba>>,
 }
@@ -44,6 +45,17 @@ struct Log {
 struct Spark(Rc<RefCell<Log>>);
 
 impl DataSource for Spark {
+    fn answer(
+        &mut self,
+        _: &mut exact_runner::Store,
+        name: &str,
+        _: &[Value],
+    ) -> Result<exact_runner::Answer, DataError> {
+        assert_eq!(name, "capture");
+        Ok(exact_runner::Answer::Later(
+            exact_runner::Request::capture_canvas("spark", "app:/tmp/shot.png"),
+        ))
+    }
     fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
         panic!("unexpected {name}")
     }
@@ -68,6 +80,11 @@ impl DataSource for Spark {
             ctx.draw_image_with_image_handle("gone.png", 0.0, 0.0)?;
             ctx.fill_text("hi", 1.0, 9.0)?;
             return Ok(false);
+        }
+        if self.0.borrow().large {
+            for _ in 0..220_000 {
+                ctx.fill_rect(0., 0., 1., 1.);
+            }
         }
         ctx.translate(1.0, 0.0)?;
         ctx.fill_rect(0.0, 0.0, n, n);
@@ -460,4 +477,292 @@ fn a_canvas_current_color_follows_the_apps_scheme() {
     r.draw_canvases(&|_| true);
     assert_eq!(log.borrow().colors, [green(true), green(false)]);
     assert_eq!(log.borrow().frames.last().unwrap().cause.names(), ["style"]);
+}
+
+/// A capture names one mounted 2D canvas by its surface, with a bitmap,
+/// and answers its backing (LLP 1056 D9, as amended for expo/exact#188);
+/// each other case is refused by a DOM exception's name before any host
+/// looks at pixels.
+#[test]
+fn a_capture_names_one_mounted_canvas_with_a_bitmap() {
+    use exact_runner::canvas_capture::captured_image;
+    use exact_runner::Request;
+    let (mut r, _) = boot_source(
+        "component App
+  state two = false
+  action more
+    two = true
+  view
+    column
+      canvas surface=spark(1) width=100 height=50
+      if two
+        canvas surface=spark(2) width=10 height=10
+",
+    );
+    let refusal = |r: &Runner<Spark>, surface: &str, path: &str| {
+        let found = r.canvas_capture(&Request::capture_canvas(surface, path));
+        captured_image(&found.expect("a capture").expect_err("refused")).unwrap_err()
+    };
+    let view = r.canvas_views()[0];
+    assert!(
+        refusal(&r, "spark", "app:/tmp/a.png").starts_with("IndexSizeError: "),
+        "not laid out yet"
+    );
+    r.set_canvas_geometry(view, geometry(100.0, 50.0, 2.0));
+    let c = r
+        .canvas_capture(&Request::capture_canvas("spark", "app:/tmp/a.png"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (c.view, c.width, c.height, c.scale, c.generation),
+        (view, 200, 100, 2.0, 0)
+    );
+    assert_eq!(c.path, "app:/tmp/a.png");
+    assert!(refusal(&r, "globe", "app:/tmp/a.png").starts_with("NotFoundError: "));
+    assert!(refusal(&r, "spark", "/tmp/a.png").starts_with("NotAllowedError: "));
+    assert!(r.canvas_capture(&Request::get("https://x.test")).is_none());
+    // Over 8,192² pixels: not written, though the canvas is within its own limits.
+    r.set_canvas_geometry(view, geometry(100.0, 50.0, 200.0));
+    assert!(refusal(&r, "spark", "app:/tmp/a.png").starts_with("QuotaExceededError: "));
+    r.act("more", vec![]).unwrap();
+    assert!(
+        refusal(&r, "spark", "app:/tmp/a.png").starts_with("InvalidStateError: "),
+        "two mounted"
+    );
+}
+
+#[test]
+fn captures_wait_for_a_completed_drawing() {
+    use exact_runner::canvas_capture::captured_image;
+    #[derive(Clone, Copy, Debug)]
+    enum Row {
+        LaterCommits,
+        DrainFirst,
+        Unchanged,
+        SurfaceReplace,
+        Later,
+        SecondCanvas,
+        Budget,
+        LaterAdvance,
+        Taken,
+        Frame,
+        SeveralFrames,
+        Unmount,
+        TakenUnmount,
+        SessionEnd,
+        TakenEnd,
+    }
+    for row in [
+        Row::LaterCommits,
+        Row::DrainFirst,
+        Row::Unchanged,
+        Row::SurfaceReplace,
+        Row::Later,
+        Row::SecondCanvas,
+        Row::Budget,
+        Row::LaterAdvance,
+        Row::Taken,
+        Row::Frame,
+        Row::SeveralFrames,
+        Row::Unmount,
+        Row::TakenUnmount,
+        Row::SessionEnd,
+        Row::TakenEnd,
+    ] {
+        let tasks = match row {
+            Row::LaterCommits => "  task save mount\n    after(1, capture)\n  task change mount\n    after(1, change)\n",
+            Row::Frame => "  task save mount\n    every(frame, capture)\n",
+            _ => "",
+        };
+        let source = format!("component App\n  state n = 4\n  state shown = true\n  mutation image as shape string\n  action capture\n    n = 1\n    send image = capture()\n  action change\n    n = 2\n  action hide\n    shown = false\n  action show\n    shown = true\n{tasks}  view\n    column\n      if shown\n        canvas surface=spark(n) width=40 height=40\n");
+        let source = if matches!(row, Row::Frame | Row::SeveralFrames | Row::Unchanged) {
+            source.replace("    n = 1\n", "")
+        } else {
+            source
+        };
+        let source = if matches!(row, Row::Unchanged) {
+            source.replace("state n = 4", "state n = 1")
+        } else {
+            source
+        };
+        let source = if matches!(row, Row::SecondCanvas) {
+            source.replace(
+                "  view",
+                "  state second = false\n  action add\n    second = true\n  view",
+            ) + "      if second\n        canvas surface=spark(n) width=40 height=40\n"
+        } else {
+            source
+        };
+        let (mut r, log) = boot_source(&source);
+        let view = r.canvas_views()[0];
+        r.set_canvas_geometry(view, geometry(40., 40., 1.));
+        log.borrow_mut().large = matches!(row, Row::Budget);
+        r.draw_canvases(&|_| true);
+        if !matches!(row, Row::Budget) {
+            r.take_canvas_lists();
+        }
+        match row {
+            Row::LaterCommits => assert_eq!(r.advance_timed(1.).receipts.len(), 2),
+            Row::Frame => {
+                r.frame(17.);
+                r.canvas_frame();
+            }
+            _ => {
+                r.act("capture", vec![]).unwrap();
+            }
+        }
+        let request = r.take_requests().pop().unwrap().request;
+        assert!(r.take_requests().is_empty(), "{row:?}: only one drain");
+        assert!(request.canvas_capture_pending(), "{row:?}: no drawing yet");
+        if matches!(row, Row::SessionEnd) {
+            drop(r);
+            assert!(request.take_canvas_capture().unwrap().is_err());
+            continue;
+        }
+        if matches!(row, Row::LaterAdvance) {
+            r.advance_timed(2.);
+        }
+        if matches!(row, Row::Unmount | Row::SurfaceReplace) {
+            r.act("hide", vec![]).unwrap();
+            if matches!(row, Row::SurfaceReplace) {
+                r.act("show", vec![]).unwrap();
+                let next = r.canvas_views()[0];
+                r.set_canvas_geometry(next, geometry(40., 40., 1.));
+            }
+        }
+        log.borrow_mut().later = matches!(row, Row::Later | Row::SecondCanvas);
+        r.draw_canvases(&|_| true);
+        if matches!(row, Row::Later | Row::SecondCanvas | Row::Budget) {
+            assert!(
+                request.canvas_capture_pending(),
+                "{row:?}: skipped or deferred is not complete"
+            );
+            assert!(
+                request.take_canvas_capture().unwrap().is_err(),
+                "{row:?}: an early take has no completed drawing"
+            );
+            if matches!(row, Row::Later | Row::SecondCanvas) {
+                if matches!(row, Row::SecondCanvas) {
+                    r.act("add", vec![]).unwrap();
+                    assert_eq!(r.canvas_views().len(), 2);
+                }
+                let (life, generation, seq) = log.borrow_mut().parked.pop().unwrap();
+                r.canvas_reply(
+                    life,
+                    generation,
+                    seq,
+                    DrawReply {
+                        lists: vec![],
+                        wants_frame: false,
+                        error: None,
+                        notes: vec![],
+                    },
+                )
+                .unwrap();
+                assert!(
+                    r.take_canvas_lists()
+                        .iter()
+                        .any(|l| l.seq == seq && l.lists.is_empty()),
+                    "an empty completed draw reaches replay"
+                );
+            } else {
+                r.take_canvas_lists();
+                log.borrow_mut().large = false;
+                r.draw_canvases(&|_| true);
+            }
+        }
+        if matches!(row, Row::SeveralFrames) {
+            for time in [20., 40., 60.] {
+                r.advance_timed(time);
+                r.canvas_frame();
+                r.draw_canvases(&|_| true);
+            }
+        }
+        let captured = request.take_canvas_capture().unwrap();
+        if matches!(row, Row::Unmount | Row::SurfaceReplace) {
+            let error = captured_image(&captured.unwrap_err()).unwrap_err();
+            assert!(error.starts_with("EncodingError:"), "{row:?}: {error}");
+            continue;
+        }
+        let c = captured.unwrap_or_else(|e| panic!("{row:?}: {e:?}"));
+        assert!(
+            c.sequence > 1,
+            "{row:?}: a drawing after the request is identified"
+        );
+        if matches!(row, Row::SeveralFrames) {
+            assert!(
+                c.sequence >= 5,
+                "several frames completed before the snapshot"
+            );
+        }
+
+        match row {
+            Row::Taken => {
+                r.act("change", vec![]).unwrap();
+                r.draw_canvases(&|_| true);
+            }
+            Row::TakenUnmount => {
+                r.act("hide", vec![]).unwrap();
+            }
+            Row::TakenEnd => drop(r),
+            _ => {}
+        }
+        if matches!(row, Row::TakenUnmount | Row::TakenEnd) {
+            assert!(
+                c.snapshotted().is_err(),
+                "{row:?}: an unmounted or replaced canvas retires"
+            );
+        } else {
+            c.snapshotted().unwrap();
+            assert!(captured_image(&c.captured()).is_ok(), "{row:?}");
+        }
+    }
+}
+
+#[test]
+fn a_rejected_draw_fails_its_capture_but_a_later_capture_can_succeed() {
+    use exact_runner::canvas_capture::captured_image;
+    for deferred in [false, true] {
+        let (mut r, log) = boot_source("component App\n  mutation image as shape string\n  action capture\n    send image = capture()\n  view\n    canvas surface=spark(1) width=40 height=40\n");
+        let view = r.canvas_views()[0];
+        r.set_canvas_geometry(view, geometry(40., 40., 1.));
+        r.draw_canvases(&|_| true);
+        r.take_canvas_lists();
+        r.act("capture", vec![]).unwrap();
+        let first = r.take_requests().pop().unwrap().request;
+        log.borrow_mut().malformed = true;
+        log.borrow_mut().later = deferred;
+        r.draw_canvases(&|_| true);
+        if deferred {
+            assert!(first.canvas_capture_pending());
+            let (life, generation, seq) = log.borrow_mut().parked.pop().unwrap();
+            assert!(r
+                .canvas_reply(
+                    life,
+                    generation,
+                    seq,
+                    DrawReply {
+                        lists: vec![vec![0xff; 8]],
+                        ..Default::default()
+                    }
+                )
+                .is_err());
+        }
+        assert!(
+            !first.canvas_capture_pending(),
+            "the rejected draw answers immediately"
+        );
+        r.act("capture", vec![]).unwrap();
+        let next = r.take_requests().pop().unwrap().request;
+        assert!(next.canvas_capture_pending());
+        // Recovery answers the new request without erasing the first job's failure.
+        log.borrow_mut().malformed = false;
+        log.borrow_mut().later = false;
+        r.draw_canvases(&|_| true);
+        let error = captured_image(&first.take_canvas_capture().unwrap().unwrap_err()).unwrap_err();
+        assert!(error.starts_with("EncodingError:"), "{error}");
+        let capture = next.take_canvas_capture().unwrap().unwrap();
+        capture.snapshotted().unwrap();
+        assert!(captured_image(&capture.captured()).is_ok());
+    }
 }

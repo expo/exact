@@ -183,7 +183,7 @@ export function afterPaintPieces(load, o) {
       }
     }).catch((error) => {
       c2dLoading = null;
-      c2dQueue.length = 0;
+      for (const q of c2dQueue.splice(0)) q.reject?.(error);
       console.error("exact: canvas2d:", error);
     });
   };

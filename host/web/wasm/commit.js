@@ -4,6 +4,31 @@ import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValu
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
+// The page's storage service for a Rust source's requests, made at the first one, for this incarnation's requests.
+async function storageService(requestIncarnation) {
+  await moduleReady;
+  if (!host.inputReady) {
+    throw new Error("data executor is unavailable");
+  }
+  if (requestIncarnation !== host.incarnation) {
+    throw new Error("storage source unloaded");
+  }
+  if (!host.storageRequests) {
+    const app = globalThis.exact.compat.inputs.app;
+    const pending = loadAfterPaint("./storage-request.js", "createStorageRequests").then((create) => create(app, host.grantSet)).catch((error) => {
+      if (host.storageRequests === pending) {
+        host.storageRequests = null;
+      }
+      throw error;
+    });
+    host.storageRequests = pending;
+  }
+  const service = await host.storageRequests;
+  if (requestIncarnation !== host.incarnation) {
+    throw new Error("storage source unloaded");
+  }
+  return service;
+}
 function viewFor(op, id) {
   const el = views.get(id);
   if (!el) {
@@ -330,30 +355,35 @@ function apply(batch) {
         }
         case "storage": {
           const requestIncarnation = host.incarnation;
-          const p = Promise.resolve().then(async () => {
-            await moduleReady;
-            if (!host.inputReady) {
-              throw new Error("data executor is unavailable");
-            }
-            if (requestIncarnation !== host.incarnation) {
-              throw new Error("storage source unloaded");
-            }
-            if (!host.storageRequests) {
-              const app = globalThis.exact.compat.inputs.app;
-              const pending = loadAfterPaint("./storage-request.js", "createStorageRequests").then((create) => create(app, host.grantSet)).catch((error) => {
-                if (host.storageRequests === pending) {
-                  host.storageRequests = null;
-                }
-                throw error;
-              });
-              host.storageRequests = pending;
-            }
-            const service = await host.storageRequests;
-            if (requestIncarnation !== host.incarnation) {
-              throw new Error("storage source unloaded");
-            }
-            return service.run(op.payload, scopedGrantSet(host.grantSet, op.scope));
-          }).then((bytes) => safelyFulfill(requestIncarnation, op.ticket, 5, 0, "", bytes)).catch((error) => safelyFulfill(requestIncarnation, op.ticket, 3, 0, "", encoder.encode(String(error))));
+          const p = storageService(requestIncarnation).then((service) => service.run(op.payload, scopedGrantSet(host.grantSet, op.scope))).then((bytes) => safelyFulfill(requestIncarnation, op.ticket, 5, 0, "", bytes)).catch((error) => safelyFulfill(requestIncarnation, op.ticket, 3, 0, "", encoder.encode(String(error))));
+          track(p, op.ticket);
+          break;
+        }
+        // A canvas capture (LLP 1056 D9, as amended for #188): the glue's PNG of the canvas's bitmap, written as a
+        // Rust source's `fs.atomicWriteFile` is; `{path, width, height, scale}` or a refusal by name, both JSON.
+        case "canvasCapturePrepare": {
+          const owner = host.incarnation;
+          // The stylesheet's queued flush precedes this layout read.
+          const p = Promise.resolve().then(() => new Promise((resolve, reject) => pieces.canvas2d({
+            prepareCapture: op.ticket, held: () => holds(op.ticket, owner), resolve, reject
+          }))).catch(error => safelyFulfill(owner, op.ticket, 0, 400, "", encoder.encode(JSON.stringify({
+            name: "EncodingError", message: `canvas preparation failed: ${error.message ?? error}`
+          }))));
+          track(p, op.ticket);
+          break;
+        }
+        case "canvasCapture": {
+          if (!holds(op.ticket)) break;
+          const requestIncarnation = host.incarnation, answer = (status, value) => safelyFulfill(requestIncarnation, op.ticket, 0, status, "", encoder.encode(JSON.stringify(value)));
+          const p = new Promise((resolve, reject) => pieces.canvas2d({ capture: op, resolve, reject })).then(async (blob) => {
+            const png = new Uint8Array(await blob.arrayBuffer());
+            const storage = await storageService(requestIncarnation);
+            if (!holds(op.ticket, requestIncarnation)) return;
+            await storage.writePng(op.path, png, scopedGrantSet(host.grantSet, op.scope), () => holds(op.ticket, requestIncarnation)).catch((error) => {
+              throw Object.assign(error, { name: /denied: /.test(error.message) ? "NotAllowedError" : error.code === "agent" ? "NotSupportedError" : "EncodingError" });
+            });
+            answer(200, { path: op.path, width: op.w, height: op.h, scale: op.scale });
+          }).catch((error) => answer(400, { name: ["NotAllowedError", "NotSupportedError"].includes(error.name) ? error.name : "EncodingError", message: `${op.path}: ${error.message ?? error}` }));
           track(p, op.ticket);
           break;
         }

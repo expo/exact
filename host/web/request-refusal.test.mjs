@@ -448,7 +448,7 @@ test('the production file command refuses a source outside the admitted fs.read 
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-files-admission-'));
   writeFileSync(resolve(dir, 'files.js'), readFileSync(resolve(ROOT, 'host/web-js/files.js'), 'utf8')
     .replace("from './rt.js'", "from './rt-stub.js'").replace("from './navigation.js'", "from './navigation-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve();\n`);
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve(),pressFeedback=()=>{};\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
   writeFileSync(resolve(dir, 'navigation-stub.js'), `export { inertAncestor, liveById } from './navigation.js';\nexport const reportPlace=()=> ['en','UTC','1'].join(String.fromCharCode(0));\n`);
   cpSync(resolve(ROOT, 'host/web-js/pointer.js'), resolve(dir, 'pointer.js'));
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
@@ -829,7 +829,7 @@ test("glue.js surface admission uses a valid raw child line even when another I/
 test('rust-data decodes an ABI child scope before the production executor refuses its parent-granted origin', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-data-'));
   const grants = 'net.fetch https://api.example\nnet.fetch https://outside.example\nsecret.keep token', set = normalized(grants);
-  for (const name of ['rust-data.js', 'admission.js', 'held.js']) {
+  for (const name of ['rust-data.js', 'admission.js', 'held.js', 'rt-link.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'");
     writeFileSync(resolve(dir, name), source);
   }
@@ -865,7 +865,7 @@ test('rust-data decodes an ABI child scope before the production executor refuse
     await module.install(data, { probe: '' }, async () => new ArrayBuffer(0));
     const answer = data.answer('probe', [], { map: new Map(), set() {} });
     expect(answer.req).toMatchObject({ method: 'GET', url: 'https://outside.example/private', scope: 'net.fetch https://api.example' });
-    expect(await data.fetch(answer.req)).toEqual({ failed: 2, message: "outside the app's grants (net.fetch)" });
+    expect(await data.fetch(answer.req)).toMatchObject({ failed: 2, message: "outside the app's grants (net.fetch)" });
     expect(data.grantSet).toBeUndefined();
   } finally {
     WebAssembly.instantiate = instantiate;
@@ -881,7 +881,7 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'")
     .replace("from './rt.js'", "from './rt-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n`);
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
   writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes={read:[[],'s'],kept:[[],'s']};\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(set)});\n`);
@@ -904,8 +904,8 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   try {
     const ts = await import(`${pathToFileURL(resolve(dir, 'ts-data.js')).href}?ts=${Date.now()}`), data = { q: [] };
     ts.install(data);
-    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true });
-    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false });
+    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true, effects: undefined, watches: new Set() });
+    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false, effects: undefined, watches: new Set() });
     expect(data.grantSet).toBeUndefined();
     await import(`${pathToFileURL(resolve(dir, 'gpu-glue.js')).href}?late=${Date.now()}`);
     expect(shaderFetches.some(url => url.endsWith('/shaders/shader.wgsl'))).toBe(true);
@@ -945,7 +945,7 @@ export function answer(name, args, store, storage) {
 `);
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n`); writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n"); // (and rt-link.js, ts-stream.js's way to them)
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n`); writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n"); // (and rt-link.js, ts-stream.js's way to them)
   const ledger = '{"days":["[",{"id":"s","transactions":["[",{"id":"s","amount":"n"}]}],"note":["?","s"]}';
   writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes={ledger:[["s"],${ledger}],later:[[],${ledger}],read:[[],"s"],stream:[[],"s"]};\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
@@ -1147,7 +1147,7 @@ export function answer(name, args, store, storage) {
 }`);
     writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
       .replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();');
+    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();'); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
     writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes=${JSON.stringify(Object.fromEntries([...methods, 'open', 'work', 'directories', 'document'].map(n => [n, [[], 's']])))};`);
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
     writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(normalized(spec))});`);

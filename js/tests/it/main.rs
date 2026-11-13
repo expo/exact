@@ -8,6 +8,7 @@ mod background;
 mod body_from;
 mod body_to;
 mod caltrain;
+mod canvas_capture;
 mod castle;
 mod compress;
 mod context;

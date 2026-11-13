@@ -189,7 +189,7 @@ test('a render refuses a Rust storage request after validating its scope', async
 test("a Rust source's store read reaches rt.js whether its call answers or fails", async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-readers-'));
   const set = normalized('secret.keep k');
-  for (const name of ['rust-data.js', 'admission.js', 'held.js']) {
+  for (const name of ['rust-data.js', 'admission.js', 'held.js', 'rt-link.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
     writeFileSync(resolve(dir, name), source);
   }
@@ -197,6 +197,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const rustGrantSet=createGrantSet(${JSON.stringify(set)}),tsGrantSet=createGrantSet(${JSON.stringify(normalized(''))});\n`);
   writeFileSync(resolve(dir, 'rt-link.js'), 'export const rt = {};\n');
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
+  let capture = false;
   let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, method = 'GET', abi = 10;
   let held = false, heldTag;
   const scopes = [];
@@ -229,7 +230,8 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
           if (heldTag !== undefined) { w.u8(heldTag); return; }
           if (prefetch) w.u8(14);
           if (preload !== undefined) { w.u8(13); w.string(preload); }
-          if (socket) { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(1); w.u8(0); w.string(''); w.string(method); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
+          if (capture) { w.u8(16); w.string('ink'); w.string('app:/tmp/ink.png'); w.u8(1); w.string(''); }
+          else if (socket) { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(1); w.u8(0); w.string(''); w.string(method); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
         });
       }
       else throw new Error(`unexpected logic call ${code}`);
@@ -312,6 +314,9 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     held = false;
     expect(data.parse('reader', [], outcome, store).req.held).toBe(false);
     expect(asked.call.held).toBe(0);
+    capture = true;
+    expect(data.answer('reader', [], store).req).toEqual({ canvas: { surface: 'ink', path: 'app:/tmp/ink.png' }, scope: '' });
+    capture = false;
     [read, fails] = [true, false];
     expect(data.answer('reader', [], store).store).toBe(true);
     expect(data.parse('reader', [], failed, store).store).toBe(true);

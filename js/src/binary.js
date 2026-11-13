@@ -1101,3 +1101,23 @@
     sockets: sockets,
   });
 })(globalThis);
+
+// `captureCanvas(surface, path)` (LLP 1056 D9, as amended for #188): the host
+// that keeps the one mounted 2D canvas of `surface` writes what it has drawn
+// as a PNG at `path`, an `app:/` file under `fs.write`, and answers `{path,
+// width, height, scale}`; a refusal rejects with a DOMException by name
+// (runner/src/canvas_capture.rs). It is a request to `exact-canvas:`, made with
+// the prelude's `fetch`, which the runner turns into the host's work.
+(function (global) {
+  "use strict";
+  global.captureCanvas = function captureCanvas(surface, path) {
+    if (typeof surface !== "string" || typeof path !== "string") return Promise.reject(new TypeError("captureCanvas(surface, path): a surface name and an app:/ path"));
+    return global.fetch("exact-canvas:", { method: "POST", body: JSON.stringify({ surface: surface, path: path }), exactIndependentHttp: { maxResponseBytes: 65536 } })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          if (r.status === 200) return { path: j.path, width: j.width, height: j.height, scale: j.scale };
+          throw new DOMException("captureCanvas: " + j.message, j.name);
+        });
+      });
+  };
+})(globalThis);

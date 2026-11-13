@@ -32,6 +32,7 @@ impl Surfaces {
     /// `reset` and the web's `gpu.reset` have it; the new tree's
     /// canvases make their own at the next sync.
     pub(crate) fn replaced<D: DataSource>(&mut self, host: &mut Host<D>) {
+        self.captures.clear();
         let views: Vec<_> = self.canvases.keys().copied().collect();
         for view in views {
             self.retire(view, host);

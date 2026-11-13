@@ -3198,8 +3198,51 @@ from an action to open it. `change` receives `Picked[]` with each file's name, t
 launch and a counter, never after the file: show or upload it under `name`. A
 specific `accept` list is limited to media types and types in the app's
 `file_handlers`. The live Linux picker is unavailable;
-its agent substitute accepts any file. Image pixel and Canvas readback remain
-deferred.
+its agent substitute accepts any file. Image pixel readback and a canvas's
+synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
+a canvas's pixels go to a file (below).
+
+### A 2D canvas's pixels as a PNG file (`captureCanvas`)
+
+`captureCanvas(surface, path)` writes what the host has drawn and kept for the
+one mounted 2D canvas of `surface` (every draw applied, its images and text as
+drawn, an accumulating drawing whole) as a PNG at the `app:/` file `path`,
+under `fs.write`, and resolves `{path, width, height, scale}`: the size in device
+pixels, and the device pixels per CSS px (1 for a canvas with `bitmap-width` or
+`bitmap-height`). A capture takes the first completed drawing at or after the
+commit that requested it. If another drawing completes before the host snapshots,
+it takes that later drawing. Later commits, advances and animation frames never
+retire a pending capture. Unmounting the canvas, replacing its surface or ending
+the session retires it with `EncodingError` and leaves the file untouched.
+The PNG is straight-alpha sRGB. A completed draw with no operations
+keeps the bitmap, transparent when nothing has painted it. No pixel
+crosses the source: show the file with
+an `image`, send it with `fetch(url, {exactBodyFrom})`, or hand it to a module
+(LLP 1056 D9):
+
+```ts
+export const grants = 'fs.write app:/tmp';
+// in a mutation's answer: the annotation as drawn, for the clipboard
+const shot = await captureCanvas('annotate', `app:/tmp/shot-${seed}.png`);
+```
+
+Call it from a live answer, directly or after `await`. On the JS web target,
+a plain `.then()` callback has no answer owner and capture rejects with
+`InvalidStateError`. Cancelling the owning answer prevents publication.
+
+A Rust source answers `Answer::Later(Request::capture_canvas(surface, path))`
+and reads the reply with `exact_runner::canvas_capture::captured_image(&outcome)`.
+`path`'s directory must exist (`app:/tmp/x.png`, not `app:/tmp/new/x.png` before
+a `mkdir`); the file is replaced whole or left as it was. A refusal is a
+`DOMException` (in Rust, `"<name>: <message>"`): `NotFoundError` when no canvas of
+the surface is mounted, `InvalidStateError` when several are or its size was
+refused, `IndexSizeError` when it has no bitmap (a box with no area),
+`QuotaExceededError` over 8,192² pixels, `NotSupportedError` for a `display-p3` or
+`float16` canvas or a drive with no store (`--storage <name>`), `NotAllowedError`
+for a path that is not an `app:/` file under `fs.write`, and `EncodingError` when
+the encoder or the write fails. Linux, Windows and Android encode the tiny-skia
+bitmap, macOS and iOS the Core Graphics bitmap or the GPU's surface, and the web
+the canvas element's own `toBlob`.
 
 For a PDF picker, declare the type in `app.json`:
 
