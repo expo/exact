@@ -772,7 +772,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         followingEndAnimated = false; authoredScrollAnimating = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
-        retainedScrollTop = nil
+        retainedScrollTop = nil; dropCarriedScroll()
         if handlers.contains("scrolldragstart") { presenter?.scrollDrag(id, nil) }
         #if os(iOS)
         if #available(iOS 27.1, *) { presenter?.arrangements.cancelScrollHandoff(id) }

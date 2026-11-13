@@ -619,6 +619,9 @@ extension NavigationHost {
                                                                   key: c.key, dataset: dataset) }
             c.hatched = true
             c.ownedScroll = scroller
+            // Run this route's passes again for a selection its hatch made, before UIKit lays out the stack it is in; a
+            // route arriving in this sync is in none yet (`selectScrollEdges`) and stays owed until it appears
+            if c.scrollEdgesOwed { selectScrollEdges(of: c) }
         }
         let waits = coverLifted(routes)
         // A route's header shown or hidden in place; a push or pop sets the
@@ -635,17 +638,47 @@ extension NavigationHost {
         return (HeaderShape.bar(of: c.node, back: container?.props["navigationBack"], backIsUIKits: c.pushed), bar(of: c.node, pushed: c.pushed))
     }
 
-    /// Select `c`'s top and bottom scroll views again, as its stack's pass
-    /// does (`collapse`, `reachBottom`), for edges an app gave back to
-    /// Exact's selection with nil: at once, since a native call outside a
-    /// batch starts no pass.
+    /// An app changed `c`'s top or bottom selection, from a hatch, a menu action or anywhere else,
+    /// usually outside a batch, which starts no pass. The call records it and asks for the route's
+    /// layout. The route's edge passes and the covers they change follow there, as the route
+    /// appears, or where a sync, a push or pop, a presentation or a dismissal under way ends. Run in
+    /// the call, the passes would write scroll offsets whose events, like the runtime's answer to
+    /// the covers, can be applied there, running the route hatch inside the app's call.
+    func scrollEdgesChanged(_ c: RouteController) {
+        c.scrollEdgesOwed = true
+        c.viewIfLoaded?.setNeedsLayout()
+    }
+
+    /// The edge passes and covers that apps' selections owe, outside a sync
+    func settleScrollEdges() {
+        guard !syncing, runOwedScrollEdges() else { return }
+        coversChanged()
+    }
+
+    /// Run the edge passes each route owes an app's selection, outside a push, a pop, a presentation and a dismissal,
+    /// and say whether any ran. The caller reports the covers.
+    @discardableResult
+    func runOwedScrollEdges() -> Bool {
+        guard !changing, !presenter.modals.inTransition else { return false }
+        let owed = controllers.values.filter(\.scrollEdgesOwed)
+        for c in owed { runOwedScrollEdges(of: c) }
+        return !owed.isEmpty
+    }
+
+    /// Run the edge passes `c` owes an app's selection, if it owes them
+    func runOwedScrollEdges(of c: RouteController) {
+        guard c.scrollEdgesOwed else { return }
+        c.scrollEdgesOwed = false
+        selectScrollEdges(of: c)
+    }
+
+    /// Select `c`'s top and bottom scroll views again, as its stack's pass does (`collapse`, `reachBottom`).
     func selectScrollEdges(of c: RouteController) {
         guard let stack = c.stack else { return }
         let nav = stack as? UINavigationController
         let (shape, bar) = barShape(of: c, in: nav)
         collapse(c, shape: shape, shows: bar != .hidden, scroller: contentScroller(of: c))
         reachBottom(c, presented: isPresented(nav))
-        coversChanged()
     }
 
     /// The header a bar stands for takes no room from the turn it is lifted,
@@ -966,7 +999,8 @@ extension NavigationHost {
             return
         }
         let old = c.collapseScroll, oldView = c.collapseScrollView
-        if let old, let sv = oldView { old.retainScrollPosition(from: sv) }
+        // Carry the leaving scroller's position across the change, unless the reader is moving it
+        if let old, let sv = oldView, !sv.isTracking, !sv.isDragging, !sv.isDecelerating { old.retainScrollPosition(from: sv) }
         c.collapseScroll = target
         c.collapseScrollView = physical
         // A scroller at its start (CSS scrollTop 0) stays there as UIKit

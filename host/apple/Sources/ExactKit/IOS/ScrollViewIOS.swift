@@ -310,6 +310,11 @@ extension NodeView {
         presenter?.keyboardToolbars.backendChanged()
     }
 
+    /// The reader's move supersedes a position Exact carries (`retainScrollPosition`), as an authored write does.
+    func dropCarriedScroll() {
+        if extras?.pendingScrollTransfer == true { pendingScrollTop = nil; pendingScrollLeft = nil }
+    }
+
     /// A replacement keeps the logical offset; an authored write takes priority.
     func retainScrollPosition(from view: UIScrollView) {
         let authored = extras?.pendingScrollTransfer != true && (pendingScrollTop != nil || pendingScrollLeft != nil)
@@ -488,6 +493,8 @@ extension NodeView {
             if extras?.pendingScrollTransfer == true { return }
         }
         guard pendingScrollTop != nil || pendingScrollLeft != nil else { return }
+        // A position Exact carries (`retainScrollPosition`) gives way to the reader's scroll under way
+        if extras?.pendingScrollTransfer == true, sv.isTracking || sv.isDragging || sv.isDecelerating { return }
         // `scroll-behavior: smooth` (CSS) animates a prop write, never a
         // reader's own scroll. Under the agent's frozen clock it lands at once
         // (as a modal presents, LLP 1035.003 D5), so `layout` reads the target.

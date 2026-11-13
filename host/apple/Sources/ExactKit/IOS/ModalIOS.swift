@@ -833,8 +833,11 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
         guard let layer = layers.last, layer.controller === presentationController.presentedViewController else { return }
         NavigationMarks.shared.platformBeganShowing()
-        presentationController.presentedViewController.transitionCoordinator?.animate(alongsideTransition: nil) { context in
-            if context.isCancelled { NavigationMarks.shared.platformCancelled() }
+        presentationController.presentedViewController.transitionCoordinator?.animate(alongsideTransition: nil) { [weak self] context in
+            guard context.isCancelled else { return }
+            NavigationMarks.shared.platformCancelled()
+            // The dismissal ends here, as at the other ends: what a sync or an app's selection owes runs
+            DispatchQueue.main.async { self?.presenter.navigation.modalDidDismiss() }
         }
     }
 

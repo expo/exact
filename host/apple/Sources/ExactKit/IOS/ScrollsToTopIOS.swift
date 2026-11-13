@@ -55,8 +55,9 @@ extension NodeView {
     /// the pump leads as it does any scroll. The tap is the reader's move of
     /// the list (`CollectionHost.readerMoves`).
     @objc package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-        guard scrollView === self.scrollView, let collections = presenter?.collections,
-              let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
+        guard scrollView === self.scrollView else { return true }
+        dropCarriedScroll()
+        guard let collections = presenter?.collections, let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
         collections.readerMoves(id)
         let top = -scrollView.adjustedContentInset.top, glide = scrollView.bounds.height * 2
         guard scrollView.contentOffset.y - top > glide * 1.5 else { return true }
