@@ -154,6 +154,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var lastError: String?
     var invalidated = false
     var generation = 0
+    /// The item whose end is watched: the one playing, once a loop's copy
+    /// takes over.
+    var watched: AVPlayerItem?
     var posterGeneration = 0
     /// HTML's show-poster flag, cleared: playback or a seek has begun since
     /// the source loaded. The poster still shows until the presentation has
@@ -216,7 +219,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in self?.timeStatusChanged() },
             player.observe(\.rate, options: [.new]) { [weak self] _, _ in self?.rateChanged() },
             player.observe(\.volume, options: [.new]) { [weak self] _, _ in self?.volumeChanged() },
-            player.observe(\.isMuted, options: [.new]) { [weak self] _, _ in self?.volumeChanged() }
+            player.observe(\.isMuted, options: [.new]) { [weak self] _, _ in self?.volumeChanged() },
+            // A loop comes round when the queue moves on to the copy.
+            player.observe(\.currentItem, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { [weak self] in self?.advanced() }
+            }
         ]
         NowPlaying.shared.joined(self)
     }
@@ -496,6 +503,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         notifications.forEach(NotificationCenter.default.removeObserver)
         notifications.removeAll()
         player.removeAllItems()
+        watched = nil
         naturalSize = .zero
         itemReady = false; seekTarget = nil; atEnd = false
         posterDismissed = false; showPoster()
@@ -539,30 +547,30 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// (AVPlayer's own pause arrives after this notification; it is the same
     /// one). With loop, the queue has already moved on to the copy.
     func watchEnd(_ item: AVPlayerItem, _ token: Int) {
+        watched = item
         notifications.forEach(NotificationCenter.default.removeObserver)
         notifications = [NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak item] _ in
             guard let self, !self.invalidated, self.generation == token else { return }
-            guard !self.bool("loop") else {
-                // The advance lands just after this notification.
-                DispatchQueue.main.async { [weak self] in self?.looped(from: item, token) }
-                return
-            }
+            // With loop, the queue moves on to the copy by itself, and
+            // `advanced` follows it there.
+            guard !self.bool("loop") else { return }
             self.wantsPlay = false; self.atEnd = true
             if !self.lastPaused { self.lastPaused = true; self.emit("pause") }
             self.emit("ended")
         }]
     }
-    /// A loop came round: the copy plays; watch its end, queue the next copy,
-    /// and report the jump to the start as a seek, as Chrome does.
-    func looped(from ended: AVPlayerItem?, _ token: Int) {
-        guard !invalidated, generation == token else { return }
-        guard let current = player.currentItem, current !== ended else {
-            // The queue ran dry (loop was turned on at the very end): start over.
-            if player.currentItem == nil { loadSource() } else { seek(0) }
+    /// The queue moved on (seen through `currentItem`, so whenever the move
+    /// lands): a loop came round. The copy plays; watch its end, queue the
+    /// next copy, and report the jump to the start as a seek, as Chrome does.
+    /// A queue that ran dry (loop turned on at the very end) starts over.
+    func advanced() {
+        guard !invalidated, bool("loop") else { return }
+        guard let current = player.currentItem else {
+            if watched != nil, !(props["src"] ?? "").isEmpty { loadSource() }
             return
         }
-        watchEnd(current, token)
-        configureItem()
+        guard current !== watched else { return }
+        watchEnd(current, generation)
         queueLoop()
         emit("seeking"); emit("seeked"); emit("timeupdate", payload: String(seconds))
     }
@@ -891,7 +899,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         if let tick { player.removeTimeObserver(tick) }; tick = nil
         observations.removeAll(); playerObservations.removeAll(); displayObservations.removeAll()
         notifications.forEach(NotificationCenter.default.removeObserver); notifications.removeAll()
-        player.removeAllItems()
+        player.removeAllItems(); watched = nil
         #if os(iOS) || os(tvOS)
         fullscreen?.left = nil; fullscreen?.dismiss(animated: false); fullscreen = nil
         detach()
