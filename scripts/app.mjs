@@ -898,9 +898,8 @@ export const linuxBuild = (app, bin = null) => ['cargo', 'build', ...injectedPro
 /** What an iOS bundle's root holds beside the executable, which a name the same but for case would collide with
  * (expo/exact-build#89): the bundle's own files and folders, the static trees (`APPLE_STATIC_TREES`, here in lower
  * case), localizations, Metal libraries and icons. */
-const BUNDLE_ROOT = new Set(['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities',
-  'frameworks', 'plugins', 'extensions', 'appclips', 'watch', 'info.plist', 'pkginfo', '_codesignature',
-  'embedded.mobileprovision', 'sc_info', 'receipt.json', 'assets.car', 'metadata.appintents', 'exactsvgfilter.metallib']);
+const BUNDLE_ROOT = new Set(['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities', 'frameworks', 'plugins',
+  'extensions', 'appclips', 'watch', 'info.plist', 'pkginfo', '_codesignature', 'embedded.mobileprovision', 'sc_info', 'receipt.json', 'assets.car', 'metadata.appintents', 'exactsvgfilter.metallib']);
 const inBundleRoot = (name) => BUNDLE_ROOT.has(name.toLowerCase()) || /\.(lproj|metallib|bundle|framework|appex)$|^appicon.*\.png$/i.test(name);
 /** The executable's name: the app's, made a file name, and given an " App" suffix when it would name one of the
  * bundle's own entries (an app called "Assets" or "Frameworks"), so such an app still builds. */
