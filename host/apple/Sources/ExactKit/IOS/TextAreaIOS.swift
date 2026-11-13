@@ -193,6 +193,16 @@ package final class TextArea: UITextView {
     }
 
     weak var owner: NodeView?
+    /// The hardware key whose handlers ran in `pressesBegan`: UIKit's own
+    /// newline or deletion for it does not run them again (`TextField.heard`).
+    var heard: String?
+    /// The software keyboard's Return or Backspace reaches `insertText` and
+    /// `deleteBackward` with no key event: its handlers hear it here. True
+    /// when one prevented it, and the edit is skipped.
+    private func softwareKeyPrevented(_ name: String) -> Bool {
+        guard heard != name, let owner, !owner.disabled else { return false }
+        return owner.presenter?.keyDown(at: owner, name) == true
+    }
     /// The Markdown styler when `markup="markdown"` (LLP 1045 D5).
     package var markup: MarkdownEditing?
     /// A plain textarea's painted decorations (LLP 1114.007).
@@ -268,6 +278,7 @@ package final class TextArea: UITextView {
     package override func insertText(_ text: String) {
         owner?.presenter?.supersedePress() // typed text, as a key (PressHandoffIOS)
         owner?.presenter?.heldKey(at: owner) // a key on a held node lets its hold go (HeldState.swift)
+        if text == "\n", markedTextRange == nil, softwareKeyPrevented("Enter") { return }
         // UIKeyInput (including the software keyboard) need not ask the
         // text-view delegate before insertion. Handle a plain Return here,
         // the app's `beforeinput` first; the command's own native insertion
@@ -285,6 +296,7 @@ package final class TextArea: UITextView {
     package override func deleteBackward() {
         owner?.presenter?.supersedePress()
         owner?.presenter?.heldKey(at: owner) // a key on a held node lets its hold go, a deletion that changes nothing included (HeldState.swift)
+        if softwareKeyPrevented("Backspace") { return }
         crossHidden(backward: true)
         if let selections = owner?.presenter?.fieldSelections {
             selections.nativeEdit(owner, replacement: "", marked: markedTextRange != nil) { if !rewritesSelection(with: "") { super.deleteBackward() } }
@@ -309,6 +321,7 @@ package final class TextArea: UITextView {
     package override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let remaining=owner?.pressedControls(presses,down:true) ?? presses
         if remaining.isEmpty || owner?.editorKeyDown(remaining) == true { return }
+        heard = remaining.first?.key.map(NodeView.keyName)
         if let key = remaining.first?.key, key.modifierFlags.intersection([.shift, .command, .control]).isEmpty,
            key.keyCode == .keyboardLeftArrow || key.keyCode == .keyboardRightArrow {
             crossHidden(backward: key.keyCode == .keyboardLeftArrow)
@@ -316,10 +329,12 @@ package final class TextArea: UITextView {
         super.pressesBegan(remaining,with:event)
     }
     package override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        heard = nil
         let remaining=owner?.pressedControls(presses,down:false) ?? presses
         if !remaining.isEmpty {owner?.editorKeyUp(remaining); super.pressesEnded(remaining,with:event)}
     }
     package override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        heard = nil
         let remaining=owner?.pressedControls(presses,down:false) ?? presses
         if !remaining.isEmpty {super.pressesCancelled(remaining,with:event)}
     }

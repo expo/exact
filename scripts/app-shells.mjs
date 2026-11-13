@@ -9,7 +9,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cargoEnvironment, pathFrom, patchLines } from './app.mjs';
 import { nativePackages } from './package-libraries.mjs';
@@ -301,6 +301,12 @@ export const authoredCrate = (dir, kind, name, title) =>
 export const copiedBuildScripts = () => Object.fromEntries(Object.values(PLATFORMS).concat('web').filter((kind, i, all) => all.indexOf(kind) === i)
   .map(kind => [kind, ['../../..', '..'].map(app => crateFiles(kind, { name: 'app', title: 'App', app, dep: () => '' })['build.rs'])]));
 
+/** How a generated workspace at `from` names a path in this checkout: always relative, with `/`. Unlike an authored
+ * workspace's (`pathFrom`), it is rewritten when the app or the checkout moves (its stamp names both), and a deploy's
+ * capture keeps the two trees' relative places, where a path into the live checkout would leave the capture. */
+const pathWithin = (from, to) =>
+  (relative(realpathSync(from), existsSync(to) ? realpathSync(to) : resolve(to)) || '.').split(sep).join('/');
+
 const titleOf = name => name.split('-').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
 const stampOf = (shells) => { try { return JSON.parse(readFileSync(resolve(shells, '.stamp.json'), 'utf8')); } catch { return null; } };
 
@@ -323,16 +329,16 @@ export function ensureShells(dir, manifest = readManifest(dir), name = null) {
   const shells = shellsDir(dir), title = manifest.app?.name ?? manifest.name ?? titleOf(name);
   // The package that fills the native slot (LLP 1154 D3); the bake refuses two.
   const crates = shellCrates(manifest), native = nativePackages(dir).map(p => p.name);
-  // The paths written are relative where the two trees share a directory (`pathFrom`), which reads real directories.
+  // The paths written are relative (`pathWithin`), which reads real directories.
   for (const kind of crates) mkdirSync(resolve(shells, kind), { recursive: true });
   const copied = ['rust-toolchain.toml', '.cargo/config.toml'].map(file => [file, readFileSync(resolve(ROOT, file), 'utf8')]);
-  const patches = patchLines(shells);
-  // The inputs whose change rewrites the workspace: the checkout's path and commit, the templates (this module), the
-  // files copied from the checkout, its patch table and its lock (a dependency the SDK moved), the manifest's platforms,
-  // the app's name and the package that fills the native slot.
+  const patches = patchLines(shells, pathWithin);
+  // The inputs whose change rewrites the workspace: the app's path, the checkout's and its commit, the templates (this
+  // module), the files copied from the checkout, its patch table and its lock (a dependency the SDK moved), the
+  // manifest's platforms, the app's name and the package that fills the native slot.
   const commit = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() ?? '';
   const stamp = {
-    exact2: ROOT, commit, name, title, crates, native,
+    exact2: ROOT, app: dir, commit, name, title, crates, native,
     ...(Object.keys(manifest.preload ?? {}).length ? { preload: true } : {}),
     inputs: createHash('sha256').update([readFileSync(fileURLToPath(import.meta.url), 'utf8'), APPLE_BUILD_SCRIPT, ...copied.map(([, text]) => text), ...patches, readFileSync(resolve(ROOT, 'Cargo.lock'), 'utf8')].join('\0')).digest('hex'),
   };
@@ -357,7 +363,7 @@ ${patches.join('\n')}
 `);
   for (const [file, text] of copied) wrote = writeChanged(resolve(shells, file), text) || wrote;
   for (const kind of crates) {
-    const files = crateFiles(kind, { name, title, native: native.length > 0, preload: Object.keys(manifest.preload ?? {}).length > 0, app: '../../..', dep: path => `{ path = ${JSON.stringify(pathFrom(resolve(shells, kind), resolve(ROOT, path)))} }` });
+    const files = crateFiles(kind, { name, title, native: native.length > 0, preload: Object.keys(manifest.preload ?? {}).length > 0, app: '../../..', dep: path => `{ path = ${JSON.stringify(pathWithin(resolve(shells, kind), resolve(ROOT, path)))} }` });
     for (const [file, text] of Object.entries(files)) wrote = writeChanged(resolve(shells, kind, file), text) || wrote;
   }
   // A crate for a platform no longer named goes with its platform.

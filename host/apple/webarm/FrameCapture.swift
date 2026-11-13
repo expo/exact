@@ -59,7 +59,9 @@ extension WebArm {
         // the visual viewport. `WKSnapshotConfiguration.rect` is in the view's
         // points, y down.
         web.evaluateJavaScript("[visualViewport.pageLeft - scrollX, visualViewport.pageTop - scrollY, visualViewport.scale]", in: nil, in: world) { [weak self, weak web] result in
-            guard let self, let web, !self.invalidated else { return }
+            guard let self, let web, !self.invalidated, self.built === web else {
+                return answer(0, 0, "NotFoundError", "the frame went away before its picture was taken")
+            }
             let viewport = ((try? result.get()) as? [NSNumber])?.map(\.doubleValue) ?? []
             let (left, top, scale) = viewport.count == 3 ? (viewport[0], viewport[1], viewport[2]) : (0, 0, 1)
             let points = scale * Double(web.pageZoom)

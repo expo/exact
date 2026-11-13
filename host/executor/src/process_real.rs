@@ -349,120 +349,157 @@ pub(super) fn spawn(
         taken: Mutex::new(0),
         freed: Condvar::new(),
     });
-    for (fd, stderr) in [(child.stdout, false), (child.stderr, true)] {
-        match fd {
-            Some(fd) => read(fd, stderr, n, ctl.clone(), cancel.clone(), credit.clone()),
-            None => ctl.send(Input::Child(n, Seen::Eof(Some(stderr)))),
+    let started = (|| -> std::io::Result<_> {
+        for (fd, stderr) in [(child.stdout, false), (child.stderr, true)] {
+            match fd {
+                Some(fd) => read(spec, fd, stderr, n, ctl, &cancel, &credit)?,
+                None => ctl.send(Input::Child(n, Seen::Eof(Some(stderr)))),
+            }
         }
-    }
-    let stdin = child.stdin.map(|fd| write(fd, n, ctl.clone()));
-    let waiter = ctl.clone();
-    let _ = std::thread::Builder::new()
-        .name(format!("exact-child-{pid}"))
-        .spawn(move || {
+        let stdin = child.stdin.map(|fd| write(spec, fd, n, ctl)).transpose()?;
+        let waiter = ctl.clone();
+        thread(spec, "wait", format!("exact-child-{pid}"), move || {
             let seen = match os::wait(pid) {
                 Ok(os::Exit::Code(code)) => Seen::Exit(Some(i64::from(code)), None),
                 Ok(os::Exit::Signal(signal)) => Seen::Exit(None, Some(os::signal_name(signal))),
                 Err(_) => Seen::Exit(None, None),
             };
             waiter.send(Input::Child(n, seen));
-        });
-    Ok(Box::new(RealChild {
-        pid,
-        stdin,
-        cancel,
-        credit,
-        shared: shared.clone(),
-    }))
+        })?;
+        Ok(stdin)
+    })();
+    match started {
+        Ok(stdin) => Ok(Box::new(RealChild {
+            pid,
+            stdin,
+            cancel,
+            credit,
+            shared: shared.clone(),
+        })),
+        // Without its waiter nothing reaps the child or sends its exit, and
+        // without a pipe's reader that pipe never ends: the call cannot
+        // finish, so the child does not run.
+        Err(e) => {
+            cancel.store(true, Ordering::Release);
+            let _ = os::signal_group(pid, os::SIGKILL);
+            let _ = os::wait(pid);
+            super::groups::forget(shared, pid);
+            Err(failed(
+                FailureKind::Refused,
+                format!("spawn {}: cannot start its thread: {e}", spec.program),
+            ))
+        }
+    }
+}
+
+/// Start one of a child's threads: its waiter, a pipe's reader or its stdin
+/// writer. A test fails each whose `role` is its call's
+/// `EXACT_TEST_FAIL_THREAD`, as the thread limit would.
+fn thread(
+    spec: &Spec,
+    role: &str,
+    name: String,
+    body: impl FnOnce() + Send + 'static,
+) -> std::io::Result<()> {
+    #[cfg(test)]
+    if spec
+        .env
+        .iter()
+        .flatten()
+        .any(|(key, value)| key == "EXACT_TEST_FAIL_THREAD" && value == role)
+    {
+        return Err(std::io::Error::other("injected thread spawn failure"));
+    }
+    #[cfg(not(test))]
+    let _ = (spec, role);
+    std::thread::Builder::new().name(name).spawn(body).map(drop)
 }
 
 /// Read one pipe to its end (or until cancelled): each chunk to the
 /// supervisor, at most `AHEAD` undelivered, then its end of file.
 fn read(
+    spec: &Spec,
     fd: OwnedFd,
     stderr: bool,
     n: u32,
-    ctl: Arc<ChildCtl>,
-    cancel: Arc<AtomicBool>,
-    credit: Arc<Credit>,
-) {
-    let _ = std::thread::Builder::new()
-        .name("exact-child-pipe".into())
-        .spawn(move || {
-            let _ = os::set_nonblocking(fd.as_raw_fd());
-            let mut file = std::fs::File::from(fd);
-            let mut buf = vec![0u8; CHUNK];
-            loop {
-                if cancel.load(Ordering::Acquire) {
-                    break;
-                }
-                if !os::readable(file.as_raw_fd(), 100) {
-                    continue;
-                }
-                match file.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(len) => {
-                        if !credit.take(&cancel) {
-                            break;
-                        }
-                        ctl.send(Input::Child(n, Seen::Out(stderr, buf[..len].to_vec())));
-                    }
-                    Err(e)
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                        ) => {}
-                    Err(_) => break,
-                }
+    ctl: &Arc<ChildCtl>,
+    cancel: &Arc<AtomicBool>,
+    credit: &Arc<Credit>,
+) -> std::io::Result<()> {
+    let (ctl, cancel, credit) = (ctl.clone(), cancel.clone(), credit.clone());
+    thread(spec, "pipe", "exact-child-pipe".into(), move || {
+        let _ = os::set_nonblocking(fd.as_raw_fd());
+        let mut file = std::fs::File::from(fd);
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                break;
             }
-            ctl.send(Input::Child(n, Seen::Eof(Some(stderr))));
-        });
+            if !os::readable(file.as_raw_fd(), 100) {
+                continue;
+            }
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(len) => {
+                    if !credit.take(&cancel) {
+                        break;
+                    }
+                    ctl.send(Input::Child(n, Seen::Out(stderr, buf[..len].to_vec())));
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => break,
+            }
+        }
+        ctl.send(Input::Child(n, Seen::Eof(Some(stderr))));
+    })
 }
 
 /// Write a child's stdin from its queue; close it once ended and empty.
-fn write(fd: OwnedFd, n: u32, ctl: Arc<ChildCtl>) -> Arc<Stdin> {
+fn write(spec: &Spec, fd: OwnedFd, n: u32, ctl: &Arc<ChildCtl>) -> std::io::Result<Arc<Stdin>> {
     let stdin = Arc::new(Stdin {
         queue: Mutex::new((VecDeque::new(), false)),
         more: Condvar::new(),
         queued: AtomicU64::new(0),
     });
-    let queue = stdin.clone();
-    let _ = std::thread::Builder::new()
-        .name("exact-child-stdin".into())
-        .spawn(move || {
-            // `None` once the child closed its stdin (`EPIPE`).
-            let mut file = Some(std::fs::File::from(fd));
-            loop {
-                let next = {
-                    let mut q = queue.queue.lock().unwrap();
-                    loop {
-                        if let Some(bytes) = q.0.pop_front() {
-                            break Some(bytes);
-                        }
-                        if q.1 {
-                            break None;
-                        }
-                        q = queue.more.wait(q).unwrap();
+    let (queue, ctl) = (stdin.clone(), ctl.clone());
+    thread(spec, "stdin", "exact-child-stdin".into(), move || {
+        // `None` once the child closed its stdin (`EPIPE`).
+        let mut file = Some(std::fs::File::from(fd));
+        loop {
+            let next = {
+                let mut q = queue.queue.lock().unwrap();
+                loop {
+                    if let Some(bytes) = q.0.pop_front() {
+                        break Some(bytes);
                     }
-                };
-                let Some(bytes) = next else {
-                    break;
-                };
-                // Once the child closed its stdin, what is queued and every
-                // later write is dropped, so the queue still drains.
-                if file.as_mut().is_some_and(|f| f.write_all(&bytes).is_err()) {
-                    file = None;
+                    if q.1 {
+                        break None;
+                    }
+                    q = queue.more.wait(q).unwrap();
                 }
-                let after = queue.queued.fetch_sub(bytes.len() as u64, Ordering::AcqRel)
-                    - bytes.len() as u64;
-                // Empty: the supervisor looks, and a write that answered
-                // `false` hears `drain` (D2, as Node's Writable).
-                if after == 0 {
-                    ctl.send(Input::Child(n, Seen::Drained));
-                }
+            };
+            let Some(bytes) = next else {
+                break;
+            };
+            // Once the child closed its stdin, what is queued and every
+            // later write is dropped, so the queue still drains.
+            if file.as_mut().is_some_and(|f| f.write_all(&bytes).is_err()) {
+                file = None;
             }
-        });
-    stdin
+            let after =
+                queue.queued.fetch_sub(bytes.len() as u64, Ordering::AcqRel) - bytes.len() as u64;
+            // Empty: the supervisor looks, and a write that answered
+            // `false` hears `drain` (D2, as Node's Writable).
+            if after == 0 {
+                ctl.send(Input::Child(n, Seen::Drained));
+            }
+        }
+    })?;
+    Ok(stdin)
 }
 
 /// `execFile` on a real program (D3): to `close`, with `input` on stdin,
@@ -496,7 +533,8 @@ pub(super) fn exec(
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let (mut eof, mut exit) = ([false, false], None);
     let (mut timed_out, mut overflow, mut escalate) = (false, false, None::<f64>);
-    let (mut exited_at, mut cut_off) = (None::<Instant>, false);
+    let (mut exited_at, mut cut_off) = (None::<f64>, false);
+    let drain = spec.drain_timeout;
     loop {
         cut_off |= clock.passed(cut);
         if (abort.signal().aborted() || cut_off) && escalate.is_none() {
@@ -513,9 +551,7 @@ pub(super) fn exec(
             escalate = None;
         }
         // Output past the drain after its exit is not waited for (D2).
-        if exited_at
-            .is_some_and(|at| at.elapsed() > Duration::from_millis(spec.drain_timeout as u64))
-        {
+        if !(eof[0] && eof[1]) && clock.passed(exited_at.map(|at| at + drain)) {
             child.close_pipes();
             eof = [true, true];
         }
@@ -526,6 +562,7 @@ pub(super) fn exec(
             deadline.filter(|_| !timed_out),
             cut.filter(|_| !cut_off),
             escalate,
+            exited_at.map(|at| at + drain),
         ]
         .into_iter()
         .flatten()
@@ -554,7 +591,7 @@ pub(super) fn exec(
             Ok(Input::Child(_, Seen::Eof(None))) => eof = [true, true],
             Ok(Input::Child(_, Seen::Exit(code, signal))) => {
                 exit = Some((code, signal));
-                exited_at = Some(Instant::now());
+                exited_at = Some(clock.now());
             }
             _ => {}
         }

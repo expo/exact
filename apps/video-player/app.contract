@@ -63,10 +63,13 @@ component VideoPlayer
     target = max(0, (pending ? target : position) - 10)
     pending = true
     pressedAt = performanceNow()
+  // The length is 0 until `durationchange`: no bound to clamp to, so
+  // Forward waits for it rather than seek to the start.
   action forward
-    target = min(duration, (pending ? target : position) + 10)
-    pending = true
-    pressedAt = performanceNow()
+    if duration > 0
+      target = min(duration, (pending ? target : position) + 10)
+      pending = true
+      pressedAt = performanceNow()
   action settle
     if pending and performanceNow() - pressedAt > 500
       seekTo = (target == seekTo ? target + 0.001 : target)

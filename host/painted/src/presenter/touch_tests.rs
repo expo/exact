@@ -123,11 +123,11 @@ const RING: [u8; 4] = [255, 0, 0, 255];
 fn before_any_key_a_windows_focus_shows_no_ring() {
     let mut p = boot(BUTTONS);
     assert_eq!(
-        (p.brush.winui_focus, p.brush.keyless),
+        (p.brush.winui_focus, p.brush.pointer_modality),
         (cfg!(windows), cfg!(windows) || cfg!(target_os = "android"))
     );
     p.brush.winui_focus = true;
-    p.brush.keyless = true;
+    p.brush.pointer_modality = true;
     let native = id(&p, "native");
     assert!(p.set_focus(Some(native), 1.).is_none());
     assert_ne!(
@@ -143,7 +143,7 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
     );
     // To Chrome a modifier alone is none; the next key shows the ring.
     let mut p = boot(BUTTONS);
-    (p.brush.winui_focus, p.brush.keyless) = (false, false);
+    (p.brush.winui_focus, p.brush.pointer_modality) = (false, false);
     let (x, y) = middle(&p, "native");
     tap(&mut p, x, y, 1.);
     p.key_down("Control", 2.);
@@ -157,7 +157,7 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
     // A chord is keyboard input to WinUI, though not to Chrome.
     for winui in [true, false] {
         let mut p = boot(BUTTONS);
-        (p.brush.winui_focus, p.brush.keyless) = (winui, winui);
+        (p.brush.winui_focus, p.brush.pointer_modality) = (winui, winui);
         let (x, y) = middle(&p, "native");
         tap(&mut p, x, y, 1.);
         p.hold_modifier("ControlLeft", true);
@@ -182,7 +182,7 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
         )
     };
     let mut p = boot(&reloaded(""));
-    (p.brush.winui_focus, p.brush.keyless) = (true, true);
+    (p.brush.winui_focus, p.brush.pointer_modality) = (true, true);
     let native = id(&p, "native");
     assert!(p.set_focus(Some(native), 1.).is_none());
     p.reload(&crate::test_plan(&reloaded("\n        text \"x\"")), ())
@@ -203,7 +203,7 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
     // After a key, a pressed control restored under a new id stays ringless.
     for winui in [true, false] {
         let mut p = boot(&reloaded(""));
-        (p.brush.winui_focus, p.brush.keyless) = (winui, winui);
+        (p.brush.winui_focus, p.brush.pointer_modality) = (winui, winui);
         p.key_down("ArrowDown", 1.);
         let (x, y) = middle(&p, "native");
         tap(&mut p, x, y, 2.);
@@ -230,10 +230,10 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
       button "Native" appearance="auto" width=120 height=40 accent-color="#ff0000" testId="native"
 "##,
     );
-    (p.brush.winui_focus, p.brush.keyless) = (true, true);
+    (p.brush.winui_focus, p.brush.pointer_modality) = (true, true);
     assert!(p.set_focus(Some(id(&p, "field")), 1.).is_none());
     assert!(p.edit_menu_key("ContextMenu", "ContextMenu", false).0);
-    assert!(!p.brush.keyless, "the Menu key counts");
+    assert!(!p.brush.pointer_modality, "the Menu key counts");
 }
 
 #[test]
@@ -834,7 +834,7 @@ fn a_computed_feedback_target_does_not_take_over_native_activation() {
 }
 
 #[test]
-fn a_pressed_field_keeps_its_ring_and_script_focus_follows_the_one_it_leaves() {
+fn a_pressed_field_keeps_its_ring_and_a_pressed_button_passes_no_ring_to_script_focus() {
     let source = r##"component App
   action next
     focus("other")
@@ -878,7 +878,7 @@ fn androids_touch_mode_shows_no_ring_until_a_key_and_a_touch_ends_it() {
       button "Other" accent-color="#ff0000" width=120 height=40 testId="other"
 "##;
     let mut p = boot(source);
-    (p.brush.touch_mode, p.brush.keyless) = (true, true);
+    (p.brush.touch_mode, p.brush.pointer_modality) = (true, true);
     p.set_pointer_kind(PointerKind::Touch);
     let (x, y) = middle(&p, "field");
     tap(&mut p, x, y, 1.);
@@ -892,8 +892,110 @@ fn androids_touch_mode_shows_no_ring_until_a_key_and_a_touch_ends_it() {
     assert_eq!(edge(&mut p, "native"), RING, "a key leaves touch mode");
     // A touch anywhere goes back to it, and takes the ring off with it.
     tap(&mut p, 390., 290., 4.);
-    assert!(p.brush.keyless);
+    assert!(p.brush.pointer_modality);
     let other = id(&p, "other");
     assert!(p.set_focus(Some(other), 5.).is_none());
     assert_ne!(edge(&mut p, "other"), RING, "a touch re-enters touch mode");
+}
+
+#[test]
+fn script_focus_remembers_pointer_input_on_empty_space_and_fields() {
+    let source = r##"component App
+  view
+    column width=400 height=300
+      input testId="field" width=200 height=30
+      button "Native" width=120 height=40 testId="native"
+      button "Other" width=120 height=40 testId="other"
+"##;
+    let mut actual = Vec::new();
+    for (winui, android) in [(false, false), (true, false), (false, true)] {
+        for target in ["empty", "miss", "field"] {
+            let mut p = boot(source);
+            p.brush.winui_focus = winui;
+            p.brush.touch_mode = android;
+            p.set_pointer_kind(if android {
+                PointerKind::Touch
+            } else {
+                PointerKind::Mouse
+            });
+            let (x, y) = middle(&p, "native");
+            tap(&mut p, x, y, 0.);
+            p.key_down("Shift", 0.);
+            assert!(p.set_focus(Some(id(&p, "native")), 0.).is_none());
+            let (x, y) = match target {
+                "empty" => (390., 290.),
+                "miss" => {
+                    assert_eq!(p.hit(390., 390.), None);
+                    (390., 390.)
+                }
+                _ => middle(&p, target),
+            };
+            tap(&mut p, x, y, 1.);
+            if target == "field" {
+                assert_eq!(p.brush.ringless, None, "fields stay focus-visible");
+            } else {
+                assert_eq!(p.focus, None, "{target}: a background press blurs");
+            }
+            let other = id(&p, "other");
+            assert!(p.set_focus(Some(other), 3.).is_none());
+            actual.push((winui, android, target, p.brush.ringless == Some(other)));
+        }
+    }
+    assert!(actual.iter().all(|case| case.3), "{actual:?}");
+}
+
+#[test]
+fn windows_pointer_movement_changes_script_focus_without_hiding_the_current_ring() {
+    for winui in [false, true] {
+        let mut p = boot(BUTTONS);
+        p.brush.winui_focus = winui;
+        p.key_down("Shift", 0.);
+        let native = id(&p, "native");
+        assert!(p.set_focus(Some(native), 0.).is_none());
+        p.pointer_move(390., 290., 1.).unwrap();
+        assert_eq!(edge(&mut p, "native"), RING);
+        let bare = id(&p, "bare");
+        assert!(p.set_focus(Some(bare), 2.).is_none());
+        assert_eq!(edge(&mut p, "bare") == RING, !winui, "winui={winui}");
+    }
+}
+
+#[test]
+fn an_unchanged_mouse_focus_carries_its_ring_by_the_platforms_script_focus_policy() {
+    for winui in [false, true] {
+        let mut p = boot(BUTTONS);
+        p.brush.winui_focus = winui;
+        let (x, y) = middle(&p, "native");
+        tap(&mut p, x, y, 0.);
+        p.key_down("Shift", 1.);
+        tap(&mut p, x, y, 2.);
+        assert_eq!(edge(&mut p, "native"), RING);
+        assert!(p.set_focus(Some(id(&p, "bare")), 4.).is_none());
+        assert_eq!(edge(&mut p, "bare") == RING, !winui, "winui={winui}");
+    }
+}
+
+#[test]
+fn reloading_an_unchanged_mouse_focus_uses_the_platforms_ring_policy_under_a_new_id() {
+    let source = BUTTONS.replace(
+        "      button \"Native\"",
+        "      box\n      button \"Native\"",
+    );
+    for winui in [false, true] {
+        let mut p = boot(&source);
+        p.brush.winui_focus = winui;
+        let (x, y) = middle(&p, "native");
+        tap(&mut p, x, y, 0.);
+        p.key_down("Shift", 1.);
+        tap(&mut p, x, y, 2.);
+        let old = id(&p, "native");
+        let changed = source.replace("      box\n", "      box\n        input\n");
+        p.reload(&crate::test_plan(&changed), ()).unwrap();
+        assert_eq!(
+            p.host.kernel().node(old).unwrap().node_type,
+            NodeType::TextInput
+        );
+        assert_eq!(p.focus, Some(id(&p, "native")));
+        assert_eq!(edge(&mut p, "native") == RING, !winui, "winui={winui}");
+    }
 }

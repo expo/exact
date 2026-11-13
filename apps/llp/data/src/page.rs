@@ -853,6 +853,8 @@ kernel();
         assert_eq!(found("straße"), ["STRAẞE"]);
         assert_eq!(found("a"), ["a", "a", "A"]);
         assert_eq!(matches("ΟΔΟΣ", &fold("οδος")), vec![0..8]);
+        // U+2126 OHM SIGN folds one byte shorter and `İ` one longer.
+        assert_eq!(matches("\u{2126}İ", "i"), vec![3..5]);
         assert!(matches(text, "").is_empty());
     }
 

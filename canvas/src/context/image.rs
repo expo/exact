@@ -40,6 +40,11 @@ pub trait Images: Send + Sync {
         let _ = canvas;
         Vec::new()
     }
+    /// The host let the decoded `src` go: its next use requests it again,
+    /// and draws nothing until it is answered.
+    fn release(&self, src: &str) {
+        let _ = src;
+    }
 }
 
 /// Where a runner's image table lives. It is made by the first image call
@@ -93,12 +98,14 @@ impl ImageTable {
 impl Images for ImageTable {
     fn size(&self, canvas: u64, src: &str) -> Option<(u32, u32)> {
         let mut s = self.state();
-        if let Some((_, size)) = s.ready.iter().find(|(r, _)| r == src) {
-            return Some(*size);
-        }
+        // A canvas that drew it is drawn again when it is answered again: the
+        // host decodes a released handle a draw in flight still used.
         let subs = s.subscribers(src);
         if !subs.contains(&canvas) {
             subs.push(canvas);
+        }
+        if let Some((_, size)) = s.ready.iter().find(|(r, _)| r == src) {
+            return Some(*size);
         }
         if !s.broken.iter().any(|(b, _)| b == src) && !s.pending.iter().any(|p| p == src) {
             s.pending.push(src.to_string());
@@ -147,6 +154,10 @@ impl Images for ImageTable {
             })
             .map(|(src, why)| format!("{src}: {why}"))
             .collect()
+    }
+
+    fn release(&self, src: &str) {
+        self.state().ready.retain(|(r, _)| r != src);
     }
 }
 

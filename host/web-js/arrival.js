@@ -187,8 +187,8 @@ export function arrivals({ rows, held, preferred, release, raise, say, valueOf }
             if (system) release(c, { reason: "interrupted", reading: null, message: "background" });
             else { say(`${extension}.${declaredOf(c.row)}: suspended`); suspended.add(c); }
           }
-        } else if (suspended.size) {
-          suspended.clear();
+        } else if (claims(extension, [a.scan]).filter(c => suspended.delete(c)).length) {
+          // Only this extension's scans: the set holds every extension's.
           say(`${extension}: scans resumed`);
           const field = preferred.get(`${extension}.${a.field}`);
           if (typeof field === "string") arrive(extension, a, field);

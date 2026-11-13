@@ -1,4 +1,5 @@
 use exact_game::{Entity, Parent, Visible, World};
+use std::cell::RefCell;
 
 /// Scratch for one immutable feed's membership scan. Ancestors shared by many
 /// draws are read once. Nothing survives into the next scan except capacity.
@@ -193,19 +194,20 @@ mod tests {
 }
 
 /// Parent edges at the last successful feed. A changed edge resets its subtree,
-/// not every unrelated hierarchy in the scene.
+/// not every unrelated hierarchy in the scene. Its walks memoize behind a
+/// shared reference, so one feed can ask it from every consumer.
 #[derive(Default)]
-pub(super) struct ParentChanges {
+pub(crate) struct ParentChanges {
     previous: Vec<Option<(Entity, Entity)>>,
     current: Vec<Option<(Entity, Entity)>>,
-    states: Vec<u8>,
-    path: Vec<Entity>,
+    states: RefCell<Vec<u8>>,
+    path: RefCell<Vec<Entity>>,
 }
 impl ParentChanges {
     pub fn reset(&mut self) {
         self.previous.clear();
         self.current.clear();
-        self.states.clear();
+        self.states.get_mut().clear();
     }
     pub fn begin(&mut self, w: &World) {
         self.current.fill(None);
@@ -216,9 +218,9 @@ impl ParentChanges {
             }
             self.current[index] = Some((entity, parent.0));
         }
-        self.states
-            .resize(self.previous.len().max(self.current.len()), 0);
-        for (index, state) in self.states.iter_mut().enumerate() {
+        let states = self.states.get_mut();
+        states.resize(self.previous.len().max(self.current.len()), 0);
+        for (index, state) in states.iter_mut().enumerate() {
             *state = if self.previous.get(index).copied().flatten()
                 != self.current.get(index).copied().flatten()
             {
@@ -231,33 +233,34 @@ impl ParentChanges {
         // with parent changes instead of rereading every shared ancestor.
         for entity in w.fresh() {
             let index = entity.index() as usize;
-            if self.states.len() <= index {
-                self.states.resize(index + 1, 0);
+            if states.len() <= index {
+                states.resize(index + 1, 0);
             }
-            self.states[index] = 2;
+            states[index] = 2;
         }
     }
-    pub fn get(&mut self, w: &World, mut entity: Entity) -> bool {
-        self.path.clear();
+    pub fn get(&self, w: &World, mut entity: Entity) -> bool {
+        let (mut states, mut path) = (self.states.borrow_mut(), self.path.borrow_mut());
+        path.clear();
         let changed = loop {
             if !w.contains(entity) {
                 break false;
             }
             let index = entity.index() as usize;
-            match self.states.get(index).copied().unwrap_or(3) {
+            match states.get(index).copied().unwrap_or(3) {
                 2 => break true,
                 1 | 3 => break false,
                 _ => {}
             }
-            self.states[index] = 1;
-            self.path.push(entity);
+            states[index] = 1;
+            path.push(entity);
             match self.current.get(index).copied().flatten() {
                 Some((owner, parent)) if owner == entity => entity = parent,
                 _ => break false,
             }
         };
-        for entity in &self.path {
-            self.states[entity.index() as usize] = if changed { 2 } else { 3 };
+        for entity in path.iter() {
+            states[entity.index() as usize] = if changed { 2 } else { 3 };
         }
         changed
     }

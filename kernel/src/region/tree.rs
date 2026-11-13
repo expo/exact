@@ -50,17 +50,21 @@ impl Derived {
             if matches!(arena.node_type(s), NodeType::Text | NodeType::Control) {
                 continue;
             }
+            // An alert's title is its first item, as `rebuild` makes it.
+            let title = arena
+                .has_alert_prefix(s)
+                .then(|| tree.new_alert_prefix(s, arena.grouped_alert(s)));
             let children = if Some(s) == cut {
-                branch
+                title
                     .into_iter()
-                    .filter_map(|b| nodes.get(&b).copied())
+                    .chain(branch.and_then(|b| nodes.get(&b).copied()))
                     .collect()
             } else {
-                let items = arena
+                let authored = arena
                     .children(s)
                     .iter()
-                    .filter_map(|c| Some((arena.style(*c).order, nodes.get(c).copied()?)))
-                    .collect();
+                    .filter_map(|c| Some((arena.style(*c).order, nodes.get(c).copied()?)));
+                let items = title.map(|n| (0, n)).into_iter().chain(authored).collect();
                 crate::layout::order::ordered(arena, s, items)
             };
             tree.set_children(nodes[&s], &children);

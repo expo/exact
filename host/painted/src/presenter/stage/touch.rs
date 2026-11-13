@@ -349,18 +349,26 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// A down lets go of any contact before it, but keeps the drag
+    /// `stage_down` began for this one.
+    pub(in crate::presenter) fn cancel_before_down(&mut self, now: f64) -> Result<(), String> {
+        let gesture = self.stage.gesture.take();
+        let result = self.pointer_cancel(now);
+        self.stage.gesture = gesture;
+        result
+    }
+
     pub(in crate::presenter) fn stage_cancel(&mut self, now: f64) {
+        // A drag still inside the slop is dropped like a scrim press: left,
+        // a later move without a contact would start it.
         if let Some(Gesture::Drag {
             modal,
             top,
             moving: true,
             ..
-        }) = self.stage.gesture
+        }) = self.stage.gesture.take()
         {
-            self.stage.gesture = None;
             self.settle_sheet(modal, top, 0.0, now);
-        } else if matches!(self.stage.gesture, Some(Gesture::Scrim { .. })) {
-            self.stage.gesture = None;
         }
     }
 

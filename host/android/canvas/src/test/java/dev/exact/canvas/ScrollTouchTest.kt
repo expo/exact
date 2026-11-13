@@ -58,7 +58,10 @@ class ScrollTouchTest {
     class Host {
         companion object {
             @JvmStatic @Implementation fun __staticInitializer__() {}
-            @JvmStatic @Implementation fun fieldInput(id: Int, generation: Int) {}
+            val fieldInputs = ArrayList<Int>()
+            @JvmStatic @Implementation fun fieldInput(id: Int, generation: Int, kind: Int) { fieldInputs.add(kind) }
+            @JvmStatic @Implementation fun fieldAction(id: Int, generation: Int, action: Int) {}
+            @JvmStatic @Implementation fun fieldEdited(id: Int, generation: Int, seq: Int, value: String, start: Int, end: Int) {}
             @JvmStatic @Implementation fun fieldFocused(id: Int, generation: Int, focused: Boolean) {}
             @JvmStatic @Implementation fun fieldSelected(id: Int, generation: Int, start: Int, end: Int) {}
             /** What exact2's thread was told of scrolling, in order: each move, and each drag's start and end. */
@@ -87,6 +90,7 @@ class ScrollTouchTest {
         val owner = Owner(false, false, 0) { null }
         thread = Shadow.extract(owner)
         Host.told.clear(); Host.ends.clear()
+        Host.fieldInputs.clear()
         view.owner = owner
         view.ownerStarted(true)
     }
@@ -123,6 +127,35 @@ class ScrollTouchTest {
         gesture()
         if (!soon) answer(words)
         HashMap(thread.moved) to ArrayList(thread.touches)
+    }
+
+    @Test fun fieldInputSeparatesPointerHardwareAndImeModality() {
+        field(keeps = false)
+        down(400f)
+        answer(reply(field = 1))
+        up(400f)
+        assertEquals(listOf(1), Host.fieldInputs)
+        val text = view.fields!!.text(1)!!
+        Host.fieldInputs.clear()
+        text.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT))
+        assertEquals(listOf(2), Host.fieldInputs)
+        Host.fieldInputs.clear()
+        text.dispatchKeyEvent(android.view.KeyEvent(0, 0, android.view.KeyEvent.ACTION_DOWN,
+            android.view.KeyEvent.KEYCODE_A, 0, android.view.KeyEvent.META_CTRL_ON))
+        assertEquals(listOf(0), Host.fieldInputs)
+        for (flags in listOf(android.view.KeyEvent.FLAG_SOFT_KEYBOARD, android.view.KeyEvent.FLAG_KEEP_TOUCH_MODE,
+                android.view.KeyEvent.FLAG_SOFT_KEYBOARD or android.view.KeyEvent.FLAG_KEEP_TOUCH_MODE)) {
+            for (code in listOf(android.view.KeyEvent.KEYCODE_DEL, android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_DPAD_LEFT)) {
+                Host.fieldInputs.clear()
+                text.dispatchKeyEvent(android.view.KeyEvent(0, 0, android.view.KeyEvent.ACTION_DOWN, code, 0, 0,
+                    android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, flags))
+                assertEquals("IME flags $flags, key $code", listOf(0), Host.fieldInputs)
+            }
+        }
+        Host.fieldInputs.clear()
+        text.onCreateInputConnection(android.view.inputmethod.EditorInfo())!!.deleteSurroundingText(1, 0)
+        assertTrue(Host.fieldInputs.isNotEmpty())
+        assertTrue(Host.fieldInputs.all { it == 0 })
     }
 
     @Test fun aLateAnswerTakesTheWayTheFingerWentPastTheSlop() {

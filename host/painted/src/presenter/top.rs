@@ -44,6 +44,7 @@ use exact_kernel::invocation::Action;
 use exact_kernel::NodeKey;
 
 pub(super) mod area;
+mod input;
 pub(super) mod look;
 mod overlay;
 pub(crate) mod shape;
@@ -162,6 +163,9 @@ struct Open {
     origin: u32,
     /// The row under the finger, and the row a keyboard focused.
     pressed: Option<usize>,
+    /// Where a finger that went down in a scrolling menu went down and
+    /// last was, and whether it has moved far enough to scroll it.
+    drag: Option<(f32, f32, bool)>,
     focused: Option<usize>,
     hovered: Option<usize>,
     /// The kernel epoch its plan was read at.
@@ -342,6 +346,7 @@ impl<D: DataSource> Presenter<D> {
 
     fn surface_inputs(&self) -> Inputs {
         let scale = self.text_scale;
+        let (window, margins) = self.surface_window();
         Inputs {
             dark: self.dark(),
             contrast: self.colors.contrast.palette,
@@ -351,7 +356,8 @@ impl<D: DataSource> Presenter<D> {
             } else {
                 1.0
             },
-            window: self.surface_window().0,
+            window,
+            room: window.1 - margins.0 - margins.1,
         }
     }
 
@@ -481,6 +487,7 @@ impl<D: DataSource> Presenter<D> {
             scale: self.brush.scale,
             origin: 0,
             pressed: None,
+            drag: None,
             focused: None,
             hovered: None,
             epoch: self.host.kernel().epoch(),
@@ -570,14 +577,13 @@ impl<D: DataSource> Presenter<D> {
 
     /// HTML's cancel is sent only for a person's close request, before close.
     pub(super) fn dialog_close_prevented(&mut self, id: ViewId, now: f64) -> bool {
+        let from = self.commands.len();
         let error = self.host.dispatch_at(id, Event::Cancel, now);
         if let Some(error) = error.or(self.after_commit()) {
             self.host.log(error);
         }
-        let prevented = self.commands.iter().any(|c| c.name == "preventDefault");
-        self.commands
-            .retain(|c| c.name != "preventDefault" && c.name != "stopPropagation");
-        prevented
+        self.commands.retain(|c| c.name != "stopPropagation");
+        self.prevented_since(from)
     }
 
     /// A person chose row `index`: the surface closes, then the row's
@@ -639,47 +645,10 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// What the shell says happened in the window of surface `serial`
-    /// ([`event`]): a touch at (`x`, `y`) of the surface, in points from
-    /// its top left; a key; a dismissal; a refusal. What it says of a
-    /// surface that is no longer the one open is dropped.
-    pub fn surface_event(&mut self, serial: u32, what: i32, x: f32, y: f32, now_ms: f64) {
-        if self.top.open.as_ref().map(|open| open.serial) != Some(serial) {
-            return;
-        }
-        match what {
-            0..=3 => self.surface_touch(what, x, y, now_ms),
-            event::DISMISSED => {
-                let open = self.top.open.as_ref().unwrap();
-                let (node, modal) = (open.node, open.modal);
-                // The shell's window is already gone. HTML permits ignoring
-                // cancelation when the UA cannot honor it; cancel still fires.
-                if modal {
-                    self.dialog_close_prevented(node, now_ms);
-                }
-                if self.top.open.as_ref().is_some_and(|o| o.serial == serial) {
-                    self.close_surface(now_ms);
-                }
-            }
-            event::REFUSED => {
-                self.host.log(format!(
-                    "the top layer's surface {serial} was refused: the shell could not make its window"
-                ));
-                self.close_surface(now_ms);
-            }
-            event::ENTER | event::SPACE => {
-                self.surface_key("Enter", now_ms);
-            }
-            event::TAB | event::DOWN => self.surface_step(false),
-            event::TAB_BACK | event::UP => self.surface_step(true),
-            event::LEFT | event::RIGHT => self.surface_horizontal(what == event::LEFT, now_ms),
-            _ => {}
-        }
-    }
-
     /// A touch in the surface: a row is lit while a finger holds it, and
     /// chosen when the finger lifts in it. A finger that leaves its row
-    /// lets go of it.
+    /// lets go of it. In a menu taller than its window, a finger that moves
+    /// past the touch slop scrolls the rows instead, and chooses none.
     fn surface_touch(&mut self, action: i32, x: f32, y: f32, now_ms: f64) {
         let Some(open) = self.top.open.as_mut() else {
             return;
@@ -687,14 +656,34 @@ impl<D: DataSource> Presenter<D> {
         let at = (open.layout.target_at(x, y)).filter(|i| open.layout.targets[*i].enabled);
         let before = open.pressed;
         let mut chosen = None;
+        let mut scrolled = false;
         match action {
-            0 => open.pressed = at,
+            0 => {
+                open.pressed = at;
+                open.drag = open.layout.menu_scroll().map(|_| (y, y, false));
+            }
+            2 if open.drag.is_some() => {
+                let (start, last, moving) = open.drag.unwrap();
+                // Android's touch slop (`ViewConfiguration`), 8 dp.
+                let moving = moving || (y - start).abs() > 8.0;
+                if moving {
+                    open.pressed = None;
+                    scrolled = open.layout.scroll_content(last - y);
+                }
+                open.drag = Some((start, if moving { y } else { last }, moving));
+            }
             2 if open.pressed != at => open.pressed = None,
             2 => {}
-            1 => chosen = open.pressed.take().filter(|pressed| Some(*pressed) == at),
-            _ => open.pressed = None,
+            1 => {
+                chosen = open.pressed.take().filter(|pressed| Some(*pressed) == at);
+                open.drag = None;
+            }
+            _ => {
+                open.pressed = None;
+                open.drag = None;
+            }
         }
-        if open.pressed != before {
+        if open.pressed != before || scrolled {
             open.revision += 1;
             self.executor.notify();
         }

@@ -6,7 +6,8 @@
 // panel shows one fixed route with a header, so its tab is a navigation
 // controller too, whose bar shows that header. Six's panel shows one fixed
 // route with no header, so its tab is a plain view controller. Home and Five
-// push a route, and Home presents Sheet, whose Five selects Five. With
+// push a route, and Home presents Sheet, whose Five selects Five. Five's
+// Full hides the tablist, so its controller hides UIKit's tab bar. With
 // Redirect on, Four's press selects Three: a press that moves the router to a
 // tab other than the one tapped. With Decline on, Six's press leaves the
 // router where it is.
@@ -19,6 +20,7 @@ routes nav
   tab four "/four"
   tab five "/five"
     deeper "/five/deeper"
+    full "/five/full"
   tab six "/six"
 
 component MoreTabs
@@ -75,9 +77,11 @@ component MoreTabs
                   if e.name == "five"
                     button press=open("/five/deeper") testId="open-deeper"
                       text "Deeper"
+                    button press=open("/five/full") testId="open-full"
+                      text "Full"
                   if e.name == "barless"
                     text e.name testId=`text-${e.name}`
-      row role="tablist"
+      row role="tablist" display=(top(nav).name == "full" ? "none" : "flex")
         button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home") testId="tab-home" flex=1
           text "Home"
         button role="tab" aria-controls="panel-barless" aria-selected=(nav.tab == "barless") press=pick("barless") testId="tab-barless" flex=1

@@ -327,6 +327,7 @@ fn launch_defers_subscription_and_recovers_a_panic() {
     assert_eq!(pending.len(), 1);
     let record: Value = serde_json::from_slice(&std::fs::read(&pending[0]).unwrap()).unwrap();
     assert_eq!(record["message"], "index out of bounds");
+    assert_eq!(record["meta"]["appIdentifier"], "com.example.crash");
     let mut next = Service::new(
         Map::new(),
         &json!({}),
@@ -346,6 +347,11 @@ fn launch_defers_subscription_and_recovers_a_panic() {
         "against the session that crashed"
     );
     assert_eq!(row["attributes"]["expo.error.is_fatal"], true);
+    let crashed = row["session"].as_str().unwrap();
+    assert_eq!(
+        next.sessions[crashed]["meta"]["appIdentifier"], "com.example.crash",
+        "the crashed build's, not the next one's"
+    );
     next.dispatch(); // no project id: the rows are dropped, as Observe out of its gate
     assert!(next.logs.is_empty());
     assert_eq!(
@@ -412,6 +418,32 @@ fn a_crash_record_stays_until_the_queue_holding_it_is_written() {
         .collect();
     assert_eq!(crashes.len(), 1);
     assert_eq!(crashes[0]["name"], "native.exception");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A crash whose session no saved row names is counted against the build in
+/// its record, not the build that opens next.
+#[test]
+fn a_crash_before_its_session_is_saved_keeps_its_build() {
+    let dir = std::env::temp_dir().join(format!(
+        "exact-observe-test-crash-build-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = json!({ "id": "com.example.app", "name": "App", "version": "1.0" });
+    let record = json!({
+        "session": "crashed", "sessionStart": 1.0, "time": 2.0, "type": "panic", "message": "boom",
+        "meta": app_meta(&old, &json!({ "environment": "staging" }), false),
+    });
+    std::fs::write(dir.join("pending-crashed.json"), record.to_string()).unwrap();
+    let new = json!({ "id": "com.example.app", "name": "App", "version": "2.0" });
+    let s = Service::new(Map::new(), &new, false, dir.clone(), "next".into(), 3.0);
+    let crashed = &s.sessions["crashed"]["meta"];
+    assert_eq!(crashed["appVersion"], "1.0");
+    assert_eq!(crashed["environment"], "staging");
+    assert_eq!(crashed["osName"], "Linux");
+    assert_eq!(s.sessions["next"]["meta"]["appVersion"], "2.0");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

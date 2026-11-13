@@ -288,7 +288,7 @@ extension NavigationHost {
             routerTab = p.at
             selectionPressed = nil
             if let container = tabController, container.selectedViewController !== navs[p.at], navs[p.at] !== tapping {
-                container.selectedViewController = navs[p.at]
+                selectInUIKit(p.at, in: container)
                 refollowFloatingBar() // (no push or pop: the stack it shows keeps its wish on an iPad)
             }
             if tabController == nil { presenter.session?.natives.tabsHatch(nil, event: 2, index: p.at) }
@@ -588,10 +588,20 @@ extension NavigationHost {
     /// Select the router's tab again: tab `index`'s press left the router on
     /// it, the app's answer to a person's pick of `index`.
     func showRouterTab(declining index: Int) {
-        guard let tabs = tabController, let stack = tabStack(routerTab) else { return }
+        guard let tabs = tabController, tabStack(routerTab) != nil else { return }
         selectionPressed = nil
-        tabs.selectedViewController = stack
+        selectInUIKit(routerTab, in: tabs)
         presenter.session?.log("navigation: tab \(index)'s press left the router on tab \(routerTab), which UIKit shows again")
+    }
+
+    /// Write UIKit's selection of tab `index`: More while it holds the tab's
+    /// routes, as a tap on More selects it, else the tab's own controller.
+    /// The tab's controller selected in code while More holds its routes
+    /// drops a route above its root that hides the tab bar, as More pops to
+    /// its list (LLP 1075.003 §9.16).
+    func selectInUIKit(_ index: Int, in tabs: UITabBarController) {
+        guard let stack = tabStack(index) else { return }
+        tabs.selectedViewController = index == moreTab ? more : stack
     }
 
     /// Whether a tap may let UIKit pop a stack to its root: only where Back

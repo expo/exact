@@ -177,7 +177,7 @@ impl<D: DataSource> Presenter<D> {
     /// Press `button` as its shortcut does: a control's assistive down and
     /// up, then its authored `press`, as the web's click runs both.
     pub(super) fn press_shortcut(&mut self, button: ViewId, now_ms: f64) {
-        self.note_press(button, true);
+        self.note_press(button);
         if self.control_target(button) == Some(button) {
             let (x, y, _, _) = self.rect_of(button).unwrap_or_default();
             for phase in ["down", "up"] {

@@ -431,6 +431,8 @@ pub trait CanvasEngine {
     fn images_pending(&self) -> bool;
     /// [`Runner::canvas_image`].
     fn image(&mut self, src: &str, result: Result<(u32, u32), String>, also: &[u64]);
+    /// [`Runner::canvas_image_released`].
+    fn release_image(&mut self, src: &str);
     /// [`Runner::canvas_fonts_loaded`].
     fn fonts_loaded(&mut self);
     /// Bind a capture to its mounted lifetime and minimum completed sequence,
@@ -1095,6 +1097,12 @@ impl CanvasEngine for Canvases {
         }
     }
 
+    fn release_image(&mut self, src: &str) {
+        if let Some(t) = self.table() {
+            t.release(src);
+        }
+    }
+
     fn fonts_loaded(&mut self) {
         for r in self.records.values_mut() {
             if r.text {
@@ -1355,6 +1363,14 @@ impl<D: DataSource> Runner<D> {
     pub fn canvas_image(&mut self, src: &str, result: Result<(u32, u32), String>, also: &[u64]) {
         if let Some(c) = self.canvases.as_mut() {
             c.image(src, result, also);
+        }
+    }
+
+    /// The host let the decoded `src` go (a cache past its budget): a later
+    /// draw that uses it requests it again (LLP 1056 D9).
+    pub fn canvas_image_released(&mut self, src: &str) {
+        if let Some(c) = self.canvases.as_mut() {
+            c.release_image(src);
         }
     }
 

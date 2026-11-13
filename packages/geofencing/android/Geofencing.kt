@@ -78,10 +78,12 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
     /** The transition being delivered now: one at a time. */
     private var delivering = false
     private var said: String? = null
+    /** The store's wake listener, kept here: the store holds it only weakly, for as long as this module lives. */
+    private val delivery: () -> Unit = ::deliver
 
     init {
         if (!context.agent) {
-            ExactRegions.listen(::deliver)
+            ExactRegions.listen(delivery)
             // Every launch re-arms the store's fences without an initial trigger (D14, Re-arming), and delivers what
             // the store kept undelivered.
             arm(app, store.list(), initial = false) { e -> if (e != null) context.log("geofencing: re-arm failed: $e") }

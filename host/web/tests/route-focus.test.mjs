@@ -145,6 +145,20 @@ async function inChrome(test, width = 600, motion = false) {
 }
 const enter = (key) => key('Enter', 'Enter', 13, '\r');
 
+check('an ArrowDown handler can push a ringed route before any pointer input', () => inChrome(async (evaluate, press, key) => {
+  await evaluate(`document.addEventListener('keydown', e => { if (e.key === 'ArrowDown') push('key', '/key'); }, { once: true })`);
+  await key('ArrowDown', 'ArrowDown', 40);
+  expect(await evaluate('focus().slice(0, 2)')).toEqual(['title-key', true]);
+}));
+
+check('a pointer route arrival clears the unchanged openers keyboard ring', () => inChrome(async (evaluate, press, key) => {
+  await evaluate(`document.getElementById('row-1').focus()`);
+  await key('Shift', 'ShiftLeft', 16);
+  expect(await evaluate('focus().slice(0, 2)')).toEqual(['row-1', true]);
+  await press('row-1');
+  expect(await evaluate('focus().slice(0, 2)')).toEqual(['title-1', false]);
+}));
+
 check('a route the app pushes before any press takes the focus with no ring', () => inChrome(async (evaluate, press, key) => {
   // A channel an app reopens as it starts (Excord's resume): the heading has the focus, as after any push, and the
   // browser draws no ring, which a script's focus on a page no one has touched would otherwise get.
@@ -173,8 +187,7 @@ check('on a push the focus moves to the new route\'s heading, and on Back to the
   await enter(key);
   expect(await evaluate('focus()')).toEqual(['title-2', true, 0, 0]);
   expect(await evaluate('pop(); focus()')).toEqual(['row-2', true, 0, 0]);
-  // And a pointer's press on it: no ring, and Back returns to the link. (Clicked while it still showed the key's
-  // ring, the heading would show one too: the browser hands a script's focus the ring its last focus had.)
+  // A pointer's press opens the route without a ring, and Back returns to the link.
   await evaluate('document.activeElement.blur()');
   await press('row-2');
   expect(await evaluate('focus()')).toEqual(['title-2', false, 0, 0]);

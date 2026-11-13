@@ -125,6 +125,9 @@ pub struct Inputs {
     pub bold_text: bool,
     /// The window it is shown over, points.
     pub window: (f32, f32),
+    /// The height a menu may take: the window's, less what it keeps from
+    /// the window's top and bottom. A taller one scrolls.
+    pub room: f32,
 }
 
 /// One thing a surface draws, in its own points.
@@ -696,11 +699,9 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
         });
         y += tall + margin;
     }
-    let height = if desktop {
-        (y + padding).min((inputs.window.1 - 8.).max(4.))
-    } else {
-        y + padding
-    };
+    // Compose's DropdownMenu scrolls its items within the window's room,
+    // as WinUI's MenuFlyout does.
+    let height = (y + padding).min(inputs.room.max(4.));
     Layout {
         size: (width, height),
         radius: if desktop { 8. } else { 4. },
@@ -715,7 +716,8 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
         items,
         targets,
         windows: None,
-        menu: (height < y + padding).then(|| menu::Scroll::new(y + padding - height, dark)),
+        menu: (height < y + padding)
+            .then(|| menu::Scroll::new(y + padding - height, dark, desktop)),
         symbols: if desktop {
             SymbolSet::Fluent
         } else {
@@ -796,6 +798,7 @@ mod tests {
                 font_scale: 1.,
                 bold_text,
                 window: (400., 800.),
+                room: 704.,
             };
             for (plan, weights) in [
                 (

@@ -7,7 +7,9 @@
 //! `takeover`); the process-wide `umask` is never touched. Publication and
 //! removal run under an exclusive `flock` on `<path>.lock`, so a listener
 //! never removes a newer one's socket between its inode check and its
-//! `unlink`. A program that publishes on the path without the lock can still
+//! `unlink`. Staging, from clearing a leftover staging name to publishing,
+//! also holds an exclusive `flock` on the directory itself, so two listeners
+//! publishing different paths there never share a staging name. A program that publishes on the path without the lock can still
 //! race that check, a declared limit (LLP 1133.005 §10).
 use std::fs;
 use std::io;
@@ -138,6 +140,20 @@ impl Lock {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&name)
             .map_err(|e| network("cannot open", Path::new(&name), e))?;
+        Lock::exclusive(file, Path::new(&name))
+    }
+
+    /// Take the lock on the directory `dir` itself, waiting for it.
+    fn directory(dir: &Path) -> Result<Lock, Failure> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(dir)
+            .map_err(|e| network("cannot open", dir, e))?;
+        Lock::exclusive(file, dir)
+    }
+
+    fn exclusive(file: fs::File, name: &Path) -> Result<Lock, Failure> {
         loop {
             // SAFETY: the descriptor is open for the call.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
@@ -145,7 +161,7 @@ impl Lock {
             }
             let e = io::Error::last_os_error();
             if e.kind() != io::ErrorKind::Interrupted {
-                return Err(network("cannot lock", Path::new(&name), e));
+                return Err(network("cannot lock", name, e));
             }
         }
     }
@@ -195,13 +211,18 @@ fn found(path: &Path) -> Result<Found, Failure> {
     }
 }
 
-static STAGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// A private staging name in `path`'s directory: `.l` and 8 hex digits.
+/// A staging name: `.l`, the whole process id and this process's count of
+/// stagings, in hex, so no two live processes stage the same name.
+fn staging_name(pid: u32, n: u64) -> String {
+    format!(".l{pid:x}.{n:x}")
+}
+
+/// A private staging name in `path`'s directory.
 fn staging(path: &Path) -> Result<PathBuf, Failure> {
     let n = STAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = format!(".l{:04x}{:04x}", std::process::id() & 0xffff, n & 0xffff);
-    let staged = path.with_file_name(name);
+    let staged = path.with_file_name(staging_name(std::process::id(), n));
     if staged.as_os_str().len() >= SUN_PATH {
         return Err(Failure::Refused(format!(
             "{} leaves no room for a staging name beside the socket",
@@ -242,7 +263,9 @@ pub fn publish(path: &Path, takeover: bool, over: bool) -> Result<Bound, Failure
         }
     };
     let staged = staging(path)?;
-    // A staging name left by a crash is this user's, in this user's directory.
+    let _staging = Lock::directory(path.parent().unwrap_or(Path::new("/")))?;
+    // Under the directory's lock nobody else is staging, so a file under this
+    // name was left by a crashed process that had this pid.
     let _ = fs::remove_file(&staged);
     let listener = UnixListener::bind(&staged).map_err(|e| network("cannot bind", path, e))?;
     let published = fs::set_permissions(&staged, fs::Permissions::from_mode(0o600)).and_then(
@@ -400,6 +423,36 @@ mod tests {
         listener.teardown();
         assert!(registered(&path).is_empty());
         assert!(!path.exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn staging_names_differ_by_the_whole_pid_and_count() {
+        // Pids and counts equal in their low 16 bits
+        assert_ne!(staging_name(0x1_2345, 0), staging_name(0x2_2345, 0));
+        assert_ne!(staging_name(7, 0x1_0000), staging_name(7, 0));
+    }
+
+    #[test]
+    #[ignore = "async lane: binds real unix sockets"]
+    fn staging_waits_for_the_directory_lock() {
+        let d = dir("staging");
+        prepare(&d.join("a.sock")).unwrap();
+        let held = Lock::directory(&d).unwrap();
+        let path = d.join("b.sock");
+        let publishing = std::thread::spawn({
+            let path = path.clone();
+            move || publish(&path, false, false).unwrap()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            identity(&path).is_none(),
+            "published while the directory was locked"
+        );
+        drop(held);
+        let bound = publishing.join().unwrap();
+        assert_eq!(identity(&path), Some(bound.identity));
+        unpublish(&path, bound.identity);
         fs::remove_dir_all(&d).unwrap();
     }
 

@@ -1,5 +1,5 @@
 // `autofocus` at mount on the JS target (LLP 1035.000 D9; LLP 1102 §3.19), as the wasm host's
-// focusController (host/web/navigation.js): after each commit, the first `[autofocus]` not yet
+// focusController (host/web/navigation.js): after each commit, the first autofocus field not yet
 // offered that is shown, enabled and not inert is offered once, and takes the focus when the focus
 // is on the body or on the control just pressed (an `if` that mounts a field after a tap).
 // A carried restart (checkpoint.js, which holds `focus` while it rebuilds) marks every field it
@@ -7,6 +7,18 @@
 // field may still take it when it is shown.
 import { inertAncestor } from './navigation.js';
 const offered = new WeakSet();
+let restarting = false;
+const candidates = '[autofocus], [data-autofocus="true"]';
+
+/** A carried boot must not enqueue the browser's own autofocus candidates. */
+export function restartAutofocus() { restarting = true; }
+
+/** Keep the authored prop while a carried boot suppresses its DOM behavior. */
+export function autofocusProp(el, on) {
+  el.toggleAttribute('autofocus', on && !restarting);
+  if (on && !restarting) el.removeAttribute('data-autofocus');
+  else el.setAttribute('data-autofocus', String(on));
+}
 
 /** The press a pointer is dispatching (a click with `detail` > 0: a key's activation keeps the
  * focus where it is, as the wasm host's): its own work may hand the pressed control's focus to a
@@ -54,8 +66,8 @@ const rootOf = () => globalThis.document?.getElementById?.('exact-root');
 
 export function autofocus(root = rootOf()) {
   const token = running ?? dispatching, by = token && !token.dead ? token.el : null;
-  if (!root?.querySelectorAll) return;
-  for (const el of root.querySelectorAll('[autofocus]')) {
+  if (restarting || !root?.querySelectorAll) return;
+  for (const el of root.querySelectorAll(candidates)) {
     if (offered.has(el) || !el.getClientRects().length || inertAncestor(el) || el.matches(':disabled') || getComputedStyle(el).visibility !== 'visible') continue;
     offered.add(el);
     const active = document.activeElement;
@@ -66,5 +78,6 @@ export function autofocus(root = rootOf()) {
 
 /** A carried restart's rebuilt fields: none takes the focus later. */
 export function offerAll(root = rootOf()) {
-  if (root?.querySelectorAll) for (const el of root.querySelectorAll('[autofocus]')) offered.add(el);
+  if (root?.querySelectorAll) for (const el of root.querySelectorAll(candidates)) offered.add(el);
+  restarting = false;
 }

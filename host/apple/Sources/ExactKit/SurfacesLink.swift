@@ -129,6 +129,7 @@ package protocol Canvas2DCanvases: AnyObject {
     var textEngine: (() -> TextEngine?)? { get set }
     var assetBytes: ((String) -> Data?)? { get set }
     var onImage: ((String, CGImage?) -> Void)? { get set }
+    var onRelease: ((String) -> Void)? { get set }
     var onHeld: ((UInt32, Bool) -> Void)? { get set }
     var onScale: ((CGFloat) -> Void)? { get set }
     var onReplayEnded: (() -> Void)? { get set }
@@ -253,6 +254,7 @@ final class NoCanvas2D: Canvas2DCanvases {
     var textEngine: (() -> TextEngine?)?
     var assetBytes: ((String) -> Data?)?
     var onImage: ((String, CGImage?) -> Void)?
+    var onRelease: ((String) -> Void)?
     var onHeld: ((UInt32, Bool) -> Void)?
     var onScale: ((CGFloat) -> Void)?
     var onReplayEnded: (() -> Void)?

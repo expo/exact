@@ -51,8 +51,28 @@
     }
     return true;
   };
-  const easing = s => {
-    if (["linear", "ease", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end"].includes(s)) return 1;
+  // css.rs `num` and Easing::css carry numbers as f32, in their shortest decimal.
+  const num = n => {
+    const f = Math.fround(n);
+    if (!Number.isFinite(f)) return f === Infinity ? "inf" : f === -Infinity ? "-inf" : "NaN";
+    if (Number.isInteger(f) && Math.abs(f) < 1e9) return String(f);
+    for (let p = 1; p < 10; p++) {
+      const value = Number(f.toPrecision(p));
+      if (Math.fround(value) !== f) continue;
+      const [mantissa, exponent] = String(value).split("e");
+      if (exponent === undefined) return mantissa;
+      const sign = value < 0 ? "-" : "", unsigned = mantissa.replace("-", "");
+      const digits = unsigned.replace(".", ""), point = (unsigned.split(".")[0].length) + Number(exponent);
+      return sign + (point <= 0 ? "0." + "0".repeat(-point) + digits
+        : point >= digits.length ? digits + "0".repeat(point - digits.length)
+        : digits.slice(0, point) + "." + digits.slice(point));
+    }
+    return String(f);
+  };
+  const easing = (s, css = false) => {
+    if (["linear", "ease", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end"].includes(s)) {
+      return css ? s === "step-start" ? "steps(1,jump-start)" : s === "step-end" ? "steps(1,jump-end)" : s : 1;
+    }
     const open = s.indexOf("(");
     if (open < 0 || !s.endsWith(")")) return 0;
     const name = s.slice(0, open), inner = trim(s.slice(open + 1, -1));
@@ -61,8 +81,9 @@
       const count = /^\+?\d+$/.test(args[0] ?? "") ? Number(args[0]) : 0;
       const position = args[1] ?? "jump-end";
       // The kernel reads only the first two arguments of steps().
-      return +(count > 0 && count <= 65535 && (position !== "jump-none" || count > 1)
-        && ["jump-start", "start", "jump-end", "end", "jump-none", "jump-both"].includes(position));
+      if (!(count > 0 && count <= 65535 && (position !== "jump-none" || count > 1)
+        && ["jump-start", "start", "jump-end", "end", "jump-none", "jump-both"].includes(position))) return 0;
+      return css ? `steps(${count},${position === "start" ? "jump-start" : position === "end" ? "jump-end" : position})` : 1;
     }
     if (name === "linear") {
       // As motion/src/parse.rs's linear_stops: a position may be infinite
@@ -104,12 +125,18 @@
         if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || input > 1 || input < last) return 0;
         last = input;
       }
-      return 1;
+      return css ? `linear(${stops.map(([input, output]) => `${num(output)} ${num(input * 100)}%`).join(",")})` : 1;
     }
     const n = args.map(number);
     if (!n.every(Number.isFinite)) return 0;
-    if (name === "cubic-bezier") return +(n.length === 4 && n[0] >= 0 && n[0] <= 1 && n[2] >= 0 && n[2] <= 1);
-    if (name === "-exact-spring") return n.length === 0 || (n.length === 3 && springValid(n)) ? 2 : 0;
+    if (name === "cubic-bezier") {
+      if (!(n.length === 4 && n[0] >= 0 && n[0] <= 1 && n[2] >= 0 && n[2] <= 1)) return 0;
+      return css ? `cubic-bezier(${n.map(num).join(",")})` : 1;
+    }
+    if (name === "-exact-spring") {
+      if (!(n.length === 0 || (n.length === 3 && springValid(n)))) return 0;
+      return css ? `spring(${(n.length ? n : [100, 10, 1]).map(num).join(", ")})` : 2;
+    }
     return 0;
   };
   const lower = s => s.replace(/[A-Z]+/g, c => c.toLowerCase());
@@ -124,5 +151,5 @@
   };
   // Written as a time, even one `time` refuses (`1.2.3s`).
   const timeLike = word => /^[+-]?\.?\d/.test(unit(word, "ms") ?? unit(word, "s") ?? "");
-  return { trim, number, split, easing, lower, time, timeLike };
+  return { trim, number, split, easing, lower, time, timeLike, num };
 })()

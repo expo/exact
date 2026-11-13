@@ -224,11 +224,8 @@ impl OpenCode {
     }
 
     fn has_closer(&self, text: &str) -> bool {
-        physical_lines(&text[self.scan_at..]).any(|(line, _)| {
-            let trimmed = line.trim_start();
-            trimmed.chars().take_while(|&c| c == self.marker).count() >= self.width
-                && trimmed.trim_end_matches(self.marker).is_empty()
-        })
+        physical_lines(&text[self.scan_at..])
+            .any(|(line, _)| closes(line.trim_start(), self.marker, self.width))
     }
 
     /// Highlight only rows after the immutable prefix. Completed blank rows
@@ -314,6 +311,14 @@ fn physical_lines(mut text: &str) -> impl Iterator<Item = (&str, bool)> {
 
 fn trimmed(line: &str) -> &str {
     line.trim_end_matches(['\n', '\r'])
+}
+
+/// Whether `line`, its indentation removed, closes a fence of `width`
+/// `marker`s: at least as many, then only spaces or tabs (CommonMark 0.31.2
+/// §4.5), as the Markdown parser reads it.
+fn closes(line: &str, marker: char, width: usize) -> bool {
+    let run = line.chars().take_while(|&c| c == marker).count();
+    run >= width && line[run..].trim_matches([' ', '\t']).is_empty()
 }
 
 fn fence_of(line: &str) -> Option<(char, usize)> {
@@ -410,9 +415,7 @@ fn groups(lines: &[&str]) -> Vec<usize> {
             while at < lines.len() {
                 let t = trimmed(lines[at]).trim_start();
                 at += 1;
-                if t.chars().take_while(|&c| c == marker).count() >= width
-                    && t.trim_end_matches(marker).is_empty()
-                {
+                if closes(t, marker, width) {
                     closed = true;
                     break;
                 }

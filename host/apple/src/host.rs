@@ -740,7 +740,7 @@ impl<D: DataSource> Host<D> {
             return Some(crate::picker::file_op(op, request, self.runner.data_ref()));
         }
         if op.as_deref() == Some("appRoots") {
-            return Some(crate::picker::roots_reply());
+            return Some(crate::picker::app_roots_reply(self.runner.data_ref()));
         }
         if op.as_deref() == Some("sensorEvents") {
             return Some(self.sensor_events(request));

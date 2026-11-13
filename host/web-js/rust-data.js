@@ -76,16 +76,38 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
 }, e => { throw new Error(`${p.slice(2)} could not be fetched: ${e?.message ?? e}`); })) {
   const [wasm, plan] = await Promise.all([load('./rust/wasm/app.module.wasm'), load('./app.bind.plan')]);
   // Bytes, or a module a renderer compiled once for every render.
-  const made = await WebAssembly.instantiate(wasm, {}), instance = made.instance ?? made;
-  const e = instance.exports;
-  if (e.exact_logic_abi() !== ABI) throw new Error(`Rust module ABI ${e.exact_logic_abi()} is not ${ABI}`);
-  const session = e.exact_logic_create();
+  const made = await WebAssembly.instantiate(wasm, {}), compiled = made.module ?? wasm;
+  // The instance and its session, which a failed call replaces (`call`); `unavailable` once that failed too.
+  let e, session, active = false, unavailable = null;
+  const start = instance => {
+    e = instance.exports;
+    if (e.exact_logic_abi() !== ABI) throw new Error(`Rust module ABI ${e.exact_logic_abi()} is not ${ABI}`);
+    session = e.exact_logic_create();
+  };
+  start(made.instance ?? made);
   const call = bytes => {
-    const p = e.exact_logic_alloc(bytes.length);
-    new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
-    const rc = e.exact_logic_call(session, p, bytes.length);
-    e.exact_logic_dealloc(p, bytes.length);
-    if (rc !== 0) throw new Error('Rust module rejected the call');
+    if (unavailable) throw new Error(`the Rust module is unavailable: ${unavailable}`);
+    let rc;
+    try {
+      const p = e.exact_logic_alloc(bytes.length);
+      new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
+      rc = e.exact_logic_call(session, p, bytes.length);
+      e.exact_logic_dealloc(p, bytes.length);
+    } catch (trap) { rc = trap; }
+    if (rc !== 0) {
+      const error = rc instanceof Error ? rc : new Error('Rust module rejected the call');
+      // A failed call may have run, and changed the module's own state, before it failed: a trap leaves its memory
+      // undefined, and a reply over the seam's bound is refused after its answer ran. The next call runs in a fresh
+      // instance, activated again now, as natively (logic/src/lib.rs `run`; LLP 1029.000 §3).
+      if (active) {
+        active = false;
+        try { start(new WebAssembly.Instance(compiled, {})); activate(); } catch (again) {
+          unavailable = again?.message ?? String(again);
+          throw new Error(`${error.message}; activating the module again failed: ${unavailable}`);
+        }
+      }
+      throw error;
+    }
     const r = reader(new Uint8Array(e.memory.buffer, e.exact_logic_output(session), e.exact_logic_output_len(session)).slice());
     if (r.u32() !== ABI) throw new Error('logic ABI version differs');
     return r;
@@ -143,10 +165,18 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     throw new Error(`a Rust answer of kind ${tag} (surface work) is not carried by the JS target`);
   };
   const op = (code, fill) => { const w = writer(); w.u32(ABI); w.u8(code); fill?.(w); return call(w.done()); };
-  let r = op(0); r.u8(); const meta = [r.str(), r.str()];
-  if (!sameGrantDeclaration(rustGrantSet, meta[1])) throw new Error('Rust module grants differ from the admitted build');
-  r = op(1, w => w.bytes(new Uint8Array(plan))); r.u8(); result(r);
-  r = op(2); r.u8(); result(r);
+  let meta;
+  // The module's identity and grants, then its plan's declarations bound and the module activated.
+  const activate = () => {
+    let r = op(0); r.u8(); const said = [r.str(), r.str()];
+    if (!sameGrantDeclaration(rustGrantSet, said[1])) throw new Error('Rust module grants differ from the admitted build');
+    if (meta && said[0] !== meta[0]) throw new Error('Rust module changes its app identity');
+    meta = said;
+    r = op(1, w => w.bytes(new Uint8Array(plan))); r.u8(); result(r);
+    r = op(2); r.u8(); result(r);
+    active = true;
+  };
+  activate();
   // A Rust source's two-way sockets (LLP 1016.003), each open one's transport under a number for the resource that
   // owns it and its stream's ticket, which the module's handles keep: a handle from an earlier ticket is stale.
   const sockets = new Set(), ids = new WeakMap();
@@ -363,7 +393,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     });
   };
   // What a loaded capability needs of the module (canvas2d.js's draws).
-  data.logic = { exports: e, session, writer, reader, encode, ABI };
+  data.logic = { get exports() { return e; }, get session() { return session; }, writer, reader, encode, ABI };
   data.appId ??= meta[0];
   data.grants = setAppGrantSet(tsGrantSet, rustGrantSet);
   for (const f of data.q.splice(0)) f();

@@ -186,6 +186,35 @@ impl PaintValues {
 }
 
 impl BoxPaint {
+    /// Only the shadow projects from a grouped section onto its card.
+    pub(super) fn section_shadow(
+        mut self,
+        section: &exact_kernel::NodeRef<'_>,
+        shown: &Presented,
+        dark: bool,
+    ) -> Self {
+        for (state, on) in [
+            (exact_kernel::LOOK_HOVER, shown.looks[0]),
+            (exact_kernel::LOOK_FOCUS_VISIBLE, shown.looks[1]),
+        ] {
+            if let Some((_, look)) = section.looks().iter().find(|(s, _)| *s == state && on) {
+                self.look_shadow(look, dark);
+            }
+        }
+        self
+    }
+
+    fn look_shadow(&mut self, look: &StyleProps, dark: bool) {
+        use exact_kernel::StyleId::BoxShadow;
+        if look.mask.union(look.written).has(BoxShadow) {
+            self.shadows = if look.mask.has(BoxShadow) {
+                ShadowPaint::capture(look, dark)
+            } else {
+                Vec::new()
+            };
+        }
+    }
+
     /// The captured box with paint motion's values over its rows.
     pub(super) fn presented(mut self, paint: &PaintValues) -> BoxPaint {
         if paint.is_empty() {
@@ -291,12 +320,7 @@ impl BoxPaint {
                 *color = rgba(side.filter(|_| look.mask.has(id)));
             }
         }
-        if names(BoxShadow) {
-            self.shadows = match look.mask.has(BoxShadow) {
-                true => ShadowPaint::capture(look, dark),
-                false => Vec::new(),
-            };
-        }
+        self.look_shadow(look, dark);
         self
     }
 }
