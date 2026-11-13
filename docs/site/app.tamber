@@ -64,3 +64,8 @@ icons
   icon.panelclose = icon(svg "icons/sidebar-collapse.svg")
   icon.panelopen = icon(svg "icons/sidebar-expand.svg")
   icon.algolia = icon(svg "icons/algolia.svg")
+  icon.edit = icon(svg "icons/edit-05.svg")
+  icon.copy = icon(svg "icons/copy-03.svg")
+  icon.chevrondown = icon(svg "icons/chevron-down.svg")
+  icon.check = icon(svg "icons/check.svg")
+  icon.xclose = icon(svg "icons/x-close.svg")
