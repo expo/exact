@@ -46,12 +46,10 @@ function channel(e, j, seen) {
   for (; e?.nodeType === 1; e = e.parentElement) {
     const looks = seen && e.getAttribute("data-exact-looks");
     if (looks) seen.sets.push(looks);
-    if (seen) seen.from = e;
     const own = e.$xi?.[j];
-    if (own !== undefined) return own;
-    for (const c of e.classList) { const at = Classes[c]?.[j]; if (at !== undefined) return at >= 0 ? Texts[at] : null; }
+    if (own !== undefined) { if (seen) seen.from = e; return own; }
+    for (const c of e.classList) { const at = Classes[c]?.[j]; if (at !== undefined) { if (seen) seen.from = e; return at >= 0 ? Texts[at] : null; } }
   }
-  if (seen) seen.from = null;
   return null;
 }
 
@@ -122,7 +120,7 @@ const set = (e, k) => { if (e.getAttribute("data-x-modes") !== k) e.setAttribute
  * one it sets or one from above it, no element between setting its own. A
  * press's colour on `el` reaches them as the input glue paints it (its
  * `paintRule`), as it reaches the text beside them. */
-(globalThis.exact ??= {}).pressBelow = el => [...el.querySelectorAll("[data-x-b]")].filter(b => b.$xfrom && (b.$xfrom === el || !el.contains(b.$xfrom)));
+(globalThis.exact ??= {}).pressBelow = el => [...boundaries(el)].filter(b => b.$xfrom && (b.$xfrom === el || !el.contains(b.$xfrom)));
 
 /** Row `j` written again on `b` as `text` (`property:value`), over `was`. An
  * accent names the property buttons read too, unless it names the accent

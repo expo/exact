@@ -89,25 +89,33 @@ afterAll(async () => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 }, 60_000);
 
+/** A page of the built app in `scheme`, once the app has committed (the
+ * boundary's colour is written again), and the calls the tests make on it. */
+async function open(scheme = 'light') {
+  const { cdp } = suite, { sessionId } = await suite.page();
+  const call = (method, params) => cdp.send(method, params, sessionId);
+  const evaluate = async expression => {
+    const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
+    return r.result.value;
+  };
+  await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+  await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
+  const at = id => `document.querySelector('[data-testid="${id}"]')`;
+  await evaluate(`new Promise(ok => { const t = setInterval(() => { if (${at('dark')}?.style.color) { clearInterval(t); ok(); } }, 20); })`);
+  // The pointer moved over `id`: its left edge, at its middle or (`corner`) its top.
+  const move = async (id, corner = false) => {
+    const [x, y] = await evaluate(`(() => { const r = ${at(id)}.getBoundingClientRect(); return [r.x + 5, ${corner ? 'r.y + 5' : 'r.y + r.height / 2'}]; })()`);
+    await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    return [x, y];
+  };
+  return { call, evaluate, at, move };
+}
+
 for (const scheme of ['light', 'dark']) {
   test(`a hovered link's colour reaches its text through a scheme boundary (${scheme})`, async () => {
-    const { cdp } = suite, { sessionId } = await suite.page();
-    const call = (method, params) => cdp.send(method, params, sessionId);
-    const evaluate = async expression => {
-      const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
-      return r.result.value;
-    };
-    await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
-    await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
-    const at = id => `document.querySelector('[data-testid="${id}"]')`;
-    // The boundary's colour, written again once the app has committed.
-    await evaluate(`new Promise(ok => { const t = setInterval(() => { if (${at('dark')}?.style.color) { clearInterval(t); ok(); } }, 20); })`);
+    const { evaluate, move } = await open(scheme);
     const colours = () => evaluate(`Object.fromEntries(['nav', 'plain', 'under-dark', 'own', 'under-literal'].map(id => [id, getComputedStyle(document.querySelector('[data-testid="' + id + '"]')).color]))`);
-    const move = async id => {
-      const [x, y] = await evaluate(`(() => { const r = ${at(id)}.getBoundingClientRect(); return [r.x + 5, r.y + r.height / 2]; })()`);
-      await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
-    };
     const [nav, ink] = scheme === 'light' ? ['rgb(102, 102, 102)', 'rgb(34, 34, 34)'] : ['rgb(255, 255, 255)', 'rgb(226, 226, 226)'];
     const rest = { nav, plain: nav, 'under-dark': 'rgb(255, 255, 255)', own: 'rgb(0, 0, 255)', 'under-literal': 'rgb(102, 102, 102)' };
     expect(await colours()).toEqual(rest);
@@ -126,36 +134,21 @@ for (const scheme of ['light', 'dark']) {
 // first), a boundary's own look stands over the one around it, and a press's
 // colour reaches it and goes with the release.
 test('the nearest look, its own look and a press reach text under a boundary', async () => {
-  const { cdp } = suite, { sessionId } = await suite.page();
-  const call = (method, params) => cdp.send(method, params, sessionId);
-  const evaluate = async expression => {
-    const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
-    return r.result.value;
-  };
-  await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
-  const at = id => `document.querySelector('[data-testid="${id}"]')`;
-  await evaluate(`new Promise(ok => { const t = setInterval(() => { if (${at('dark')}?.style.color) { clearInterval(t); ok(); } }, 20); })`);
+  const { call, evaluate, at, move } = await open();
   const colour = id => evaluate(`getComputedStyle(${at(id)}).color`);
-  // A colour that settles (the press eases), polled until it is `want` or a second has passed.
-  const settles = (id, want) => evaluate(`new Promise(ok => { const end = performance.now() + 1000; const t = setInterval(() => { const c = getComputedStyle(${at(id)}).color; if (c === ${JSON.stringify(want)} || performance.now() > end) { clearInterval(t); ok(c); } }, 20); })`);
-  const point = async (id, inside) => {
-    const [x, y] = await evaluate(`(() => { const r = ${at(id)}.getBoundingClientRect(); return ${inside ? '[r.x + 5, r.y + 5]' : '[r.x + 5, r.y + r.height / 2]'}; })()`);
-    await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
-    return [x, y];
-  };
-  await point('nested-text');
+  // The colour `id` settles on (the press eases): polled until it is `want`, or a second has passed.
+  const settles = async (id, want) => expect(await evaluate(`new Promise(ok => { const end = performance.now() + 1000; const t = setInterval(() => { const c = getComputedStyle(${at(id)}).color; if (c === ${JSON.stringify(want)} || performance.now() > end) { clearInterval(t); ok(c); } }, 20); })`)).toBe(want);
+  await move('nested-text');
   expect(await colour('nested-under')).toBe('rgb(204, 0, 0)');
-  await point('card', true);
+  await move('card', true);
   expect(await colour('nested-under')).toBe('rgb(0, 0, 204)');
-  await point('own-look');
+  await move('own-look');
   expect(await colour('own-look')).toBe('rgb(0, 170, 0)');
-  const [x, y] = await point('press-plain');
+  const [x, y] = await move('press-plain');
   await call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-  expect(await settles('press-plain', 'rgb(204, 0, 204)')).toBe('rgb(204, 0, 204)');
-  expect(await settles('press-under', 'color(srgb 0.8 0 0.8)')).toBe('color(srgb 0.8 0 0.8)');
+  await settles('press-plain', 'rgb(204, 0, 204)');
+  await settles('press-under', 'color(srgb 0.8 0 0.8)');
   await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
-  await point('away');
-  expect(await settles('press-under', 'rgb(255, 255, 255)')).toBe('rgb(255, 255, 255)');
+  await move('away');
+  await settles('press-under', 'rgb(255, 255, 255)');
 }, 60_000);
-

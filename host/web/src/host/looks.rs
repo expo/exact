@@ -40,7 +40,7 @@ pub fn rules(at: &str, looks: &[(u8, String)]) -> String {
         if *state == LOOK_HOVER {
             rows.push_str("--exact-hover-wash:none!important;--exact-hover-dim:1!important;");
         }
-        holding(&mut out, *state, at, &rows);
+        holding(&mut out, *state, at, &rows, str::to_string);
     }
     out
 }
@@ -63,7 +63,7 @@ pub fn colour_below(at: &str, looks: &[(u8, String)], set: usize) -> String {
     let below: Vec<String> = (1..=LOOK_DEPTH)
         .map(|k| format!("[data-x-lc~=\"{k}:{set}\"]").repeat(LOOK_DEPTH + 1 - k))
         .collect();
-    let list = |holder: String| {
+    let list = |holder: &str| {
         (below.iter())
             .map(|b| format!(":where({holder}) {b}"))
             .collect::<Vec<_>>()
@@ -72,45 +72,35 @@ pub fn colour_below(at: &str, looks: &[(u8, String)], set: usize) -> String {
     let mut out = String::new();
     for (state, css) in looks {
         let row = (css.split_terminator(';')).find(|row| row.trim_start().starts_with("color:"));
-        let Some(row) = row else { continue };
-        match *state {
-            LOOK_HOVER => write!(
-                out,
-                "@media (any-hover:hover){{{}{{{row}!important;}}}}{}{{{row}!important;}}",
-                list(format!(
-                    "html:not([data-exact-input=touch]) {at}:hover{ENABLED}"
-                )),
-                list(format!("{at}[data-exact-held~=hover]{ENABLED}")),
-            ),
-            _ => write!(
-                out,
-                "{},{}{{{row}!important;}}",
-                list(format!("{at}:focus-visible{ENABLED}")),
-                list(format!("{at}[data-exact-held~=focus-visible]{ENABLED}")),
-            ),
+        if let Some(row) = row {
+            holding(&mut out, *state, at, &format!("{row}!important;"), list);
         }
-        .expect("a String");
     }
     out
 }
 
-/// Not disabled: a disabled box says `disabled` (a bool's text; none, or
-/// "false", is enabled).
-const ENABLED: &str = ":not(:disabled,[disabled]:not([disabled=\"false\"]))";
-
-/// `rows` as look `state`'s rule on the element `at` selects.
-fn holding(out: &mut String, state: u8, at: &str, rows: &str) {
-    let on = ENABLED;
+/// `rows` as look `state`'s rule on what `selector` makes of each selector
+/// of the element `at` selects while the state holds (that selector itself,
+/// for the element's own rule).
+fn holding(out: &mut String, state: u8, at: &str, rows: &str, selector: impl Fn(&str) -> String) {
+    // A disabled box says `disabled` (a bool's text; none, or "false", is enabled).
+    let on = ":not(:disabled,[disabled]:not([disabled=\"false\"]))";
     match state {
         // A held state (LLP 1122 D8, `data-exact-held`) is the state's own
         // rule, whatever the pointer (the input glue's `hold`).
         LOOK_HOVER => write!(
             out,
-            "@media (any-hover:hover){{:where(html:not([data-exact-input=touch])) {at}:hover{on}{{{rows}}}}}{at}[data-exact-held~=hover]{on}{{{rows}}}"
+            "@media (any-hover:hover){{{}{{{rows}}}}}{}{{{rows}}}",
+            selector(&format!(
+                ":where(html:not([data-exact-input=touch])) {at}:hover{on}"
+            )),
+            selector(&format!("{at}[data-exact-held~=hover]{on}")),
         ),
         _ => write!(
             out,
-            "{at}:focus-visible{on},{at}[data-exact-held~=focus-visible]{on}{{{rows}}}"
+            "{},{}{{{rows}}}",
+            selector(&format!("{at}:focus-visible{on}")),
+            selector(&format!("{at}[data-exact-held~=focus-visible]{on}")),
         ),
     }
     .expect("a String");

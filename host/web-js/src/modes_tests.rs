@@ -590,10 +590,10 @@ fn a_looks_color_is_its_rule_and_reaches_a_boundary_below() {
     // attribute most, so the boundary's own look and a nearer one win.
     let near = "[data-x-lc~=\"1:1\"]".repeat(3);
     let hover = below(&format!(
-        ":where(html:not([data-exact-input=touch]) [data-exact-looks=\"1\"]:hover{on}) {near},"
+        ":where(:where(html:not([data-exact-input=touch])) [data-exact-looks=\"1\"]:hover{on}) {near},"
     ));
     below(&format!(
-        ":where(html:not([data-exact-input=touch]) [data-exact-looks=\"1\"]:hover{on}) [data-x-lc~=\"3:1\"]{{color:var(--x-text-primary)!important;}}"
+        ":where(:where(html:not([data-exact-input=touch])) [data-exact-looks=\"1\"]:hover{on}) [data-x-lc~=\"3:1\"]{{color:var(--x-text-primary)!important;}}"
     ));
     below(&format!(
         ":where([data-exact-looks=\"1\"][data-exact-held~=hover]{on}) [data-x-lc~=\"3:1\"]{{"

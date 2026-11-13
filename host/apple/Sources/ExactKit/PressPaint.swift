@@ -235,8 +235,9 @@ extension NodeView {
             // (One an ancestor's press colours now takes this one's, if what it shows beneath is the same; not one
             // showing its own colour, a press's included, which is its subtree's boundary.)
             // A mode boundary (`-exact-mode`, LLP 1121 D7) writes the colour around it again in its own tuple, a
-            // value of its own: it takes the colour too, and the views below it that take that value.
-            let boundary = node.wrote("mode")
+            // value of its own: it takes the colour too, and the views below it that take that value. A control's
+            // colour is the platform's, never one it inherits.
+            let boundary = node.wrote("mode") && node.kind != "control"
             guard !node.showsOwnTextColor, boundary || node.pressPaint.inkedBy.view === self || node.style["text_color"] == inherited
                 || (node.pressPaint.inkedBy.view != nil && node.pressPaint.rest["text_color"] ?? nil == inherited) else { continue }
             let base = node.pressPaint.overlay["text_color"] == nil ? node.style["text_color"] : node.pressPaint.rest["text_color"] ?? nil
@@ -470,23 +471,13 @@ extension NodeView {
                 // A row the look clears is null: CSS's `unset`, for `color` the colour around (inherited), for the
                 // rest their initial value, none (no shadow).
                 if case .null? = look[key] {
-                    if key == "text_color", let around = colorAround { s[key] = around } else { s.removeValue(forKey: key) }
+                    if key == "text_color", let around = nodeSuperview?.style["text_color"] { s[key] = around } else { s.removeValue(forKey: key) }
                 } else if let value = look[key] { s[key] = value }
             }
             if let o = look["opacity"]?.number { pressPaint.lookOpacity = Float(min(1, max(0, o))) }
             if look["text_color"] != nil, let ink = s["text_color"] { pressPaint.lookInk = ink }
         }
         return s
-    }
-
-    /// The text colour the nearest node above shows, which this one would inherit.
-    private var colorAround: BatchValue? {
-        var view = superview
-        while let current = view {
-            if let node = current as? NodeView { return node.style["text_color"] }
-            view = current.superview
-        }
-        return nil
     }
 
     /// The looks' opacity in place of the node's own, at once: an additive
