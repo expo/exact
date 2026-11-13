@@ -183,12 +183,12 @@ fn runtime_entry(
     Ok(format!(
         r#"#[derive(Default)]
 struct ExactEmptyData;
-impl exact_logic::exact_runner::DataSource for ExactEmptyData {{
+impl exact_runner::DataSource for ExactEmptyData {{
     fn app_id(&self) -> &str {{ {app:?} }}
-    fn query(&mut self, source: &str, args: &[exact_logic::exact_runner::Value])
-        -> Result<exact_logic::exact_runner::Value, exact_logic::exact_runner::DataError>
+    fn query(&mut self, source: &str, args: &[exact_runner::Value])
+        -> Result<exact_runner::Value, exact_runner::DataError>
     {{
-        exact_logic::exact_runner::DataSource::query(&mut (), source, args)
+        exact_runner::DataSource::query(&mut (), source, args)
     }}
 }}
 {entry}"#
