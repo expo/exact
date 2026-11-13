@@ -105,3 +105,34 @@ fn configuration_and_provider_are_explicit_and_denials_create_nothing() {
         .contains("denied"));
     assert!(!project.0.join("data/missing.db").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn symlink_roots_are_refused_by_writable_and_snapshot_storage() {
+    let project = Project::new("symlink-root");
+    let dirs = directories(&project);
+    std::fs::write(project.0.join("cache/secret"), b"outside").unwrap();
+    std::fs::rename(project.0.join("data"), project.0.join("pinned-data")).unwrap();
+    std::os::unix::fs::symlink(project.0.join("cache"), project.0.join("data")).unwrap();
+    for snapshot in [false, true] {
+        for root in ["data", "data/", "data/."] {
+            let roots = [root, "cache", "tmp"].map(|name| project.0.join(name));
+            let opened = if snapshot {
+                AppDirectories::snapshot(&roots[0], &roots[1], &roots[2])
+            } else {
+                AppDirectories::new(&roots[0], &roots[1], &roots[2])
+            };
+            assert!(opened.is_err(), "symlink root opened: {opened:?}");
+        }
+    }
+    let pinned = Host::new()
+        .with_app_directories(dirs)
+        .endow(GrantSet::parse("fs.read app:/data\nfs.write app:/data").unwrap());
+    assert!(pinned.fs.read_file("app:/data/secret").is_err());
+    pinned.fs.write_file("app:/data/new", b"pinned").unwrap();
+    assert_eq!(
+        std::fs::read(project.0.join("pinned-data/new")).unwrap(),
+        b"pinned"
+    );
+    assert!(!project.0.join("cache/new").exists());
+}

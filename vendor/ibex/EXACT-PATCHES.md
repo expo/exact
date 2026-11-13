@@ -340,6 +340,11 @@ cache or temporary directories. `exact-js` selects it only for a snapshot;
 is the direct consumer test. This is LLP 1126 D8 application policy and
 remains local.
 
+Unix app roots open with `O_DIRECTORY | O_NOFOLLOW`, including snapshot
+roots. A root substituted by a symlink before its first open is refused;
+opened roots stay pinned. `tests/app_storage.rs` covers both acquisition modes
+and pinning after replacement.
+
 The standalone locks above remain local. Application policy stays in Exact:
 request scheduling and byte budgets, whole-exchange deadlines, source grants,
 document session identity, JSON result vocabulary, native image codec, and
