@@ -122,13 +122,14 @@ impl<D: DataSource> Presenter<D> {
             }
             id.filter(|&id| kernel.node(id).is_some_and(|n| n.node_type == node_type))
         });
-        let previous = self.focus;
+        // The old ids no longer name their nodes. The same-place restore
+        // keeps the current ring, subject to the platform's input modality.
+        let ring = !self.brush.pointer_modality
+            || (!self.brush.winui_focus
+                && !self.brush.touch_mode
+                && self.focus.is_some_and(|id| self.brush.ringless != Some(id)));
         self.focus = target.filter(|&id| self.focusable(id) && !self.host.route_visibility(id).1);
-        // The restored focus keeps the ring the one it stands for had, as
-        // `set_focus` carries it; the old tree's ids name nothing now.
-        let ringless = self.brush.ringless;
-        self.brush.ringless = if self.brush.keyless || (ringless.is_some() && ringless == previous)
-        {
+        self.brush.ringless = if !ring {
             self.focus.and_then(|id| self.unringed(id))
         } else {
             None
@@ -224,7 +225,7 @@ impl<D: DataSource> Presenter<D> {
         self.disabled_blur.push(id);
         let now = self.host.now();
         // Every event first, then one servicing, as a removed focus's path.
-        let (sent, mut error) = self.move_focus_serviced(None, now, false);
+        let (sent, mut error) = self.move_focus_serviced(None, now, false, None);
         if sent {
             error = error.or(self.sync_commit());
         }
@@ -385,10 +386,31 @@ impl<D: DataSource> Presenter<D> {
         (!field).then_some(id)
     }
 
+    /// A script focus follows input modality. Chrome also carries a visible
+    /// ring from an unchanged non-text focus; a field's always-visible focus
+    /// does not turn pointer input into keyboard input.
+    pub(crate) fn focus_shows_ring(&self) -> bool {
+        !self.brush.pointer_modality
+            || (!self.brush.winui_focus
+                && !self.brush.touch_mode
+                && self.focus.is_some_and(|id| {
+                    self.unringed(id).is_some() && self.brush.ringless != Some(id)
+                }))
+    }
+
     /// Move the focus in DOM order, with both bubbling paths fixed before an
     /// action on either path can change the tree.
     pub(crate) fn set_focus(&mut self, next: Option<ViewId>, now_ms: f64) -> Option<String> {
-        self.move_focus_serviced(next, now_ms, true).1
+        self.move_focus_serviced(next, now_ms, true, None).1
+    }
+
+    pub(crate) fn set_focus_ring(
+        &mut self,
+        next: Option<ViewId>,
+        now_ms: f64,
+        ring: bool,
+    ) -> Option<String> {
+        self.move_focus_serviced(next, now_ms, true, Some(ring)).1
     }
 
     /// [`Self::set_focus`]; `service` false leaves its handlers' commits to the
@@ -400,6 +422,7 @@ impl<D: DataSource> Presenter<D> {
         next: Option<ViewId>,
         now_ms: f64,
         service: bool,
+        ring: Option<bool>,
     ) -> (bool, Option<String>) {
         if next.is_some_and(|id| !self.alert_allows(id)) {
             return (
@@ -414,18 +437,11 @@ impl<D: DataSource> Presenter<D> {
         if next.is_some() {
             self.focus_start = None;
         }
-        // A focus the app or a route moves shows a ring only where the one it
-        // leaves did, as Chrome's `:focus-visible` has it for `focus()`: after
-        // a press, none. A press or a key says so itself, before or after.
-        // On Windows, none before the first key (`keyless`).
-        let ringless = self.brush.ringless;
-        if self.brush.keyless
-            || (ringless.is_some() && (ringless == previous || previous.is_none()))
-        {
-            if let Some(next) = next {
-                self.brush.ringless = self.unringed(next);
-            }
-        }
+        self.brush.ringless = if ring.unwrap_or_else(|| self.focus_shows_ring()) {
+            None
+        } else {
+            next.and_then(|id| self.unringed(id))
+        };
         let out = previous
             .map(|id| self.host.runner().focus_bubble(id, next, false))
             .unwrap_or_default();
@@ -618,13 +634,12 @@ impl<D: DataSource> Presenter<D> {
             } else {
                 Event::Key(key)
             };
+            let from = self.commands.len();
             error = error.or(self
                 .host
                 .dispatch_at(id, event, now_ms)
                 .or(self.after_commit()));
-            let queued = self.commands.len();
-            self.commands.retain(|c| c.name != "preventDefault");
-            prevented |= self.commands.len() != queued;
+            prevented |= self.prevented_since(from);
             // `stopPropagation()`: no ancestor hears it (files diary F8).
             let queued = self.commands.len();
             self.commands.retain(|c| c.name != "stopPropagation");

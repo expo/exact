@@ -633,7 +633,9 @@ pub trait TextMeasurer {
     /// Size a paragraph under an offer.
     fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics;
 
-    /// Size presentation-only width candidates without retaining a paragraph artifact.
+    /// Size text the kernel lays out but never paints as a paragraph (width
+    /// candidates, a host-drawn alert title) without retaining a paragraph
+    /// artifact.
     fn measure_reservation(&mut self, request: &TextMeasureRequest<'_>) -> Option<TextMetrics> {
         Some(self.measure(request))
     }

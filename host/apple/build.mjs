@@ -989,8 +989,9 @@ async function main(args, lockHeld = false) {
   // the scratch is taken before it is linked and kept until the products link, and the app takes its own copy.
   const waitForSwift = () => awaitBuildOutput(app, paths.swiftLock, (owner) => console.log(`host/apple: waiting for the Swift build of ${owner} in ${swiftBuildRoot.replace(root + '/', '')}`));
   const widgetClaim = widgets ? waitForSwift() : null;
-  const core = widgets ? sharedWidgetCore({ app, prepared: widgetCore, libDir, crate, env, runApple, linkedPlan, library }) : null;
-  const shared = core && { ...core, framework: placeCoreFramework(core.framework, resolve(binDir, 'ExactCore.framework'), app, ios ? 'ios' : 'macos') };
+  // An iOS development core links reserved room and this app's plan is fitted into its copy (#477); a shipped one has none.
+  const reserve = ios && !production && !distribution && linkedPlan ? linkedPlan.dir : null, core = widgets ? sharedWidgetCore({ app, prepared: widgetCore, libDir, crate, env, runApple, linkedPlan, library, reserve: !!reserve }) : null;
+  const shared = core && { ...core, framework: placeCoreFramework(core.framework, resolve(binDir, 'ExactCore.framework'), app, ios ? 'ios' : 'macos', reserve) };
   if (shared) env.EXACT_CORE_FRAMEWORK = relative(pkg, shared.xcframework);
   // A Clip's executable name may also be its parent's or a sample host's.
   const clipBin = simulatorClip ? resolve(mkdtempSync(resolve(binDir, '.clip-')), simulatorClip.executable) : null;

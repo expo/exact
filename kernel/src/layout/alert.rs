@@ -53,11 +53,14 @@ pub(super) fn measure(
             height,
             exclusions: &[],
         };
-        let metrics = measurer.measure(&request);
-        if !metrics.is_valid() {
+        // The host draws the title; the kernel only sizes its box.
+        let Some(metrics) = measurer
+            .measure_reservation(&request)
+            .filter(|m| m.is_valid())
+        else {
             invalid.get_or_insert_with(|| arena.local_id(context.slot));
             return Some((Size::ZERO, TextMetrics::default()));
-        }
+        };
         if context.measurements.len() == LEAF_OFFERS {
             context.measurements.remove(0);
         }
@@ -91,7 +94,7 @@ pub(super) fn prefix_style(grouped: bool) -> taffy::Style {
 }
 
 impl LayoutTree {
-    pub(super) fn new_alert_prefix(&mut self, slot: u32, grouped: bool) -> NodeId {
+    pub(crate) fn new_alert_prefix(&mut self, slot: u32, grouped: bool) -> NodeId {
         let style = self.share(prefix_style(grouped));
         match self.taffy.new_leaf_with_context(
             style,

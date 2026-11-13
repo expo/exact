@@ -415,8 +415,9 @@ fn controls_own_release_and_focus_and_placed_siblings_cover() {
         },
     );
     p.boxes();
+    // The focus a press gives (`press_hit_after_down`, `control_tap`).
+    assert!(p.set_focus(Some(button), 0.).is_none());
     assert!(p.control_input(button, "down", 20., 30., 1, 0.));
-    assert_eq!(p.focus(), Some(button));
     p.hardware_key("Space", "Space", true, false);
     assert_eq!(p.control_bindings[&(canvas, u32::MAX - 1)].name, "jump");
     p.hardware_key("Space", "Space", false, false);

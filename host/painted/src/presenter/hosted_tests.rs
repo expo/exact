@@ -762,14 +762,38 @@ fn a_finger_on_a_hosted_field_puts_android_back_in_touch_mode() {
     let mut p = boot(FORM);
     p.serve_requests();
     p.reader_fields(1.0);
-    (p.brush.touch_mode, p.brush.keyless) = (true, false);
+    (p.brush.touch_mode, p.brush.pointer_modality) = (true, false);
     p.set_pointer_kind(crate::presenter::PointerKind::Touch);
-    p.reader_field_focused(id(&p, "name"), 0, true, 1.0);
-    assert!(p.brush.keyless);
+    let field = id(&p, "name");
+    p.reader_field_input(field, 0, 1);
+    p.reader_field_focused(field, 0, true, 1.0);
+    assert!(p.brush.pointer_modality);
     // The app moving the focus from the field shows no ring there.
     let jump = id(&p, "jump");
     assert!(p.set_focus(Some(jump), 2.0).is_none());
     assert_eq!(p.brush.ringless, Some(jump));
+    p.reader_field_input(field, 0, 2);
+    assert!(
+        !p.brush.pointer_modality,
+        "hardware input leaves touch mode"
+    );
+    p.reader_field_focused(field, 0, true, 3.0);
+    assert!(
+        !p.brush.pointer_modality,
+        "a focus report preserves modality"
+    );
+    p.reader_field_input(field, 0, 1);
+    assert!(
+        p.brush.pointer_modality,
+        "a touch in an already focused field"
+    );
+    p.reader_field_input(field, 0, 0);
+    assert!(p.brush.pointer_modality, "the IME keeps touch mode");
+    p.reader_field_input(field, 1, 2);
+    assert!(
+        p.brush.pointer_modality,
+        "stale field input changes nothing"
+    );
 }
 
 /// A hosted edit is told after the platform's field made it: its

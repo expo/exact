@@ -24,13 +24,12 @@ impl<D: DataSource> Presenter<D> {
             if self.host.kernel().node(view).is_none() {
                 continue;
             }
+            let from = self.commands.len();
             let error = self.host.dispatch_at(view, Event::Beforeunload, now);
             if let Some(error) = error.or(self.after_commit()) {
                 self.host.log(error);
             }
-            let queued = self.commands.len();
-            self.commands.retain(|c| c.name != "preventDefault");
-            prevented |= self.commands.len() != queued;
+            prevented |= self.prevented_since(from);
             // Every listener hears it: the window's is no bubbling event.
             self.commands.retain(|c| c.name != "stopPropagation");
         }

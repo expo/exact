@@ -198,7 +198,10 @@ impl<D: DataSource> Host<D> {
         if std::mem::take(&mut self.prevented) {
             return After::Continue;
         }
-        if let Some(f) = focus.filter(|f| self.is_field(*f)) {
+        // The handler may have moved the focus, or covered the field.
+        let field =
+            |h: &Self, f: ViewId| h.focus == Some(f) && h.input_eligible(f) && h.is_field(f);
+        if let Some(f) = focus.filter(|f| field(self, *f)) {
             if self.field_key(f, &key) {
                 return After::Continue;
             }

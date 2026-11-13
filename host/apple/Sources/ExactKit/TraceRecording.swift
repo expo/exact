@@ -22,6 +22,43 @@ import AppKit
 #endif
 
 extension ExactSession {
+    /// Direct observations bypass the carrier's drain and guest scripting.
+    /// The saved frame ring ends before these reads, which never settle or seek.
+    func traceSnapshot() -> [String: Any] {
+        let read = { (op: String) -> Any in
+            (try? JSONSerialization.jsonObject(with: Data(self.agent("{\"op\":\"\(op)\"}").utf8))) ?? ["error": "unreadable reply"]
+        }
+        let started = ExactEnv.wall()
+        let tree = read("tree"), state = read("state"), layout = agentInstance.layout()
+        return ["tree": tree, "state": state, "layout": layout,
+                "observation": executionObservation().merging([
+                                "wallFrom": started, "wallTo": ExactEnv.wall(), "timebase": "milliseconds since process main",
+                                "reads": ["tree": ["class": "passive", "scope": "runner; no guest DOM"],
+                                          "state": ["class": "passive", "scope": "runner; no host settling"],
+                                          "layout": ["class": "passive", "scope": "mounted host geometry"],
+                                          "journal": ["class": "passive"], "perf": ["class": "passive"]],
+                                "frameRingEndsBeforeReads": true, "settlingReads": [] as [String]] as [String: Any]) { _, read in read }]
+    }
+
+    func appFileStorage() -> [String: Any] {
+        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.agent("{\"op\":\"appRoots\"}").utf8))
+        return (reply as? [String: Any])?["storage"] as? [String: Any] ?? ["available": false, "store": "none"]
+    }
+
+    func executionObservation() -> [String: Any] {
+        let frozen = clock != nil, files = appFileStorage()
+        let substitutedFiles = ExactEnv.environment["EXACT_AGENT"] != nil
+        let substitutedSecrets = substitutedFiles && ExactEnv.environment["EXACT_STORE"] != "real"
+        var substitutions = ExactEnv.agentMode
+            ? ["timers", "collection-fill-scheduling", "scroll-velocity", "wheel-routing", "device-facts", "capabilities"] : []
+        if substitutedFiles { substitutions.append("storage") }
+        if substitutedSecrets { substitutions.append("secret-presence") }
+        return ["clockMode": frozen ? "virtual" : "real", "clock": now(), "clockChanged": false,
+                "execution": ExactEnv.agentMode ? "agent" : "normal", "scheduling": ExactEnv.agentMode ? "agent" : "normal",
+                "substitutions": substitutions, "store": files["store"] as? String ?? "none",
+                "performanceClaim": !ExactEnv.agentMode && !substitutedFiles && !substitutedSecrets && !frozen]
+    }
+
     /// The host commands `startTrace_EXPERIMENTAL()` and `stopTrace_EXPERIMENTAL([maxBytes])`.
     func traceCommand(_ name: String, _ args: [Any]) {
         if name == "startTrace_EXPERIMENTAL" { startTrace(); return }

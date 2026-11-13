@@ -207,7 +207,7 @@ impl<D: DataSource> Presenter<D> {
             self.toggle_control(id, now_ms);
             return;
         }
-        self.note_press(id, true);
+        self.note_press(id);
         self.activate_with(id, now_ms, false);
     }
 

@@ -1004,10 +1004,8 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Build `app.contract` plus `app.ts`, including app-local imports. The app
-/// exports `appId`, `grants`, and `answer`; the generated entry checks their
-/// types and supplies the executor ABI. No source or source-adjacent generated
-/// declaration is overwritten. This producer requires its host's lean Hermes.
+/// Bake `app.contract` and `app.ts` with app-local imports through the host's lean Hermes.
+/// Development or unset trust refreshes the editor declarations beside app.ts.
 pub fn bake(app: &Path, tools: &Tools) -> Result<Baked, String> {
     let stage = Scratch::new(&std::env::temp_dir())?;
     bake_in(
@@ -1171,12 +1169,15 @@ fn bake_in(
         &stage.join("__exact_canvas.d.ts"),
         RECORDER_TYPES.as_bytes(),
     )?;
-    write_changed(&stage.join(DECLARATIONS), declarations.as_bytes())?;
     // The composer's roster is available only in this bake. Publish its editor
     // declarations before checking app.ts, including when that check fails.
-    if development || composer.is_some() {
-        write_changed(&app.join(DECLARATIONS), declarations.as_bytes())?;
-    }
+    write_declarations(
+        &app,
+        stage,
+        &declarations,
+        development || composer.is_some(),
+        std::env::var("EXACT_UPDATE_TRUST").ok().as_deref(),
+    )?;
     // A development build's `local-network` lines admit loopback too (LLP 1133.036 D5), as
     // `developmentLocalNetwork` in typescript.mjs writes them for the web.
     let trust = std::env::var("EXACT_UPDATE_TRUST");
@@ -1353,6 +1354,22 @@ fn compile_bytecode(stage: &Path, hermesc: &Path) -> Result<(), String> {
         ],
         stage,
     )
+}
+
+fn write_declarations(
+    app: &Path,
+    stage: &Path,
+    declarations: &str,
+    development: bool,
+    trust: Option<&str>,
+) -> Result<(), String> {
+    write_changed(&stage.join(DECLARATIONS), declarations.as_bytes())?;
+    // The editor's copy is not a captured input. A one-shot native development
+    // build uses the production producer with development trust.
+    if development || trust.is_none_or(|trust| trust == "development") {
+        write_changed(&app.join(DECLARATIONS), declarations.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn write_changed(path: &Path, bytes: &[u8]) -> Result<(), String> {

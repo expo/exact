@@ -268,10 +268,15 @@ impl Scanner<'_> {
     }
 
     fn construct(&mut self, kind: u8, outer: B, inner: B, href: Option<String>) {
-        self.out
-            .hidden
-            .push((outer.start..inner.start, outer.clone()));
-        self.out.hidden.push((inner.end..outer.end, outer.clone()));
+        // A closer that spans a line break (a link's title on the next line)
+        // stays shown, its opener with it: hidden, its line break would draw
+        // an empty line.
+        if !self.source[inner.end..outer.end].contains(['\n', '\r']) {
+            self.out
+                .hidden
+                .push((outer.start..inner.start, outer.clone()));
+            self.out.hidden.push((inner.end..outer.end, outer.clone()));
+        }
         self.out.marks.push(Mark {
             range: inner.clone(),
             flags: kind,
@@ -472,7 +477,19 @@ impl Scanner<'_> {
         } else {
             let k = self.destination_end(j + 1, hi)?;
             let target = self.source[self.pos(j + 2)..self.pos(k)].trim();
-            (k, target.split_whitespace().next().unwrap_or(""))
+            let (href, rest) = target
+                .split_once(char::is_whitespace)
+                .unwrap_or((target, ""));
+            // CommonMark 0.31.2 §6.3: a line ending may come before the
+            // destination or between it and a title, never inside it.
+            let rest = rest.trim_start();
+            if target.contains(['\n', '\r'])
+                && !rest.is_empty()
+                && !rest.starts_with(['"', '\'', '('])
+            {
+                return None;
+            }
+            (k, href)
         };
         let href = decode_destination(href).into_owned();
         let start = if image { i - 1 } else { i };

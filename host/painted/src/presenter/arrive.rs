@@ -17,8 +17,8 @@
 //!   nor where the focus was as the press began. So a route that arrives
 //!   with no press never takes the focus from where a person put it;
 //! - another tab's stack is no arrival, nor is the first sight of the page;
-//! - nothing scrolls, and the ring is as the web's `:focus-visible`: none
-//!   after a pointer's press, one after a key's.
+//! - nothing scrolls, and focus visibility follows the latest input, as
+//!   the web's `:focus-visible` does.
 //!
 //! The stack is the first navigation root's, as the host's navigation last
 //! projected it (`Host::shown_stack`). A pointer press is noted at activation
@@ -44,8 +44,6 @@ struct Press {
     control: Option<ViewId>,
     /// Where the focus was.
     focus: Option<ViewId>,
-    /// A key's press, which shows the focus it moves; a pointer's does not.
-    key: bool,
     at: Instant,
 }
 
@@ -134,13 +132,13 @@ impl<D: DataSource> Presenter<D> {
 
     /// A press on `hit` begins, a key's or a pointer's, with the focus
     /// where it is now: what a route that arrives next came from.
-    pub(crate) fn note_press(&mut self, hit: ViewId, key: bool) {
-        self.note_press_from(hit, key, self.focus);
+    pub(crate) fn note_press(&mut self, hit: ViewId) {
+        self.note_press_from(hit, self.focus);
     }
 
     /// A field's mouse activation remembers focus before its down default,
     /// but begins the route-arrival window only when the press completes.
-    pub(crate) fn note_press_from(&mut self, hit: ViewId, key: bool, focus: Option<ViewId>) {
+    pub(crate) fn note_press_from(&mut self, hit: ViewId, focus: Option<ViewId>) {
         let mut control = Some(hit);
         while let Some(id) = control {
             if self.presses(id) {
@@ -151,7 +149,6 @@ impl<D: DataSource> Presenter<D> {
         self.route_focus.pressed = Some(Press {
             control,
             focus,
-            key,
             at: Instant::now(),
         });
     }
@@ -225,23 +222,13 @@ impl<D: DataSource> Presenter<D> {
             .filter(|id| self.lands(*id))
             .or_else(|| self.route_title(top))
             .unwrap_or(top);
-        // None after a pointer's press, one after a key's. With no press a
-        // finger leaves none (LLP 1115.001 D7.6), and otherwise the focus
-        // left decides, as for any focus the app moves (`set_focus`).
-        // In Android's touch mode, whether a key came after the last finger.
-        let ring = if self.brush.touch_mode {
-            Some(!self.brush.keyless)
+        let error = if by.is_some() {
+            self.set_focus_ring(Some(to), self.host.now(), !self.brush.pointer_modality)
         } else {
-            by.map(|p| p.key).or((self.direct()).then_some(false))
+            self.set_focus(Some(to), self.host.now())
         };
-        if let Some(e) = self.set_focus(Some(to), self.host.now()) {
+        if let Some(e) = error {
             eprintln!("exact: {e}");
-        }
-        if let Some(ring) = ring {
-            if !ring || self.brush.ringless == Some(to) {
-                self.brush.ringless = (!ring).then_some(to);
-                self.dirty = true;
-            }
         }
     }
 }

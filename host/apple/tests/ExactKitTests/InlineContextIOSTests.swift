@@ -79,6 +79,45 @@ final class InlineContextIOSTests: XCTestCase {
         override func location(in view: UIView?) -> CGPoint { point }
     }
 
+    private final class Hover: UIHoverGestureRecognizer {
+        var phase = UIGestureRecognizer.State.began, point = CGPoint.zero
+        override var state: UIGestureRecognizer.State { get { phase } set {} }
+        override func location(in view: UIView?) -> CGPoint { point }
+    }
+
+    /// Hover follows the pointer from an inline run onto the rest of its
+    /// paragraph, and a failed hover leaves neither hovered.
+    func testHoverMovesFromAnInlineRunToItsParagraph() throws {
+        let p = try presenter()
+        defer { p.menus.reset(); window.isHidden = true }
+        var style = InlineStyle()
+        try style.set("font_size", .number(18))
+        p.applyParagraph(2, [
+            InlineText(id: 10, parent: 2, props: ["text": "#tag"], style: style, handlers: ["hover"], paints: true),
+            InlineText(id: 11, parent: 2, props: ["text": " plain text"], style: style, handlers: [], paints: true),
+        ])
+        let node = try XCTUnwrap(p.views[2])
+        let centre = { (id: UInt32) throws -> CGPoint in
+            let rect = try XCTUnwrap(node.inlineRects(try XCTUnwrap(p.inlineText(id))).first)
+            return CGPoint(x: rect.midX, y: rect.midY)
+        }
+        let g = Hover()
+        let move = { (phase: UIGestureRecognizer.State, point: CGPoint) in
+            g.phase = phase; g.point = point; node.hovering(g)
+        }
+        move(.began, try centre(10))
+        XCTAssertEqual(p.hoveredInline, 10)
+        XCTAssertNil(p.hovered)
+        move(.changed, try centre(11))
+        XCTAssertNil(p.hoveredInline)
+        XCTAssertTrue(p.hovered === node, "the paragraph is entered")
+        move(.changed, try centre(10))
+        XCTAssertEqual(p.hoveredInline, 10)
+        move(.failed, try centre(10))
+        XCTAssertNil(p.hoveredInline, "a failed hover leaves the run")
+        XCTAssertNil(p.hovered)
+    }
+
     func testAHandlerOnlyRunKeepsRecognitionBesideANativeRunMenu() throws {
         let p = try presenter()
         defer { p.menus.reset(); window.isHidden = true }

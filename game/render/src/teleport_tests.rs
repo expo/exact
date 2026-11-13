@@ -90,10 +90,10 @@ fn a_socket_follows_teleport_from_from_its_landing() {
     }
     let mut sim = Sim::<Rig>::new(()).unwrap();
     let mut attachments = crate::world::scene::Attachments::default();
-    attachments.feed(sim.world(), true, false, false, true);
+    attachments.feed(sim.world(), true, false, None, true);
     sim.advance(0., Clock::Seekable);
     sim.advance_with(17., Clock::Seekable, |w, _| {
-        attachments.feed(w, false, true, false, false)
+        attachments.feed(w, false, true, None, false)
     });
     let actor = sim.world().named("actor").unwrap();
     sim.world_mut().teleport_from(
@@ -101,7 +101,7 @@ fn a_socket_follows_teleport_from_from_its_landing() {
         Transform::at(20., 0., 0.),
         Transform::at(24., 0., 0.),
     );
-    attachments.feed(sim.world(), false, false, false, false);
+    attachments.feed(sim.world(), false, false, None, false);
     let charm = sim.world().named("charm").unwrap();
     let mut at = |alpha: f32| {
         attachments.frame(alpha);

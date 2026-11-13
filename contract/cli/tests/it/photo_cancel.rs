@@ -35,7 +35,8 @@ impl exact_runner::DataSource for Granted {
 }
 
 type Calls = Arc<Mutex<Vec<Json>>>;
-type Held = Arc<Mutex<Vec<Reply>>>;
+/// The replies held back, each with the send it answers.
+type Held = Arc<Mutex<Vec<(String, Reply)>>>;
 /// The requests whose work answers later, by ticket, across pumps.
 type Waiting = Vec<(u64, std::sync::mpsc::Receiver<Outcome>)>;
 
@@ -49,6 +50,12 @@ fn reply(reply: Reply, answer: Json) {
 
 /// Photo Editor over the native slot; each `takePhoto` is held in `Held`.
 fn boot() -> (Runner<Granted>, Calls, Held) {
+    boot_holding(&["takePhoto"])
+}
+
+/// Photo Editor over the native slot; each send named in `holds` is held in
+/// `Held`, every other answered at once.
+fn boot_holding(holds: &'static [&'static str]) -> (Runner<Granted>, Calls, Held) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/photo-editor/app.contract");
     let (plan, _) = contract::compile_path_all(&path, false).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
@@ -69,15 +76,15 @@ fn boot() -> (Runner<Granted>, Calls, Held) {
                 return;
             };
             seen.lock().unwrap().push(v.clone());
-            let track = json!({ "id": "track-1", "kind": "video", "label": "Camera",
-                "enabled": true, "muted": false, "readyState": "live", "settings": {} });
-            match v["send"].as_str() {
-                Some("takePhoto") => hold.lock().unwrap().push(answer),
-                Some("getUserMedia") => reply(
-                    answer,
-                    json!({ "id": "stream-1", "active": true, "tracks": [track] }),
-                ),
-                Some("stopTrack") => reply(answer, json!(track)),
+            let track = track(json!({}));
+            let send = v["send"].as_str().unwrap_or_default().to_owned();
+            if holds.contains(&send.as_str()) {
+                hold.lock().unwrap().push((send, answer));
+                return;
+            }
+            match send.as_str() {
+                "getUserMedia" => reply(answer, stream()),
+                "stopTrack" | "applyConstraints" => reply(answer, json!(track)),
                 _ => {}
             }
         })));
@@ -143,6 +150,15 @@ fn why(r: &Runner<Granted>, calls: &Calls) -> String {
     format!("{slots:?}\nsent {sent:?}")
 }
 
+fn track(settings: Json) -> Json {
+    json!({ "id": "track-1", "kind": "video", "label": "Camera",
+        "enabled": true, "muted": false, "readyState": "live", "settings": settings })
+}
+
+fn stream() -> Json {
+    json!({ "id": "stream-1", "active": true, "tracks": [track(json!({}))] })
+}
+
 fn photo() -> Json {
     json!({ "path": "app:/tmp/camera/1.jpg", "type": "image/jpeg", "size": 1, "width": 1, "height": 1 })
 }
@@ -175,7 +191,7 @@ fn left_while_taking(leave: &str, args: Vec<exact_runner::Value>) {
     assert_eq!(top(&r), "print", "{}", why(&r, &calls));
     let stopped = stops(&calls);
 
-    reply(held.lock().unwrap().pop().unwrap(), photo());
+    reply(held.lock().unwrap().pop().unwrap().1, photo());
     pump(&mut r, &mut w);
     assert!(
         format!("{:?}", r.slot("photo")).contains("assets/sample.jpg"),
@@ -213,7 +229,7 @@ fn a_photo_answered_on_the_camera_is_edited() {
     pump(&mut r, &mut w);
     r.act("shutter", Vec::new()).unwrap();
     pump(&mut r, &mut w);
-    let taken = held.lock().unwrap().pop().unwrap();
+    let taken = held.lock().unwrap().pop().unwrap().1;
     reply(taken, photo());
     pump(&mut r, &mut w);
     assert!(
@@ -222,4 +238,57 @@ fn a_photo_answered_on_the_camera_is_edited() {
         why(&r, &calls)
     );
     assert_eq!(top(&r), "editor", "{}", why(&r, &calls));
+}
+
+/// The camera cancelled while it opens: the stream that arrives afterwards
+/// is stopped at once and never held, so the camera does not stay on.
+#[test]
+fn a_stream_arriving_after_cancel_is_stopped() {
+    let (mut r, calls, held) = boot_holding(&["getUserMedia"]);
+    let mut w = Waiting::new();
+    pump(&mut r, &mut w);
+    r.act("takePicture", Vec::new()).unwrap();
+    pump(&mut r, &mut w);
+    r.act("cancel", Vec::new()).unwrap();
+    pump(&mut r, &mut w);
+    assert_eq!(top(&r), "editor", "{}", why(&r, &calls));
+    let stopped = stops(&calls);
+    let (_, open) = held.lock().unwrap().pop().unwrap();
+    reply(open, stream());
+    pump(&mut r, &mut w);
+    assert_eq!(
+        r.slot("track"),
+        Some(&exact_runner::Value::str("")),
+        "{}",
+        why(&r, &calls)
+    );
+    assert_eq!(stops(&calls), stopped + 1, "{}", why(&r, &calls));
+    let last = calls.lock().unwrap().last().cloned().unwrap();
+    assert!(last.to_string().contains("track-1"), "{last}");
+}
+
+/// Flip changes `facing` only once the track has turned: a refused flip
+/// leaves it as the open camera has it.
+#[test]
+fn facing_follows_the_flip_the_track_took() {
+    let (mut r, calls, held) = boot_holding(&["applyConstraints"]);
+    let mut w = Waiting::new();
+    pump(&mut r, &mut w);
+    r.act("takePicture", Vec::new()).unwrap();
+    pump(&mut r, &mut w);
+    let facing = |r: &Runner<Granted>| r.slot("facing").cloned();
+    let environment = Some(exact_runner::Value::str("environment"));
+    r.act("flip", Vec::new()).unwrap();
+    pump(&mut r, &mut w);
+    assert_eq!(facing(&r), environment, "not before it turned");
+    let (_, refused) = held.lock().unwrap().pop().unwrap();
+    reply(refused, json!({ "error": "OverconstrainedError" }));
+    pump(&mut r, &mut w);
+    assert_eq!(facing(&r), environment, "{}", why(&r, &calls));
+    r.act("flip", Vec::new()).unwrap();
+    pump(&mut r, &mut w);
+    let (_, turned) = held.lock().unwrap().pop().unwrap();
+    reply(turned, track(json!({ "facingMode": "user" })));
+    pump(&mut r, &mut w);
+    assert_eq!(facing(&r), Some(exact_runner::Value::str("user")));
 }
