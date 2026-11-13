@@ -126,6 +126,46 @@ fn configured_entry_passes_the_shared_secret_backend_and_configuration_errors() 
     ));
 }
 
+/// A source that names no app id takes the manifest's, which the host keys
+/// its storage roots by; one that names its own keeps it, and a replacement
+/// keeps the id the binary admitted.
+#[test]
+fn a_source_without_an_id_takes_the_manifests() {
+    #[derive(Default)]
+    struct Unnamed;
+    impl DataSource for Unnamed {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::Number(1.))
+        }
+    }
+    crate::configured!(Entry, Unnamed, || Swappable::off(Unnamed)
+        .named("com.example.unnamed"));
+    assert_eq!(Entry::default().app_id(), "com.example.unnamed");
+    assert_eq!(Swappable::off(Unnamed).app_id(), "");
+    assert_eq!(
+        Swappable::wasm(Fixture).named("com.example.other").app_id(),
+        "test.logic"
+    );
+    let native = Swappable::wasm(Unnamed)
+        .with_native("abc", || Unnamed)
+        .named("com.example.unnamed");
+    let mut plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    plan.app_id = "com.example.unnamed".into();
+    let plan = plan.encode();
+    let module = wasm("");
+    let mut meta: serde_json::Value = serde_json::from_str(&receipt(&plan, &module)).unwrap();
+    meta["appId"] = json!("com.example.unnamed");
+    meta["grants"] = json!("");
+    meta["source"] = json!("abc");
+    let replaced = native
+        .replacement(&plan, &meta.to_string(), module)
+        .unwrap();
+    assert!(replaced.embedded.is_some());
+    assert_eq!(replaced.app_id(), "com.example.unnamed");
+}
+
 fn encoded(op: u8, f: impl FnOnce(&mut Writer)) -> Vec<u8> {
     let mut w = Writer::default();
     w.u32(abi::ABI);

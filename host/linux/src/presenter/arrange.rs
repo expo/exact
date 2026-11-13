@@ -405,6 +405,7 @@ impl<D: DataSource> Presenter<D> {
             || self.arrange_edge().is_some()
             || self.group_needs_frame()
             || self.brush.moving()
+            || self.bars_ripple_moving()
             || self.surfaces.owes_records()
             || self.stage_moving()
     }

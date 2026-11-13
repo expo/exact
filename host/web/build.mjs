@@ -346,6 +346,7 @@ if (bakeOnly ? !!moduleInput : typeof exports.exact_module_artifact === 'functio
   finally { await bundle.close(); }
 }
 const bakedReceipt = readBake(app, 'web', 'wasm32-unknown-unknown', buildEnv.EXACT_BAKE_OUTPUT);
+writeFileSync(resolve(stage, 'app.version.json'), JSON.stringify({ version: bakedReceipt.embedded.version, buildNumber: bakedReceipt.embedded.buildNumber }) + '\n');
 if (!bakeOnly) {
   if (typeof exports.exact_compat !== 'function') throw new Error('the web wasm exposes no baked receipt');
   const compatLen = exports.exact_compat();

@@ -163,7 +163,7 @@ test('a token that expired ends the requests Convex had not answered with its wo
   sync.frame(JSON.stringify({ type: 'AuthError', error: 'Convex token identity expired', baseVersion: 1, authUpdateAttempted: false })); // recorded
   sync.closed('the socket closed (1005)'); // recorded
   expect(await running.outcome).toEqual({ ok: false, message: 'Convex refused the token before it answered (Convex token identity expired); the action may have run.' });
-  expect(await later.outcome).toEqual({ ok: false, message: 'Convex refused the token before it answered (Convex token identity expired); the mutation may have run.' });
+  expect(await later.outcome).toEqual({ ok: false, message: 'Convex refused the token before it answered (Convex token identity expired); the mutation may have run.', again: 2 });
   expect(await acknowledged.outcome).toEqual({ ok: true, value: 'alice' });
   expect([sync.status, sync.authError]).toEqual(['closed', 'Convex token identity expired']);
   // The person's answers are not given as signed out, which the next connection is.
@@ -180,7 +180,7 @@ test('a token Convex refused ends what was sent behind it with its words: it did
   // Recorded: Convex refused the token and closed the socket, and the mutation behind it wrote nothing.
   sync.frame(JSON.stringify({ type: 'AuthError', error: 'Could not parse JWT payload.', baseVersion: 0, authUpdateAttempted: true }));
   sync.closed('the socket closed (1005)');
-  expect(await behind.outcome).toEqual({ ok: false, message: 'Could not parse JWT payload.' });
+  expect(await behind.outcome).toEqual({ ok: false, message: 'Could not parse JWT payload.', again: 1 });
   expect(await before.outcome).toEqual({ ok: false, message: 'Convex refused the token before it answered (Could not parse JWT payload.); the action may have run.' });
 });
 

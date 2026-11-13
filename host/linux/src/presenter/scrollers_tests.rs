@@ -174,6 +174,34 @@ fn scrollbar_policy_reaches_both_reader_messages_and_live_updates() {
 }
 
 #[test]
+fn a_scrollers_keyboard_dismissal_is_its_authored_mode_and_unsaid_nothing() {
+    for (said, bits) in [
+        ("", 0),
+        (r#" keyboardDismissMode="none""#, 0),
+        (r#" keyboardDismissMode="on-drag""#, 64),
+        (r#" keyboardDismissMode="interactive""#, 128),
+    ] {
+        let source = PAGE_OF_SCROLLERS.replace(
+            r#"testId="inner" width=400"#,
+            &format!(r#"testId="inner"{said} width=400"#),
+        );
+        let mut p = boot(&source);
+        let (inner, page) = (id(&p, "inner"), id(&p, "page"));
+        let words = p.reader_under(200., 240., 1.);
+        let flags = |id: ViewId| {
+            words[3..]
+                .chunks_exact(11)
+                .find(|e| e[0] == id as i32)
+                .unwrap()[1]
+        };
+        assert_eq!(flags(inner) & 192, bits, "{said}");
+        assert_eq!(flags(page) & 192, 0, "the page around it says nothing");
+        let words = p.reader_scrollers(&[], 1.).unwrap();
+        assert_eq!(told(&words, inner).0 & 192, bits, "{said}");
+    }
+}
+
+#[test]
 fn the_page_indicator_follows_the_root_scrollbar_policy() {
     for (width, child_width, flag) in [("none", "auto", 8), ("auto", "none", 0)] {
         let mut p = boot(&format!(

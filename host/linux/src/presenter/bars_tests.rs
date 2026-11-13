@@ -1044,3 +1044,77 @@ fn a_panel_inside_the_tablist_stays_in_the_page() {
     p.run_commands(|| Nothing);
     assert_eq!(p.host().route_visibility(push), (false, false));
 }
+
+/// A finger on a bar's target ripples in its state layer's shape (LLP
+/// 1115.001 D9): nothing at the touch's instant, the wave at rest after
+/// 450 ms, the bar told again at each new instant while it moves, and the
+/// bar as it was once the wave has left after the lift.
+#[test]
+fn a_bars_target_ripples_and_is_told_at_each_instant() {
+    let (mut p, pictures) = barred(APP);
+    p.reader_bars(1.0).expect("the bars are told");
+    let last = |pictures: &Rc<RefCell<Vec<Pixmap>>>| pictures.borrow().last().unwrap().clone();
+    let rest = last(&pictures);
+    let other = id(&p, "tab-other");
+    let (_, bottom) = p.bars();
+    let target = *(bottom.unwrap().targets.iter())
+        .find(|t| t.what == What::Tab(other))
+        .unwrap();
+    let (x, y, w, h) = target.rect;
+    p.clock(1000.);
+    p.bar_event(BOTTOM, 0, x + w / 2.0, y + h / 2.0, 1000.);
+    p.reader_bars(1.0).expect("pressed");
+    assert_eq!(
+        last(&pictures).data(),
+        rest.data(),
+        "nothing at the touch's instant"
+    );
+    assert!(p.needs_animation_frame(), "the ripple owes frames");
+    assert_eq!(p.reader_bars(1.0), None, "the same instant is told once");
+    p.clock(1500.);
+    p.reader_bars(1.0).expect("a new instant");
+    assert_ne!(last(&pictures).data(), rest.data(), "the wave at rest");
+    assert!(!p.needs_animation_frame(), "held at rest, nothing moves");
+    // Lifted outside the target: it chooses nothing, and the wave leaves.
+    p.bar_event(BOTTOM, 2, 1.0, 1.0, 1500.);
+    p.bar_event(BOTTOM, 1, 1.0, 1.0, 1500.);
+    assert!(p.needs_animation_frame());
+    p.clock(1700.);
+    p.reader_bars(1.0).expect("leaving");
+    p.clock(1900.);
+    p.reader_bars(1.0).expect("gone");
+    assert_eq!(last(&pictures).data(), rest.data(), "the bar as it was");
+    assert!(!p.needs_animation_frame());
+    assert_eq!(p.reader_bars(1.0), None);
+}
+
+/// A bar measured again while a finger holds one of its targets (here the
+/// window turns) has other targets: the held one's ripple goes with it, and
+/// the lift that follows leaves nothing pressed.
+#[test]
+fn a_bar_measured_again_while_held_lets_its_ripple_go() {
+    let (mut p, _) = barred(APP);
+    p.reader_bars(1.0).expect("the bars are told");
+    let other = id(&p, "tab-other");
+    let (_, bottom) = p.bars();
+    let target = *(bottom.unwrap().targets.iter())
+        .find(|t| t.what == What::Tab(other))
+        .unwrap();
+    let (x, y, w, h) = target.rect;
+    p.clock(1000.);
+    p.bar_event(BOTTOM, 0, x + w / 2.0, y + h / 2.0, 1000.);
+    p.reader_bars(1.0).expect("pressed");
+    assert!(p.bars.ripple.is_some());
+    let turned = Window {
+        size: (916.0, 412.0),
+        ..WINDOW
+    };
+    assert_eq!(p.set_window(turned), None);
+    p.reader_bars(1.0).expect("measured again");
+    assert!(p.bars.ripple.is_none(), "the held target's ripple is gone");
+    p.bar_event(BOTTOM, 1, x + w / 2.0, y + h / 2.0, 1100.);
+    p.clock(3000.);
+    p.reader_bars(1.0);
+    assert!(p.bars.ripple.is_none() && p.bars.pressed.is_none());
+    assert!(!p.needs_animation_frame());
+}

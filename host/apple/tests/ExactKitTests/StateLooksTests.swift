@@ -198,6 +198,23 @@ final class StateLooksTests: XCTestCase {
         XCTAssertEqual(colours(below), [ink(red), ink(blue), ink(red), ink(red)])
     }
 
+    /// A text a batch mounts under a node while its look holds takes the
+    /// look's colour, as a browser's inheritance gives it, and gives it back
+    /// when the look goes.
+    func testAViewMountedUnderAHoldingLookTakesItsColour() throws {
+        let (p, v, _) = try colourFixture()
+        p.setHoverPath([v])
+        p.apply(wireBatch([
+            ["op": "create", "id": 6, "kind": "text", "props": ["text": "New"], "style": ["text_color": white]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 6]],
+            ["op": "frame", "id": 6, "x": 0.0, "y": 80.0, "w": 200.0, "h": 20.0],
+        ]))
+        let mounted = try XCTUnwrap(p.views[6])
+        XCTAssertEqual(mounted.style["text_color"], ink(red))
+        p.setHoverPath([])
+        XCTAssertEqual(mounted.style["text_color"], ink(white))
+    }
+
     /// A re-entrant hover (an ancestor's enter replacing the path) publishes
     /// only the newer path's looks.
     func testAReentrantHoverShowsOnlyTheNewerPathsLooks() throws {

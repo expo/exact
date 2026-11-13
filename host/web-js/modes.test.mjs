@@ -189,10 +189,10 @@ test('a development build with no axes puts its boundaries in the empty tuple', 
   expect(b.getAttribute('data-x-modes')).toBe('');
 });
 
-// A boundary that writes the colour around it again names the state looks
-// whose colour reaches it (`data-x-lc`): those up to and with the nearest
-// element that sets the colour. One that sets its own, or writes nothing
-// again, names none.
+// A boundary that does not set its own colour names the state looks whose
+// colour reaches it (`data-x-lc`): those up to and with the nearest element
+// that sets the colour, a token or a literal. One that sets its own names
+// none.
 test('a boundary names the looks whose colour reaches it', async () => {
   const document = createDocument();
   Object.assign(globalThis, { document, __exactRender: true });
@@ -207,12 +207,16 @@ test('a boundary names the looks whose colour reaches it', async () => {
   const inWriter = el(writer, 'c2', { 'data-x-b': '0' });
   const plain = el(root, '');
   const untinted = el(plain, 'c2', { 'data-x-b': '0' });
-  modes([], { c1: { 0: 0 }, c3: { 0: -1 } }, ['color:var(--x-ink)'], {}, [], { '--x-ink': 'ink' });
+  const literal = el(root, 'c4', { 'data-exact-looks': '4' });
+  const underLiteral = el(literal, 'c2', { 'data-x-b': '0' });
+  modes([], { c1: { 0: 0 }, c3: { 0: -1 }, c4: { 0: -1 } }, ['color:var(--x-ink)'], {}, [], { '--x-ink': 'ink' });
   for (const f of After) f();
   expect(below.getAttribute('data-x-lc')).toBe('1 3');
   expect(inWriter.getAttribute('data-x-lc')).toBe('2');
   expect(own.getAttribute('data-x-lc')).toBeNull();
   expect(untinted.getAttribute('data-x-lc')).toBeNull();
+  // A literal base colour: the look's token still resolves on the boundary.
+  expect(underLiteral.getAttribute('data-x-lc')).toBe('4');
 });
 
 // A dev reload's checkpoint carries the window's modes: each axis the

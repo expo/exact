@@ -42,8 +42,10 @@ function parameter(p, entities, enums = {}) {
   if (p.valueKind !== 'InitCall' || p.value?.type !== `AppIntents.IntentParameter<${p.type}>`) fail(`missing parameter constants for ${p.label}`);
   const inputTypes = entity ? [] : type === 'Swift.String' ? [primitive(0), { array: { wrapper: { capabilities: 3, memberValueType: primitive(2) } } }, primitive(2)]
     : (type === 'Swift.Bool' ? [1] : type === 'Swift.Double' ? [2, 0, 7] : optional ? [7, 0, 2] : [0, 2, 7]).map(primitive);
+  const description = argument(p, 'description'), described = description && description.valueKind !== 'NilLiteral';
   return { capabilities: 0, dynamicOptionsSupport: entity ? 2 : 0, inputConnectionBehavior: 0, isInput: false, isOptional: !!optional,
-    name: p.label, resolvableInputTypes: inputTypes.map(valueType => ({ kindValue: 0, valueType })),
+    name: p.label, ...(described ? { parameterDescription: localized(raw(description)) } : {}),
+    resolvableInputTypes: inputTypes.map(valueType => ({ kindValue: 0, valueType })),
     title: localized(raw(argument(p, 'title'))), typeSpecificMetadata: [], valueType: entity ? entityValue(entity.typeName) : primitive(id) };
 }
 

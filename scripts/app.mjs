@@ -34,7 +34,8 @@ import { createHash } from 'node:crypto';
 import { nativeSource, prepareRustBundle } from './rust.mjs';
 import { bakeOutside, compiledBakeDir, linkable, linkedInputs, recordRustBake } from './linked-plan.mjs';
 import { throwContractErrors } from './contract-diagnosis.mjs';
-import { filesystem, installedModules, removePrivateTree, withHostDeployment } from './filesystem.mjs';
+import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withHostDeployment } from './filesystem.mjs';
+import { installedFileDependencies } from './file-dependencies.mjs';
 import { startSweep } from './sweep.mjs';
 import { NO_WORKSPACE, androidCargo, appleCargo, authoredWorkspace, cargoDiagnosticsCommand, cargoOnPath, knownWorkspace, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { cargoOnPath } from './cargo-check.mjs';
@@ -206,7 +207,7 @@ export function lockedMetadata(workspace, noDeps = false, env = process.env) {
   const args = ['metadata', '--locked', '--offline', ...(noDeps ? ['--no-deps'] : []), '--format-version', '1'];
   const options = { cwd: workspace, env: cargoEnvironment(env), encoding: 'utf8', maxBuffer: 1 << 26 };
   let result = spawnSync('cargo', args, options);
-  if (result.status !== 0 && /--offline was specified|attempting to make an HTTP request|in the offline mode|offline mode \(via `--offline`\)/.test(result.stderr ?? '')) {
+  if (result.status !== 0 && OFFLINE_MISSING.test(result.stderr ?? '')) {
     console.error(`${workspace}: fetching missing locked Cargo sources (cargo fetch --locked)`);
     const fetched = spawnSync('cargo', ['fetch', '--locked'], options);
     if (fetched.status === 0) result = spawnSync('cargo', args, options);
@@ -465,6 +466,7 @@ export function resolveApp(nameOrCrate) {
   // The bake runs this checkout's TypeScript compiler and bundler (partial
   // fixture copies carry no package.json, as PINNED_BUN says).
   if (PINNED_BUN) installedModules();
+  installedFileDependencies(dir); // every package reader reads node_modules, where a `file:` package is as of the last install
   // Materialize defaults before Cargo inspects workspace members on a clean checkout.
   const manifest = readManifest(dir, name);
   if (dirname(dir) === resolve(ROOT, 'game/games') && manifest.game === undefined) {
@@ -599,6 +601,8 @@ export function readManifest(dir, name) {
       ? 'game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)'
       // LLP 1163 D2: the dark launch colour moved into the W3C member.
       : /^background_color_dark: /.test(p) ? 'background_color_dark is now color_scheme_dark.background_color: "color_scheme_dark": { "background_color": "#000000" } (LLP 1163 D2)'
+      // Expo's splash keys and a host's own launch colour: the launch is the manifest's one colour on every host.
+      : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color, and color_scheme_dark.background_color in a dark scheme, on every host (host.ios.launchImage adds a picture on iOS)`
       : p).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
@@ -837,10 +841,9 @@ const orderedBuild = (rows) => rows.sort((a, b) => Buffer.compare(Buffer.from(ca
 function buildCommand(command, args, app, env, stderr = 'pipe') {
   if (command === 'cargo') env = cargoEnvironment(env);
   let result = spawnSync(...cargoDiagnosticsCommand(...androidCargo(...appleCargo(command, args, { cwd: app.workspace, env, stdio: ['ignore','pipe',stderr], encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 }))));
-  // An offline Cargo that lacks a source it needs (a new workspace, a new
-  // lock entry) fetches the lock's sources once and tries again, instead of
-  // failing on the first missing crate (LLP 1054 O2).
-  if (command === 'cargo' && result.status !== 0 && /--offline was specified|attempting to make an HTTP request|in the offline mode|offline mode \(via `--offline`\)/.test(result.stderr ?? '')) {
+  // An offline Cargo that lacks a source it needs (a new workspace, a new lock entry) fetches the lock's
+  // sources once and tries again, instead of failing on the first missing crate (LLP 1054 O2).
+  if (command === 'cargo' && result.status !== 0 && OFFLINE_MISSING.test(result.stderr ?? '')) {
     console.error(`${app.name}: Cargo's sources are not all fetched; fetching the locked ones (cargo fetch --locked) and trying again`);
     const fetched = spawnSync('cargo', ['fetch', '--locked'], { cwd: app.workspace, env, stdio: ['ignore', 'inherit', 'inherit'] });
     if (fetched.status === 0) result = spawnSync(...cargoDiagnosticsCommand(...androidCargo(...appleCargo(command, args, { cwd: app.workspace, env, stdio: ['ignore','pipe',stderr], encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 }))));

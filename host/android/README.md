@@ -48,7 +48,8 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    `app/build/<app>/icons/res/`: from a square `maskable` PNG an adaptive icon, with a `monochrome` glyph as its
    themed layer; without one, a legacy icon from a square `any` PNG; and a banner from a 16:9 `any` PNG. A file its
    slot refuses (smaller than the slot, or a glyph with no transparent pixels) fails the build here, before anything
-   compiles;
+   compiles; and the launch theme in its `background_color`, where it names one, under `app/build/<app>/launch/res/`
+   ([the launch window](#the-devices-colours-llp-1115001-d4));
 2. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_linux::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
@@ -317,12 +318,15 @@ their own (a group: ops 20 and 21) is translated on the UI thread in the frame t
 far, mounts and retires rows behind it, and its next stream draws the rows where it then has them; the reader places
 the node by the difference. This is what a driver's `scroll` always did, now for the scroller under the finger.
 
-Three calls cross, all in the view's pixels:
+Six calls cross, all in the view's pixels:
 
 | Call | Direction | What it says |
 |---|---|---|
 | `Native.under(x, y)` (`CanvasHost::under`, `Presenter::reader_under`) | reader asks, at a touch's down | Which scrollers are under the point, innermost first, then the page itself where the document is larger than the viewport (id 0). For each: its id, the axes it takes a drag from here on, its revision, its offset, its farthest offset and the box it shows in. Also the axes exact2's own gestures claim there: a swipe row sideways, a reorder grip or a height handle up and down, a transform drag both, a `pan` whatever its `touch-action` does not give to scrolling. And, from D8 on, the hosted text field the touch is for (below) |
 | `Native.scrolled(id, dx, dy, rev)` (`CanvasHost::scrolled`, `Presenter::reader_scrolled`) | reader tells | It moved scroller `id` by that much, knowing revision `rev` of it. exact2 clamps the move to the scroller's travel |
+| `Native.scrollDrag(id, ended, vx, vy, rest, restX, restY)` (`CanvasHost::drag_began`, `drag_ended`; `presenter/scroll_drag.rs`) | reader tells | A finger began dragging scroller `id`, at the drag's first move of it (each scroller the drag moves, an outer one the hand-off reaches too); or let go of it, before the fling's first frame, with `VelocityTracker`'s velocity (px/s, positive as the offset grows) and where the scroller will rest (`OverScroller`'s end, or where it is when nothing is thrown). The app hears `scrolldragstart` and `scrolldragend`. From the start the scroller's moves owe no `scrollend` until the lift with nothing thrown, or until the fling stops |
+| `Native.refresh(id)` (`CanvasHost::refresh`, `Presenter::reader_refresh`) | reader tells | A pull to refresh of scroller `id` was let go of past its threshold: the app hears `refresh` |
+| `Native.flingEnded(id)` (`CanvasHost::fling_ended`, `Presenter::reader_fling_ended`) | reader tells | The fling a drag of scroller `id` threw stopped: at rest, caught by a finger, or ended by the app's scroll. Its `scrollend` is due now |
 | `Native.scrollers()` (`CanvasHost::scrollers`, `Presenter::reader_scrollers`) | exact2 tells, with each stream | For every scroller it has told the reader of: its id, its axes, its revision, where it is, the offset its rows were last painted at, and its farthest offset. Null when nothing of it changed; a scroller it leaves out is gone, and the reader forgets it |
 
 **Who is the authority.** While a drag or a fling runs, the reader: exact2 takes each move as told. A scroll the app
@@ -343,6 +347,16 @@ it may be a tap, a press or a gesture of exact2's own. Once the finger has moved
   press fires. No more of that touch reaches exact2;
 - else it stays exact2's.
 
+The drag takes the way the finger went past the slop, as RecyclerView's does. Whose a touch is waits for exact2's
+answer for its down. A frame that answers late loses nothing: what came of the touch meanwhile (its moves, a second
+finger, a finger that lifted, the lift itself) is kept and taken in order when the answer comes, as it would have been
+had it come at once (`Scrolling.next`, `caughtUp`). A hosted field that held the touch gets each held event after the
+scroll has seen it, so a field that asks to keep its touch keeps it and one the scroll takes is cancelled where it is.
+A touch that ends before its answer while the next one comes down is taken when its answer comes, from its down to its
+end, the later touch set aside meanwhile, and a fling it throws stops where the later touch came down. A touch whose
+activity stops, or whose view leaves its window, before the answer is forgotten: nothing scrolls or
+flings for it after.
+
 A finger that lands on a list while it flings stops it and has it, as on the platform's lists, and exact2 hears
 nothing of that touch.
 
@@ -350,6 +364,29 @@ nothing of that touch.
 Each move goes to the innermost; what it cannot take, because it is at its end, goes to the next one out, and so on
 to the page. A fling hands off the same way, frame by frame. An `overscroll-behavior` other than `auto` ends the
 chain at its scroller. What no scroller can take stretches the edge of the innermost one that has a node.
+
+**Pull to refresh** (`Refresh.kt`, LLP 1115.001 D12). A scroller with a `refresh` handler is Material 3's pull to
+refresh, Compose's `PullToRefreshBox` with its default indicator, short or empty too (exact2 gives it to the reader as
+scrolling up and down whatever its range, as UIKit's scroll view with a refresh control always bounces): a downward
+drag at the top that no scroller of the drag takes pulls, instead of stretching the edge, a 40 dp disc
+(`surfaceContainerHigh`, elevation 3 dp) down from the scroller's top at half the finger's way, with tension past the
+80 dp threshold, and its arc and arrow (`onSurfaceVariant`) grow with the pull. The list stays where it is. The
+finger's way back takes the pull back first, and on past it the drag scrolls and flings as any other.
+Let go past the threshold, the reader sends `refresh` (`Native.refresh`, `Presenter::reader_refresh`) and the disc
+settles at the threshold and turns as Material's indeterminate indicator does while the app's `refreshing` is true
+(the statement's bit 5); it goes back up when `refreshing` ends, or 350 ms after the release when the app never set
+it, as the iOS host ends UIKit's control. Short of the threshold, it goes back up. A pull while `refreshing` is true
+stretches the edge, and `refreshing` with no pull shows nothing, as on iOS. Under "remove animations" the disc moves
+at once and its arc stands still.
+
+**The keyboard** (`Dismissal.kt`, LLP 1115.001 D12). A drag does to the software keyboard what the first scroller
+it moves (or, while it moves none, whose edge it stretches) says in `keyboardDismissMode` (bits 6 and 7 of its flags). Unsaid, nothing, as the platform's lists leave the
+keyboard up. `on-drag`: as the drag starts, the focused field lets go of the focus (the app hears a blur) and the
+keyboard goes. `interactive`, up and down: once the finger reaches the keyboard, the keyboard follows it, moved by
+the platform's control of the IME's inset animation (`controlWindowInsetsAnimation`, Android 11 and later); at the
+lift it goes, and the field lets go of the focus, when the finger was moving down or had pulled it more than half
+away, and comes back otherwise. The page is laid out for where the keyboard ends, not each step of the follow. Before
+Android 11 the finger reaching the keyboard puts it away.
 
 **The ends and the indicator.** The stretch is `EdgeEffect`'s own: it stretches the `RenderNode` it is drawn into, so
 while an edge is stretched the scroller's rows are drawn through a node the size of its box (`Scrolling.record`).
@@ -379,8 +416,8 @@ Not built of D7:
   a scroller nested in a list's row, and the page itself are drawn inside their surroundings, so they move when
   exact2's paint arrives; the frame waits up to 2 ms for it, as it does for a drag's moves. They have no stretch at
   their ends either. Giving each a node needs the recorder to open a group inside a row's recording.
-- `keyboardDismissMode`, pull-to-refresh and a sheet's part in the hand-off are later stages. A hosted `EditText`
-  takes part as a child of a ScrollView does (below).
+- A sheet's part in the hand-off is a later stage. A hosted `EditText` takes part as a child of a ScrollView
+  does (below).
 - A mouse's wheel and a trackpad do not scroll (`onGenericMotionEvent`), and nothing scrolls for TalkBack.
 - A pressable under the finger shows its press at the down, not after the platform's tap delay, so a row may flash
   as a scroll starts.
@@ -432,10 +469,26 @@ in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a swi
 the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
 The controls' shapes are still the desktop painter's (D9).
 
+**A press is Material's ripple** (D9; `host/linux/src/paint/ripple.rs`): on a button, a segment, a field that opens
+something, a checkbox and a radio (in the 40 dp circle round the mark, from its middle), a list's row and any other
+node that presses (a `press` or a link's `href`) with no pressed look of its own (`:active`, `-exact-press-scale`,
+`pointerdown`). In what scrolls it waits the platform's tap timeout, 100 ms, so a touch a scroller takes sooner shows
+none. It is the framework `RippleDrawable`'s wave, which Compose
+Material 3 draws a press with: a soft circle from the touch, in the content's colour at the pressed state's 10%,
+bounded by the pressed shape, spreading to rest in 450 ms while the finger is down, its centre moving to the shape's
+middle, and fading out over 375 ms once the finger has lifted and those 450 ms are over. No state layer shows beside
+it, as Compose shows none for a press; a hover's 8% does. The wave's sparkles are not drawn. With animations removed,
+and on the agent's clock, a press is the wave at rest and a release takes it away. The bars' targets ripple too, in
+the shape their state layer had (below); the top layer's rows and buttons still show the 10% state layer alone.
+
 **The launch window.** From Android 14 the launch theme names the platform's `system_surface_light` and
 `system_surface_dark` (`res/values-v34`, `values-night-v34`), the colour the first frame's unsaid background has, with
 the bars' icons set for it. On Android 12 and 13 the platform has no `surface` to name in a theme, and the launch
-window is the device theme's own day or night background (`?android:attr/colorBackground`).
+window is the device theme's own day or night background (`?android:attr/colorBackground`). An app whose manifest
+names a `background_color` launches on it instead, and on `color_scheme_dark.background_color` in night mode, as its
+iOS launch screen and its web page's first paint do: the build writes a theme over `ExactLaunch` with that colour
+behind the window and on Android 12's starting window, and the bars' icons dark over a light colour
+(`agent-android.mjs` `androidLaunch`).
 
 ## The channel out (LLP 1115.001 D5)
 
@@ -1057,7 +1110,7 @@ the bar took of the routes goes to nothing while it is covered (`Presenter::fit_
 | Title | the heading, title-large (22/28 sp, regular), `onSurface`, one line cut with an ellipsis; 16 dp from the side, or 4 dp after what leads it (56 dp after the Up arrow) | the same (`TopAppBarLayout`: the title's box at `TopAppBarTitleInset` or after the navigation icon, its own 4 dp padding) |
 | Up arrow | on a pushed route: Material Symbols' `arrow_back`, 24 dp in a 48 dp target 4 dp from the side, `onSurface` | the same |
 | Buttons | the header's, at the trailing side, 4 dp from it: a 24 dp symbol in a 48 dp target (`onSurfaceVariant`) where the button has a symbol, else a text button (label-large, `primary`, 12 dp padding, at least 58 dp wide) | icon buttons and text buttons, the same metrics |
-| Held | a state layer (10%): a 40 dp circle on an icon, a pill on a text button | a state layer and a ripple |
+| Held | the ripple (above), in a 40 dp circle on an icon, a pill on a text button | the ripple, bounded by the icon button's 40 dp circle |
 
 A level-1 heading is the same small bar: Material's medium and large bars, which collapse as the content scrolls,
 are S3's, and so is the change of colour as a transition (it switches in one frame here; Compose animates it).

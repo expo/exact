@@ -59,8 +59,10 @@ impl<D: DataSource> Presenter<D> {
                 if node.props.bool(PropId::Disabled) == Some(true) {
                     return Err("disabled");
                 }
+                // What a real press shows on (`press_target`): a `press`, or a link.
                 let handlers = self.host.runner().handlers_of(id);
-                if handlers.contains(&EventKind::Press) {
+                let link = node.node_type != NodeType::Text && node.props.link().is_some();
+                if link || handlers.contains(&EventKind::Press) {
                     break;
                 }
                 // (The kernel's parent: the display's is the last picture's, none before a new

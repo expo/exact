@@ -37,6 +37,40 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Target color space
+
+`Surface::color_space()` requests `ColorSpace::Srgb` (the default) or
+`ColorSpace::DisplayP3` for SDR. The module grants P3 only when the target
+advertises it for the selected format. Metal configures the `CAMetalLayer`
+with Display P3 and keeps its 8-bit format without EDR. WebGPU uses the same
+capability check and configures the canvas with `colorSpace: "display-p3"`.
+Other targets fall back to sRGB unless they advertise P3. Android's buffered
+canvas and offscreen targets always use sRGB; Android wide-color windows and
+hardware-buffer tagging are outside this API's implementation.
+
+`Surface::color_space_granted(space)` reports the actual RGB primaries after
+`device_ready`, before preparation or drawing, including on reattachment and
+device restoration and renderer rebuilding after a GPU tier change. Choose
+shader output from the grant, not the request. Every native RGBA8 readback
+grants sRGB before capture, including after detachment, then restores any P3
+presentation grant; captured bytes remain suitable for the host's sRGB images.
+A granted `high_dynamic_range()` request takes precedence: it stays
+`Rgba16Float` in extended sRGB, reports `ColorSpace::Srgb`, and uses the
+existing `Frame::headroom` range. It never selects extended Display P3.
+
+For a P3 target, the shader writes Display P3 RGB components. With an ordinary
+`*Unorm` render target, write sRGB-transfer-encoded Display P3 in `[0, 1]`.
+When `srgb_target()` obtains an `*Srgb` view, write linear-light Display P3;
+the view applies the sRGB transfer function, which Display P3 also uses.
+The `Srgb` texture-format suffix chooses the transfer function, not the
+primaries. Always honor the format passed to `render`: a backend that cannot
+supply the requested view still needs encoded output. A fallback target needs
+sRGB components, with any conversion from P3 performed by the surface.
+HDR keeps D12b's encoded extended-sRGB output, including values above 1.
+
+`apps/caltrain/gpu` is a complete GPU module; the
+[GPU module recipe](../docs/recipes/gpu-module.md) shows a minimal surface.
+
 ## Frame pacing and timing
 
 A surface that rests returns `false` from `render`; the host then asks for no

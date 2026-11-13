@@ -115,7 +115,8 @@ pub(crate) fn emit(
     std::fs::write(out.join("artifacts.json"), graph.to_string()).map_err(|e| e.to_string())?;
     compat.target = target.into();
     compat.embedded = json!({"seq":0,"plan":plan_card,"assets":assets,"entryDigest":null,
-        "genesis":true,"trust":trust});
+        "genesis":true,"trust":trust,
+        "version":compat.embedded["version"],"buildNumber":compat.embedded["buildNumber"]});
     if plans.as_object().is_some_and(|p| !p.is_empty()) {
         compat.embedded["plans"] = plans;
     }

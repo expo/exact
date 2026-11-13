@@ -1,6 +1,7 @@
 # Return beside a literal backtick in a list item's code span breaks the span
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Code spans strip one edge space from each end as CommonMark 0.31.2 §6.1 does, hidden as syntax, and the `code` command and Return write each span through one serializer that pads content beginning or ending with a backtick.
 **Systems:** markdown/src/edit.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

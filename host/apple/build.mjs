@@ -393,6 +393,12 @@ export function writeUsageStrings(reach, dir) {
   }
 }
 
+/** The version inputs shared by the bundle and its baked delivery facts. */
+export const bundleVersion = () => ({
+  CFBundleVersion: process.env.EXACT_BUILD_NUMBER ?? '1',
+  CFBundleShortVersionString: process.env.EXACT_VERSION ?? '0.1.0',
+});
+
 /** The iOS `Info.plist` from the manifest (LLP 1030 D2: one declaration; `build.mjs` consumes what it generates). The dev client's local-networking permission is `host.ios.localNetworking` (a string: the prompt); the store-required version numbers are counters bake owns, not authored. */
 export const infoPlist = (app, device = false, { executable = appleExecutableName(app), id = app.id, name = app.displayName, development = null, icon = {}, distribution = null, distributed = false, reach = null, tv = false, clip = false } = {}) => {
   const ios = app.manifest.host?.ios ?? {};
@@ -404,8 +410,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
     CFBundleName: name,
     CFBundleDisplayName: name,
     CFBundlePackageType: 'APPL',
-    CFBundleVersion: '1',
-    CFBundleShortVersionString: '0.1.0',
+    ...bundleVersion(),
     CFBundleSupportedPlatforms: [tv ? (device ? 'AppleTVOS' : 'AppleTVSimulator') : device ? 'iPhoneOS' : 'iPhoneSimulator'],
     DTPlatformName: tv ? (device ? 'appletvos' : 'appletvsimulator') : device ? 'iphoneos' : 'iphonesimulator',
     MinimumOSVersion: ios.minimumOS ?? '17.0',
@@ -453,8 +458,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
  * numbers App Store Connect requires to rise). */
 export function distributionKeys(sdkName = 'iphoneos') {
   return {
-    CFBundleVersion: process.env.EXACT_BUILD_NUMBER ?? '1',
-    CFBundleShortVersionString: process.env.EXACT_VERSION ?? '0.1.0',
+    ...bundleVersion(),
     ...distributionToolchain(sdkName),
     // A device requirement: a simulator bundle on an Intel Mac is x86_64.
     ...(sdkName.endsWith('simulator') ? {} : { UIRequiredDeviceCapabilities: ['arm64'] }),
@@ -501,8 +505,7 @@ export const macInfoPlist = (app, { development = null, icon = {}, reach = null,
   CFBundleName: app.displayName,
   CFBundleDisplayName: app.displayName,
   CFBundlePackageType: 'APPL',
-  CFBundleVersion: '1',
-  CFBundleShortVersionString: '0.1.0',
+  ...bundleVersion(),
   LSMinimumSystemVersion: app.manifest.host?.macos?.minimumOS ?? '14.0',
   NSHighResolutionCapable: true,
   ...usageKeys(reach), // usage strings for the devices the app's grants name (LLP 1069.008)

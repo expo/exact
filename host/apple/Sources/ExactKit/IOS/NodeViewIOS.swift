@@ -793,7 +793,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         #if os(iOS)
         if swipeOwner, scrollView.isTracking { presenter?.swipeActions.painted.scrolled(self) }
         #endif
-        presenter?.transformGeometry.changed()
+        presenter?.transformGeometry.changed(); presenter?.tipsScrolled()
         presenter?.videoVisibility?.changed()
         presenter?.reaimFixedGradients()
         presenter?.scrollPump.scrolled(self)

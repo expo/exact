@@ -333,14 +333,12 @@ final class HeldStateTests: XCTestCase {
         XCTAssertEqual(dropped, ["replaced", "replaced"])
     }
 
-    /// Active feedback follows a declared handler, as the author guide specifies.
-    @MainActor func testAPresslessLinkDoesNotTakeAnActiveHold() throws {
+    /// Active feedback follows the nearest press, a declared handler or a
+    /// link's `href`, as CSS's `:active` holds on a link (LLP 1121 D8).
+    @MainActor func testAPresslessLinkTakesAnActiveHold() throws {
         let (p, _, _) = try fixture()
         let link = try XCTUnwrap(p.views[6]), label = try XCTUnwrap(p.views[7])
         XCTAssertNotNil(link.defaultLink)
-        XCTAssertNil(label.hold("active", dropped: nil).held)
-        XCTAssertFalse(link.holds("active"))
-        link.handlers = ["press"]
         XCTAssertEqual(label.hold("active", dropped: nil).held, "active")
         XCTAssertTrue(link.holds("active"))
     }

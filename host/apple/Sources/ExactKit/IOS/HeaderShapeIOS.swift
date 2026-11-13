@@ -6,8 +6,10 @@ import UIKit
 /// its title — large for a level-1 heading, inline for any other — and the
 /// header's buttons as its items, those before the heading leading and
 /// those after it trailing, each pressing its authored button. The stack's
-/// Back control is UIKit's back button, never an item. iOS does not paint
-/// the header; the web and the agent do (LLP 1021 D4's one presentation).
+/// Back control is UIKit's back button, never an item. A header with no
+/// heading that holds only what the bar places is a bar with no title,
+/// its items trailing (`exact_kernel::bars`). iOS does not paint the
+/// header; the web and the agent do (LLP 1021 D4's one presentation).
 struct HeaderShape: Equatable {
     struct Item: Equatable {
         let id: UInt32, title: String, symbol: String?, label: String?, disabled: Bool, accessibilityDisabled: Bool
@@ -222,15 +224,15 @@ struct HeaderShape: Equatable {
         self.authored = authored
         let projects = { (node: NodeView) in !authored.contains { node === $0 || node.isDescendant(of: $0) } }
         authoredBack = back != nil && roles.contains { $0.props["id"] == back && !projects($0) }
-        let heading = rule.heading, titleProjects = projects(heading)
-        self.heading = titleProjects ? heading : nil
+        let heading = rule.heading.flatMap { projects($0) ? $0 : nil }, titleProjects = heading != nil
+        self.heading = heading
         let search = rule.search.flatMap { projects($0) ? $0 : nil }
         let segments = rule.segments.flatMap { projects($0) ? $0 : nil }
         let tap = rule.tap.flatMap { projects($0) ? $0 : nil }
         header = rule.header
         // A heading of only white space names nothing (accname trims it);
         // UIKit would take it as a title and show a pair of quotes
-        let text = titleProjects ? heading.accessibleText : ""
+        let text = heading?.accessibleText ?? ""
         title = text.unicodeScalars.allSatisfy(\.properties.isWhitespace) ? "" : text
         level = titleProjects ? rule.level : 0
         let item = { (node: NodeView) -> Item? in
@@ -255,13 +257,13 @@ struct HeaderShape: Equatable {
         #endif
         self.search = search
         self.segments = segments
-        let group = titleProjects ? HeaderTitle(header: header, heading: heading, tap: tap, apart: rule.items + faced + [rule.search, rule.segments].compactMap { $0 }) : nil
+        let group = heading.flatMap { HeaderTitle(header: rule.header, heading: $0, tap: tap, apart: rule.items + faced + [rule.search, rule.segments].compactMap { $0 }) }
         self.group = group
         let tablist = segments.flatMap { HeaderShape.titleTabs($0).isEmpty ? nil : $0 }
         // The title's pressable wrapper goes with the title it holds, unless
         // it holds an opted-out node, which stays where it is.
         let wrapper = titleProjects ? tap.flatMap { tap in authored.contains { $0.isDescendant(of: tap) } ? nil : tap } : nil
-        placed = ([heading] + rule.items + shownReadouts + [search, tablist, wrapper].compactMap { $0 } + (HeaderShape.presented(group, segments: segments)?.placed ?? [])).filter(projects)
+        placed = ([rule.heading].compactMap { $0 } + rule.items + shownReadouts + [search, tablist, wrapper].compactMap { $0 } + (HeaderShape.presented(group, segments: segments)?.placed ?? [])).filter(projects)
     }
 
     /// The tabs of a header's tablist the segmented title shows (§9.8).

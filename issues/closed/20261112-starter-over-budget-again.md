@@ -1,6 +1,7 @@
 # The production starter's app.js is over its 45 KiB budget again
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The starter's production app.js is 45,744 bytes brotli-11 (336 under): a sheet's frame (navigation/sheets.js) links only for a plan that can present a sheet, links.js only for one that binds a link's `href`, `rel` or `target`, and `watchState` only into a development page.
 **Systems:** host/web-js (runtime linked into every app), scripts/metrics.mjs (`JS_TARGET_KIB`), host/web-js/build.test.mjs
 **Severity:** P2
 **Author:** Claude (found while landing issue fixes)

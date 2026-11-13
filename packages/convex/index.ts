@@ -53,18 +53,26 @@ export interface ConvexClient {
   query<Q extends Reference<'query'>, T = ReturnOf<Q>>(rev: number, ref: Q, args: ArgsOf<Q>, shape?: (value: ReturnOf<Q>) => T): T | Promise<T>;
   /** A mutation: its result once the queries show its write. It rejects with `ConvexFailure` when Convex refuses it,
    *  when the socket is not open (nothing is sent), when Convex refused the token it was sent behind (its words;
-   *  it did not run), and when the socket closes first (it may have run, and an expired token's words say why). */
+   *  it did not run), and when the socket closes first (it may have run, and an expired token's words say why). A
+   *  failure of the last two kinds carries `again`, unless the app has signed out since the mutation was sent. */
   mutation<M extends Reference<'mutation'>>(ref: M, args: ArgsOf<M>): Promise<ReturnOf<M>>;
   /** An action: its result, as soon as Convex has it; the queries may show what it wrote a moment later. It rejects
-   *  as a mutation does. */
+   *  as a mutation does, with no `again`. */
   action<A extends Reference<'action'>>(ref: A, args: ArgsOf<A>): Promise<ReturnOf<A>>;
   /** The person's token (a JWT the deployment is configured to accept), or `undefined` signed out. Call it in a
    *  mutation's source; in an `async` one it may follow an `await`. From a plain `.then` callback its send throws on the web.
-   *  It sends on the socket, so the same turn may not `fetch`: the runner refuses that mutation and sends nothing. Await
-   *  the fetch first, then call it. Until Convex confirms the token, no answer computed for another is given, and each
+   *  It sends on the socket, so a source's synchronous part may not also `fetch`: the runner refuses that mutation and
+   *  sends nothing. Await the fetch first, then call it. Until Convex confirms the token, no answer computed for another is given, and each
    *  mutation and action is sent behind the token again, so none runs as the person before; a call whose frame never
    *  left may be made again. Convex says nothing when a token expires on a quiet socket: renew it before it expires. */
   setAuth(token: string | undefined): void;
+  /** A mutation Convex did not answer before its connection ended, sent once more: `handle` is its failure's `again`.
+   *  Convex answers a request it has seen with its first answer, so the write happens once; one it never saw runs
+   *  now, as the person signed in now. Call it in a mutation's source once `live.status` is "open" or "ready"
+   *  again. A handle is good once: when the connection ends before Convex answers again, that failure carries the
+   *  next, and "it did not run" then speaks of that sending only. The module keeps the last hundred unanswered
+   *  mutations, and signing out (`setAuth(undefined)`) forgets every handle. */
+  again<T = unknown>(handle: number): Promise<T>;
   /** The queries Convex is asked for and the requests in flight, for a test or a log. */
   inspect(): { queries: { id: number; udfPath: string; sent: boolean; answered: boolean }[]; requests: number };
 }
@@ -79,7 +87,7 @@ export function convex(address: string, functions: ConvexFunctions, options: Con
   const send = (frames: Frame[]) => { for (const frame of frames) socket?.send(JSON.stringify(frame)); };
   const snapshot = (): ConvexLive => ({ status: sync.status, rev: sync.rev, error: sync.error, authError: sync.authError });
   const settle = <T>(outcome: Outcome, shape?: (value: any) => T): T => {
-    if (!outcome.ok) throw new ConvexFailure(outcome.message, outcome.data);
+    if (!outcome.ok) throw new ConvexFailure(outcome.message, outcome.data, outcome.again);
     return shape ? shape(outcome.value) : outcome.value as T;
   };
 
@@ -134,8 +142,16 @@ export function convex(address: string, functions: ConvexFunctions, options: Con
     return sync.request(kind, name, args, send).outcome.then(o => settle<T>(o));
   }
 
+  function again<T>(handle: number): Promise<T> {
+    // The handle stays good: the mutation is still kept.
+    if (sync.status !== 'open' && sync.status !== 'ready') return Promise.reject(new ConvexFailure('Not connected to Convex: the mutation was not sent again.', undefined, handle));
+    const sent = sync.again(handle, send);
+    if (!sent) return Promise.reject(new ConvexFailure('Nothing to send again: no unanswered mutation has that handle.'));
+    return sent.outcome.then(o => settle<T>(o));
+  }
+
   return {
-    live, query,
+    live, query, again,
     mutation: <M extends Reference<'mutation'>>(ref: M, args: ArgsOf<M>) => request<ReturnOf<M>>('Mutation', getFunctionName(ref), args ?? {}),
     action: <A extends Reference<'action'>>(ref: A, args: ArgsOf<A>) => request<ReturnOf<A>>('Action', getFunctionName(ref), args ?? {}),
     setAuth(token: string | undefined) { sync.setAuth(token, send); },

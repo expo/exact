@@ -669,6 +669,36 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
+    /// What a press at or above `id` shows on (LLP 1061 D2, LLP 1121 D8):
+    /// the nearest node with a `press` handler or a link's `href`, as CSS's
+    /// `:active` holds on a pressed link.
+    pub(crate) fn press_target(&self, id: ViewId) -> Option<ViewId> {
+        if self.brush.region_blocks_action(id) || self.host.route_visibility(id).1 {
+            return None;
+        }
+        let kernel = self.host.kernel();
+        let mut at = Some(id);
+        while let Some(n) = at {
+            let node = kernel.node(n)?;
+            if node.props.bool(PropId::Disabled) == Some(true) {
+                return None;
+            }
+            // A link run in a paragraph is no box to press (`lower-state-target`).
+            let link = node.node_type != NodeType::Text && node.props.link().is_some();
+            if link
+                || self
+                    .host
+                    .runner()
+                    .handlers_of(n)
+                    .contains(&EventKind::Press)
+            {
+                return Some(n);
+            }
+            at = self.display.parent(kernel, n);
+        }
+        None
+    }
+
     /// A captured mouse click follows kernel ancestry through nodes hidden
     /// by pointerup. A picture boundary is returned for retained dispatch;
     /// ordinary live handler lookup must not cross it.

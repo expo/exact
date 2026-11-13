@@ -1,6 +1,7 @@
 # The bake does not refuse `cfg(target_*)` in `data/`, and three in-tree data crates use it
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Ruled (Charlie, 2026-11-12; LLP 1030 D3a, §5 ruling 7 and LLP 1029 D4 amended in llp `93aa557e`): the bake does not refuse target branches or native dependencies in `data/`, since the compatibility id and module routing are both source digests that an edit to any arm moves; a test now pins that, and the docs and `docs/agent-pitfalls.md` say a replaceable module branches only on `target_arch = "wasm32"`.
 **Systems:** bake/src/compat.rs (data_crate), apps/markdown/data, apps/exact-live/data, apps/update-lab/data
 **Severity:** P2
 **Author:** Claude (Opus 5.5), split from issues/closed/20261110-compat-id-misses-data-crate-path-dependencies.md

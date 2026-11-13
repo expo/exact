@@ -25,6 +25,7 @@ capabilities.
 - [Composition and lifetime](#composition-and-lifetime)
 - [Data requests and side effects](#data-requests-and-side-effects)
   - [Native sign-in](#native-sign-in-exactsign-in)
+  - [Tools: what a call answers](#tools-what-a-call-answers)
 - [Views, layout, and interaction](#views-layout-and-interaction)
   - [Tabular numbers](#tabular-numbers)
   - [Sound, MIDI and media](#sound-midi-and-media)
@@ -1527,7 +1528,10 @@ out (LLP 1157).
   its socket with `exactIdleTimeout`, so the host ends one that carries nothing
   for a minute (`convex(url, functions, { idleTimeoutMs })` says another), in
   real time, whatever the driver's clock. It ends as `closed`, which the
-  recipe's `reconnect` opens again.
+  recipe's `reconnect` opens again. So does a connection with no results by
+  Convex's second ping, about half a minute after it opened, whatever
+  `idleTimeoutMs` says: the module cannot tell opening frames that were lost
+  from a first answer that late.
 - **A query's lifetime.** Its identity is its function and arguments. One a
   screen no longer asks for is dropped at the second change after its last
   ask. One asked while the socket is closed, with nothing delivered for it,
@@ -1539,14 +1543,26 @@ out (LLP 1157).
   keeps what it showed. A mutation or an action rejects with one when Convex
   refuses it (`message` is Convex's, `data` a `ConvexError`'s payload), when
   the socket is not open (nothing was sent), and when the socket closes before
-  the answer. That last one may have run, and nothing is sent again on the
-  next connection: a write that must not repeat carries its own key. When
+  the answer. That last one may have run, and the module sends nothing again
+  on the next connection by itself. When
   Convex refuses a token it closes the socket. A request sent behind the
   refused `setAuth` rejects with Convex's words, as `live.authError` has them:
   it did not run. When a token expires, Convex refuses it at whichever request
   meets it first, and one sent earlier (an action still running) may have run,
   so each rejects with "Convex refused the token before it answered (…); the
   mutation may have run".
+- **Sending a mutation again.** The failure of a mutation whose connection
+  ended before Convex answered carries `again`, a handle (none if you signed
+  out after sending it). Once `live.status`
+  is `ready` again, `cx.again(handle)` in a mutation's source sends the same
+  request: Convex answers one it has seen with its first answer, so the write
+  happens once, and runs one it never saw as the person signed in now. Keep
+  the handle in state (`catch (e) { return { ok: false, again: e.again ?? -1 } }`)
+  and offer the retry. A handle is good once (a mutation sent again and left
+  unanswered again fails with the next), the module keeps the last hundred,
+  and `cx.setAuth(undefined)` forgets them all, so a mutation is never sent
+  again as the next person. An action has no handle: one that must not repeat
+  carries its own key.
 - **An action's reply** arrives as soon as Convex has it, and the queries may
   show what it wrote a moment later: a mutation's reply waits for them, an
   action's does not. A view that reads both can show them out of step.
@@ -1617,6 +1633,57 @@ answers from a script on the agent's clock. macOS and Linux run it; every
 other target answers `NotSupportedError`, which `processStatus()` says
 ahead. The options, events and limits are `docs/reference.md`'s "Child
 processes".
+
+### Tools: what a call answers
+
+A `tool` line offers a root action to callers outside the app: the agent
+driver, and, through its face in `app.json` `intents.tools`, Siri and
+Shortcuts (App Intents) and a browser's agent
+([WebMCP](https://webmachinelearning.github.io/webmcp/)). Every door
+answers one envelope (LLP 1111 D4), and `state.intents.calls` keeps the
+last twenty with their `door`:
+
+- `outcome`: `ok`, `failed`, `superseded`, `timeout`, `interrupted` or
+  `refused`. `certainty`: `none` (it did not run), `applied` (it ran and
+  its work settled) or `uncertain` (it ran, and its effect may or may not
+  have landed: read before calling again).
+- `reason`, one word where there is one: `unavailable` (not offered on that
+  door, `available when` false, a face that changed), `arguments`, `busy`
+  (5 s behind another call or a wake, what it reports still being answered,
+  storage still writing), `cancelled`, `refused-commit`, `background`,
+  `person-required`.
+- `value` is what `returns` reads (null when refused), and `message` a
+  sentence for the caller. The record adds `cancelled`.
+
+**A cancelled call.** A browser's agent aborting `execute`, or the system
+cancelling an intent's task, cancels the call (the door sends
+`{"op":"cancel","id":<call>}`). One still waiting never runs: `refused`,
+`none`, `cancelled`. One already dispatched runs to its end, since its
+commit has landed and what it started is the app's to finish; its record
+says `cancelled: true`, and the journal that the caller left.
+
+**On the web**, each faced tool is registered with `document.modelContext`:
+
+- `readOnlyHint` for a `reads` tool whose reach (its action, the actions
+  it calls, the `then`s of what it sends) has no `send`; `consequentialHint`
+  for `destroys` and for every `writes` except `writes additive closed`,
+  which only adds to the app's own data; `untrustedContentHint` when
+  `returns` is a string, whose text may not be the author's (a note, a
+  review).
+- `outputSchema` is the envelope, its `value` typed from `returns`, and
+  `execute` resolves with it for every outcome. It never rejects: an agent
+  learns nothing of a rejection but "OperationError".
+- A face parameter's `title` and `description` are its input schema's
+  (`"page": { "title": "Page", "description": "The page you have read up
+  to.", "type": "integer" }`); App Intents shows the same two words.
+- A route with no `activate=` that would wait for the reader is `idle` in
+  an app with a faced tool on the web door, so the agent finds the tools
+  once the page has loaded. A declared `activate` is kept.
+- `document.modelContext` exists only in a secure context: on `https`, on
+  `localhost` and on `127.0.0.1`, not on a LAN address over `http`
+  (Chrome 156 with `--enable-features=WebMCPTesting`: none at
+  `http://10.0.0.4:<port>`). To try a LAN host, serve it over HTTPS or
+  start Chrome with `--unsafely-treat-insecure-origin-as-secure=<origin>`.
 
 ## Views, layout, and interaction
 
@@ -1976,6 +2043,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
 | `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on iOS and the Mac the group keeps one Tab stop (the checked radio) and arrow keys that press the next or previous radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
 | a route whose first child is a `header` holding one heading (`text role="heading"`; an `aria-level` alone is not one), a text after it and its buttons | the navigation bar; a level-1 heading (`aria-level=1`) is a large title, in a sheet too, and any other level an inline one; the text after it the subtitle |
+| a route whose first child is a `header` holding buttons and no heading (readouts, a search field, a tablist and plain boxes around them too, nothing else) | the navigation bar with no title, its buttons trailing and the root's `navigationBack` control leading; a text or an image in it keeps the whole header in the page (`lower-header-no-bar`) |
 | a pushed route with no such `header` | a bar holding the system Back button alone (LLP 1115.000 D5.2) |
 | a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back |
 | a route with `navigationPresentation="modal"` | a sheet |
@@ -3535,6 +3603,23 @@ finger, and `"automatic"`, the default, is the platform's. iOS and tvOS set it a
 `preferredMenuElementOrder`; the web, the Mac and the other hosts always show the rows
 as written, so they have nothing to apply.
 
+#### Tips
+
+`tip="<title>"` on an element is a tip that teaches it (LLP 1035.006.000), with
+`tipMessage` under the title and `tipImage` a symbol beside it (`symbol:<role>` or
+`symbol:sf/<name>`). The element's `id` names the tip, which the platform remembers across
+launches, so the build refuses a `tip` without an `id` (`lower-tip-id`), and a `tipMessage`,
+`tipImage` or `tipDone` without a `tip` (`lower-tip-parts`). `tipDone=<bool>` says the person
+has done what it teaches; once true the tip is retired for good. iOS, iPadOS and macOS show
+it as TipKit's popover over the element, or over the navigation bar or toolbar item drawn
+for a header's button, when TipKit says it may: one at a time in document order, while the
+element is on screen and uncovered, never again after the person closes it. An empty title
+is no tip, so a computed one offers it only when it applies. The web, Android, Linux,
+Windows and the terminal have no tip system and show none: put nothing essential in a tip.
+A plan that binds `tip` links the `tips` capability (TipKit and SwiftUI on Apple). The
+driver's `state.tips` lists each tip's TipKit status, whether it shows and what it points
+at. Recipe: `tips`.
+
 #### Swipe to reply
 
 `swiperight` moves its node with the finger: it follows up to 64 points, then a fifth of
@@ -3870,7 +3955,14 @@ stored size again. Do not multiply a scale factor into every size instead.
 
 Platform facts are reserved sources (`exactViewport`, `exactPage`, `exactDelivery`,
 `exactSurface`, `exactCanvasPerformance`, `exactTime`); the bake refuses a declared field the source does
-not have. `exactViewport().displayMode` is a string: the current CSS display
+not have. `exactDelivery()` includes the string fields `version` and `buildNumber`: the
+installed binary's `EXACT_VERSION` and `EXACT_BUILD_NUMBER` at bake time (defaults
+`0.1.0` and `1` only when unset). Over-the-air updates leave them unchanged; an
+older bake without them answers `""`. The web JS build uses the same variables
+at build time, with `""` for each unset variable. Rust-rendered pages read those
+values from the web build, including when the server has neither variable set.
+`state.delivery` mirrors them.
+`exactViewport().displayMode` is a string: the current CSS display
 mode on the web, `fullscreen`, `window-controls-overlay` (the tall title row
 `display_override` asks for) or `standalone` on macOS, `standalone` on other
 native hosts. Declare it on the resource's shape; `state.device.displayMode`
@@ -5284,7 +5376,8 @@ component App
 `aria-pressed` true) are the runner's: they take `background-color`, `color`,
 `border-color`, `opacity`, `box-shadow` and `-exact-tint-color`, `:checked`
 under `:disabled`, and `:disabled` is your own disabled look (no default dim).
-`:active` is the host's own press of the innermost node with a `press`: it takes
+`:active` is the host's own press of the innermost node with a `press` or a link's
+`href` (`link href=`, `button href=`, as CSS's `a:active`): it takes
 `background-color`, `color`, `opacity` and `-exact-press-scale`, which become the
 node's pressed paint (LLP 1061 D7). Custom nodes ease on the press curve (under
 Reduce Motion too) and replace the host's unsaid press. Native controls keep

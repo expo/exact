@@ -662,6 +662,22 @@ test('`userInterfaceStyle` takes Expo\'s three values, refusing others by name, 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a launch colour of a host\'s own or Expo\'s splash is refused for background_color, every host\'s one colour', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-launch-'));
+  const read = (extra) => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Launch', app: { id: 'dev.exact.launch', name: 'Launch' }, ...extra }));
+    return readManifest(dir, 'launch');
+  };
+  try {
+    for (const [extra, key] of [[{ host: { android: { windowBackground: '#000' } } }, 'host.android.windowBackground'], [{ splash: { backgroundColor: '#000' } }, 'splash'], [{ host: { android: { splashScreen: {} } } }, 'host.android.splashScreen']]) {
+      assert.throws(() => read(extra), new RegExp(`${key.replaceAll('.', '\\.')}: not a known key; what shows before the first frame is background_color`));
+    }
+    assert.equal(read({ background_color: '#102839', color_scheme_dark: { background_color: '#000' } }).background_color, '#102839');
+    assert.throws(() => read({ color_scheme_dark: { background_color: 'navy' } }), /color_scheme_dark\.background_color: "navy" does not match/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('host.android.maven accepts only pinned group:artifact:version coordinates', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'manifest-maven-'));

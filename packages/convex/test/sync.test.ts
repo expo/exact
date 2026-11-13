@@ -129,7 +129,7 @@ test('the socket closing ends what waits, and the next connection starts from ve
   sync.closed('the socket closed (1006)');
   await pending.wait;
   expect(pending.read()).toBeUndefined();
-  expect(await unanswered.outcome).toEqual({ ok: false, message: 'The connection to Convex closed before it answered (the socket closed (1006)); the mutation may have run.' });
+  expect(await unanswered.outcome).toEqual({ ok: false, message: 'The connection to Convex closed before it answered (the socket closed (1006)); the mutation may have run.', again: 0 });
   expect(await acknowledged.outcome).toEqual({ ok: true, value: 3 });
   expect([sync.status, sync.error]).toEqual(['closed', 'the socket closed (1006)']);
   // What the socket had delivered is still answered.
@@ -183,6 +183,25 @@ test('a connection opened with a token authenticates before its query set, and a
   sync.closed('the socket closed (1005)');
   sync.connecting('s');
   expect(sync.opened().map(f => f.type)).toEqual(['Connect', 'ModifyQuerySet']);
+});
+
+test('a connection Convex has pinged twice and sent no results is ended, to connect again', () => {
+  const sync = new Sync(JSON_ONLY);
+  sync.connecting('session-1');
+  sync.ask(0, 'messages:list', {});
+  sync.opened();
+  expect(sync.frame(JSON.stringify({ type: 'Ping' }))).toEqual([]);
+  let thrown: unknown;
+  try { sync.frame(JSON.stringify({ type: 'Ping' })); } catch (e) { thrown = e; }
+  expect(thrown).toBeInstanceOf(ProtocolError);
+  expect([(thrown as ProtocolError).message, (thrown as ProtocolError).fatal]).toEqual(['Convex sent no results on this connection; connecting again', false]);
+  // A connection Convex has answered may stay quiet as long as it likes, and each connection counts its own.
+  sync.closed((thrown as Error).message);
+  sync.connecting('session-1');
+  sync.opened();
+  sync.frame(JSON.stringify({ type: 'Ping' }));
+  sync.frame(transition(version(0, 0, T0), version(1, 0, T1), [updated(0, [])]));
+  for (let i = 0; i < 3; i++) expect(sync.frame(JSON.stringify({ type: 'Ping' }))).toEqual([]);
 });
 
 test('a chunked Transition is applied once whole', () => {

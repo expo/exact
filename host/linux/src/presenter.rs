@@ -1293,6 +1293,7 @@ impl<D: DataSource> Presenter<D> {
             || self.group.is_some()
             || self.focus.is_some()
             || self.brush.moving()
+            || self.bars_ripple_moving()
             || self.stage_moving();
         let (layout, paint) = self.host.tick_effects(now_ms);
         if layout {

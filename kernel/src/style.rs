@@ -1011,7 +1011,7 @@ fn align_items(v: AlignItems) -> Option<taffy::style::AlignItems> {
     })
 }
 
-fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::AlignItems> {
+fn justify_items(v: JustifyItems) -> Option<taffy::style::AlignItems> {
     use taffy::style::AlignItems as T;
     Some(match v {
         JustifyItems::Normal => return None,
@@ -1024,14 +1024,8 @@ fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::
         JustifyItems::SelfEnd | JustifyItems::UnsafeSelfEnd => T::SELF_END,
         JustifyItems::FlexStart | JustifyItems::UnsafeFlexStart => T::FLEX_START,
         JustifyItems::FlexEnd | JustifyItems::UnsafeFlexEnd => T::FLEX_END,
-        JustifyItems::Left | JustifyItems::UnsafeLeft => match direction {
-            Direction::Ltr => T::START,
-            Direction::Rtl => T::END,
-        },
-        JustifyItems::Right | JustifyItems::UnsafeRight => match direction {
-            Direction::Ltr => T::END,
-            Direction::Rtl => T::START,
-        },
+        JustifyItems::Left | JustifyItems::UnsafeLeft => T::LEFT,
+        JustifyItems::Right | JustifyItems::UnsafeRight => T::RIGHT,
         JustifyItems::SafeCenter => T::SAFE_CENTER,
         JustifyItems::SafeStart => T::SAFE_START,
         JustifyItems::SafeEnd => T::SAFE_END,
@@ -1039,14 +1033,8 @@ fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::
         JustifyItems::SafeSelfEnd => T::SAFE_SELF_END,
         JustifyItems::SafeFlexStart => T::SAFE_FLEX_START,
         JustifyItems::SafeFlexEnd => T::SAFE_FLEX_END,
-        JustifyItems::SafeLeft => match direction {
-            Direction::Ltr => T::SAFE_START,
-            Direction::Rtl => T::SAFE_END,
-        },
-        JustifyItems::SafeRight => match direction {
-            Direction::Ltr => T::SAFE_END,
-            Direction::Rtl => T::SAFE_START,
-        },
+        JustifyItems::SafeLeft => T::SAFE_LEFT,
+        JustifyItems::SafeRight => T::SAFE_RIGHT,
     })
 }
 
@@ -1311,7 +1299,7 @@ impl StyleProps {
         s.align_items = align_items(self.align_items);
         s.align_self = align_self(self.align_self);
         s.align_content = align_content(self.align_content);
-        s.justify_items = justify_items(self.justify_items, self.direction);
+        s.justify_items = justify_items(self.justify_items);
         s.gap = taffy::geometry::Size {
             width: length(cells::gap(env, self.column_gap, across)),
             height: length(cells::gap(env, self.row_gap, down)),
@@ -1387,7 +1375,6 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
         Direction::Ltr => taffy::style::Direction::Ltr,
         Direction::Rtl => taffy::style::Direction::Rtl,
     };
-    s.justify_items = justify_items(arena.style(slot).justify_items, direction);
     if let Some(multicol) = crate::fragment::taffy_multicol(arena, slot) {
         s.rare.multicol = Some(multicol);
         // The flow thread starts at the content top: `align-content` moves

@@ -1,8 +1,10 @@
 // @ref LLP 1080.001 — the UIKit walks behind `layout <target> native` and
 // `layout agree` (the shared half is `AgentNative.swift`). Ownership is by
-// identity, never by class: a subview is accounted for when it is a live
-// node's view, a parked or leaving tree's, or one of the views the presenter
-// and its hosts are known to add (D3's closed list, `inspectionAccount`).
+// identity: a subview is accounted for when it is a live node's view, a
+// parked or leaving tree's, or one of the views the presenter and its hosts
+// are known to add (D3's closed list, `inspectionAccount`). Only the private
+// views UIKit hangs in a scroll view (its indicators, edge effect and large
+// title) are matched by class, and only where they hang.
 // Strays are judged only in a subview list Exact owns (`inspectionJudges`);
 // inside a platform view — a text view, a web view, a control, a
 // controller's view — what is not a node is counted `opaque`, and any node
@@ -193,6 +195,8 @@ extension Presenter {
         if let o = owner {
             let id = o.id
             if sub === o.symbolView { return ("glyph", id) }
+            // A paragraph's painted words (`NodeView.makeTextBox`).
+            if sub === o.specs?.rasterView { return ("text", id) }
             if sub === o.materialView || sub === o.glassSlot || sub === o.glassGroupView || sub === o.vibrancyView { return ("material", id) }
             if sub === o.clipBox { return ("clip", id) }
             if sub === o.metal || sub === o.overlay { return ("canvas", id) }
@@ -230,6 +234,10 @@ extension Presenter {
             let kinds = sub.subviews.map { String(describing: Swift.type(of: $0)) }
             if String(describing: Swift.type(of: sub)) == "_UITouchPassthroughView",
                kinds.contains(where: { $0 == "ScrollEdgeEffectView" || $0 == "BackdropView" }) { return ("edge-effect", owner?.id) }
+            // A navigation bar's large title, which UIKit hangs in the
+            // scroller the bar follows at its top edge (iOS 26 and later).
+            if String(describing: Swift.type(of: sub)) == "_UINavigationBarLargeTitleView",
+               Agent.bar(following: scroll)?.navigationController != nil { return ("large-title", owner?.id) }
         }
         return nil
     }

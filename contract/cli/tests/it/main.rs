@@ -267,6 +267,7 @@ mod theme;
 mod three_forms;
 mod time;
 mod timelines;
+mod tips;
 mod tool_calls;
 mod top_layer_inheritance;
 mod transform_binding;

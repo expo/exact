@@ -1284,3 +1284,32 @@ test('compiler reuse is invalidated by dependency manifests and the workspace lo
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('web builds expose their version inputs in the view and delivery state', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/delivery-version-'));
+  const dist = resolve(dir, 'dist');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Version', app: { id: 'test.delivery-version', name: 'Version' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'shape Build\n  version: string\n  buildNumber: string\ncomponent App\n  resource build = exactDelivery() as shape Build\n  view\n    text `${build.version} (${build.buildNumber})` testId="version"\n');
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) { const file = Bun.file(resolve(dist, new URL(request.url).pathname.slice(1) || 'index.html')); return await file.exists() ? new Response(file) : new Response(null, { status: 404 }); } });
+    for (const [version, buildNumber] of [['2.3.4', '56'], [undefined, undefined], ['', '']]) {
+      const env = { ...process.env, EXACT_APP_DIR: dir };
+      delete env.EXACT_VERSION; delete env.EXACT_BUILD_NUMBER;
+      if (version !== undefined) env.EXACT_VERSION = version;
+      if (buildNumber !== undefined) env.EXACT_BUILD_NUMBER = buildNumber;
+      const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'delivery-version', '--out', dist, '--render', 'none'], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
+      expect(status, stdout + stderr).toBe(0);
+      expect(JSON.parse(readFileSync(resolve(dist, 'app.version.json'), 'utf8'))).toEqual({ version: version ?? '', buildNumber: buildNumber ?? '' });
+      browser = await open({ host: 'web', app: dir, webDist: dist, url: server.url.href });
+      const state = await browser.state();
+      expect(state.resources.build).toEqual({ version: version ?? '', buildNumber: buildNumber ?? '' });
+      expect(state.delivery.version).toBe(version ?? '');
+      expect(state.delivery.buildNumber).toBe(buildNumber ?? '');
+      expect(await browser.carrier.evaluate('document.querySelector("[data-testid=version]").textContent')).toBe(`${version ?? ''} (${buildNumber ?? ''})`);
+      await browser.close(); browser = null;
+    }
+  } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

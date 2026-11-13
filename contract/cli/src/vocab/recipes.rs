@@ -89,6 +89,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("timer-in-a-component"),
     recipe!("timer-that-survives-relaunch"),
     recipe!("timers"),
+    recipe!("tips"),
     recipe!("usb-hid-serial"),
     recipe!("web-look"),
     recipe!("website"),

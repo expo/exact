@@ -184,6 +184,9 @@ struct Bar<'a> {
     search: bool,
     tablist: bool,
     tap: bool,
+    /// A bar item, a readout, a search field or a tablist: what a header
+    /// with no heading needs to be the bar.
+    placed: bool,
     unplaced: Vec<(Span, String)>,
 }
 
@@ -200,8 +203,10 @@ pub(super) const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\
 /// subtitle (a filled box before it as the avatar), one search field, one
 /// tablist, the buttons that press, open a popover or are disabled, and the
 /// readouts (`role="status"`, LLP 1075.003 §9.15); the rest of the header is hidden
-/// with it. With no heading or with two, the bar takes nothing and the
-/// header is shown as written: `lower-header-no-bar`'s (LLP 1116.003 D2.2).
+/// with it. With two headings the bar takes nothing and the header is shown
+/// as written: `lower-header-no-bar`'s (LLP 1116.003 D2.2). With none, the
+/// bar has no title and takes the header only when it places all of it
+/// (`exact_kernel::bars`, issue #364).
 /// An `if` first among the route's children is read branch by branch: a branch's first node
 /// is the route's first child while it is taken, and `after` the route's nodes past that `if`.
 pub(super) fn route_header<'a>(
@@ -226,11 +231,19 @@ pub(super) fn route_header<'a>(
     }
     let mut bar = Bar::default();
     walk(header, &mut bar);
-    if bar.headings != 1 {
+    // No heading, and nothing the bar has no place for: the bar with no title.
+    let untitled = bar.headings == 0 && bar.placed && !bar.avatar && bar.unplaced.is_empty();
+    if bar.headings != 1 && !untitled {
         if !bar.doubt {
             out.push(LowerError {
                 id: "lower-header-no-bar",
-                message: if bar.headings == 0 {
+                message: if bar.headings == 0 && bar.placed {
+                    let what = match bar.unplaced.first() {
+                        Some((_, what)) => what.trim_end_matches(',').trim_end_matches(", before the heading").to_string(),
+                        None => "its filled box".into(),
+                    };
+                    format!("this route's `header` holds no heading, and {what} in it is not a bar item, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items; or, for a bar with no title, move what is not a button below the `header`: a header of buttons alone is the bar{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
+                } else if bar.headings == 0 {
                     format!("this route's `header` holds no heading, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
                 } else {
                     format!("this route's `header` holds {} headings, so on iOS it is not the navigation bar: {NOT_THE_BAR} Keep one `text role=\"heading\"` and make the others plain `text` (the first text after the heading is the bar's subtitle), or move them below the `header`{OR_NO_BAR} (docs/recipes/navigation-stack.md)", bar.headings)
@@ -268,8 +281,8 @@ fn walk<'a>(parent: &'a Node, bar: &mut Bar<'a>) {
                 bar.title = Some(node);
                 bar.passed = true;
             }
-            Part::Search if !bar.search => bar.search = true,
-            Part::Tablist if !bar.tablist => bar.tablist = true,
+            Part::Search if !bar.search => (bar.search, bar.placed) = (true, true),
+            Part::Tablist if !bar.tablist => (bar.tablist, bar.placed) = (true, true),
             Part::Search => bar
                 .unplaced
                 .push((span, "a second `input type=\"search\"`".into())),
@@ -281,10 +294,10 @@ fn walk<'a>(parent: &'a Node, bar: &mut Bar<'a>) {
                 bar.tap = true;
                 walk(node, bar);
             }
-            Part::Pressable => {}
+            Part::Pressable => bar.placed = true,
             // A status around the heading is no readout: walked for it.
             Part::Status if holds_heading(node) => walk(node, bar),
-            Part::Status => {}
+            Part::Status => bar.placed = true,
             Part::Text if bar.passed && !bar.subtitle => bar.subtitle = true,
             Part::Text => bar.unplaced.push((
                 span,

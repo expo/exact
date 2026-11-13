@@ -215,7 +215,7 @@ impl Updates {
 
     /// What the store has to say, into a runner's delivery facts (LLP 1030
     /// D7): the stream, the running and embedded `seq`, whether an entry is
-    /// staged, the sunset; the binary's own three are left as they were.
+    /// staged, the sunset; the binary's own facts are left as they were.
     pub(crate) fn staged_stream_into(&self, delivery: &mut Delivery) {
         let client = lock(&self.client);
         let embedded = client.embedded();
@@ -364,6 +364,13 @@ mod tests {
 
     #[test]
     fn a_stalled_check_allows_selection_session_boot_and_activation() {
+        let mut compat: serde_json::Value = serde_json::from_str(COMPAT).unwrap();
+        compat["embedded"] = serde_json::json!({
+            "seq": 0, "genesis": true, "entryDigest": null, "assets": [],
+            "plan": {"sha256": exact_update::sha256_hex(b"embedded plan"), "bytes": b"embedded plan".len()},
+            "version": "2.3.4", "buildNumber": "56"
+        });
+        let compat = compat.to_string();
         for block_head in [true, false] {
             let base = std::env::temp_dir().join(format!(
                 "exact-linux-stalled-{}-{block_head}",
@@ -372,7 +379,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&base);
             let plan = caltrain::build().unwrap().encode();
             let mut client =
-                Client::open_at(&base, &base, COMPAT, b"embedded plan", Some(ORIGIN)).unwrap();
+                Client::open_at(&base, &base, &compat, b"embedded plan", Some(ORIGIN)).unwrap();
             assert!(matches!(
                 client.check(&mut |url| Ok(if url.ends_with("exact.json") {
                     head(1, &plan)
@@ -398,6 +405,7 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
             let (responsive_tx, responsive_rx) = std::sync::mpsc::channel();
+            let thread_compat = compat.clone();
             let foreground = std::thread::spawn(move || {
                 assert!(!updates.dir().as_os_str().is_empty());
                 let candidate = updates.prepare_activation().unwrap().unwrap();
@@ -417,8 +425,12 @@ mod tests {
                 assert!(session.kernel().live_count() > 0);
                 updates.boot_started();
                 updates.boot_succeeded();
-                let mut delivery = Delivery::default();
+                let mut delivery = Delivery::default().with_compat(&thread_compat);
                 updates.status_into(&mut delivery);
+                assert_eq!(
+                    (&*delivery.version, &*delivery.build_number),
+                    ("2.3.4", "56")
+                );
                 responsive_tx
                     .send((updates, delivery.seq, delivery.staged))
                     .unwrap();
@@ -429,9 +441,13 @@ mod tests {
             assert_eq!(checking.join().unwrap(), "staged seq 2");
             let (updates, seq, staged) = response.unwrap();
             assert_eq!((seq, staged), (1, false));
-            let mut delivery = Delivery::default();
+            let mut delivery = Delivery::default().with_compat(&compat);
             updates.status_into(&mut delivery);
             assert_eq!(delivery.seq, 1);
+            assert_eq!(
+                (&*delivery.version, &*delivery.build_number),
+                ("2.3.4", "56")
+            );
             assert!(delivery.staged);
             drop(updates);
             let _ = std::fs::remove_dir_all(base);

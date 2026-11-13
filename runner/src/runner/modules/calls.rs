@@ -25,6 +25,10 @@
 //!   taken when that commit stands: `uncertain` for a send, `applied` for a
 //!   resource's ask. **Timeout** [`BOUND`] after dispatch. A name that needs
 //!   a person refuses the call `person-required`, `uncertain`.
+//! - **Cancelled** by its caller (`{"op":"cancel","id"}`): one still
+//!   waiting is dropped, `refused`, `none` (`cancelled`); one dispatched
+//!   runs to its end, since its commit has landed and what it started is the
+//!   app's to finish, and its record says the caller left (`cancelled`).
 
 use super::super::{CommitReceipt, DataSource, Runner, RunnerError};
 use super::{CallOrigin, Json};
@@ -81,6 +85,8 @@ struct Call {
     arrived: f64,
     dispatched: Option<f64>,
     skipped: Vec<String>,
+    /// Its caller cancelled it.
+    cancelled: bool,
 }
 
 #[derive(Default)]
@@ -115,6 +121,7 @@ impl<D: DataSource> Runner<D> {
             arrived: self.now_ms,
             dispatched: None,
             skipped: Vec::new(),
+            cancelled: false,
         });
         self.native_slot().changed("");
         Ok(id)
@@ -302,9 +309,21 @@ impl<D: DataSource> Runner<D> {
 
     /// The current call ends `outcome`, with its certainty and reason.
     fn end_call(&mut self, outcome: &str, certainty: &str, reason: &str, value: Json) {
-        let Some(call) = self.extensions.calls.current.take() else {
-            return;
-        };
+        if let Some(call) = self.extensions.calls.current.take() {
+            self.finish_call(call, outcome, certainty, reason, value);
+        }
+    }
+
+    /// `call` ends `outcome`, its record joining the ended calls'. A
+    /// refusal's `value` is its message.
+    fn finish_call(
+        &mut self,
+        call: Call,
+        outcome: &str,
+        certainty: &str,
+        reason: &str,
+        value: Json,
+    ) {
         let name = self.plan.str(self.plan.tools[call.tool].name).to_owned();
         let message = match (outcome, value.as_str()) {
             ("refused", Some(m)) => m.to_owned(),
@@ -330,6 +349,7 @@ impl<D: DataSource> Runner<D> {
             "reason": reason,
             "stale": false,
             "skipped": call.skipped,
+            "cancelled": call.cancelled,
             "value": value,
             "message": message,
             "at": self.time.epoch_at_zero + self.now_ms,
@@ -406,6 +426,38 @@ impl<D: DataSource> Runner<D> {
         })
     }
 
+    /// Call `id`'s caller cancelled it (module doc): `{call, state}`, the
+    /// state `ended` once it has ended, `running` while it runs to its end.
+    fn cancel_call(&mut self, id: u64) -> Result<String, String> {
+        let calls = &mut self.extensions.calls;
+        if let Some(i) = calls.waiting.iter().position(|c| c.id == id) {
+            let mut call = calls.waiting.remove(i).expect("found");
+            call.cancelled = true;
+            let name = self.plan.str(self.plan.tools[call.tool].name).to_owned();
+            self.log(format!(
+                "tool:system:{} {name}: cancelled before it ran",
+                call.how.door
+            ));
+            let message = json!("Its caller cancelled it before it ran.");
+            self.finish_call(call, "refused", "none", "cancelled", message);
+            return Ok(json!({ "call": id, "state": "ended" }).to_string());
+        }
+        if let Some(call) = calls.current.as_mut().filter(|c| c.id == id) {
+            if !std::mem::replace(&mut call.cancelled, true) {
+                let door = call.how.door.clone();
+                let name = self.current_tool_name();
+                self.log(format!(
+                    "tool:system:{door} {name}: its caller cancelled; it runs to its end"
+                ));
+            }
+            return Ok(json!({ "call": id, "state": "running" }).to_string());
+        }
+        match calls.ended.iter().any(|c| c["id"] == id) {
+            true => Ok(json!({ "call": id, "state": "ended" }).to_string()),
+            false => Err(format!("no call {id}")),
+        }
+    }
+
     /// Call `id` as its door polls it: LLP 1111 D4's envelope once it has
     /// ended, else `{call, state}` with `waiting` or `running`.
     fn call_answer(&self, id: u64) -> Result<String, String> {
@@ -425,7 +477,8 @@ impl<D: DataSource> Runner<D> {
     /// as the door would hand it), a launch's `--call '<tool> <json>'`
     /// (`{"op":"launchEntry","launch":"call","entry"}`: a cold call in a
     /// session no one sees, as a system's call boots one), a door's poll of
-    /// its call (`{"op":"called","id"}`) and `entities`
+    /// its call (`{"op":"called","id"}`), its caller's cancellation
+    /// (`{"op":"cancel","id"}`) and `entities`
     /// (`{"op":"entities","kind","matching"}`, what the content index's
     /// query answers a system). `None` for any other op.
     pub fn call_agent(&mut self, op: &str, request: &str) -> Option<Result<String, String>> {
@@ -468,6 +521,10 @@ impl<D: DataSource> Runner<D> {
             "called" => Some(match v["id"].as_u64() {
                 Some(id) => self.call_answer(id),
                 None => Err("called needs the call's id".into()),
+            }),
+            "cancel" => Some(match v["id"].as_u64() {
+                Some(id) => self.cancel_call(id),
+                None => Err("cancel needs the call's id".into()),
             }),
             "entities" => {
                 let Some(kind) = v["kind"].as_str() else {

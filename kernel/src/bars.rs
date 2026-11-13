@@ -16,6 +16,14 @@
 //! Back control is the platform's own Back where the platform has one for
 //! that route, and an item like the others where it has not.
 //!
+//! **A header with no heading** is the bar too, with no title, when the bar
+//! places everything it shows: buttons, readouts, a search field, a
+//! tablist, and plain boxes around them or empty between them (issue #364).
+//! A text, an image or anything else in it is the page's, so such a header
+//! stays as written rather than lose it. With no heading to stand between
+//! them, its items trail, as SwiftUI's `ToolbarItemPlacement.automatic`
+//! places an action in a bar, except the stack's Back control, which leads.
+//!
 //! **Two trees.** The rule is written once, over [`Tree`]: a node's facts
 //! ([`fact`]) and its children. A host that reads the kernel's tree calls
 //! [`Kernel::header_shape`]. A host that keeps a mirror of the tree (the
@@ -93,6 +101,10 @@ pub mod fact {
     pub const NAV: u32 = 1 << 13;
     /// An `href` or `role="link"`.
     pub const LINK: u32 = 1 << 14;
+    /// A plain box (a `view`, a `row`, a `header`, …), which shows nothing of
+    /// its own: a header with no heading may hold one around or between its
+    /// items and still be the bar.
+    pub const BOX: u32 = 1 << 15;
     /// A heading's `aria-level`, 1 to 6, shifted this far; 0 where it says
     /// none (ARIA's default is then 2).
     pub const LEVEL: u32 = 16;
@@ -139,6 +151,7 @@ pub mod fact {
                 AUTHORED,
             ),
             (props.str(PropId::NavigationBar) == Some("none"), NO_BAR),
+            (node.node_type == NodeType::View, BOX),
             (
                 (node.node_type == NodeType::Pressable
                     || (node.node_type == NodeType::Control
@@ -187,10 +200,11 @@ pub fn site_header<T: Tree>(tree: &T, header: T::Node) -> bool {
 pub struct HeaderShape<N> {
     /// The `header`.
     pub header: N,
-    /// Its one heading: the bar's title.
-    pub heading: N,
+    /// Its one heading: the bar's title. None for a header with no heading,
+    /// whose bar has no title.
+    pub heading: Option<N>,
     /// The heading's level: 1 is the screen's own title (UIKit's large
-    /// title), any other an inline one.
+    /// title), any other an inline one; 0 with no heading.
     pub level: u32,
     /// The items before the heading, in order: its buttons and readouts
     /// (`role="status"`).
@@ -263,6 +277,10 @@ fn holds_heading<T: Tree>(tree: &T, node: T::Node) -> bool {
 
 struct Walk<N> {
     headings: Vec<N>,
+    /// A shown node the bar has no place for, outside its items: a text, an
+    /// image, a control. With a heading it is hidden with the header; with
+    /// none, the header is not the bar.
+    unplaced: bool,
     leading: Vec<N>,
     trailing: Vec<N>,
     items: Vec<N>,
@@ -289,10 +307,14 @@ impl<N: Copy + PartialEq> Walk<N> {
             if facts & fact::HEADING != 0 {
                 self.headings.push(child);
             } else if facts & fact::SEARCH != 0 {
+                // The bar has one place for a search field: a second is
+                // unplaced, so a header with no title keeps it in the page.
+                self.unplaced |= self.search.is_some();
                 self.search.get_or_insert(child);
             } else if facts & fact::TABLIST != 0 {
                 // Its tabs press, but they are the title's segments, never
-                // bar items.
+                // bar items. One tablist, as one search field.
+                self.unplaced |= self.segments.is_some();
                 self.segments.get_or_insert(child);
             } else if facts & (fact::PRESS | fact::MENU) != 0
                 // A disabled button around the heading is walked for it, as a box is.
@@ -314,6 +336,7 @@ impl<N: Copy + PartialEq> Walk<N> {
                 // presses. What it holds is its face.
                 self.place(child);
             } else {
+                self.unplaced |= facts & fact::BOX == 0;
                 self.walk(tree, child, back_is_platforms);
             }
         }
@@ -336,6 +359,7 @@ pub fn header_shape<T: Tree>(
     }
     let mut walk = Walk {
         headings: Vec::new(),
+        unplaced: false,
         leading: Vec::new(),
         trailing: Vec::new(),
         items: Vec::new(),
@@ -344,12 +368,27 @@ pub fn header_shape<T: Tree>(
         tap: None,
     };
     walk.walk(tree, header, back_is_platforms);
-    let [heading] = walk.headings[..] else {
-        return None;
-    };
-    let level = match tree.facts(heading) >> fact::LEVEL {
-        level @ 1..=6 => level,
-        _ => 2,
+    let (heading, level) = match walk.headings[..] {
+        [heading] => match tree.facts(heading) >> fact::LEVEL {
+            level @ 1..=6 => (Some(heading), level),
+            _ => (Some(heading), 2),
+        },
+        [] if !walk.unplaced
+            && (!walk.items.is_empty()
+                || !walk.leading.is_empty()
+                || walk.search.is_some()
+                || walk.segments.is_some()) =>
+        {
+            // No heading stands between them: the items trail, the stack's
+            // Back control leads.
+            let (back, rest): (Vec<T::Node>, Vec<T::Node>) = std::mem::take(&mut walk.leading)
+                .into_iter()
+                .partition(|item| tree.facts(*item) & fact::BACK != 0);
+            walk.leading = back;
+            walk.trailing.splice(0..0, rest);
+            (None, 0)
+        }
+        _ => return None,
     };
     Some(HeaderShape {
         header,
@@ -448,8 +487,9 @@ pub const PROJECTED: u32 = 2;
 /// that keeps its own mirror of the tree: `words` is the route and its
 /// first child's subtree in preorder, two words a node (facts, child
 /// count). The answer names nodes by their place in that order: the
-/// header, the heading, its level, then one more than the pressable
-/// around the heading, the search field and the tablist (0: none), the
+/// header, then one more than the heading (0: none), its level, one more
+/// than the pressable around the heading, the search field and the
+/// tablist (0: none), the
 /// counts of leading items, trailing items (readouts among them) and
 /// buttons, and those three lists. `None` for a route that is not header-shaped, or words that are
 /// not one tree.
@@ -463,7 +503,7 @@ pub fn header_shape_words(words: &[u32], flags: u32) -> Option<Vec<u32>> {
     let optional = |node: Option<u32>| node.map_or(0, |node| node + 1);
     let mut out = vec![
         shape.header,
-        shape.heading,
+        optional(shape.heading),
         shape.level,
         optional(shape.tap),
         optional(shape.search),

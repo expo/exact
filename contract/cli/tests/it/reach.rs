@@ -280,6 +280,26 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     );
     let digest = log["digest"].as_str().unwrap().to_owned();
     assert_eq!(digest.len(), 64);
+    // A face on the web door is offered to a browser's agent, so a page
+    // that would wait for the reader activates `idle` (LLP 1048.007 D1).
+    assert!(exact_runner::activation::offers_tools(&plan));
+
+    // A parameter's description is the face's, and the digest covers it:
+    // a door that compiled the old words is refused (`face`).
+    let mut described = good.clone();
+    described["tools"]["log"]["parameters"]["page"]["description"] = json!("The page reached.");
+    write(&described);
+    let plan = compile().unwrap_or_else(|e| panic!("{e:?}"));
+    let log = face(&plan, "log");
+    assert_eq!(
+        log["parameters"]["page"]["description"],
+        "The page reached."
+    );
+    assert_ne!(log["digest"], digest);
+    let mut native = good.clone();
+    native["tools"]["log"]["doors"] = json!(["apple"]);
+    write(&native);
+    assert!(!exact_runner::activation::offers_tools(&compile().unwrap()));
 
     let refused = |intents: Json, id: &str| {
         write(&intents);

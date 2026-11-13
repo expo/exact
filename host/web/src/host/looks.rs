@@ -46,11 +46,12 @@ pub fn rules(at: &str, looks: &[(u8, String)]) -> String {
 }
 
 /// Each look's `color` as page rules for the elements `below` selects inside
-/// the element `at` selects, in [`rules`]' order; empty for none. A mode
-/// boundary writes the colour around it again on itself (the JS target's
-/// `modes.js`), which stops a look's colour that its subtree would inherit;
-/// written on the boundary too, the look's token resolves in the boundary's
-/// modes, as the colour it stands over does.
+/// the element `at` selects, in [`rules`]' order; empty for none. A mode or
+/// `color-scheme` boundary that does not set its own colour (the JS target's
+/// `modes.js` marks it) resolves tokens in its own modes, and writes an
+/// inherited token colour again on itself, which would stop the look's;
+/// written on the boundary, the look's colour reaches its subtree, its token
+/// resolved there.
 pub fn colour_below(at: &str, looks: &[(u8, String)], below: &str) -> String {
     let (mut out, below) = (String::new(), format!(" {below}"));
     for (state, css) in looks {

@@ -77,7 +77,7 @@ function everyRole() {
     refresh();
   }).finally(() => inflight.n--);
 }
-const STYLE = '@property --exact-tint{syntax:"<color>";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}:where(img[data-symbol-path][data-symbol-color]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:center;mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}';
+const STYLE = '@property --exact-tint{syntax:"<color>";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:center;mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}';
 /** `table`: role → [path, filled], for sources a binding names. */
 export function symbols(table) {
   Table = table;
@@ -158,24 +158,6 @@ function template(e, v) {
   e.$template = true;
   if (fit === "scale-down") { const set = () => { const cs = getComputedStyle(e); e.style.setProperty("--exact-tint-fit", e.naturalWidth <= e.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) && e.naturalHeight <= e.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) ? "auto" : "contain"); }; if (e.complete) set(); else e.addEventListener("load", set, { once: true }); }
 }
-// Whether a symbol under a bound `color` or a mode boundary draws in its colour
-// (LLP 1121 stage 9 B, style.rs `symbol_marks`): the nearest of its `n` such nodes
-// (`data-exact-ink`) that sets the row decides. A boundary's implied row (modes.js
-// `$xs`), which no author wrote, first: it stands where its own binding clears or is
-// refused, as the runner installs it; else a bound one while its binding has a value,
-// a clear included (`$ink`, rows.rs), as its author wrote it or not. With none, the
-// decision past them.
-const inked = (e, ink) => {
-  let n = +ink.slice(0, -1);
-  for (let p = e; p && n; p = p.parentElement) {
-    const w = p.getAttribute("data-exact-ink");
-    if (w == null) continue;
-    n--;
-    if (w.endsWith("b") && p.$xs?.[0] != null) return false;
-    if (w !== "b" && (p.$ink ?? !!p.style.getPropertyValue("color"))) return w[0] === "1";
-  }
-  return ink.endsWith("1");
-};
 function refresh() {
   if (typeof window === "undefined" || globalThis.__exactRender) return; // the render host's document answers no query and computes no style; the page's glue sizes its symbols
   const symbols = [];
@@ -183,10 +165,6 @@ function refresh() {
     if (!el.isConnected) continue;
     if (el.$app === undefined && el.hasAttribute("data-app-src")) appSource(el, el.getAttribute("data-app-src"));
     if (el.hasAttribute("data-symbol-path")) symbols.push(el);
-  }
-  for (const el of symbols) {
-    const ink = el.getAttribute("data-symbol-ink");
-    if (ink) el.toggleAttribute("data-symbol-color", inked(el, ink));
   }
   // Batch reads before writes; computed styles are live, so keep only scalar values.
   const titles = symbols.flatMap(el => {

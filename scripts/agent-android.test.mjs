@@ -825,6 +825,24 @@ test('Android distribution refuses bad metadata and incomplete credentials befor
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a production Android build with the Linux bake store on and no stream is refused before compiling (#48)', async () => {
+  const { androidStreamRefusal } = await import('./agent-android.mjs');
+  const production = { EXACT_UPDATE_TRUST: 'production' };
+  expect(androidStreamRefusal('a', {}, production)).toContain('deploy.store.linux to "0"');
+  expect(androidStreamRefusal('a', { deploy: { store: { android: '0' } } }, production)).toContain('deploy.store.android does not');
+  expect(androidStreamRefusal('a', { deploy: { store: { linux: '0' } } }, production)).toBeNull();
+  expect(androidStreamRefusal('a', {}, {})).toBeNull();
+  expect(androidStreamRefusal('a', {}, { ...production, EXACT_UPDATE_GENESIS: '1' })).toBeNull();
+  expect(androidStreamRefusal('a', {}, { ...production, EXACT_UPDATE_RECEIPT: '/receipt.json' })).toBeNull();
+  expect(androidStreamRefusal('a', {}, { ...production, EXACT_BAKE_ANALYSIS: '1' })).toBeNull();
+  // The verb says it in its first second: `--bundle` bakes production trust, and this app's store is on.
+  const env = { ...process.env };
+  for (const key of ['EXACT_UPDATE_TRUST', 'EXACT_UPDATE_RECEIPT', 'EXACT_UPDATE_GENESIS', 'EXACT_BAKE_ANALYSIS']) delete env[key];
+  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'auth-fixture', '--bundle'], { encoding: 'utf8', env, timeout: 30000 });
+  expect(r.status).toBe(1);
+  expect(r.stderr).toContain('set deploy.store.linux to "0" in app.json');
+});
+
 test('Android bundles and unattended APKs have explicit command flags', async () => {
   const { guardFlags } = await import('./help.mjs');
   expect(guardFlags('android', ['--bundle', '--json'])).toEqual(['--bundle', '--json']);

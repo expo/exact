@@ -672,7 +672,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if let sv = scroll { presenter?.session?.frameHealth.trackScrolled(sv) }
         presenter?.stickies.scrolled(id)
         presenter?.collectionScrolled(id)
-        presenter?.transformGeometry.changed()
+        presenter?.transformGeometry.changed(); presenter?.tipsScrolled()
         presenter?.videoVisibility?.changed()
         // The list window and the text bands follow the scroll; they are not
         // part of it (`Presenter.scrolled`).

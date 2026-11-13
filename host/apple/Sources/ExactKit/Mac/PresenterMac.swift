@@ -199,7 +199,7 @@ package final class Presenter {
         scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
             object: viewport.contentView, queue: .main) { [weak self] _ in
             if let self { let o = viewport.contentView.bounds.origin; onScrolled?(nil, Double(o.x), Double(o.y)) }
-            self?.stickies.scrolled(nil); self?.scrolled(); self?.transformGeometry.changed(); self?.videoVisibility?.changed() }
+            self?.stickies.scrolled(nil); self?.scrolled(); self?.transformGeometry.changed(); self?.videoVisibility?.changed(); self?.tipsScrolled() }
     }
 
     deinit {
@@ -635,7 +635,7 @@ package final class Presenter {
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
         WakeLock.hold(self, false); releaseOrientationLock() // the new host's first batch says them again
         cancelPageElementScroll(viewport.contentView)
-        focusEvents.reset()
+        focusEvents.reset(); TipLink.installed?.withdraw(owner: self)
         pointerHeld = nil; pointerPath = []; pointerSource = nil; mouseChain.bubbledPress?.cancel()
         mouseChain.early = nil; mouseChain.reported = []; mouseChain.heldUp = nil; mouseChain.releaseAfterBubbling = false
         elements.reset()
@@ -1247,6 +1247,7 @@ package final class Presenter {
             }
         }
         regridMoved()
+        NodeView.inkPlaced(reparented.compactMap { views[$0] })
         if !flights.isEmpty { flightsBatchApplied() }
         tables.sync(batch)
         navigation.sync(batch, reparented: reparented)
@@ -1287,6 +1288,7 @@ package final class Presenter {
             #endif
         }
         shortcuts.sync()
+        presentTips()
         statusItems.sync()
         if structureChanged { selection.structureChanged() }
         // The key-view loop is read only by a key event (Tab): it is marked

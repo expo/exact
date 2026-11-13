@@ -86,6 +86,24 @@ shape Run
 shape Cell
   id: string
   runs: Run[]
+  align: string
+shape TableGroup
+  id: string
+  start: number
+  end: number
+// One sizing line refers to cells of its table block's `cells` by index:
+// `cells`, single-run cells of one style that the reader joins with
+// newlines, or `cell`, one cell of several runs (`-1` when `cells` is used).
+shape SizerLine
+  id: string
+  cells: number[]
+  cell: number
+  weight: number
+  slant: string
+  mono: bool
+shape TableSizer
+  id: string
+  lines: SizerLine[]
 shape Block
   id: string
   kind: string
@@ -100,6 +118,8 @@ shape Block
   width: number
   height: number
   align: string
+  tableGroups: TableGroup[]
+  tableSizers: TableSizer[]
 shape Runbook
   title: string
   sourceBytes: number
@@ -833,16 +853,20 @@ component Blocks
               if block.kind == "rule"
                 view width="100%" height=1 background-color=theme.edge margin-top=22 margin-bottom=22 testId=`block-${block.id}`
               else
-                if block.kind == "table-row"
-                  row width="100%" border-bottom-style="solid" border-bottom-width=1 border-color=theme.edge testId=`block-${block.id}`
-                    for c in block.cells key=c.id
-                      view flex=1 padding=8
-                        if block.header
-                          text color=theme.ink line-height="20px"
-                            Runs(runs=c.runs, size=(13 * k), weight=700)
-                        else
-                          text color=theme.ink line-height="20px"
-                            Runs(runs=c.runs, size=(13 * k), weight=400)
+                if block.kind == "table"
+                  view width="100%" testId=`block-${block.id}`
+                    scroll testId=`table-${block.id}` width="100%" overflow-x="auto" overflow-y="hidden"
+                      for g in block.tableGroups key=g.id
+                        view display="grid" grid-template-columns=`repeat(${block.depth}, minmax(min-content, auto))`
+                          for s in block.tableSizers key=s.id
+                            ColumnSizer(sizer=s, cells=block.cells, size=(13 * k))
+                          for c, i in block.cells.slice(g.start, g.end) key=c.id
+                            if g.start + i < block.depth
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color=theme.edge color=theme.ink line-height="20px"
+                                Runs(runs=c.runs, size=(13 * k), weight=700)
+                            else
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color=theme.edge color=theme.ink line-height="20px"
+                                Runs(runs=c.runs, size=(13 * k), weight=400)
                 else
                   if block.kind == "image"
                     column width="100%" padding-top=10 padding-bottom=10 gap=6 testId=`block-${block.id}`
@@ -853,6 +877,34 @@ component Blocks
                     // Raw HTML: shown, never interpreted.
                     view width="100%" padding-top=4 padding-bottom=4 testId=`block-${block.id}`
                       text block.text font-family="ui-monospace" font-size=(12 * k) color=theme.muted
+
+// The text of a sizing line's cells, one cell a line.
+fn sizerText(cells: Cell[], refs: number[]): string = refs.map(n => match cells.at(n) { case some(c) => match first(c.runs) { case some(r) => r.text, case none => "" }, case none => "" }).join("\n")
+
+// One column's invisible grid item in each group of a long table: it gives
+// every group the whole table's intrinsic column widths. It draws no links,
+// which hidden text must not take focus with.
+component ColumnSizer
+  props
+    sizer: TableSizer
+    cells: Cell[]
+    size: number
+  view
+    view height=0 overflow="hidden" opacity=0 aria-hidden=true padding-left=8 padding-right=8
+      for l in sizer.lines key=l.id
+        if l.cell < 0
+          if l.mono
+            text sizerText(cells, l.cells) white-space="pre-line" line-height="20px" font-family="ui-monospace" font-size=(size * 0.92) font-weight=l.weight font-style=l.slant
+          else
+            text sizerText(cells, l.cells) white-space="pre-line" line-height="20px" font-size=size font-weight=l.weight font-style=l.slant
+        else
+          for c in cells.slice(l.cell, l.cell + 1) key=c.id
+            text line-height="20px"
+              for r in c.runs key=r.id
+                if r.mono
+                  text r.text font-family="ui-monospace" font-size=(size * 0.92) font-weight=(r.weight > l.weight ? r.weight : l.weight) font-style=r.slant
+                else
+                  text r.text font-size=size font-weight=(r.weight > l.weight ? r.weight : l.weight) font-style=r.slant
 
 // The styled spans of one paragraph, as the inline `text` children the
 // kernel measures as one paragraph and CoreText paints as one typeset run.

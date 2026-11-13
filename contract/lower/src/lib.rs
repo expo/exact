@@ -86,6 +86,7 @@ mod tables;
 pub mod tags;
 mod theme;
 mod timers;
+mod tips;
 mod tools;
 mod type_tokens;
 mod values;
@@ -1340,9 +1341,12 @@ impl<'a> Lowerer<'a> {
                     glass = width;
                     &glass
                 // @ref LLP 1116.007 D3.1 — a symbol by another spelling is its role.
-                } else if let Some(role) = (prop == exact_kernel::PropId::ImageSource)
-                    .then(|| symbols::roles(&a.value))
-                    .flatten()
+                } else if let Some(role) = matches!(
+                    prop,
+                    exact_kernel::PropId::ImageSource | exact_kernel::PropId::TipImage
+                )
+                .then(|| symbols::roles(&a.value))
+                .flatten()
                 {
                     glass = role;
                     &glass

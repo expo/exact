@@ -477,7 +477,7 @@ export async function setup({check = false, platform = null, device = false} = {
     }
   }
   const rows = sdkReport(process.env, { only: platform, device });
-  const report = platform ? (await platformReport(platform, rows, { device })).map(row => ({ ...row, required: true })) : rows;
+  const report = [...(platform ? (await platformReport(platform, rows, { device })).map(row => ({ ...row, required: true })) : rows), cratesRow()];
   printReport(report);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
@@ -487,6 +487,16 @@ export async function setup({check = false, platform = null, device = false} = {
   console.log(needed.length
     ? `SDK tools ready, except for ${needed.join('; ')}. Build scripts select the pinned stable/nightly without changing rustup default.`
     : 'SDK tools ready. Build scripts select the pinned stable/nightly without changing rustup default.');
+}
+/** Whether Cargo's cache holds every source exact2's lock names. Its tools build `--locked --offline`, and offline
+ * Cargo resolves the whole lock, so a single missing crate stops the first of them (a clean CI worker's, with
+ * "no matching package named `wat` found"). Setup's own row, not `sdkReport`'s: a build fetches what is missing
+ * once, and a platform's first build must not be refused for it. `manifest` is the workspace's (a test's own). */
+export function cratesRow(env = process.env, manifest = resolve(ROOT, 'Cargo.toml')) {
+  const fetched = spawnSync('cargo', ['fetch', '--locked', '--offline', '--manifest-path', manifest], { cwd: ROOT, encoding: 'utf8', env: cargoEnvironment(env) });
+  const said = (fetched.stderr ?? '').split('\n').find(line => line.startsWith('error: '))?.slice(7);
+  return { name: 'Cargo crates', have: fetched.status === 0 ? 'in Cargo cache' : said ?? fetched.error?.message ?? 'not all fetched',
+    want: "exact2's Cargo.lock", ok: fetched.status === 0, fix: `cargo fetch --locked --manifest-path ${manifest} (exact setup does)`, required: true, need: null };
 }
 /** Every prerequisite at once (LLP 1086 D6): what is installed, what the SDK
  * pins, and, for what only some apps need, which ones. A row is `required`

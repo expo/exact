@@ -1,6 +1,7 @@
 # Web: a history traversal forgoes the shared-element flight
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A web Back or Forward now flies its shared element: during the traversal the router mirrors its settled value to the history before the view transition's deferred tree update, which does not apply it again, so `popped` judges at once, and the agent's `travel` waits for the update; a traversal the browser animated (`hasUAVisualTransition`) or under reduced motion cuts.
 **Systems:** web host history (`host/web/navigation.js`), JS target shared elements (`host/web-js/shared.js`, `host/web-js/rt.js`)
 **Severity:** P3
 **Author:** unrecorded (filed without a header)

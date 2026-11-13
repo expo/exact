@@ -1112,11 +1112,17 @@ reading. Nothing that isn't HTML is added by it.
   and Low Data Mode; Expose's real battery. Unblocks an app that does what
   Low Power Mode and Low Data Mode ask without app Swift or Kotlin. Take:
   none named; the ruling is its own waiver. Still out, each until a
-  consumer asks (LLP 1133.031 §11): device and app identity;
+  consumer asks (LLP 1133.031 §11): device identity;
   `chargingTime` and `dischargingTime`; `effectiveType`, `downlink` and
   `rtt`; ultra-constrained paths and a path's unsatisfied reason; battery
   health, cycle count, temperature and voltage; Android's thermal
   headroom; `prefers-reduced-data`; and a Linux or Windows thermal state.
+- **Expanded (Charlie, 2026-11-12, "recs ok"; LLP 1133.031 §11 and
+  LLP 1030.003 D2, D3):** the app's installed version and build number as
+  delivery facts, `exactDelivery()`'s `version` and `buildNumber` strings,
+  mirrored by `state.delivery`. Consumer: #360's reporter, whose About screen
+  and support email need the installed build. Take: none named; the ruling
+  is its own waiver. Device identity remains deferred.
 - **Expanded (Charlie, 2026-10-23, "Admit all three, no take", on LLP
   1133.014 §13 question 8):** signing in with an identity provider by
   FedCM's names: an `identity` member on `@exact/passkeys`'

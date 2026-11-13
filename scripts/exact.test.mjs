@@ -1217,6 +1217,29 @@ test.skipIf(process.platform === 'win32')("setup names rustup's directory when a
   });
 });
 
+test("setup's Cargo crates row fails on a registry without exact2's locked crates and names the fetch (#48)", async () => {
+  const { cratesRow } = await import('./exact.mjs');
+  // A workspace whose lock names no registry crate has every source on an empty Cargo home.
+  inDir((dir) => {
+    const home = resolve(dir, 'home'), crate = resolve(dir, 'crate');
+    mkdirSync(home); mkdirSync(resolve(crate, 'src'), { recursive: true });
+    writeFileSync(resolve(crate, 'Cargo.toml'), '[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n\n[workspace]\n');
+    writeFileSync(resolve(crate, 'src/lib.rs'), '');
+    writeFileSync(resolve(crate, 'Cargo.lock'), 'version = 4\n\n[[package]]\nname = "fixture"\nversion = "0.1.0"\n');
+    const row = cratesRow({ ...process.env, CARGO_HOME: home }, resolve(crate, 'Cargo.toml'));
+    assert.equal(row.ok, true, row.have);
+    assert.equal(row.have, 'in Cargo cache');
+  });
+  // exact2's lock on a clean CI worker's: Cargo's home has no index and no crates.
+  inDir((home) => {
+    const row = cratesRow({ ...process.env, CARGO_HOME: home });
+    assert.equal(row.ok, false);
+    assert.ok(row.required);
+    assert.match(row.have, /no matching package named|--offline was specified/);
+    assert.ok(row.fix.startsWith(`cargo fetch --locked --manifest-path ${resolve(import.meta.dir, '../Cargo.toml')}`), row.fix);
+  });
+}, 60_000);
+
 test.skipIf(process.platform === 'win32')("the setup report's Rust row and exact contract name another's cargo, rustup's rustc working", async () => {
   const { sdkReport } = await import('./exact.mjs');
   const pin = Bun.TOML.parse(readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8')).toolchain.channel;

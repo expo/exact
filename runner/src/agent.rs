@@ -1083,6 +1083,10 @@ fn delivery<D: DataSource>(runner: &Runner<D>, s: &mut String) {
     }
     s.push_str("],\"compatibilityId\":");
     quote(&d.compatibility_id, s);
+    s.push_str(",\"version\":");
+    quote(&d.version, s);
+    s.push_str(",\"buildNumber\":");
+    quote(&d.build_number, s);
     s.push_str(",\"L\":");
     quote(&d.store.to_string(), s);
     s.push_str(",\"E\":[");

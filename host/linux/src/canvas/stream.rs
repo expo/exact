@@ -252,6 +252,102 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_route_headings_follow_focus_and_touch_mode() {
+        use crate::presenter::{PainterChoice, PointerKind, Presenter};
+
+        let source = r##"routes nav
+  tab home "/"
+    detail "/detail"
+component App
+  action open
+    nav = push(nav, "/detail")
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" width=400 height=500 accent-color="#ed1234"
+      for t in nav.tabs key = t.name
+        for e in t.stack key = e.id
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            if e.name == "home"
+              button testId="open" press=open width=100 height=40
+                text "Open"
+            if e.name == "detail"
+              header overflow-y="auto" width=200 height=120
+                text "Detail" role="heading" testId="title" width=160 height=50
+                box tabindex=-1 testId="other" width=160 height=50
+              button id="back" press=back width=100 height=40
+                text "Back"
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (400., 500.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        (p.brush.touch_mode, p.brush.keyless) = (true, true);
+        p.set_pointer_kind(PointerKind::Touch);
+        let id = |p: &Presenter<()>, name: &str| {
+            let k = p.host().kernel();
+            k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+        };
+        let mut rows = HashMap::new();
+        let mut frame = |p: &mut Presenter<()>| {
+            p.frame();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let (mut at, mut rings, mut recorded) = (0, 0, 0);
+            while at < ops.len() {
+                let next = end(&ops, at).expect("valid Canvas stream");
+                match ops[at] {
+                    ROW_BEGIN => {
+                        let mut i = at + 6;
+                        let mut count = 0;
+                        while i < next {
+                            count += usize::from(ops[i] == RING && ops[i + 1] == 0xffed1234);
+                            i = end(&ops, i).expect("valid row");
+                        }
+                        rows.insert(ops[at + 1], count);
+                        recorded += 1;
+                    }
+                    ROW_DRAW => rings += rows[&ops[at + 1]],
+                    ROW_FREE => {
+                        rows.remove(&ops[at + 1]);
+                    }
+                    RING if ops[at + 1] == 0xffed1234 => rings += 1,
+                    _ => {}
+                }
+                at = next;
+            }
+            (rings, recorded)
+        };
+        frame(&mut p);
+        p.tap(id(&p, "open")).unwrap();
+        let title = id(&p, "title");
+        assert_eq!(p.focus(), Some(title));
+        assert_eq!(frame(&mut p).0, 0, "touch arrival leaves no ring");
+        assert_eq!(frame(&mut p), (0, 0), "the touch frame is kept");
+        p.key_down("Shift", p.host().now());
+        assert_eq!(frame(&mut p), (1, 1), "Shift records the heading's ring");
+        assert_eq!(frame(&mut p), (1, 0), "the ring frame is kept");
+        let other = id(&p, "other");
+        assert!(p.set_focus(Some(other), p.host().now()).is_none());
+        assert_eq!(frame(&mut p), (1, 2), "both focus rows change");
+        assert_eq!(frame(&mut p), (1, 0));
+        assert!(p.set_focus(None, p.host().now()).is_none());
+        assert_eq!(frame(&mut p), (0, 1), "blur removes the kept ring");
+        assert!(p.set_focus(Some(title), p.host().now()).is_none());
+        assert_eq!(frame(&mut p), (1, 1));
+        let now = p.host().now();
+        p.pointer_down(300., 400., now).unwrap();
+        assert_eq!(frame(&mut p), (0, 1), "touch removes the kept ring");
+        p.pointer_up(300., 400., now + 1.).unwrap();
+        assert_eq!(frame(&mut p), (0, 0));
+    }
+
+    #[test]
     fn turned_boxes_record_shapes_without_cpu_pictures() {
         use crate::presenter::{PainterChoice, Presenter};
         let (mut p, error) = Presenter::boot_with(

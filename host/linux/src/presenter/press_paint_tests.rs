@@ -212,3 +212,108 @@ fn an_ancestors_moving_colour_stops_at_a_native_field() {
     );
     assert!(!reddened(&mut p, native), "a native field keeps its ink");
 }
+
+/// LLP 1121 D8 as amended: a link with no `press` is pressed as CSS's
+/// `:active` holds on a link, its press shown while held and let go at the
+/// lift; the lift still follows its `href`. A `text` link run is no target.
+#[test]
+fn a_link_with_no_press_shows_its_active_paint() {
+    const LINK: &str = r##"component App
+  view
+    column width=400 height=400 background-color="#ffffff"
+      link href="https://example.com/a" background-color="#00ff00" width=300 height=120 testId="link"
+        :active
+          background-color="#0000ff"
+        text "Away"
+      link href="https://example.com/b" width=300 height=120 testId="bare"
+        text "Bare"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &contract::compile(LINK)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .encode(),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = opened.clone();
+    p.set_url_opener(move |url| {
+        sink.borrow_mut().push(url.to_owned());
+        Ok(())
+    });
+    let b = rect(&mut p, "link");
+    let ground = (b.0 + b.2 - 4., b.1 + 4.);
+    assert_eq!(pixel(&mut p, ground.0, ground.1), [0, 255, 0]);
+    let key = |p: &Presenter<()>, name| p.host().kernel().find_by_test_id(name)[0];
+    p.pointer_down(ground.0, ground.1, 0.).unwrap();
+    p.clock(120.);
+    assert_eq!(pixel(&mut p, ground.0, ground.1), [0, 0, 255], "held");
+    assert!(p.host().pressed(key(&p, "link")));
+    p.pointer_up(ground.0, ground.1, 130.).unwrap();
+    p.clock(400.);
+    assert_eq!(pixel(&mut p, ground.0, ground.1), [0, 255, 0], "let go");
+    assert_eq!(*opened.borrow(), ["https://example.com/a"], "followed once");
+    // An unsaid link is pressed too: the host's press holds it.
+    let bare = rect(&mut p, "bare");
+    let (x, y) = (bare.0 + 10., bare.1 + 10.);
+    p.pointer_down(x, y, 500.).unwrap();
+    assert!(p.host().pressed(key(&p, "bare")));
+    p.pointer_up(x, y, 520.).unwrap();
+    assert!(!p.host().pressed(key(&p, "bare")));
+    assert_eq!(opened.borrow().len(), 2);
+}
+
+/// A link that shrinks while held (its `-exact-press-scale`) is followed
+/// when a finger lifts where it went down, near its edge: the lift is
+/// judged against the box it had unpressed, as any press's is.
+#[test]
+fn a_shrinking_link_is_followed_from_its_unpressed_box() {
+    const LINK: &str = r##"component App
+  view
+    column width=400 height=400 background-color="#ffffff"
+      link href="https://example.com/a" -exact-press-scale=0.5 background-color="#00ff00" width=300 height=120 testId="link"
+        text "Away"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &contract::compile(LINK)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .encode(),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.set_pointer_kind(crate::presenter::PointerKind::Touch);
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = opened.clone();
+    p.set_url_opener(move |url| {
+        sink.borrow_mut().push(url.to_owned());
+        Ok(())
+    });
+    let b = rect(&mut p, "link");
+    let edge = (b.0 + b.2 - 4., b.1 + 4.);
+    p.pointer_down(edge.0, edge.1, 0.).unwrap();
+    p.clock(300.);
+    p.frame();
+    assert_ne!(
+        p.hit(edge.0, edge.1),
+        Some(
+            p.host()
+                .kernel()
+                .node_by_key(p.host().kernel().find_by_test_id("link")[0])
+                .unwrap()
+                .id
+        ),
+        "held, the link has shrunk away from the finger"
+    );
+    p.pointer_up(edge.0, edge.1, 300.).unwrap();
+    assert_eq!(*opened.borrow(), ["https://example.com/a"], "followed once");
+}

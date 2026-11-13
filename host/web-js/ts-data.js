@@ -252,8 +252,9 @@ globalThis.__exact_module = body => {
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
 globalThis.exact.moduleReaders = key => Resources.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
-// The documents the answers watch, for the agent's `state.watches`, as the runner lists them.
-(globalThis.exact ??= {}).watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
+// The documents the answers watch, for the agent's `state.watches`, as the runner lists them: a development page
+// names it (build.mjs), since the agent drives only that, and a production page does not link it.
+export const watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
   const m = /^doc-watch(-recursive)?:(.*)$/.exec(t);
   return m ? [{ path: m[2], recursive: !!m[1] }] : [];
 });

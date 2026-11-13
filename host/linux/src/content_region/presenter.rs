@@ -126,7 +126,9 @@ impl<D: DataSource> Presenter<D> {
         self.restore_scroll_anchors();
         self.arm_scroll_anchors();
         self.scroll_timelines();
-        let dirty = self.host.take_row_dirty();
+        let mut dirty = self.host.take_row_dirty();
+        // A ripple paints its node's row again every frame it shows.
+        self.brush.ripples.keys().for_each(|key| dirty.node(key));
         self.brush.numerals.now = self.host.now();
         self.brush.numerals.still = self.host.runner().viewport().preferences.reduced_motion;
         self.brush.rows_dirty(self.host.kernel(), dirty);

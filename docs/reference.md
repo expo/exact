@@ -905,6 +905,16 @@ layers compile in the same `actool` pass as the app's catalogs; changing them
 requires a new native build. `icons` still supplies the web and the native
 raster fallback when the platform has no `icon` selection.
 
+What shows before the first frame is `app.json`'s Web App Manifest
+`background_color`, and in a dark scheme `color_scheme_dark.background_color`
+(`#RGB`, `#RRGGBB` or `#RRGGBBAA`); a fixed `userInterfaceStyle` takes its side
+alone. The web page has it until the first frame, the iOS launch screen centres
+`host.ios.launchImage` on it, and the Android launch window (the starting window
+from Android 12) is it, with the bars' icons dark over a light colour. Unset,
+each is the platform's surface: iOS's `systemBackground` (its grouped background
+under a first route that scrolls a grouped list) and Android's `surface`.
+Changing either colour requires a new native build.
+
 ### Store category, Game Mode and memory
 
 `categories` in `app.json` is the W3C manifest's member, which the web manifest
@@ -1111,6 +1121,9 @@ module.exports = {
 Match both identifiers to Exact's app id. Link the EAS project and install
 `expo-modules-autolinking` as a development dependency for EAS's config
 resolver (`bun add --dev expo-modules-autolinking`; commit the lockfile).
+EAS CLI reads it from the app's `node_modules` on the machine that runs
+`eas build`, so run `bun install` there first: without it, `eas build -p ios`
+fails in its entitlements step, before anything is sent to EAS.
 Exact does not need Expo or React Native at run time. Pin EAS CLI in the app's
 dev dependencies too (`bun add --dev --exact eas-cli`). This `eas.json` uses file secrets for signing; set
 `EXACT_REF` to the immutable Exact commit used by the app:
@@ -1144,8 +1157,10 @@ See [EAS custom builds](https://docs.expo.dev/custom-builds/schema/) and
 
 Save the following as `.ci/prepare-native.sh` in the app repository. The
 recipes run it with `ios` or `android`. It installs only that platform's
-Rust targets and Hermes bundles, with no simulator. Bun, git, curl and
-unzip come from the selected image. For a clean local worker, install Bun
+Rust targets and Hermes bundles, with no simulator, and fetches the crates
+Exact's lock names: Exact's tools build offline, and a worker's empty Cargo
+registry stops the first of them. Bun, git, curl and unzip come from the
+selected image. For a clean local worker, install Bun
 1.4.2 first and omit the final two EAS `set-env` calls.
 
 ```sh
@@ -1168,11 +1183,14 @@ case "$1" in
 esac
 rustup toolchain install "$pin" --profile minimal --target "$triple"
 cargo +"$pin" run --locked --manifest-path "$EXACT/vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml" -- --target "$triple"
+cargo +"$pin" fetch --locked --manifest-path "$EXACT/Cargo.toml"
 set-env EXACT "$EXACT"
 set-env PATH "$PATH"
 ```
 
 The installer also installs the host Hermes bundle used to bake TypeScript.
+`setup --check` reports a registry that lacks any of Exact's locked crates
+on its `Cargo crates` row.
 If the launcher or Cargo manifests still name a developer's checkout, run
 `EXACT=../exact bun exact.mjs update` locally and commit its changes before
 submitting the job. An app's `host.ios` and `host.android` entries must be
@@ -1183,12 +1201,34 @@ can be read without a simulator; see [the CI archive path](#build-an-ios-app-on-
 Cache Cargo's registry and git downloads, `$CARGO_HOME/hermes-lean-sys`,
 Gradle's `GRADLE_USER_HOME` (default `~/.gradle`), and `~/.cache/exact` when
 useful. Restore app and Exact `target/` only under keys that distinguish
-OS/architecture, toolchain, lockfiles and build mode. A cache hit does not
-promise reuse: fresh checkout mtimes can invalidate Cargo fingerprints,
-and production Apple builds do not use the development module cache.
-`CARGO_LOG=cargo::core::compiler::fingerprint=info` explains rebuilds. Do not
-rewrite source mtimes to force reuse. A clean build must work without these
-caches. Do not cache signing keys or provisioning profiles.
+OS/architecture, toolchain, lockfiles and build mode, and keep both
+checkouts at the same absolute paths between runs: Cargo's fingerprints
+include the location of a path crate outside the app's workspace. A cache
+hit does not promise reuse; production Apple builds do not use the
+development module cache, and
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` explains rebuilds. A
+clean build must work without these caches. Do not cache signing keys or
+provisioning profiles.
+
+Cargo rebuilds a path crate when one of its source files is newer than its
+last build, and a fresh clone dates every file at the clone, so a restored
+`target/` alone still rebuilds every Exact crate. Dating the clone's files
+at its commit's time lets Cargo reuse the restored output. Add these lines
+to `.ci/prepare-native.sh` directly after the `git checkout`:
+
+```sh
+when=$(TZ=UTC git -C "$EXACT" log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd)
+git -C "$EXACT" ls-files -z | (cd "$EXACT" && xargs -0 touch -h -d "$when")
+```
+
+This is sound only while each file so dated has the bytes it had when the
+cache was saved, because Cargo then compares nothing but times: a changed
+file with an old time is not rebuilt, and the build ships its stale output.
+So restore that `target/` only under a key that names the Exact commit
+(`EXACT_REF`), with no fallback key that restores another commit's cache,
+and date only the files the checkout wrote, before any step changes the
+clone. Leave the app's own files their checkout times unless the key names
+the app's commit too.
 
 ### Import an iOS signing identity on a CI worker
 
@@ -1242,7 +1282,9 @@ artifact's absolute path. An outside app's outputs are
 
 `EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
 from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
-default). Set all four of `EXACT_KEYSTORE` (a file path),
+default). The app reads their baked strings as `buildNumber` and `version`
+through `exactDelivery()`; over-the-air updates keep both values.
+Set all four of `EXACT_KEYSTORE` (a file path),
 `EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS` and `EXACT_KEY_PASSWORD` to sign
 with your upload key. Partial credentials fail before compiling. A bundle
 requires them; an APK without them uses Android's debug key and cannot be
@@ -1327,9 +1369,16 @@ Export compliance is the developer's answer, so a production iOS or tvOS build
 into Info.plist only when `EXACT_NON_EXEMPT_ENCRYPTION` is `true` or `false` in its
 environment (`false` when the app's only encryption is HTTPS and the system's);
 without it App Store Connect asks at each upload. A development build never writes it.
-The same builds write the bundle's version and build number from `EXACT_VERSION`
-and `EXACT_BUILD_NUMBER` (`0.1.0` and `1` when unset). App Store Connect takes a
+Every Apple app bundle, including development and macOS builds, takes its version
+and build number from `EXACT_VERSION` and `EXACT_BUILD_NUMBER` (`0.1.0` and `1`
+when unset; an explicitly empty value stays empty). App Store Connect takes a
 build number once for a version, so each upload needs a higher one.
+Read both at runtime as the string fields `version` and `buildNumber` of
+`exactDelivery()`, also mirrored in `state.delivery`. Native hosts read the
+binary's baked values: an over-the-air update leaves them unchanged, and neither
+enters the compatibility id. An older bake without the fields answers `""`.
+The web JS build uses these variables at build time and answers `""` for each
+unset variable. No `app.json` version key is defined.
 
 ## Open the same development URL on Apple hosts
 
@@ -2931,7 +2980,7 @@ For a PDF picker, declare the type in `app.json`:
 In `app.contract`, receive the selected file's display name and app path.
 Cancelling keeps the previous choice:
 
-```contract
+```text
 component PdfPicker
   state name = "No PDF selected"
   state path = ""
@@ -2951,7 +3000,7 @@ Put a PDF at `fixtures/report.pdf` beside `app.test.contract`, then run
 `bun exact.mjs test web`. The test's `pick` answers the picker that `tap`
 opened; paths are relative to the test file:
 
-```contract
+```contract-test
 test "choose a PDF and cancel the next picker" on web
   tap "pdf"
   pick "pdf" "fixtures/report.pdf"
@@ -3616,7 +3665,7 @@ A data crate answers the view's sources in Rust instead of `app.ts`: an app's
 | `query(source, args)` | Answer now, with no I/O: the build bakes this into the plan for the first frame. `Err(DataError::Unavailable(…))` leaves the resource unbaked; every host asks again at launch. |
 | `answer(store, source, args)` | At run time: `Answer::Now(value)`, or `Answer::Later(request)` for the host to run (storage, `fetch`). The default is `query`. A resource the build left unbaked is asked at boot, before the host has started storage. There `Err(DataError::Unavailable(…))`, `UnknownSource`, `BadArguments` or `Interface` refuses the boot: the app does not start (the agent says `the app booted with an error`; a release build shows no view). On a resource with something to show (its type's zero, or a declared placeholder), `Failed(code, …)` boots with the resource failed (`failure(x)`); `DeferredAtBake` and `Answer::Later` boot with it pending; `Overrun` boots with it pending and asks again twice, at 250 ms and 1 s, and a third fails the resource while the app runs on. A row that is another resource's `else source()` has nothing to show and must answer now: there each of these refuses the boot too. A source that needs storage answers `Answer::Later` and finishes in `parse`. |
 | `parse(store, source, args, outcome)` | What the host brought back for that request: answer, or hand back one more request. |
-| `app_id()` | The app's identity, which names its storage: `com.example.my-app-3f9a2c` (`exact new` writes the name and six random hex digits), or for a game `com.exact.<Game::ID>` unless its app.json names one. A source with no id has no app storage on Apple and Linux. |
+| `app_id()` | The app's identity, which names its storage: `com.example.my-app-3f9a2c` (`exact new` writes the name and six random hex digits), or for a game `com.exact.<Game::ID>` unless its app.json names one. A source that names none takes app.json's `app.id` in the app's build, so its storage (`app:/data`, kept answers, `persist` states, an agent drive's `--storage`) is the app's; one that names its own keeps it, so write the same id as app.json or leave it out. |
 | `grants()` | One grant per line, the lines `app.ts`'s `grants` takes (`net.fetch …`, `sqlite.open …`, `fs.read …`). |
 
 An app `exact new` made outside this checkout that answers in Rust writes its own Cargo workspace
@@ -3951,6 +4000,14 @@ compiler) and every Rust receipt carries it as `source`. A candidate whose
 interpreted until a binary built from that source is installed; an update that
 changes only the Contract or TypeScript leaves the Rust native.
 
+The bake accepts `cfg(target_*)` branches and native dependencies in the data
+crate: the source digest reads every arm, so an edit to any of them moves it
+(LLP 1030 D3a, amended 2026-11-12). An interpreted module is built for
+`wasm32-unknown-unknown`, though, and runs only the crate's
+`target_arch = "wasm32"` arms, never one for the device's `target_os`. A crate
+whose module can be replaced should branch on nothing else
+([pitfall](agent-pitfalls.md#actions)).
+
 The repository's app entries use `contract::rust_entry` to select a concrete
 factory at bake time. A custom host adapter must do the same (and depend on
 `exact-logic`), or compose `Swappable::native`, `Swappable::tiered`, `Swappable::wasm` or
@@ -4080,10 +4137,11 @@ of it, as UIKit's `scrollViewWillBeginDragging` and
 `ScrollDragEvent` carries `velocityX` and `velocityY` in UIKit's units, CSS
 pixels per millisecond, positive in the direction `scrollLeft` and `scrollTop`
 grow, and `targetLeft` and `targetTop`, where the momentum will stop, `some` on
-iOS and `none` where the host cannot say before it gets there. macOS takes a
-trackpad's two fingers as the drag and the web a touch, each estimating the
-velocity from the last 100 ms of the fingers' moves; Linux, Windows and
-Android send neither yet. A wheel, the keyboard and a programmatic scroll send
+iOS and Android and `none` where the host cannot say before it gets there. macOS
+takes a trackpad's two fingers as the drag and the web a touch, each estimating
+the velocity from the last 100 ms of the fingers' moves; Android takes a finger
+on each scroller it moves, with the platform's velocity; Linux and
+Windows send neither. A wheel, the keyboard and a programmatic scroll send
 neither
 ([events](contract-grammar.md#events)).
 

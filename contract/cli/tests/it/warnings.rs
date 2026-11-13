@@ -277,15 +277,14 @@ fn a_back_control_the_bar_stands_for_or_a_route_with_no_bar_is_not_warned() {
         let src = pushed(NAMED, route, BACK);
         assert_eq!(warned(&src), [(BACK_TWICE.to_string(), 16)], "{src}");
     }
-    // In a first `header` that is no bar, the header's own warning names
-    // the bar that holds the system Back above it; the control is not
-    // named a second time.
-    let no_bar = pushed(
+    // A first `header` of the Back control alone is the bar with no title,
+    // UIKit's Back standing for it (issue #364): nothing to warn of.
+    let alone = pushed(
         NAMED,
         "",
         &format!("header\n  {}", BACK.replace('\n', "\n  ")),
     );
-    assert_eq!(warned(&no_bar), [(NO_BAR.to_string(), 16)], "{no_bar}");
+    assert_eq!(warned(&alone), [], "{alone}");
 }
 
 /// A root tab bar: tabs that name their panels, as polls and chat-rooms

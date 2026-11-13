@@ -967,6 +967,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::GlassGroup => "glassGroup",
             // Interactive glass and a menu's order are UIKit's; a page has neither.
             PropId::GlassInteractive | PropId::MenuOrder => continue,
+            // A page has no tip system (LLP 1035.006.000 D4).
+            PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",
             // tvOS's focus guide; a browser's Tab order is sequential.
             PropId::FocusGuide => continue,
@@ -1366,10 +1368,6 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             }
             // How it is filled, and by which rule (element_symbol.rs).
             symbol::fill_marks(&mut out, role, symbol);
-            // Its author's `color` it draws in, untinted (LLP 1121 stage 9 B; glue.js).
-            if node.symbol_color {
-                out.insert("data-symbol-color".into(), String::new());
-            }
             // Decorative unless the author named it (`alt`, `aria-label`).
             if !out.contains_key("alt") {
                 out.insert("alt".into(), String::new());

@@ -164,10 +164,9 @@ impl<D: DataSource> Presenter<D> {
                         .is_none_or(|(key, _)| {
                             self.input_live(key)
                                 && self.host.kernel().node_by_key(key).is_some_and(|n| {
-                                    self.host
-                                        .runner()
-                                        .handlers_of(n.id)
-                                        .contains(&EventKind::Press)
+                                    n.props.link().is_some()
+                                        || (self.host.runner().handlers_of(n.id))
+                                            .contains(&EventKind::Press)
                                 })
                         })
                     && match contact.candidate {
@@ -267,6 +266,8 @@ impl<D: DataSource> Presenter<D> {
     /// 1061 D2, D7), the clock unmoved.
     pub(crate) fn land_presses(&mut self) {
         self.host.land_presses();
+        self.brush.ripples.land(self.host.now());
+        self.land_bar_ripple();
         self.dirty = true;
     }
     pub(crate) fn contact_event_ms(&self) -> Option<f64> {
@@ -454,6 +455,7 @@ impl<D: DataSource> Presenter<D> {
     /// synthesis; then the node's `pointerdown` (LLP 1005 §3), which the
     /// contact never waits for.
     pub fn pointer_down(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.brush.ripples.input(now_ms);
         // A finger of an earlier touch whose up never came.
         #[cfg(any(target_os = "android", test))]
         self.cancel_fingers(now_ms);
@@ -676,7 +678,9 @@ impl<D: DataSource> Presenter<D> {
             });
             return Ok(true);
         }
-        let pressed = self.handler_target(view, EventKind::Press);
+        // A link with no `press` shows its press too (LLP 1121 D8, as amended),
+        // and is followed by the lift's hit as before.
+        let pressed = self.press_target(view);
         // `-exact-press-haptic` plays at the press, the host's own as the
         // scale and paint below are (LLP 1077 D14; LLP 1061 D7).
         if let Some(id) = pressed {
@@ -687,6 +691,8 @@ impl<D: DataSource> Presenter<D> {
             let (key, origin) = (node.key, node.style.transform_origin.clone());
             self.box_of(id).map(|b| (key, b.unpressed(origin)))
         });
+        // A pressed box that shows its press (a scale shrinks it) activates
+        // where the lift is in the box it had unpressed, a link as a press.
         let press_activates = feedback.is_some_and(|(key, _)| {
             self.host
                 .kernel()
@@ -1043,6 +1049,7 @@ impl<D: DataSource> Presenter<D> {
         now_ms: f64,
         event_ms: f64,
     ) -> Result<bool, String> {
+        self.brush.ripples.input(now_ms);
         if self.stage_up(x, y, now_ms, event_ms) {
             return Ok(true);
         }
@@ -1214,7 +1221,13 @@ impl<D: DataSource> Presenter<D> {
                         self.focus_for_press(hit, (x, y), now_ms, self.contact_is_direct());
                     }
                     self.press_point = Some((x, y));
+                    // Read before the press, whose handler may remove it: a
+                    // link is followed after its press, as `press_at` has it.
+                    let link = self.link_at(hit, x, y);
                     self.activate(id, now_ms);
+                    if let Some(href) = link {
+                        self.follow(hit, &href, now_ms);
+                    }
                 }
             }
             Ok(false)
@@ -1290,6 +1303,7 @@ impl<D: DataSource> Presenter<D> {
     /// Escape, wheel takeover, disconnection, or invalidated binding: no
     /// release event, except a pan that began, which releases at rest.
     pub fn pointer_cancel(&mut self, now_ms: f64) -> Result<(), String> {
+        self.brush.ripples.input(now_ms);
         self.stage_cancel(now_ms);
         self.overlay_pointer_cancel();
         self.field_drag = None;
@@ -1300,6 +1314,7 @@ impl<D: DataSource> Presenter<D> {
         let at = self.contact_position().or(self.pointer).unwrap_or((0., 0.));
         let mark = self.hatch_pointer_mark(crate::hatches::Phase::Cancel, at.0, at.1);
         let result = self.pointer_abandon(now_ms);
+        self.cancel_ripple();
         self.refresh_feedback();
         self.hatch_pointer(mark, crate::hatches::Phase::Cancel, at.0, at.1);
         result

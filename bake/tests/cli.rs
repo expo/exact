@@ -134,3 +134,41 @@ fn compat_cli_validates_all_options_before_reading_the_manifest() {
     );
     assert_eq!(std::fs::read_dir(&app.0).unwrap().count(), 2);
 }
+
+#[test]
+fn versions_default_only_when_unset_and_do_not_change_the_cohort() {
+    let app = App::new("version");
+    app.write(
+        "app.json",
+        r#"{"app":{"id":"com.exact.version","name":"Version"}}"#,
+    );
+    let run = |version: Option<&str>, build: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_exact-bake"));
+        command
+            .args(["compat", ".", "--platform", "web", "--json"])
+            .current_dir(&app.0)
+            .env("EXACT_UPDATE_TRUST", "development")
+            .env_remove("OUT_DIR")
+            .env_remove("EXACT_VERSION")
+            .env_remove("EXACT_BUILD_NUMBER");
+        if let Some(v) = version {
+            command.env("EXACT_VERSION", v);
+        }
+        if let Some(v) = build {
+            command.env("EXACT_BUILD_NUMBER", v);
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()
+    };
+    let default = run(None, None);
+    assert_eq!(default["embedded"]["version"], "0.1.0");
+    assert_eq!(default["embedded"]["buildNumber"], "1");
+    for (version, build) in [("2.3.4", "56"), ("", "")] {
+        let changed = run(Some(version), Some(build));
+        assert_eq!(changed["embedded"]["version"], version);
+        assert_eq!(changed["embedded"]["buildNumber"], build);
+        assert_eq!(changed["id"], default["id"]);
+        assert_eq!(changed["inputs"], default["inputs"]);
+    }
+}

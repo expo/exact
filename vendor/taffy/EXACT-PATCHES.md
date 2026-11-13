@@ -3,7 +3,7 @@
 - **Upstream:** `taffy` 0.14.0, crates.io package supplied offline at
   `~/Library/Caches/exact2-textflow/taffy-0.14.0/` (M8, 2026-09-18).
   The archive's `.cargo_vcs_info.json` pins commit `77f385683c1d698c91a23a259f87fdddf26925fb`.
-- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 and 71 below remain. `[patch.crates-io]`
+- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73 and 74 below remain. `[patch.crates-io]`
   selects this copy; the kernel declares `taffy = "0.14"`.
 - **Owner:** Charlie Cheever (kernel/layout).
 - **Features:** std, taffy_tree, flexbox, grid, block_layout, content_size, calc.
@@ -2132,9 +2132,18 @@ RTL, overflow safety, margins, bounds, percentages, insets, box sizing,
 text, and block-level flex/grid children. The 72 mismatched frames before
 the patch now match Chrome. `block_justify_self_overrides_the_container_default`
 also failed before the patch and holds the vendor's per-item override; no
-Contract attribute is added. The remaining fixture records the absolute-child
-follow-up in `QUEUE.md`: automatic insets still give x=0 instead of Chrome's
-x=40. Floats remain disabled in Exact.
+Contract attribute is added. Floats remain disabled in Exact.
+
+Absolute children align inside the parent's inline content-box edges when
+both inline insets are automatic, including descendants hoisted to a
+positioned ancestor. Explicit insets retain precedence. Chrome 151.0.7922.34
+(2026-11-12) applies overflow safety from an absolute child's own `justify-self`
+only; the parent's `safe` modifier does not affect its static position.
+Physical left/right keywords are preserved until layout: block static
+positions treat them as inline start/end, while in-flow block and grid items
+keep their physical meaning. The fixture adds 70 cases for these paths;
+`absolute_block_justify_self_overrides_the_container_default` covers the
+vendor's per-item override in both directions, including overflow safety.
 
 ## Patch 67: a scroll container's end padding extends its children's margin boxes
 
@@ -2273,3 +2282,94 @@ kernel uses weak hash indexes, so dropping a style can reclaim calculations
 without invalidating a detached dimension or another retained style.
 
 Held by the kernel's calculation reclamation and retained-style tests.
+
+## Patch 72: keep every size answer used during a pass — to upstream
+
+`Cache` records the tree's wrapping `u16` pass on each stored or used size
+answer. The first nine slots fill across passes. Once full, new answers replace
+an earlier pass's entry, starting at the eviction cursor; when none remains,
+the slots grow. Looking for a slot clears no marks. The pass occupies two
+padding bytes in the 24-byte key, so a size entry stays 32 bytes. Zero is
+reserved: after 65,535 passes the tree resets every cache stamp to zero and
+starts at one, retaining answers without confusing an old pass with this one
+(LLP 1165 D3).
+
+Both engine entry points advance the tree's pass. Row recording and replay
+carry it through the same cache accessors, including the clears after a stopped
+replay. A hit calls no measure function and does not record `Replay::probed`:
+that boundary record was made when the answer was stored and is cleared with
+the cache.
+
+A size computation that lays children out for baseline alignment drops the
+node's final-layout entry and every ancestor's, in flexbox and grid track
+sizing. Those entries otherwise describe descendants laid out for another
+question. Row traces record the node and replay the ancestor walk on the
+receiving tree. Dropping a final entry preserves the dirty-propagation mark,
+so a later edit still invalidates ancestors even when no size answers remain.
+Other size computations leave the final entry alone;
+margin-bearing answers and clears retain their existing rules.
+
+`All` is the default. Tests can select the nine-entry clock (`Nine`) or no size
+cache (`Off`). Opt-in counts separate computed answers from replayed stores, detect
+repeats between clears, retain each node's peak occupancy until the caller resets
+counts, and observe occupancy in successfully replayed subtrees.
+The kernel resets counts once for a layout, so its page and host blocks sum.
+Disabled tracking returns before updating counters or collecting questions.
+
+On this 64-bit host the cache object grows from 120 to 136 bytes: seven bytes
+widen the eviction cursor from `u8` to `usize`, eight hold patch 74's optional
+pointer, and one is additional alignment padding. With one, three and nine
+answers, respectively, cache storage is 232, 232 and 424 bytes, against
+216, 216 and 408 before (allocated slots, no allocator metadata). Patch 74
+describes the conditional additional storage.
+
+**Held by** `kernel/tests/it/size_cache.rs`, the kernel's `layout::size_cache`,
+`layout::size_cache::shapes`, `layout::memo_tests`, and
+`kernel/tests/it/layout_equality/size_cache.rs`. The public-API regressions,
+including wraparound, both lookups, cache bytes and descendant geometry after
+flex and grid baseline probes, run in kernel test targets. Frames, scroll
+extents and flow results agree under `All`, `Nine` and `Off` in the directed
+cases, small shapes and generators without baseline alignment. The baseline
+generator variant compares `All` and `Nine` with rehydrated and replayed trees;
+`Off` is not self-consistent there (QUEUE.md). The cold and resized baseline
+chains agree under all three.
+The depth tests check zero repeats and bound each node's peak at 64 answers plus
+eight for each level above the node. A separate full-seed test counts both lost
+and retained height proofs, by layout and by leaf, allowing `All` at most 5%
+more losses than `Nine`.
+
+The remaining private lazy-allocation tests in `tree::cache::tests` are run
+by hand: `cargo test --manifest-path vendor/taffy/Cargo.toml --lib
+--no-default-features --features std,taffy_tree,flexbox,grid,block_layout,content_size,calc,parse`.
+The vendored crate is outside the workspace and runs in neither test lane.
+
+## Patch 73: aspect-ratio size answers match the requested axis — to upstream
+
+`Cache::get` requires an exact requested axis when a node has an aspect ratio.
+Patches 12 and 64 compute a ratio leaf's width differently for a horizontal
+probe, so an answer for both axes cannot answer that probe (LLP 1165 D3).
+
+**Held by** `kernel/tests/it/size_cache.rs::a_ratio_leaf_answers_only_the_requested_axis`:
+a 2:1 leaf capped at 20 points high answered a horizontal probe with a cached
+width of 180 before the repair; an uncached probe answers 40.
+
+## Patch 74: keep the offer beside an indefinite known size — to upstream
+
+A flex container still reads available space on an axis whose known size is
+indefinite. Replacing that offer with the known size in the cache key aliases
+different questions (LLP 1165 D3).
+
+The common key stays 24 bytes. Only entries with a known but indefinite size
+and a non-default offer allocate extra storage: an optional boxed vector of
+packed offers indexed by slot. Slot zero names the final layout and subsequent
+slots name size entries. The owner costs 24 bytes and each allocated slot
+eight bytes on this host; an absent offer means max-content on both axes.
+A lookup reads its slot directly instead of scanning the offers for each
+candidate entry. Replacement updates the slot, and clears retain its
+allocation as they retain the size slots. This avoids adding eight bytes to
+every key and size entry.
+
+**Held by** `kernel/tests/it/size_cache.rs::an_indefinite_known_width_keeps_the_available_space`,
+for size probes and final layouts, with and without a ratio and percentage
+children. Before the repair a descendant kept 90 points of overflow from the
+old offer; a fresh layout under the new offer gives 45.

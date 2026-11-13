@@ -556,11 +556,11 @@ fn materials_segmented_buttons_share_the_row_and_fill_the_checked_one() {
     let expected = f32::from(fill) * (1.0 - 0.38);
     let ink = f32::from(darkest(&mut p, d1));
     assert!((ink - expected).abs() <= 4.0, "{ink} against {expected}");
-    // Held, the state layer lies over an unchecked one.
+    // Held, the ripple lies over an unchecked one, at rest after 450 ms.
     p.pointer_down(mi.0 + 20.0, mi.1 + 20.0, 1000.0).unwrap();
-    p.frame();
+    p.clock(1500.0);
     let at = inside(mi);
-    assert_ne!(pixel(&mut p, at.0, at.1), page, "the pressed layer");
+    assert_ne!(pixel(&mut p, at.0, at.1), page, "the ripple");
     p.pointer_cancel(1050.0).ok();
     // A press checks another: the fill moves, and so does what an
     // accessibility service is told.

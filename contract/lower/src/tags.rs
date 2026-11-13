@@ -639,6 +639,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "contextMagnify" => AttrTarget::Prop(p("contextMagnify")),
         // @ref LLP 1021 §5.1 — the popover a node's context menu shows, and its preview row.
         "contextPopover" | "contextPreview" => AttrTarget::Prop(p(name)),
+        // @ref LLP 1035.006.000 D1, D2 — a tip over the element, and whether its lesson is done.
+        "tip" | "tipMessage" | "tipImage" | "tipDone" => AttrTarget::Prop(p(name)),
         "emojiPicker" => AttrTarget::Prop(p("emojiPicker")),
         "backgroundMaterial" => AttrTarget::Prop(p("backgroundMaterial")),
         "glassGroup" => AttrTarget::Prop(p("glassGroup")),

@@ -1782,7 +1782,7 @@ host.
 | Zero or one `Selection` (the action takes it or leaves it) | `selectionchange`, on a `text` ([text selection](#text-selection)) |
 | Zero or one `InputEvent` | `selectionchange` and `beforeinput`, on a plain text field |
 | Zero or one `MediaSessionActionDetails` (the action takes it or leaves it) | `seekbackward`, `seekforward`, `seekto`, `previoustrack`, `nexttrack`, `stop`, on an `audio` or `video` with `metadata=` ([media session](#media-session)) |
-| Zero or one `ToggleEvent` (the action takes it or leaves it) | `toggle`, on a popover: `oldState` and `newState` |
+| Zero or one `ToggleEvent` (the action takes it or leaves it) | `toggle`, on a popover: `oldState` and `newState`. It fires at the popover, never at the button that opens it, so on an element with no `popover` it is refused (`lower-handler-tag`) |
 | Zero or one `AtomEvent` (the action takes it or leaves it) | `atompress`, on a node with `atoms=` ([inline atoms](#inline-atoms-atom-atoms-atomfaces-atompress)) |
 | Zero or one frame record (the action takes it or leaves it) | on an `iframe`: `currententrychange`, `navigatesuccess` and `navigateerror` (`FrameNavigation`), `capture` (`FrameCapture`), `download` (`FrameDownload`), `newwindow` (`FrameNewWindow`) and `userpromptopened` (`FrameUserPrompt`) |
 | Zero or one `MIDIMessageEvent` (the action takes it or leaves it) | `midimessage`, on an element with `midiinputs=` ([MIDI](#midi-exactmidi-sendmidi-midimessage)) |
@@ -1889,7 +1889,9 @@ the momentum or a smooth scroll stopped, or (a jump, a mouse wheel's notches)
 the offset still for 100 ms on Apple's hosts. It takes no payload. An app that
 needs to know a fling has stopped hears it, instead of restarting a timer on
 every `scroll`. Linux and the shared Android Presenter complete notches and
-instant jumps at the next delivery point; reader samples use 100 ms quiet.
+instant jumps at the next delivery point. Android's drag ends at the lift
+when nothing is thrown and when its fling stops, however long a finger rests on
+the list meanwhile; other reader samples use 100 ms quiet.
 Delivery uses the existing host clock after its runner work, so a late wake may
 run a later timer first. Android device qualification remains open (LLP 1005,
 “Linux, first step”).
@@ -1922,11 +1924,11 @@ the velocity from the moves of the last 100 ms, with no target. The web takes a
 touch on the scroller, from its first `scroll` under the finger to the last
 finger's lift, with no target and the finger's velocity over its last 100 ms
 of moves (UIKit's is the pan's too), 0 if it rested that long before
-lifting; a mouse or a pen sends neither. Linux and Windows scroll by no drag
-and send neither. The presenter they share with Android
-takes a drag's start and release from Android's scroller, with its velocity
-and the fling's resting offset as the target, but that scroller does not
-report them yet, so Android sends neither either.
+lifting; a mouse or a pen sends neither. Android takes a finger's drag of each
+scroller it moves (an outer one the hand-off reaches too), from the drag's first
+move of it to the lift, with the platform's velocity (`VelocityTracker`) and, as the target, where
+the fling will rest (`OverScroller`), or where the scroller is when nothing is
+thrown. Linux and Windows scroll by no drag and send neither.
 
 `intersect=action` offers an optional final `IntersectionObserverEntry` after
 any authored arguments. The record contains `isIntersecting: bool` and

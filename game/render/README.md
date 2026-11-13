@@ -1087,9 +1087,10 @@ until it has, and the driver asks again.
   outside the view by the quad's own extent about its anchor, or drawn. An
   entity's word combines all of its drawables: when an opaque part drew, that
   part's word (`drawn`, `custom-material`, `outside-cascade <n>`); when only a
-  blended part, a sprite or an emitter drew, `drawn`, the reason naming which;
+  blended part, a sprite or an emitter drew, `drawn`;
   when none drew, the first one's word (the mesh's, then the sprite's, then the
-  emitter's), the reason naming the others'.
+  emitter's). For multiple drawables, the reason lists each drawable's word and
+  explanation in that order.
 - **Views**: the game's camera; an orbit at a yaw, pitch and distance from the
   centre of the scene; or an orthographic plan from above. An orbit or plan first
   reads a camera frame for the scene's bounds: the cull's sphere of every item it

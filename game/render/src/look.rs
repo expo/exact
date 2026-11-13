@@ -616,26 +616,25 @@ fn drew(word: &str) -> bool {
 }
 
 /// An entity's word from its drawables' (`visible`): a mesh that drew keeps its
-/// own word; else `drawn` if a sprite or an emitter drew, naming it; else the
-/// first one's, naming the others'.
+/// own word; else `drawn` if a sprite or an emitter drew; else the first one's.
+/// Multiple drawables' reasons list each word and explanation in order.
 fn combine(parts: Vec<(&str, (String, String))>) -> (String, String) {
     if parts.len() == 1 {
         return parts.into_iter().next().unwrap().1;
     }
-    if let Some((_, word)) = parts.iter().find(|(k, w)| *k == "mesh" && drew(&w.0)) {
-        return word.clone();
-    }
-    if let Some((kind, (_, reason))) = parts.iter().find(|(_, w)| drew(&w.0)) {
-        return ("drawn".into(), format!("its {kind}: {reason}"));
-    }
-    let (kind, (word, reason)) = &parts[0];
-    let others: Vec<String> = (parts[1..].iter())
-        .map(|(k, (w, _))| format!("its {k}: {w}"))
-        .collect();
-    (
-        word.clone(),
-        format!("its {kind}: {reason}; {}", others.join("; ")),
-    )
+    let word = if let Some((_, (word, _))) = parts.iter().find(|(k, w)| *k == "mesh" && drew(&w.0))
+    {
+        word.clone()
+    } else if parts.iter().any(|(_, w)| drew(&w.0)) {
+        "drawn".into()
+    } else {
+        parts[0].1 .0.clone()
+    };
+    let reason = (parts.iter())
+        .map(|(kind, (word, reason))| format!("its {kind}: {word} ({reason})"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    (word, reason)
 }
 
 /// A mesh's word: its model's residency, its level of detail, and the draw
@@ -860,6 +859,83 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visibility_lists_sprite_and_emitter_words_in_order() {
+        for (sprite, emitter, word, reason) in [
+            (
+                QuadFact::Drawn(1),
+                QuadFact::Drawn(8),
+                "drawn",
+                "its sprite: drawn (drew 1 quads); its emitter: drawn (drew 8 quads)",
+            ),
+            (
+                QuadFact::Drawn(1),
+                QuadFact::Drawn(0),
+                "drawn",
+                "its sprite: drawn (drew 1 quads); its emitter: no-particles (the emitter has no live particle this frame)",
+            ),
+            (
+                QuadFact::Culled,
+                QuadFact::Drawn(8),
+                "drawn",
+                "its sprite: frustum (outside the camera's view); its emitter: drawn (drew 8 quads)",
+            ),
+            (
+                QuadFact::Pending("sprite.tex".into()),
+                QuadFact::Drawn(0),
+                "asset-pending sprite.tex",
+                "its sprite: asset-pending sprite.tex (its texture is not resident); its emitter: no-particles (the emitter has no live particle this frame)",
+            ),
+        ] {
+            assert_eq!(
+                combine(vec![
+                    ("sprite", quad_word(Some(&sprite))),
+                    ("emitter", quad_word(Some(&emitter))),
+                ]),
+                (word.into(), reason.into()),
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_keeps_a_successful_mesh_word_and_lists_every_drawable() {
+        for word in ["drawn", "custom-material", "outside-cascade 2", "frustum"] {
+            let parts = vec![
+                ("mesh", (word.into(), "mesh decision".into())),
+                ("sprite", quad_word(Some(&QuadFact::Culled))),
+                ("emitter", quad_word(Some(&QuadFact::Drawn(8)))),
+            ];
+            assert_eq!(
+                combine(parts),
+                (
+                    if word == "frustum" { "drawn" } else { word }.into(),
+                    format!(
+                        "its mesh: {word} (mesh decision); its sprite: frustum (outside the camera's view); its emitter: drawn (drew 8 quads)"
+                    ),
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_keeps_single_drawable_answers() {
+        for kind in ["mesh", "sprite", "emitter"] {
+            for (word, reason) in [
+                ("drawn", "drew 8 quads"),
+                ("frustum", "outside the camera's view"),
+                ("asset-pending sprite.tex", "its texture is not resident"),
+                ("custom-material", "custom shader has not reported coverage"),
+                (
+                    "outside-cascade 2",
+                    "drawn, in no sun shadow cascade's list",
+                ),
+            ] {
+                let answer = (word.into(), reason.into());
+                assert_eq!(combine(vec![(kind, answer.clone())]), answer);
+            }
+        }
+    }
 
     #[test]
     fn requests_name_their_view_and_refuse_bad_numbers() {

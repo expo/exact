@@ -61,6 +61,18 @@ fn describe(shape: &Shape) -> &'static str {
     }
 }
 
+/// Whether tool `tool`'s reach sends (LLP 1111 D3): its action, with the
+/// calls of other actions the plan holds inline (LLP 1089), has a `send`.
+/// The rest of the reach, a mutation's `then`, is reached only through a
+/// send. A `reads` tool that sends is not read-only, since what a source
+/// does with a send is the module's.
+pub fn sends(plan: &exact_plan::Plan, tool: usize) -> bool {
+    let body = plan.code(plan.actions[plan.tools[tool].action.0 as usize].body);
+    crate::vm::instructions(body)
+        .flatten()
+        .any(|i| i.op == exact_plan::Opcode::Send)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

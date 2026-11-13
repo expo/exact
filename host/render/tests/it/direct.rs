@@ -54,6 +54,7 @@ fn the_fixture_s_pages_are_the_same_without_a_kernel() {
                 Ids::Any,
                 projection,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
             .unwrap()
         };
@@ -84,6 +85,7 @@ fn direct_documents_keep_text_row_presence_and_clears() {
             Ids::Any,
             projection,
             1_700_000_000_000.0,
+            &Default::default(),
         )
         .unwrap()
     };
@@ -146,6 +148,7 @@ fn every_corpus_and_conformance_plan_is_the_same_without_a_kernel() {
                 Ids::Any,
                 projection,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
         };
         let what = file.display().to_string();
@@ -321,6 +324,7 @@ component Pages
                 Ids::Any,
                 projection,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
             .unwrap()
         };

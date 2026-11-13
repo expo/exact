@@ -589,7 +589,20 @@ fn the_readers_blocks_make_each_table_one_block_of_the_headers_columns() {
     let doc = here(
         "Before.\n\n| A | B | C |\n| - | - | - |\n| 1 |\n| 2 | 3 | 4 | 5 |\n\n| x | y | z |\n| - | - | - |\n| p | q | r |\n\nAfter.\n",
     );
+    let groups: Vec<_> = markdown_parse::value::block_groups(&doc).collect();
+    assert_eq!(
+        groups.iter().map(|g| g.len()).collect::<Vec<_>>(),
+        [1, 3, 2, 1]
+    );
+    let paged = Value::list(
+        groups
+            .iter()
+            .enumerate()
+            .map(|(i, group)| markdown_parse::value::block_group(i, group))
+            .collect(),
+    );
     let value = markdown_parse::value::into_blocks_with_tables(doc);
+    assert_eq!(paged, value, "paging preserves whole tables and block ids");
     let blocks = fields(&value);
     let kinds: Vec<_> = blocks
         .iter()
@@ -749,4 +762,74 @@ fn this_repositorys_own_documents_parse_into_blocks() {
     assert!(files > 20, "expected the corpus, found {files} documents");
     assert!(headings > 200, "expected headings, found {headings}");
     assert!(tables > 20, "expected tables, found {tables}");
+}
+
+#[test]
+fn grouped_table_cells_retain_separator_alignment() {
+    use exact_plan::Value;
+    let Value::List(blocks) = markdown_parse::value::into_blocks_with_tables(here(
+        "| Left | Right | Center |\n| :--- | ---: | :---: |\n| a | b | c |\n",
+    )) else {
+        panic!("blocks")
+    };
+    let Value::Record(table) = &blocks[0] else {
+        panic!("table")
+    };
+    let Value::List(cells) = &table[8] else {
+        panic!("cells")
+    };
+    for (cell, align) in cells.iter().zip(["left", "right", "center"].iter().cycle()) {
+        let Value::Record(fields) = cell else {
+            panic!("cell")
+        };
+        assert_eq!(fields.get(2), Some(&Value::str(align)));
+    }
+}
+
+#[test]
+fn a_long_tables_sizers_refer_to_its_cells_by_index() {
+    use exact_plan::Value;
+    fn fields(value: &Value) -> &[Value] {
+        match value {
+            Value::Record(values) | Value::List(values) => values,
+            _ => panic!("expected fields or items"),
+        }
+    }
+    fn refs(line: &Value) -> Vec<usize> {
+        fields(&fields(line)[1])
+            .iter()
+            .map(|at| at.as_number().unwrap() as usize)
+            .collect()
+    }
+    // Past 8,192 rows a table has several grids, and so sizers.
+    let mut source = String::from("| A | B |\n| - | - |\n");
+    for row in 0..9_000 {
+        source.push_str(&format!("| r{row} | **x** y |\n"));
+    }
+    source.push_str("| r0 | `z` |\n");
+    let blocks = markdown_parse::value::into_blocks_with_tables(here(&source));
+    let table = fields(&fields(&blocks)[0]);
+    let sizers = fields(&table[14]);
+    assert_eq!(sizers.len(), 2);
+
+    // Single-run cells join by style; a repeated cell is referred to once.
+    let a = fields(&fields(&sizers[0])[1]);
+    assert_eq!(a.len(), 2);
+    assert_eq!(refs(&a[0]), [0]);
+    assert_eq!(fields(&a[0])[3], Value::Number(700.));
+    assert_eq!(
+        refs(&a[1]),
+        (1..=9_000).map(|row| row * 2).collect::<Vec<_>>()
+    );
+    assert_eq!(fields(&a[1])[2], Value::Number(-1.));
+    assert_eq!(fields(&a[1])[3], Value::Number(400.));
+
+    // A cell of several runs is its own line, by `cell`.
+    let b = fields(&fields(&sizers[1])[1]);
+    assert_eq!(b.len(), 3);
+    assert_eq!(refs(&b[0]), [1]);
+    assert!(refs(&b[1]).is_empty());
+    assert_eq!(fields(&b[1])[2], Value::Number(3.));
+    assert_eq!(refs(&b[2]), [9_001 * 2 + 1]);
+    assert_eq!(fields(&b[2])[5], Value::Bool(true));
 }

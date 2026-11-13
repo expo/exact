@@ -65,6 +65,7 @@ pub use material::{FieldText, FieldTexts};
 mod native;
 pub(crate) mod neutral;
 pub(crate) mod numerals;
+pub(crate) mod ripple;
 pub use native::NativeKind;
 mod order;
 mod placed;
@@ -403,7 +404,7 @@ pub struct Scene<'a> {
     pub page: (f32, f32),
     /// Decoded images by node.
     pub images: &'a BTreeMap<ViewId, Arc<Bitmap>>,
-    /// The focused input, if any (its caret is painted).
+    /// The focused node, if any (its ring, or a field's caret, is painted).
     pub focus: Option<ViewId>,
     /// The focused text field's selection (x2apps codeedit #2).
     pub selection: Option<exact_runner::FieldSelection>,
@@ -479,8 +480,7 @@ pub struct Painter {
     decoration_warning: bool,
     /// The node a 3D island paints flat, its own transform being the warp's (LLP 1077 D8).
     pub(crate) flatten: Option<ViewId>,
-    /// The control a finger's press focused: it is the focus and shows no
-    /// ring, which is for a focus a key moved (LLP 1115.001 D7.6).
+    /// The focused node that shows no ring until a key (LLP 1115.001 D7.6).
     pub(crate) ringless: Option<ViewId>,
     /// The focus visual follows WinUI's input tracking, not Chrome's `:focus-visible` (LLP
     /// 1115.004 D9.2): no ring for a focus the app moves before any key (`keyless`), and a key
@@ -496,6 +496,8 @@ pub struct Painter {
     pub(crate) feedback: (Option<ViewId>, Option<ViewId>),
     /// The control a held `active` presses (`presenter/held.rs`), beside a contact's.
     pub(crate) held_press: Option<ViewId>,
+    /// Material's ripples, each from its press's touch (`ripple.rs`).
+    pub(crate) ripples: ripple::Ripples,
     /// The background the last box painted shows, its states' over its own,
     /// which its `background-clip: text` fills with (`text_clip`).
     clipped: Option<(ViewId, [u8; 4])>,
@@ -558,6 +560,8 @@ impl Painter {
         // A fresh kernel can reuse both epochs and node keys.
         self.paint_epoch = None;
         self.svg_warned.clear();
+        // The old tree's presses: its view ids are another tree's now.
+        self.ripples.clear();
     }
 
     /// A painter over a backend.
@@ -603,6 +607,7 @@ impl Painter {
             symbols: look::symbols(),
             feedback: (None, None),
             held_press: None,
+            ripples: Default::default(),
             clipped: None,
             field_content: HashMap::new(),
             field_text: HashMap::new(),
@@ -651,9 +656,19 @@ impl Painter {
     }
 
     /// Something the painter animates owes a frame: a number rolling, a
-    /// field's label floating.
+    /// field's label floating, a ripple spreading or fading.
     pub(crate) fn moving(&self) -> bool {
-        self.numerals.rolling() || self.labels.moving()
+        let (now, still) = (self.numerals.now, self.numerals.still);
+        self.numerals.rolling() || self.labels.moving() || self.ripples.moving(now, still)
+    }
+
+    /// When the last of them comes to rest, ms.
+    pub(crate) fn settles_at(&self) -> Option<f64> {
+        let now = self.numerals.now;
+        (self.numerals.settles_at().into_iter())
+            .chain(self.labels.settles_at())
+            .chain(self.ripples.settles_at(now))
+            .reduce(f64::max)
     }
 
     #[cfg(windows)]
@@ -861,6 +876,7 @@ impl Painter {
         // set remains intact; candidate leases simply unwind with `walk`.
         self.numerals.painted();
         self.labels.painted();
+        self.ripples.painted(self.numerals.now, self.numerals.still);
         if finished.is_ok() {
             self.accepted_text = walk.text;
             self.field_text = walk.fields;
@@ -1075,6 +1091,7 @@ impl Painter {
                 dark,
                 feedback,
             );
+            self.pressable(node, &surface.outer, ts);
         }
         let outer = geometry.outer;
         let content = geometry.content;
@@ -1185,16 +1202,15 @@ impl Painter {
             {
                 self.file_control(node, content, ts);
             }
-            NodeType::Control => control::paint(
-                self.backend.as_mut(),
-                node,
-                content,
-                ts,
-                self.dark,
-                walk.scene.controls.get(&node.id).copied(),
-                self.feedback.0 == Some(node.id),
-                self.scale,
-            ),
+            NodeType::Control => {
+                let held = walk.scene.controls.get(&node.id).copied();
+                let hovered = self.feedback.0 == Some(node.id);
+                let backend = self.backend.as_mut();
+                control::paint(
+                    backend, node, content, ts, self.dark, held, hovered, self.scale,
+                );
+                self.mark_ripple(node, content, held, ts);
+            }
             _ => {}
         }
         // Children, moved by this box's scroll offset when it scrolls.
@@ -1229,18 +1245,8 @@ impl Painter {
         if clips {
             self.backend.pop_clip();
         }
-        // LLP 1104 D6: native buttons ring their own chrome; a bare
-        // button rings its outer box even without a press handler.
-        if paints_self
-            && (node.node_type == NodeType::Pressable
-                || self.alert.is_some() && node.props.str(PropId::AlertPart) == Some("message"))
-            && node.props.str(PropId::Href).is_none()
-            && walk.scene.focus == Some(node.id)
-            && !self.unringed(node)
-            && node.props.bool(PropId::Disabled) != Some(true)
-        {
-            let accent = control::ring(node, self.dark);
-            self.field_ring(&outer, accent, ts);
+        if paints_self {
+            self.node_ring(walk, node, &outer, ts);
         }
         // @ref LLP 1075.003.000.001 §2.2.1 — a hatch's overlay: over the
         // node's own paint and its descendants, clipped to its border box.

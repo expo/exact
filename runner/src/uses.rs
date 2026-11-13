@@ -126,11 +126,15 @@ pub enum Capability {
     /// SQL storage, selected by a data module's `sqlite.open` grants or by
     /// the manifest's `link`, since requests live below the plan.
     Sqlite,
+    /// A tip over an element (`tip`, LLP 1035.006.000): on Apple, TipKit's
+    /// popover, whose frameworks (TipKit, SwiftUI) an app links only for it.
+    /// Hosts with no tip system show none and link nothing for it.
+    Tips,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 30] = [
+    pub const ALL: [Capability; 31] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -161,6 +165,7 @@ impl Capability {
         Capability::Numerals,
         Capability::Dates,
         Capability::Sqlite,
+        Capability::Tips,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -196,6 +201,7 @@ impl Capability {
             Capability::Numerals => "numerals",
             Capability::Dates => "dates",
             Capability::Sqlite => "sqlite",
+            Capability::Tips => "tips",
         }
     }
 
@@ -325,6 +331,9 @@ pub fn uses(plan: &Plan) -> Uses {
                 Some(PropId::ListStyle) => uses = uses.with(Capability::GroupedLists),
                 Some(PropId::Dataset) => uses = uses.with(Capability::Dataset),
                 Some(PropId::AccessibilityControls) => uses = uses.with(Capability::Tabs),
+                Some(PropId::Tip) if can_be(&binding, &|v| !v.is_empty()) => {
+                    uses = uses.with(Capability::Tips);
+                }
                 Some(PropId::Type) if can_be(&binding, &|v| v == "file") => {
                     uses = uses.with(Capability::Picker);
                 }

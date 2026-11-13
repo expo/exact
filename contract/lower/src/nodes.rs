@@ -156,6 +156,7 @@ impl Lowerer<'_> {
         menus::check_menu_keys(expanded, parent_tag.is_none())?;
         values::check_position_area(expanded)?;
         menus::check_invoker(tag, expanded)?;
+        crate::tips::check(expanded, *span)?;
         crate::alert_parts::check_authored(expanded)?;
         tags::check_exclusion(&t, expanded, self.parent_positioned)?;
         // @ref LLP 1121 D3 — a motion token an expansion carried in (a
@@ -594,6 +595,10 @@ impl Lowerer<'_> {
                 || refused.contains(&a.name.as_str())
                 || dataset::word(&a.name).is_some()
             {
+                continue;
+            }
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+                self.errors.push(e);
                 continue;
             }
             if let Err(e) = self.attr(

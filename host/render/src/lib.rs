@@ -21,6 +21,7 @@
 mod activation;
 mod best;
 mod compare;
+mod delivery;
 mod direct;
 mod encode;
 mod executor;
@@ -279,11 +280,13 @@ pub fn render_with<D: DataSource + 'static, F: Fn() -> D>(
         ids,
         projection,
         render_time(),
+        &Default::default(),
     )
 }
 
 /// [`render_with`], with a fixed render timestamp in milliseconds since the
-/// Unix epoch, including every initializer, resource argument and checkpoint.
+/// Unix epoch, including every initializer, resource argument and checkpoint,
+/// and the web build's delivery facts available before any initializer runs.
 #[allow(clippy::too_many_arguments)]
 pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
     plan: &Plan,
@@ -295,10 +298,11 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
     ids: Ids,
     projection: Projection,
     now_ms: f64,
+    delivery: &exact_runner::delivery::Delivery,
 ) -> Result<Rendered, String> {
     let direct = direct_for(plan, ids, projection)?;
     let mut page = settle_at(
-        plan, data, viewport, location, deadline, direct, now_ms, None,
+        plan, data, viewport, location, deadline, direct, now_ms, delivery, None,
     )?;
     let settled_tree = if direct {
         match page.runner.document_tree() {
@@ -330,6 +334,7 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
                     ids,
                     Projection::Kernel,
                     now_ms,
+                    delivery,
                 );
             }
             Err(why) => {
@@ -364,7 +369,7 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
                 Kernel::with_monospace_on_demand(),
                 &state,
                 Vec::new(),
-                Default::default(),
+                delivery.clone(),
                 viewport,
                 location,
             )
@@ -421,6 +426,7 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     deadline: Duration,
     detached: bool,
     now_ms: f64,
+    delivery: &exact_runner::delivery::Delivery,
     on_boot: Option<OnBoot<'_, D>>,
 ) -> Result<Settling<D>, String> {
     // Both complete documents and streamed JS pages settle through this entry.
@@ -473,7 +479,17 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
             Kernel::with_monospace_on_demand()
         }
     };
-    let boot = |source| Runner::boot_at(plan.clone(), source, kernel(), viewport, location, now_ms);
+    let boot = |source| {
+        Runner::boot_at(
+            plan.clone(),
+            source,
+            kernel(),
+            viewport,
+            location,
+            now_ms,
+            delivery.clone(),
+        )
+    };
     // A realm made ahead (or kept warm) is active, so boot asks its sources
     // itself: a call the deadline stops there is the deadline, as it is in
     // `activate` for a fresh realm. The page boots again on a realm not yet
@@ -870,6 +886,7 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
     let (mut shell, mut rules) = (None::<String>, None::<String>);
     let (mut serve, mut planned) = (None::<std::path::PathBuf>, false);
     let mut generations = None::<std::path::PathBuf>;
+    let mut plan_path = None::<std::path::PathBuf>;
     let (mut port, mut renders, mut queue, mut lifetime) = (0u16, 4usize, 32usize, 60u64);
     let usage = || {
         eprintln!("usage: render [--plan <app.plan>] [--viewport <w>x<h>] [--name <name>] [--origin <url>] [--deadline <ms>] ([--shell <index.html>] [--compare] (--build | <location>…) | --serve <dist> [--port <n>] [--renders <n>] [--queue <n>] [--lifetime <s>] [--generations <dir>])");
@@ -877,7 +894,10 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--plan" => match args.next().map(std::fs::read) {
+            "--plan" => match args.next().map(|path| {
+                plan_path = Some(path.clone().into());
+                std::fs::read(path)
+            }) {
                 Some(Ok(bytes)) => {
                     plan = bytes;
                     planned = true;
@@ -957,6 +977,16 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
             }
         }
     }
+    if let Some(dist) = &serve {
+        plan_path = Some(dist.join("app.plan"));
+    }
+    let delivery = match plan_path.as_deref().map(delivery::beside).transpose() {
+        Ok(delivery) => delivery.unwrap_or_default(),
+        Err(e) => {
+            eprintln!("render: version: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let decoded = match Plan::decode(&plan) {
         Ok(decoded) => decoded,
         Err(e) => {
@@ -1030,6 +1060,7 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
                 &site,
                 deadline,
                 shell.as_deref(),
+                &delivery,
             );
             failed |= fields.starts_with(",\"same\":false");
             line.push_str(&fields);
@@ -1042,7 +1073,7 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
         } else {
             Ids::Runtime
         };
-        let rendered = render_with(
+        let rendered = render_with_at(
             &decoded,
             &data,
             viewport,
@@ -1051,6 +1082,8 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
             deadline,
             ids,
             Projection::Kernel,
+            render_time(),
+            &delivery,
         )
         .and_then(|rendered| {
             let page = shell

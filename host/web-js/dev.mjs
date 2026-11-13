@@ -36,6 +36,7 @@ import { inlineWhy as inlineWhyOf } from './dev-inline.mjs';
 import { DEV_STATUS_TYPE, FAILED, PHASE, gist } from '../web/dev-phase.mjs';
 import { startupBuilds, stopBuildTree } from '../web/dev-startup.mjs';
 import { fileURLToPath } from 'node:url';
+import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
 
 const CHECKPOINT_BYTES = 16 * 1024 * 1024, CHECKPOINTS = 8;
 
@@ -114,6 +115,9 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
   // build into each other's.
   const stage = resolve(app.target, 'web-js-dev-stage', createHash('sha256').update(resolve(dist)).digest('hex').slice(0, 16));
   rmSync(stage, { recursive: true, force: true });
+  // The app's `file:` packages as their directories hold them, before the build begins: installed during it, they
+  // would be sources moved since it began, and it would be set aside (#115).
+  try { installedFileDependencies(app.dir); } catch (error) { return Promise.resolve({ packages: devPackages(stage), error: error.message }); }
   const began = Date.now();
   // The app's own inputs beside its Contract sources, and which were there.
   const own = [designPath(app.dir) ?? resolve(app.dir, 'app.tamber'), resolve(app.dir, 'app.ts'), resolve(app.dir, 'app.json'), resolve(app.dir, '.exact/backend-origin'), resolve(app.dir, '.env.local'), resolve(app.dir, '.env')];

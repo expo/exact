@@ -115,13 +115,14 @@ pub(crate) fn paints(style: &exact_kernel::StyleProps) -> bool {
 }
 
 /// Whether the host may paint `property` over `node`'s own: a press's
-/// paint, or a `:hover` or `:focus-visible` look naming it.
+/// paint, or a `:hover` or `:focus-visible` look naming it. A look's `color`
+/// is not one: this host's looks paint the box alone (`BoxPaint::looked`).
 pub(crate) fn paints_over(node: &exact_kernel::NodeRef<'_>, property: Property) -> bool {
     use exact_kernel::StyleId::*;
     let (rows, row): (&[exact_kernel::StyleId], _) = match property {
-        Property::Opacity => (&[PressOpacity, PressOpacityTo], Opacity),
-        Property::BackgroundColor => (&[PressBackgroundColor], BackgroundColor),
-        Property::Color => (&[PressColor], TextColor),
+        Property::Opacity => (&[PressOpacity, PressOpacityTo], Some(Opacity)),
+        Property::BackgroundColor => (&[PressBackgroundColor], Some(BackgroundColor)),
+        Property::Color => (&[PressColor], None),
         _ => return false,
     };
     // A look's `currentcolor` (a colour row set with no value, or a side it
@@ -139,10 +140,8 @@ pub(crate) fn paints_over(node: &exact_kernel::NodeRef<'_>, property: Property) 
                 .any(|(id, c)| l.mask.union(l.written).has(*id) && c.is_none())
     };
     rows.iter().any(|r| node.style.mask.has(*r))
-        || node
-            .looks()
-            .iter()
-            .any(|(_, l)| l.mask.union(l.written).has(row))
+        || row
+            .is_some_and(|row| (node.looks().iter()).any(|(_, l)| l.mask.union(l.written).has(row)))
         || property == Property::Color && node.looks().iter().any(|(_, l)| current(l))
 }
 

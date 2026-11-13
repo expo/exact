@@ -69,13 +69,18 @@ enum ExactDoor {
         var localizedStringResource: LocalizedStringResource { "\\(message)" }
     }
 
-    /// Hands the host a call and awaits its answer (LLP 1111 D4's envelope).
+    /// Hands the host a call and awaits its answer (LLP 1111 D4's envelope). The system's cancellation of the
+    /// intent's task is the caller's: the host drops a call still waiting and lets one that runs finish (LLP 1133.023 D7).
     @MainActor static func call(_ tool: String, _ args: [String: Any], digest: String) async throws -> [String: Any] {
-        let answer: [String: Any] = await withCheckedContinuation { done in
-            let body = NSMutableDictionary(dictionary: ["tool": tool, "args": args, "door": "apple", "digest": digest])
-            body["reply"] = { (answer: [String: Any]) in done.resume(returning: answer) }
-            NotificationCenter.default.post(name: Notification.Name("exact.tools.call"), object: body)
-            if body["taken"] as? Bool != true { done.resume(returning: ["outcome": "refused", "message": "This app has no tool door."]) }
+        let body = NSMutableDictionary(dictionary: ["tool": tool, "args": args, "door": "apple", "digest": digest])
+        let answer: [String: Any] = await withTaskCancellationHandler {
+            await withCheckedContinuation { done in
+                body["reply"] = { (answer: [String: Any]) in done.resume(returning: answer) }
+                NotificationCenter.default.post(name: Notification.Name("exact.tools.call"), object: body)
+                if body["taken"] as? Bool != true { done.resume(returning: ["outcome": "refused", "message": "This app has no tool door."]) }
+            }
+        } onCancel: {
+            NotificationCenter.default.post(name: Notification.Name("exact.tools.cancel"), object: body)
         }
         guard answer["outcome"] as? String == "ok" else {
             let message = answer["message"] as? String ?? ""
@@ -144,8 +149,9 @@ struct Open${T}: OpenIntent {
   }
   for (const { signature, face } of faces) {
     const T = typeName(signature.name);
-    const params = signature.parameters.map(([name, planType]) => ({ name, ...swiftType(planType, face.parameters?.[name]), title: face.parameters?.[name]?.title ?? name }));
-    const fields = params.map(p => `    @Parameter(title: ${literal(p.title)}) var ${p.name}: ${p.type}${p.optional ? '?' : ''}`).join('\n');
+    const params = signature.parameters.map(([name, planType]) => ({ name, ...swiftType(planType, face.parameters?.[name]), title: face.parameters?.[name]?.title ?? name,
+      description: face.parameters?.[name]?.description }));
+    const fields = params.map(p => `    @Parameter(title: ${literal(p.title)}${p.description ? `, description: ${literal(p.description)}` : ''}) var ${p.name}: ${p.type}${p.optional ? '?' : ''}`).join('\n');
     const value = (p) => p.entity ? `${p.name}${p.optional ? '?' : ''}.id` : p.name;
     const args = params.length ? `[${params.map(p => `${literal(p.name)}: ${p.optional ? `${value(p)} as Any? ?? NSNull()` : value(p)}`).join(', ')}]` : '[:]';
     out.push(`

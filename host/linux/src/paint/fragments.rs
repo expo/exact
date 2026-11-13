@@ -108,6 +108,7 @@ impl Painter {
             .and_then(|id| kernel.node(id))
             .filter(|n| {
                 n.node_type == NodeType::Text
+                    && (n.is_inline_run() || n.props.str(PropId::Href).is_some())
                     && n.props.bool(PropId::Disabled) != Some(true)
                     && !control::ringless(n)
             });

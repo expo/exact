@@ -72,7 +72,7 @@ const firstLine = (text) => String(text ?? '').split('\n').find((l) => l.trim())
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // The app's own server (LLP 1116.006 D3). A local origin the data module calls, with any path under it.
-const LOCAL = /\bhttps?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}(?:\/[\w\-./]*)?/;
+const LOCAL = /\bhttps?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}(?:\/[\w\-./]*)?/, LOCAL_SOCKET = new RegExp(LOCAL.source.replace('https?', 'wss?'));
 const readIn = (dir, path) => { try { return readFileSync(resolve(dir, path), 'utf8'); } catch { return null; } };
 
 /** The modules of the app's own that `path` imports (`from './x'`, `import './x'`, `import('./x')`, `require('./x')`),
@@ -99,11 +99,11 @@ export function onThisMachine(origin) {
 function builtSettings(dir, env, code = readIn(dir, 'app.ts')) {
   try { const { code: built, record } = inlineSettings(code, dir, createRequire(import.meta.url)('rolldown/utils').parseSync, env); return { code: built, values: Object.fromEntries(Object.entries(record).map(([name, s]) => [name, s.value])) }; } catch { return { code, values: {} }; }
 }
-/** The server URL the data module calls: the first local one (`http://127.0.0.1:8787`, localhost) in app.ts as built (a
- * setting's value, not a default it overrides), else in a module of its own it imports (`./api`'s `API`); else null. */
+/** The server URL the data module calls: the first local one (`http://127.0.0.1:8787`, localhost; with none, a socket's origin, `ws://…`, is its
+ * server's) in app.ts as built (a setting's value, not a default it overrides), else in a module of its own it imports (`./api`'s `API`); else null. */
 export function serverUrl(dir, env = process.env) {
-  const at = (text) => text?.match(LOCAL)?.[0].replace(/\/$/, '') ?? null;
-  return at(builtSettings(dir, env).code) ?? importsOf(dir, 'app.ts').map((p) => at(readIn(dir, p))).find(Boolean) ?? null;
+  const texts = [builtSettings(dir, env).code, ...importsOf(dir, 'app.ts').map((p) => readIn(dir, p))], at = (re) => texts.map((t) => t?.match(re)?.[0]).find(Boolean);
+  return (at(LOCAL) ?? at(LOCAL_SOCKET))?.replace(/\/$/, '').replace(/^ws/, 'http') ?? null;
 }
 
 /** Whether `entry`, or a module of the app's own it imports (a root shim that only imports the backend), reads the

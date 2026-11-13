@@ -146,6 +146,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a chat that opens at its newest message|`chat-thread`|
 |a long list or grid that loads more|`long-lists`|
 |a welcome at first launch|`first-launch`|
+|a tip that teaches a control until it is used (TipKit)|`tips`|
 |records kept across launches, a saved library (`state` holds values, not records): a JSON file, SQLite, grants|`files-and-grants`|
 |dice, a shuffle, a random pick or name (Contract has no `random()`: copy the recipe's `roll`)|`random-rolls`, `random-and-shuffle`|
 |location, or anything the person must allow|`permissions`|

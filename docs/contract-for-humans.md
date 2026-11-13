@@ -155,7 +155,10 @@ A `use` names one of three things:
   `package.json` `exports` maps `.` (and any subpaths) to `.contract` files;
   without `exports`, `index.contract`. A local library is a dependency too:
   `"@me/ui": "file:../ui"` in the app's `package.json`, or a Bun workspace.
-  A package's own relative uses stay inside the package.
+  A build installs a `file:` package again (`bun install --frozen-lockfile`)
+  when its directory no longer matches what `node_modules` holds, so an edit
+  to it reaches the next build. A package's own relative uses stay inside the
+  package.
 
 A library is Contract only: components, shapes, functions, styles, keyframes and
 timelines. It cannot own resources or carry TypeScript; its components take data

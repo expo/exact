@@ -675,6 +675,7 @@ impl Kernel {
         presented: &[PresentedHeight],
     ) -> Result<LayoutReceipt, KernelError> {
         self.mirror();
+        engine(&mut self.layout).reset_size_cache_counts();
         let slot = self.layout_root_slot(root, offer)?;
         for (i, sample) in presented.iter().enumerate() {
             self.validate_presented_height(slot, *sample)?;

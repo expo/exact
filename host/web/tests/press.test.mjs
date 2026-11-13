@@ -351,12 +351,12 @@ check('a pressable that declares no feedback dims while pressed; a row, a native
     expect(await shown('custom')).toBe('0.65');
     await mouse('mouseReleased', custom);
     expect(await faded('custom')).toBe('1');
-    // A link without a `press` handler shows nothing under a mouse when it declares its own feedback; otherwise
-    // it dims. A finger shows the authored feedback (below). LLP 1061 has yet to unify this behavior across hosts.
+    // A link without a `press` handler is pressed as CSS's `:active` holds on it, under a mouse as under a finger:
+    // it shows the feedback it declares, and dims where it declares none (LLP 1121 D8).
     await evaluate(`document.getElementById('away').insertAdjacentHTML('beforebegin', '<a id="bare" data-view="" href="#there" style="scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:0.9">bare</a>')`);
     const bare = () => evaluate(`document.getAnimations().forEach(a => a.finish()), [parseFloat(getComputedStyle(document.getElementById('bare')).scale) || 1, (globalThis.exact?.pressShown?.(document.getElementById('bare')) ?? getComputedStyle(document.getElementById('bare'))).opacity].join()`);
     await mouse('mousePressed', await centre('bare'));
-    expect(await bare()).toBe('1,1');
+    expect(await bare()).toBe('0.9,1');
     await mouse('mouseReleased', await centre('bare'));
     // Only the innermost: a button or a field in a card takes the press, and the card's own area dims the card.
     expect(await held('inner', 'inner', 'outer')).toBe('0.65,1');

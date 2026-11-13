@@ -29,6 +29,7 @@ mod memo_tests;
 mod order;
 mod publication;
 mod rebuild;
+pub mod size_cache;
 mod table;
 mod titles;
 pub use publication::compute;
@@ -380,6 +381,7 @@ impl LayoutTree {
         // here loses subpixel edits and snaps Retina views to whole points.
         let mut taffy = TaffyTree::new();
         taffy.disable_rounding();
+        taffy.track_size_computations(cfg!(test));
         taffy.set_calc_resolver(crate::style::resolve_calc);
         LayoutTree {
             taffy,

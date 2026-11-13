@@ -2,7 +2,9 @@
 // hovered link's colour reaches its text, through a `color-scheme` boundary
 // that writes the link's token colour again on itself (modes.js), where the
 // look's token resolves in the boundary's scheme; a text with its own colour
-// keeps it, and the pointer leaving gives the base back.
+// keeps it, and the pointer leaving gives the base back. Under a literal base
+// colour, which the boundary does not write again, the look's token resolves
+// in the boundary's scheme too.
 import { afterAll, beforeAll, expect, test as bunTest } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +30,11 @@ const view = `component App
         column color-scheme="dark" testId="dark"
           text "Under dark" testId="under-dark"
         text "Own" testId="own" color="#0000ff"
+      link href="/b" testId="literal" color="#666666"
+        :hover
+          color = "ink"
+        column color-scheme="dark"
+          text "Literal, under dark" testId="under-literal"
       text "Away" testId="away" padding=40
 `;
 let dir, server, suite;
@@ -67,17 +74,19 @@ for (const scheme of ['light', 'dark']) {
     const at = id => `document.querySelector('[data-testid="${id}"]')`;
     // The boundary's colour, written again once the app has committed.
     await evaluate(`new Promise(ok => { const t = setInterval(() => { if (${at('dark')}?.style.color) { clearInterval(t); ok(); } }, 20); })`);
-    const colours = () => evaluate(`Object.fromEntries(['nav', 'plain', 'under-dark', 'own'].map(id => [id, getComputedStyle(document.querySelector('[data-testid="' + id + '"]')).color]))`);
+    const colours = () => evaluate(`Object.fromEntries(['nav', 'plain', 'under-dark', 'own', 'under-literal'].map(id => [id, getComputedStyle(document.querySelector('[data-testid="' + id + '"]')).color]))`);
     const move = async id => {
       const [x, y] = await evaluate(`(() => { const r = ${at(id)}.getBoundingClientRect(); return [r.x + 5, r.y + r.height / 2]; })()`);
       await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
     };
     const [nav, ink] = scheme === 'light' ? ['rgb(102, 102, 102)', 'rgb(34, 34, 34)'] : ['rgb(255, 255, 255)', 'rgb(226, 226, 226)'];
-    const rest = { nav, plain: nav, 'under-dark': 'rgb(255, 255, 255)', own: 'rgb(0, 0, 255)' };
+    const rest = { nav, plain: nav, 'under-dark': 'rgb(255, 255, 255)', own: 'rgb(0, 0, 255)', 'under-literal': 'rgb(102, 102, 102)' };
     expect(await colours()).toEqual(rest);
     await move('plain');
     // The boundary's text takes `ink` in its own scheme, dark: #e2e2e2.
-    expect(await colours()).toEqual({ nav: ink, plain: ink, 'under-dark': 'rgb(226, 226, 226)', own: 'rgb(0, 0, 255)' });
+    expect(await colours()).toEqual({ ...rest, nav: ink, plain: ink, 'under-dark': 'rgb(226, 226, 226)' });
+    await move('under-literal');
+    expect(await colours()).toEqual({ ...rest, 'under-literal': 'rgb(226, 226, 226)' });
     await move('away');
     expect(await colours()).toEqual(rest);
   }, 60_000);

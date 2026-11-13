@@ -26,7 +26,7 @@
         "title": "Log Pages",
         "parameters": {
           "id": { "title": "Book", "entity": "book" },
-          "page": { "title": "Page", "type": "integer" }
+          "page": { "title": "Page", "description": "The page you have read up to.", "type": "integer" }
         },
         "apple": { "phrases": ["Log pages in ${applicationName}"] }
       },
@@ -35,7 +35,7 @@
         "parameters": {
           "title": { "title": "Title" },
           "author": { "title": "Author" },
-          "pages": { "title": "Pages", "type": "integer" }
+          "pages": { "title": "Pages", "description": "How many pages the book has.", "type": "integer" }
         }
       }
     }

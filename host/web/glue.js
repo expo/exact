@@ -1,4 +1,4 @@
-import { listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
+import { listItem, syncListItemRoles, sheetLeaves, sheetFrame, useSheets, liveById, sourceField, popoverCommand, contextAt, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
 import { syncViewportFit } from "./wasm/views.js";
@@ -499,8 +499,8 @@ visualViewport?.addEventListener("resize", () => { pageChanged(); requestAnimati
 onKeyboard(pageChanged); // LLP 1039 D9: the VirtualKeyboard API moves the keys without a resize
 const symbolStyle = document.createElement("style");
 document.head.append(symbolStyle);
-// @ref LLP 1081 stage 2 — a symbol is drawn in its `color`: a zero-specificity default, so a native face's or a bar's own ink wins. LLP 1116.003 D3.2: the nearest authored accent (`--exact-accent`), as the role is (LLP 1116.001 D2) and UIKit's inherited tint. LLP 1121 stage 9 B: one whose `color` its author wrote (`data-symbol-color`, element.rs) draws in it.
-symbolStyle.textContent = "@property --exact-tint{syntax:\"<color>\";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}:where(img[data-symbol-path][data-symbol-color]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:center;mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}";
+// @ref LLP 1081 stage 2 — a symbol draws in its `color`: a zero-specificity default, so a native face's or a bar's own ink wins.
+symbolStyle.textContent = "@property --exact-tint{syntax:\"<color>\";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:center;mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}";
 // An image's `load` and `error` (LLP 1011 §2) as HTML `<img>` fires them, once per source, the error with its message (rt.js `imageEvent`); a symbol fires neither. A tinted raster paints
 // through its CSS mask (element.rs `host_css`), a CORS fetch: from an origin that sends no CORS headers it paints nothing, so a CORS probe of the source decides. An adopted page's image may have settled before this attached.
 export const IMAGE_ERROR = "the image did not load", CORS_ERROR = "a tinted image from another origin needs CORS (Access-Control-Allow-Origin)", imageProbes = new Map();
@@ -899,6 +899,8 @@ const hostGo = (location) => {
   applyBatch(batch);
   return batch;
 };
+// Any plan the wasm host runs may present a sheet (navigation/routes.js `sheetFrame`).
+useSheets(sheetFrame);
 // the runner's own `go` (LLP 1115.000 D4.3): Forward, and a link to a route (input-glue.js)
 navigation.connect(root, navigate, log, (id) => {
   if (host.inputReady) {

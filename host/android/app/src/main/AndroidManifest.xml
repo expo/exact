@@ -24,8 +24,9 @@
          Android 16 the platform calls it only when the app opts in; without this, Back on Android 13 to 15 finished
          the activity from any screen. -->
     <!-- Locked secrets' files stay out of backups and transfers (res/xml/exact_backup.xml, LLP 1133.010 D6). -->
-    <!-- The launcher icon and the TV banner are the app manifest's `icons` (app/build.gradle.kts, LLP 1163 D6). -->
-    <application android:label="${appName}" android:theme="@style/ExactLaunch" android:hardwareAccelerated="true"
+    <!-- The launcher icon and the TV banner are the app manifest's `icons` (app/build.gradle.kts, LLP 1163 D6), and the
+         launch theme its `background_color` where it names one (LLP 1115.001 D3.6). -->
+    <application android:label="${appName}" android:theme="${appTheme}" android:hardwareAccelerated="true"
         android:icon="${appIcon}" android:roundIcon="${appIcon}" android:banner="${appBanner}"
         android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/exact_backup" android:dataExtractionRules="@xml/exact_data_extraction">

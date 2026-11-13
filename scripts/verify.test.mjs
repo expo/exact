@@ -473,6 +473,15 @@ test('the app\'s server: its entry, the URL app.ts calls, and why it cannot be r
     const setting = { 'app.ts': "export const API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8080';\nexport const grants = `net.fetch ${API}`;\n", 'app.json': JSON.stringify({ env: ['API_BASE_URL'], server: { database: false } }), 'server.ts': 'Bun.serve({});\n' };
     put(setting);
     assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8080');
+    // An app whose backend is one socket names its origin alone: the server is there.
+    put({ ...setting, 'app.ts': "const CONVEX = 'ws://127.0.0.1:3210';\nexport const grants = `net.websocket ${CONVEX}`;\n" });
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:3210');
+    // A socket elsewhere does not stand for the server when the app names an http: one, whichever comes first.
+    put({ ...setting, 'app.ts': "const FEED = 'ws://127.0.0.1:4791';\nconst API = 'http://127.0.0.1:8080';\nexport const grants = `net.websocket ${FEED}\\nnet.fetch ${API}`;\n" });
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8080');
+    // …in a module app.ts imports, too.
+    put({ ...setting, 'app.ts': "import { API } from './api';\nconst FEED = 'ws://127.0.0.1:4791';\nexport const grants = `net.websocket ${FEED}\\nnet.fetch ${API}`;\n", 'api.ts': "export const API = 'http://127.0.0.1:8090';\n" });
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8090');
     put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n' });
     assert.deepEqual([appServer(dir, {}).url, appServer(dir, {}).refusal], ['http://127.0.0.1:8787', null]);
     put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n', '.env.local': 'API_BASE_URL=http://localhost:9000\n' });

@@ -732,6 +732,17 @@ pub(super) fn props_for(node: &NodeRef<'_>) -> exact_kernel::SortedMap<&'static 
             out.insert("spellcheck", value.to_string());
         }
     }
+    // @ref LLP 1035.006.000 D1 — a tip's symbol by its SF Symbols name.
+    if let Some(role) = node
+        .props
+        .str(PropId::TipImage)
+        .and_then(|s| s.strip_prefix("symbol:"))
+    {
+        out.insert(
+            "tipSymbolName",
+            exact_kernel::apple_symbol_name(role).into(),
+        );
+    }
     if node.node_type == NodeType::Image {
         if let Some(role) = node
             .props

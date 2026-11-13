@@ -64,6 +64,9 @@ android {
         // shows the shell's plain one (res/drawable/banner.xml).
         manifestPlaceholders["appIcon"] = providers.gradleProperty("appIcon").orNull ?: "@null"
         manifestPlaceholders["appBanner"] = providers.gradleProperty("appBanner").orNull ?: "@drawable/banner"
+        // The launch window in the manifest's `background_color` (agent-android.mjs `androidLaunch`); without one the
+        // reader's, the platform's surface (LLP 1115.001 D3.6).
+        manifestPlaceholders["appTheme"] = providers.gradleProperty("appTheme").orNull ?: "@style/ExactLaunch"
     }
     val upload = providers.environmentVariable("EXACT_KEYSTORE").orNull?.let { path ->
         signingConfigs.create("upload") {
@@ -86,6 +89,7 @@ android {
     sourceSets["main"].assets.directories.add(out.resolve("rust/assets").path)
     // The icon and banner agent-android.mjs makes from the manifest's `icons` (LLP 1163 D6).
     sourceSets["main"].res.directories.add(out.resolve("icons/res").path)
+    sourceSets["main"].res.directories.add(out.resolve("launch/res").path)
     sourceSets["main"].kotlin.directories.add(if (compose) "src/compose/java" else "src/nocompose/java")
     // The app's Kotlin hatches and module roster (LLP 1115.001.000 D4) in its `modules/android`; -PmodulesDir lets a
     // component fixture compile the app's actual provider without copying its Kotlin.

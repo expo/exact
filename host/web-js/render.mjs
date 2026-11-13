@@ -118,12 +118,14 @@ const utcIntl = new vm.Script(`{
  * capture script can neither replay nor wake for — else `eager`. A render that formatted in
  * the default zone does not wait either. The page carries the plan's
  * viewport comparisons as it was laid out by them, which the capture
- * script checks (`wake`). */
+ * script checks (`wake`). A page that would wait is `idle` when the plan
+ * offers tools to a browser's agent, which only the runtime registers
+ * (`exact_runner::activation::offers_tools`). */
 function infer(out) {
-  const { waits: kinds, kept } = out.activation;
+  const { waits: kinds, kept, tools } = out.activation;
   const on = [...out.root.matchAll(/ data-exact-on="([^"]*)"/g)].flatMap(m => m[1].split(' '));
   const waits = !kept && !out.pending.length && !out.outstanding && !out.continuing && !out.open.length && !out.due && !out.zoned && on.every(k => kinds.includes(k));
-  return waits ? 'interaction' : 'eager';
+  return waits ? (tools ? 'idle' : 'interaction') : 'eager';
 }
 
 /** The renderer for one built dist: its server bundle compiled once. */

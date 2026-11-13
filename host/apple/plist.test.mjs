@@ -213,3 +213,23 @@ test('module settings keep their keys escaped, and a value a property list canno
   for (const [value, what] of [[null, 'null'], [NaN, 'NaN'], [Infinity, 'Infinity'], [1e21, '1e+21']]) refused(value, 'dsn', what);
   refused(['a', null], 'dsn[1]', 'null');
 });
+
+test('every app plist takes the version inputs, defaulting only unset variables', () => {
+  const app = { id: 'com.exact.version', displayName: 'Version', manifest: {} };
+  const saved = [process.env.EXACT_VERSION, process.env.EXACT_BUILD_NUMBER];
+  try {
+    for (const [version, build] of [[undefined, undefined], ['2.3.4', '56'], ['', '']]) {
+      for (const [name, value] of [['EXACT_VERSION', version], ['EXACT_BUILD_NUMBER', build]]) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+      for (const plist of [infoPlist(app), infoPlist(app, true), infoPlist(app, false, { tv: true }), infoPlist(app, false, { development: { scheme: 'exact-version-dev', origins: ['http://localhost:7777'], token: 'fixture' } }), macInfoPlist(app)]) {
+        assert.ok(flat(plist).includes(`<key>CFBundleShortVersionString</key><string>${version ?? '0.1.0'}</string>`));
+        assert.ok(flat(plist).includes(`<key>CFBundleVersion</key><string>${build ?? '1'}</string>`));
+      }
+    }
+  } finally {
+    for (const [i, name] of ['EXACT_VERSION', 'EXACT_BUILD_NUMBER'].entries()) {
+      if (saved[i] === undefined) delete process.env[name]; else process.env[name] = saved[i];
+    }
+  }
+});

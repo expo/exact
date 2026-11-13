@@ -23,7 +23,7 @@ pub(super) fn canvas_css(node: &NodeFacts<'_>, parent: Option<&NodeFacts<'_>>, c
         given(StyleId::Height, style.height.clone()),
     );
     css.push_str("contain:size;");
-    if !in_flow(node) || parent.is_none_or(|p| !aligns(p)) {
+    if parent.is_none_or(|p| !aligns(p)) {
         css.push_str("justify-self:start;");
     }
     if !height {
@@ -81,8 +81,8 @@ fn in_flow(node: &NodeFacts<'_>) -> bool {
     )
 }
 
-/// A parent's `justify-items` that aligns (`start`, `center`, …) aligns an in-flow child, in block
-/// flow too since the kernel's 6d81878b30: a host's `justify-self: start` is not written over it.
+/// An aligning parent's `justify-items` applies in block flow and to an
+/// absolute child's static position. The host leaves `justify-self` unset.
 fn aligns(parent: &NodeFacts<'_>) -> bool {
     use exact_kernel::JustifyItems as J;
     !matches!(parent.style.justify_items, J::Normal | J::Stretch)

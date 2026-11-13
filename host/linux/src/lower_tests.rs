@@ -399,3 +399,36 @@ fn the_indicator_stands_still_while_animations_are_removed() {
     reduce(&mut h, false);
     assert_eq!(h.spinner_tracks(), moving);
 }
+
+/// A look's `color` leaves the node's colour track to the reader: this host
+/// paints no look's text colour, so nothing composes on the engine's sample.
+/// A look's background still takes its track.
+#[test]
+fn a_looks_color_leaves_the_colour_track_to_the_reader() {
+    let source = r##"component App
+  view
+    box testId="t" color="#000000"
+      :hover
+        color = "#ff0000"
+        background-color = "#00ff00"
+      text "a"
+"##;
+    let (h, error) = Host::boot(
+        &contract::compile(source).unwrap().encode(),
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        500.,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let node = h
+        .kernel()
+        .node_by_key(h.kernel().find_by_test_id("t")[0])
+        .unwrap();
+    assert!(!crate::host::press::paints_over(&node, Property::Color));
+    assert!(crate::host::press::paints_over(
+        &node,
+        Property::BackgroundColor
+    ));
+}

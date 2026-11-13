@@ -617,13 +617,6 @@ impl Em<'_> {
         // so its `--exact-accent` naming one that names the accent would name
         // itself: that token's colour stands by tuple (`data-x-accent`), as
         // css.rs leaves a self-reference out; a clear there writes nothing.
-        // A bound `color` that decides a symbol's ink (style.rs
-        // `symbol_marks`) keeps whether its binding has a value now, a clear
-        // included, whatever its map writes: symbols.js `inked` reads it.
-        let inked = (id == StyleId::TextColor
-            && parts.props.get("data-exact-ink").is_some_and(|w| w != "b"))
-        .then(|| format!("()=>{{const v=({f})();{e}.$ink=v!=null;return v}}"));
-        let f = inked.as_deref().unwrap_or(f);
         // A blank text row clears its start; `none` leaves that start exposed.
         let clear = matches!(id, StyleId::FontWeight | StyleId::LineHeight).then(|| {
             format!("()=>{{const v=({f})();return typeof v===\"string\"&&!v.trim()?\"unset\":v}}")
