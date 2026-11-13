@@ -21,12 +21,12 @@ import AppKit
 #endif
 
 /// One shadow of a `box-shadow` list, resolved for an appearance.
-struct BoxShadowSpec: Equatable {
-    var color: CGColor
-    var offset: CGSize
-    var blur: CGFloat
-    var spread: CGFloat
-    var inset: Bool
+package struct BoxShadowSpec: Equatable {
+    package var color: CGColor
+    package var offset: CGSize
+    package var blur: CGFloat
+    package var spread: CGFloat
+    package var inset: Bool
 
     /// The row's list (`style.rs`), the colours for `dark`; transparent
     /// shadows left out.
@@ -42,15 +42,15 @@ struct BoxShadowSpec: Equatable {
 
     /// How far past the shape it reaches: three deviations, the offset and
     /// the spread.
-    var reach: CGFloat { 1.5 * blur + max(abs(offset.width), abs(offset.height)) + abs(spread) + 1 }
+    package var reach: CGFloat { 1.5 * blur + max(abs(offset.width), abs(offset.height)) + abs(spread) + 1 }
 }
 
 /// The outer shadows: a container masked to outside the border box, one
 /// casting sublayer per shadow.
-final class ShadowCaster: CALayer {
+package final class ShadowCaster: CALayer {
     private let outside = CAShapeLayer()
 
-    override init() {
+    package override init() {
         super.init()
         outside.fillRule = .evenOdd
         mask = outside
@@ -65,7 +65,7 @@ final class ShadowCaster: CALayer {
 
     /// `box` and the paths in the host layer's coordinates: `outline` the
     /// border box's, each shadow's shape its outline grown by its spread.
-    func cast(box: CGRect, outline: CGPath, shadows: [(shape: CGPath, spec: BoxShadowSpec)]) {
+    package func cast(box: CGRect, outline: CGPath, shadows: [(shape: CGPath, spec: BoxShadowSpec)]) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         let reach = shadows.map(\.spec.reach).max() ?? 1
@@ -108,10 +108,10 @@ final class ShadowCaster: CALayer {
 
 /// The inset shadows: a container masked to the padding box, one sublayer
 /// per shadow casting a frame inward (LLP 1077 D4).
-final class InsetShadowCaster: CALayer {
+package final class InsetShadowCaster: CALayer {
     private let inside = CAShapeLayer()
 
-    override init() {
+    package override init() {
         super.init()
         mask = inside
     }
@@ -120,7 +120,7 @@ final class InsetShadowCaster: CALayer {
 
     /// `padding` the padding box's outline; each shadow's hole the padding
     /// box shrunk by its spread, all in the host layer's coordinates.
-    func cast(box: CGRect, padding: CGPath, shadows: [(hole: CGPath, spec: BoxShadowSpec)]) {
+    package func cast(box: CGRect, padding: CGPath, shadows: [(hole: CGPath, spec: BoxShadowSpec)]) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         if frame != box { frame = box }
@@ -188,11 +188,37 @@ extension BoxShadowSpec {
 }
 
 extension NodeView {
+    /// The section owns hover and focus; its card owns their shadow paint.
+    var groupedShadowCard: NodeView? {
+        guard props["semanticTag"] == "section", nodeSuperview?.props["listStyle"] != nil else { return nil }
+        return container.subviews.compactMap { $0 as? NodeView }.first {
+            !["header", "footer"].contains($0.props["semanticTag"] ?? "")
+        }
+    }
+
     /// The `box-shadow` list resolved for the view's appearance; a popover's
     /// default surface's shadow where its author wrote none (`defaultSurface`).
-    var boxShadows: [BoxShadowSpec] {
-        let list = BoxShadowSpec.list(style["box_shadow"], dark: drawsDark, contrast: drawsHighContrast, elevated: drawsElevated, tint: ownTint(for: style["box_shadow"]))
+    package var boxShadows: [BoxShadowSpec] {
+        if groupedShadowCard != nil { return [] }
+        var value = style["box_shadow"]
+        if let section = nodeSuperview, section.groupedShadowCard === self {
+            for (state, on) in [("hover", section.pressPaint.hovered || section.holds("hover")),
+                                ("focus_visible", section.pressPaint.focusShown || section.holds("focus-visible"))] where on && !section.disabled {
+                if let shadow = Self.look(state, in: section.style)?["box_shadow"] { value = shadow }
+            }
+        }
+        let list = BoxShadowSpec.list(value, dark: drawsDark, contrast: drawsHighContrast, elevated: drawsElevated, tint: ownTint(for: value))
         return list.isEmpty ? defaultSurfaceShadow.map { [$0] } ?? [] : list
+    }
+
+    /// A projected card uses the node's corners at its native size.
+    package func boxShadowShape(in box: CGRect, spread: CGFloat = 0, inset: Bool = false) -> CGPath {
+        let sizes = BorderPaint.reduced(BorderPaint.radii(style, in: box), in: box)
+        let grown = box.insetBy(dx: inset ? spread : -spread, dy: inset ? spread : -spread)
+        guard grown.width > 0, grown.height > 0 else { return CGMutablePath() }
+        let radius = { (r: CGFloat) in inset ? max(0, r - spread) : BoxShadowSpec.spreadRadius(r, spread) }
+        let radii = sizes.map { CGSize(width: radius($0.width), height: radius($0.height)) }
+        return BorderPaint.roundedRect(grown, radii, shape: CornerShape(style["corner_shape"]))
     }
 
     /// The first outer shadow's colour; nil when there is none.
@@ -207,6 +233,15 @@ extension NodeView {
     /// The casters onto the layer: the outer ones at its bottom, cast from
     /// the border box; the inset ones over the box's paint; or gone.
     func applyShadow(outline: CGPath) {
+        if let card = groupedShadowCard {
+            card.syncShadowClip()
+            #if os(macOS)
+            card.applyClipRadius()
+            card.applyShadow()
+            #else
+            card.applyBoxLayer()
+            #endif
+        }
         if cssVisibilityHidden {
             shadowCaster?.removeFromSuperlayer(); shadowCaster = nil
             insetCaster?.removeFromSuperlayer(); insetCaster = nil
@@ -366,6 +401,19 @@ extension NodeView {
         guard kind != "text" else { return false }
         let pair = [style["overflow_x"]?.string ?? "visible", style["overflow_y"]?.string ?? "visible"]
         return pair == ["clip", "visible"] || pair == ["visible", "clip"]
+    }
+
+    /// Keep overflow clipped on the children while an outer shadow reaches past the card.
+    func syncShadowClip() {
+        #if os(macOS)
+        let canHoldChildren = materialContent == nil
+        #else
+        let canHoldChildren = materialKind != "glass"
+        #endif
+        syncClipBox(overflowClips && kind != "text" && (shadowColor != nil || clipsOneAxis)
+                    && scroll == nil && overlay == nil && canHoldChildren)
+        let clipped = overflowClips && clipBox == nil
+        if clipsToBounds != clipped { clipsToBounds = clipped }
     }
 
     /// The children into a clipping box of their own, or back out of it, as

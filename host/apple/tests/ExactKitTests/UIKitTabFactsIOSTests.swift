@@ -171,6 +171,42 @@ final class UIKitTabFactsIOSTests: XCTestCase {
         settle()
     }
 
+    /// A tab under More whose root and a route above it More holds, selected
+    /// again while another tab shows. More selected, as the tap helper selects
+    /// it, keeps More's stack. The tab's own controller selected in code keeps
+    /// it too, unless the route hides the tab bar: then More drops the route
+    /// within the setter, shows its list and the tab's root again, and the
+    /// route is in no controller.
+    func testSelectingATabWhoseRoutesMoreHolds() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit shows More's tabs as in an app only in a scene's window") }
+        for (hides, viaMore) in [(false, false), (true, false), (false, true), (true, true)] {
+            build(scene)
+            let more = tabs.moreNavigationController, five = navs[4], root = five.viewControllers[0], list = more.viewControllers[0]
+            let deeper = UIViewController()
+            deeper.hidesBottomBarWhenPushed = hides
+            tapTab(tabs, of: more)
+            settle()
+            tabs.selectedViewController = five
+            settle()
+            more.pushViewController(deeper, animated: false)
+            settle()
+            tapTab(tabs, 0)
+            settle()
+            watcher.shownAtWillShow = []
+            if viaMore { tapTab(tabs, of: more) } else { tabs.selectedViewController = five }
+            settle()
+            let what = "\(viaMore ? "More" : "the tab's controller") selected, the route \(hides ? "hiding" : "keeping") the tab bar"
+            if hides && !viaMore {
+                XCTAssertTrue(more.viewControllers.elementsEqual([list, root], by: ===), "\(what): More drops the route")
+                XCTAssertTrue(watcher.shownAtWillShow.elementsEqual([deeper, list, root], by: ===), "\(what): More shows its list, then the tab's root")
+                XCTAssertNil(deeper.parent, "\(what): the route is in no controller")
+            } else {
+                XCTAssertTrue(more.viewControllers.elementsEqual([list, root, deeper], by: ===), "\(what): More keeps its stack")
+                XCTAssertTrue(deeper.parent === more, "\(what): the route stays More's")
+            }
+        }
+    }
+
     /// Five's Deeper over Five's root in More, Five picked from More's list.
     @discardableResult
     private func deeperUnderMore() -> UIViewController {
@@ -237,10 +273,11 @@ private final class SelectionWatcher: NSObject, UINavigationControllerDelegate, 
     weak var tabs: UITabBarController?
     var selectedAtWillShow: [UIViewController?] = []
     var selectedAtDidSelect: [UIViewController?] = []
+    var shownAtWillShow: [UIViewController] = []
     let pop = InteractivePop()
 
     func navigationController(_ nav: UINavigationController, willShow vc: UIViewController, animated: Bool) {
-        if nav === tabs?.moreNavigationController { selectedAtWillShow.append(tabs?.selectedViewController) }
+        if nav === tabs?.moreNavigationController { selectedAtWillShow.append(tabs?.selectedViewController); shownAtWillShow.append(vc) }
     }
 
     func navigationController(_ nav: UINavigationController, animationControllerFor operation: UINavigationController.Operation,

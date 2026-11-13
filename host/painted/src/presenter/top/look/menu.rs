@@ -1,20 +1,24 @@
-//! Overflowing desktop menus keep the item geometry, hit tests and focus in one viewport.
+//! Overflowing menus keep the item geometry, hit tests and focus in one viewport. WinUI's
+//! MenuFlyout shows its scrollbar; Compose's DropdownMenu shows none.
 use super::*;
 
 pub(super) struct Scroll {
     offset: f32,
     max: f32,
     dark: bool,
+    /// WinUI's: its rows' corners are rounded, and it has a scrollbar.
+    desktop: bool,
     hovered: bool,
     grab: Option<f32>,
 }
 
 impl Scroll {
-    pub(super) fn new(max: f32, dark: bool) -> Self {
+    pub(super) fn new(max: f32, dark: bool, desktop: bool) -> Self {
         Self {
             offset: 0.,
             max,
             dark,
+            desktop,
             hovered: false,
             grab: None,
         }
@@ -46,9 +50,10 @@ impl Layout {
             return false;
         }
         scroll.offset = next;
+        let corner = if scroll.desktop { 4. } else { 0. };
         for target in &mut self.targets {
             target.rect.1 += shift;
-            target.layer.0 = Shape::new(target.rect, [4.; 4]);
+            target.layer.0 = Shape::new(target.rect, [corner; 4]);
         }
         for item in &mut self.items {
             match item {
@@ -76,7 +81,7 @@ impl Layout {
     }
 
     fn menu_bar(&self) -> Option<(Rect4, Rect4)> {
-        let scroll = self.menu.as_ref()?;
+        let scroll = self.menu.as_ref().filter(|scroll| scroll.desktop)?;
         let height = (self.size.1 - 8.).max(0.);
         let track = (self.size.0 - 13., 4., 12., height);
         let thumb_height = (height * height / (height + scroll.max))

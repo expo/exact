@@ -91,6 +91,7 @@ component PhotoEditor
   mutation opened as shape MediaStream then show
   mutation shot as shape Photo then taken
   mutation adjusted as shape MediaStreamTrack
+  mutation turned as shape MediaStreamTrack then faced
   mutation stopped as shape MediaStreamTrack
   mutation saved as shape Saved then wasSaved
   mutation copied as shape PhotoCopy then openCopy
@@ -130,15 +131,28 @@ component PhotoEditor
     if not holding
       send opened = getUserMedia(video=true, videoConstraints=facingOnly)
     nav = push(nav, "/camera")
+  // A stream that arrives after the camera was left (cancel, back) is let go
+  // at once, so the camera does not stay on behind the editor.
   action show
     match opened
       case some(s)
-        track = match s.tracks.at(0) { case some(t) => t.id, case none => "" }
+        let arrived = match s.tracks.at(0) { case some(t) => t.id, case none => "" }
+        if top(nav).name == "camera"
+          track = arrived
+        else
+          send stopped = stopTrack(track=arrived)
       case none
         track = track
   action flip
-    send adjusted = applyConstraints(track=track, facingMode=(facing == "environment" ? "user" : "environment"))
-    facing = facing == "environment" ? "user" : "environment"
+    send turned = applyConstraints(track=track, facingMode=(facing == "environment" ? "user" : "environment"))
+  // The camera faces the other way once the track has turned; a refused flip
+  // (no track yet, no camera that way) leaves `facing` as the open camera has it.
+  action faced
+    match turned
+      case some(t)
+        facing = match t.settings.facingMode { case some(f) => f, case none => (facing == "environment" ? "user" : "environment") }
+      case none
+        facing = facing
   action torch
     send adjusted = applyConstraints(track=track, torch=not torchOn)
   action shutter

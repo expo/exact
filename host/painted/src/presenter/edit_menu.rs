@@ -138,23 +138,15 @@ impl<D: DataSource> Presenter<D> {
             let Some(node) = self.host.kernel().node_by_key(key) else {
                 continue;
             };
+            let from = self.commands.len();
             let error = self.host.dispatch_at(node.id, Event::Contextmenu, now);
             if let Some(error) = error.or(self.after_commit()) {
                 self.host.log(error);
             }
-            let mut stopped = false;
-            self.commands.retain(|c| match c.name.as_str() {
-                "preventDefault" => {
-                    prevented = true;
-                    false
-                }
-                "stopPropagation" => {
-                    stopped = true;
-                    false
-                }
-                _ => true,
-            });
-            if stopped {
+            prevented |= self.prevented_since(from);
+            let queued = self.commands.len();
+            self.commands.retain(|c| c.name != "stopPropagation");
+            if self.commands.len() != queued {
                 break;
             }
         }

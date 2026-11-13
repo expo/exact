@@ -514,3 +514,63 @@ test('web dispatch refuses a Rust prefetch on a send and sends a resource prefet
     expect(inflight.n).toBe(0);
   }
 });
+
+// A Rust call that fails may have changed the module's own state before it failed: refused after its answer ran, or
+// trapped. The next call runs in a fresh instance, activated again, as natively (logic/src/lib.rs `run`).
+test('a Rust call after a refused or trapped one runs in a fresh instance', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-fresh-'));
+  for (const name of ['rust-data.js', 'admission.js', 'held.js']) {
+    const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
+    writeFileSync(resolve(dir, name), source);
+  }
+  for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
+  writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const rustGrantSet=createGrantSet(${JSON.stringify(normalized(''))}),tsGrantSet=createGrantSet(${JSON.stringify(normalized(''))});\n`);
+  writeFileSync(resolve(dir, 'rt-link.js'), 'export const rt = {};\n');
+  // Each instance counts the calls named `bump` it ran; `count` answers that count.
+  let instances = 0;
+  const instance = () => {
+    instances++;
+    const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
+    let output = new Uint8Array(), bumps = 0;
+    const response = fill => {
+      const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
+      const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
+      u32(11); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    };
+    return { exports: {
+      memory, exact_logic_abi: () => 11, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+      exact_logic_output: () => out, exact_logic_output_len: () => output.length,
+      exact_logic_call(_session, pointer) {
+        const code = new Uint8Array(memory.buffer)[pointer + 4];
+        if (code === 0) response(w => { w.u8(0); w.string('test.rust'); w.string(''); });
+        else if (code === 1 || code === 2) response(w => { w.u8(0); w.u8(0); w.u8(3); });
+        else {
+          const view = new DataView(memory.buffer), n = view.getUint32(pointer + 5, true);
+          const source = new TextDecoder().decode(new Uint8Array(memory.buffer, pointer + 9, n));
+          if (source === 'refused') { bumps++; return 1; }
+          if (source === 'trapped') { bumps++; throw new WebAssembly.RuntimeError('unreachable'); }
+          response(w => { w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u32(0); w.u32(0); w.u8(0); w.string(''); w.u8(0); w.u8(2); w.string(String(bumps)); });
+        }
+        return 0;
+      },
+    } };
+  };
+  const [instantiate, Instance] = [WebAssembly.instantiate, WebAssembly.Instance];
+  WebAssembly.instantiate = async () => ({ instance: instance(), module: 'compiled' });
+  WebAssembly.Instance = function (module) { expect(module).toBe('compiled'); return instance(); };
+  try {
+    const module = await import(pathToFileURL(resolve(dir, 'rust-data.js')).href);
+    const data = { q: [] }, store = { map: new Map(), set() {} };
+    await module.install(data, { count: '', refused: '', trapped: '' }, async () => new ArrayBuffer(0));
+    expect(data.answer('count', [], store).v).toBe('0');
+    expect(() => data.answer('refused', [], store)).toThrow('Rust module rejected the call');
+    expect(data.answer('count', [], store).v).toBe('0');
+    expect(() => data.answer('trapped', [], store)).toThrow('unreachable');
+    expect(data.answer('count', [], store).v).toBe('0');
+    expect(instances).toBe(3);
+    expect(data.logic.exports.exact_logic_abi()).toBe(11);
+  } finally {
+    [WebAssembly.instantiate, WebAssembly.Instance] = [instantiate, Instance];
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

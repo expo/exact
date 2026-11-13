@@ -44,10 +44,13 @@ final class TextInputFormatter: Formatter {
     override func getObjectValue(_ obj: AutoreleasingUnsafeMutablePointer<AnyObject?>?, for string: String, errorDescription error: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
         obj?.pointee = string as NSString; return true
     }
-    override func isPartialStringValid(_ partialString: String, newEditingString newString: AutoreleasingUnsafeMutablePointer<NSString?>?, errorDescription error: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
+    /// As `TextInputLimit.allows`: an edit that does not grow the editor's
+    /// own string past `maxlength` goes ahead, whatever the `value` prop says.
+    override func isPartialStringValid(_ partialStringPtr: AutoreleasingUnsafeMutablePointer<NSString>, proposedSelectedRange proposedSelRangePtr: NSRangePointer?, originalString origString: String, originalSelectedRange origSelRange: NSRange, errorDescription error: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool {
         guard let owner, owner.presenter?.fieldSelections.replacing.contains(owner.id) != true,
               let maximum = TextInputLimit.maximum(owner.props) else { return true }
-        return partialString.utf16.count <= maximum || partialString.utf16.count <= (owner.props["value"]?.utf16.count ?? 0)
+        let next = partialStringPtr.pointee.length
+        return next <= maximum || next <= origString.utf16.count
     }
 }
 #endif

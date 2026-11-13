@@ -56,6 +56,36 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(query("book"), [])
     }
 
+    #if canImport(CoreSpotlight)
+    /// Spotlight's answer to a key's first change leaves it pending while a
+    /// later change is unanswered: a crash then leaves the later one to the
+    /// next launch.
+    func testAnAnswerUnmarksOnlyTheChangeItAnswers() throws {
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke")]))
+        let first = try XCTUnwrap(ExactContentIndex.stamps["book:1"])
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke, 2020")]))
+        let second = try XCTUnwrap(ExactContentIndex.stamps["book:1"])
+        XCTAssertNotEqual(first, second)
+        ExactContentIndex.acknowledge(["book:1"], stamp: first)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.pendingKeys, ["book:1"], "the newer change is still unanswered")
+        ExactContentIndex.acknowledge(["book:1"], stamp: second)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.pendingKeys, [])
+    }
+
+    /// A change the mirror could not write is not told to Spotlight.
+    func testAChangeTheMirrorCouldNotWriteIsNotTold() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let blocked = directory.appendingPathComponent("file")
+        try Data().write(to: blocked)
+        ExactContentIndex.file = blocked.appendingPathComponent("exact-content-index.json")
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [book("2", "Dune", "Frank Herbert")]))
+        XCTAssertEqual(ExactContentIndex.pendingKeys, ["book:2"])
+        XCTAssertNil(ExactContentIndex.stamps["book:2"])
+    }
+    #endif
+
     func testRefusalsChangeNothing() {
         XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke")]))
         XCTAssertEqual(ExactContentIndex.set(kind: "book", [JSONValue.fields(["id": "x", "title": "Away", "url": "https://example.com"])]), "TypeError")

@@ -338,9 +338,11 @@ impl<D: DataSource> Presenter<D> {
             Err(error) => self.host.log(error),
             Ok(true) => {}
         }
-        if self.focus.take().is_some() {
-            self.focus_out.clear();
-            self.dirty = true;
+        // The field the press leaves commits and blurs, as any focus change has it.
+        if self.focus.is_some() {
+            if let Some(error) = self.set_focus(None, now_ms) {
+                self.host.log(error);
+            }
             self.queue_collections();
         }
         if let Some(error) = self.after_commit() {

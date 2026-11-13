@@ -598,6 +598,7 @@ export function parseFlags(argv) {
     else if (argv[i] === '--format-locale') flags.formatLocale = value();
     else if (argv[i] === '--time-zone') flags.timeZone = value();
     else if (argv[i] === '--epoch') flags.epoch = value();
+    else if (argv[i] === '--live') flags.live = true;
     else if (argv[i] === '--timing') flags.timing = value();
     else if (argv[i] === '--touch') flags.touch = value();
     else if (argv[i] === '--chrome') flags.chrome = value();

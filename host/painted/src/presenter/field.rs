@@ -904,6 +904,7 @@ impl<D: DataSource> Presenter<D> {
         let value = self.field_text(id);
         let selection = self.reported_selection(id, &value, self.field_selection(id));
         let event = Event::BeforeInput(value.clone(), selection, edit.clone());
+        let from = self.commands.len();
         if let Some(e) = self
             .host
             .dispatch_at(id, event, now)
@@ -911,9 +912,7 @@ impl<D: DataSource> Presenter<D> {
         {
             return Err(e);
         }
-        let queued = self.commands.len();
-        self.commands.retain(|c| c.name != "preventDefault");
-        Ok(!((edit.cancelable && queued != self.commands.len())
+        Ok(!((self.prevented_since(from) && edit.cancelable)
             || self.host.kernel().node(id).is_none()
             || self.field_text(id) != value))
     }

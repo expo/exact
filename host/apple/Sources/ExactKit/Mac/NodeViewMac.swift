@@ -1185,9 +1185,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         // On a layer-backed view this is the layer's `masksToBounds`, unless
         // the node casts a shadow that clipping would clip (`BoxShadow.swift`).
         // A paragraph paints its own text, which a box would not clip.
-        syncClipBox(overflowClips && kind != "text" && (shadowColor != nil || clipsOneAxis) && scroll == nil && overlay == nil && materialContent == nil)
-        let clipped = overflowClips && clipBox == nil
-        if clipsToBounds != clipped { clipsToBounds = clipped }
+        syncShadowClip()
         applyClipRadius()
         applyShadow()
         syncGlassGroup()

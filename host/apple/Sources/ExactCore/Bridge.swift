@@ -279,6 +279,8 @@ package final class Runtime {
             return read(exact_canvas_image(rt, n, UInt32(max(0, width)), UInt32(max(0, height)), ok ? 1 : 0))
         }
     }
+    /// The presenter let a decoded Canvas 2D image handle go (LLP 1056 D9).
+    package func canvasImageReleased(_ src: String) { on { exact_canvas_image_released(rt, write(src)) } }
     /// A 2D canvas's replay is behind or caught up (LLP 1056 D5).
     package func canvasHeld(_ view: UInt32, _ held: Bool) { on { exact_canvas_held(rt, view, held ? 1 : 0) } }
     /// The Canvas 2D text measurer (LLP 1056 D8), with the measurer's context.

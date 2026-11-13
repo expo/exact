@@ -20,7 +20,7 @@ markdown-parse = { path = "../../markdown/parse" }
 serde_json = "1.0"
 unicode-width = "0.2"
 png = "=0.18.1"
-rustix = { version = "1.1", features = ["process"] }
+rustix = { version = "1.1", features = ["fs", "process"] }
 ureq = { version = "=3.4.0", default-features = false, features = ["rustls"] }
 
 # `build.rs` generates the seam's Rust types from `../shapes.contract`

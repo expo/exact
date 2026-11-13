@@ -103,9 +103,11 @@ test('the JS dev loop carries state by built logic revision and refreshes host f
     ready=new Promise((ok,fail)=>{const take=d=>{lines+=d;for(const line of lines.split('\n'))if(line==='plan ready')return ok()};dev.stdout.on('data',take);dev.stderr.on('data',take);dev.once('error',fail);dev.once('exit',code=>fail(new Error(`dev loop exited ${code}: ${lines.slice(-2000)}`)))});
     await Promise.race([ready,new Promise((_,fail)=>setTimeout(()=>fail(new Error(`dev loop did not start: ${lines.slice(-2000)}`)),120000))]);
     drive=await open({host:'web',app:'realworld',url:`http://127.0.0.1:${port}/`});
+    await drive.tap('nav-login');
     await drive.tap('nav-register');
     assert.ok((await drive.tree()).nodes.some(n=>n.props?.testId==='page-register'),'the route changed before the reload');
     const stack=(await drive.state()).navigation.stack;
+    assert.equal(stack.length,2,'both login and register are mounted; /register alone mounts only register');
     await drive.carrier.evaluate(`(()=>{const el=document.querySelector('[data-testid="reload-probe"]');el.value='x'.repeat(6*1024*1024);el.dispatchEvent(new Event('input',{bubbles:true}));return el.value.length})()`);
     assert.equal(await drive.carrier.evaluate(`document.querySelector('[data-testid="reload-probe"]').value.length`),6*1024*1024);
     await drive.clock('settle');

@@ -41,9 +41,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
-    /// The reader's field `id` had real input (a finger down, a key down).
-    pub fn field_input(&mut self, id: u32, generation: u32) {
-        self.p.reader_field_input(id, generation);
+    /// The reader's field `id` had input of `kind` (`reader_field_input`).
+    pub fn field_input(&mut self, id: u32, generation: u32, kind: i32) {
+        self.p.reader_field_input(id, generation, kind);
         self.force = true;
     }
 

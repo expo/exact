@@ -146,8 +146,20 @@ final class Canvas2DHost: Canvas2DEnv {
     var assetBytes: ((String) -> Data?)?
     /// A handle decoded (its image) or not (nil): the session tells the runtime.
     var onImage: ((String, CGImage?) -> Void)?
+    /// A decoded handle let go: the session tells the runtime, whose next
+    /// draw of it asks for it again.
+    var onRelease: ((String) -> Void)?
     private var images: [String: CGImage] = [:]
     private var loading: Set<String> = []
+    /// When each decoded handle was last drawn, or decoded if it has not been since.
+    private var drawnAt: [String: CFTimeInterval] = [:]
+    private var imageBytes = 0
+    /// Past this many decoded bytes, handles are let go, least recently
+    /// drawn first, as `RasterLoader.minimumBudget` bounds an `img`'s.
+    static var imageBudget = 32 * 1024 * 1024
+    /// A handle drawn this recently stays: a canvas that animates draws it
+    /// again in its next frame, and a handle just decoded is about to be drawn.
+    static var drawnRecently: CFTimeInterval = 1
 
     func canvasFont(_ f: Canvas2DFont) -> CTFont? { textEngine?()?.canvasText.font(f) }
     func canvasImage(_ src: String) -> CGImage? { images[src] }
@@ -193,10 +205,36 @@ final class Canvas2DHost: Canvas2DEnv {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.loading.remove(src)
-                    if let image { self.images[src] = image }
+                    if let image {
+                        if let old = self.images.updateValue(image, forKey: src) { self.imageBytes -= old.bytesPerRow * old.height }
+                        self.imageBytes += image.bytesPerRow * image.height
+                        self.drawnAt[src] = CACurrentMediaTime()
+                    }
                     self.onImage?(src, image)
+                    self.releaseOverBudget()
                 }
             }
+        }
+    }
+
+    /// A replay drew `drawn`. `missed` were let go while a draw that used
+    /// them was on its way: decoded again, they redraw the canvases that drew them.
+    func drew(_ drawn: Set<String>, missed: Set<String>) {
+        let now = CACurrentMediaTime()
+        for src in drawn where images[src] != nil { drawnAt[src] = now }
+        if !missed.isEmpty { load(Array(missed)) }
+        releaseOverBudget()
+    }
+
+    /// Past the budget, the handles drawn least recently are let go, and the runtime told.
+    private func releaseOverBudget() {
+        guard imageBytes > Self.imageBudget else { return }
+        let now = CACurrentMediaTime()
+        for (src, at) in drawnAt.sorted(by: { $0.value < $1.value }) {
+            guard imageBytes > Self.imageBudget, now - at >= Self.drawnRecently else { break }
+            drawnAt[src] = nil
+            if let image = images.removeValue(forKey: src) { imageBytes -= image.bytesPerRow * image.height }
+            onRelease?(src)
         }
     }
 
@@ -339,9 +377,11 @@ final class Canvas2DHost: Canvas2DEnv {
                 k.recording = nil
                 contents = r.image()
             }
+            let (drawn, missed) = Canvas2DSnapshot.taken([env, gpuEnv])
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.pending -= 1
+                self.drew(drawn, missed: missed)
                 for _ in 0..<unreadable { self.errors.append("canvas \(id): unreadable list") }
                 guard let contents, self.sequence[id] != nil, job.seq >= self.born[id] ?? .max, job.seq > self.shown[id] ?? 0,
                       let layer = self.layers[id] else { return }
@@ -389,6 +429,9 @@ final class Canvas2DHost: Canvas2DEnv {
             r.env = nil
             contents = r.image()
         }
+        var (drawn, missed) = Canvas2DSnapshot.taken([env, keptEnv])
+        // A recording draws when Core Animation shows it: every handle its generation named.
+        if recording != nil { drawn.formUnion(k.tracker.imageSources.values) }
         // Kept only while it may be recorded: a canvas that does not animate,
         // or kept past the bound, starts again at its next cover.
         if !k.bounded || (!job.animating && k.recording == nil) { k.drop() }
@@ -396,6 +439,7 @@ final class Canvas2DHost: Canvas2DEnv {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.pending -= 1
+            self.drew(drawn, missed: missed)
             for _ in 0..<unreadable { self.errors.append("canvas \(id): unreadable list") }
             // The newest replay done of a canvas still mounted shows: the
             // bitmap, or the recording.
@@ -556,12 +600,35 @@ private final class Canvas2DJob {
 }
 
 /// What one replay reads off the main thread: the images and fonts as they
-/// were when its lists arrived.
+/// were when its lists arrived, and which handles it drew or found let go.
 final class Canvas2DSnapshot: Canvas2DEnv {
     let images: [String: CGImage]
     let fonts: [Canvas2DFont: CTFont]
+    private let lock = NSLock()
+    private var drawn: Set<String> = [], missed: Set<String> = []
     init(images: [String: CGImage], fonts: [Canvas2DFont: CTFont]) { self.images = images; self.fonts = fonts }
     func canvasFont(_ f: Canvas2DFont) -> CTFont? { fonts[f] }
-    func canvasImage(_ src: String) -> CGImage? { images[src] }
+    func canvasImage(_ src: String) -> CGImage? {
+        let image = images[src]
+        lock.lock()
+        if image != nil { drawn.insert(src) } else { missed.insert(src) }
+        lock.unlock()
+        return image
+    }
+
+    /// The handles `snapshots` drew and missed since they were last asked.
+    static func taken(_ snapshots: [Canvas2DSnapshot]) -> (drawn: Set<String>, missed: Set<String>) {
+        var all: (drawn: Set<String>, missed: Set<String>) = ([], [])
+        for s in snapshots {
+            s.lock.lock()
+            all.drawn.formUnion(s.drawn)
+            all.missed.formUnion(s.missed)
+            s.drawn = []
+            s.missed = []
+            s.lock.unlock()
+        }
+        all.missed.subtract(all.drawn)
+        return all
+    }
 }
 

@@ -187,8 +187,13 @@ impl Input {
             Ok(i) => readings[i].sample = sample,
             Err(i) => readings.insert(i, Reading { sensor, sample }),
         }
-        if sensor == SensorKind::Gravity && self.sensors.first_gravity.is_none() {
-            self.sensors.first_gravity = Some([values[0], values[1], values[2]]);
+        // Only a vector can be a neutral: a zero or non-finite sample leaves the slot for the next.
+        let g = [values[0], values[1], values[2]];
+        if sensor == SensorKind::Gravity
+            && self.sensors.first_gravity.is_none()
+            && gravity(g).is_some()
+        {
+            self.sensors.first_gravity = Some(g);
         }
         self.tick_samples.push(TickSample { sensor, sample });
     }

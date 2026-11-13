@@ -692,6 +692,22 @@ final class HeaderMacTests: XCTestCase {
         }
     }
 
+    /// Status items that name neither `testId` nor `id` keep their
+    /// positions under names of their own: one placed after another is
+    /// removed takes no survivor's.
+    func testUntitledStatusItemsNeverShareAnAutosaveName() throws {
+        let status = ["menuPlacement": "status"]
+        let p = fixture(extra: symbolButton(16, "One", "1.circle", status) + symbolButton(17, "Two", "2.circle", status)
+            + [children(15, [16, 17])])
+        defer { p.statusItems.reset() }
+        XCTAssertEqual(p.statusItems.items.count, 2)
+        p.apply(wireBatch([children(15, [17])]))
+        p.apply(wireBatch(symbolButton(18, "Three", "3.circle", status) + [children(15, [17, 18])]))
+        let names = [17, 18].map { p.statusItems.items[$0]?.autosaveName }
+        XCTAssertEqual(names.compactMap { $0 }.count, 2, "both are placed: \(names)")
+        XCTAssertNotEqual(names[0], names[1])
+    }
+
     /// A header's button that opens a menu is AppKit's menu item: the menu
     /// is the item's own to pop up, filled from the popover's rows as it
     /// opens, after the button's own press; a chosen row presses its

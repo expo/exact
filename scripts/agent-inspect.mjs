@@ -923,6 +923,10 @@ export function renderTrace(t) {
   if (t.perf?.sites?.some(x => x.source?.status !== 'compatible') && typeof digest === 'string') {
     out.push(`source · no map here fits plan ${digest.slice(0, 12)}: pass --plan a build of it (a plan, its map, or a directory such as that checkout's target/)${hb.commit ? `; the host was built from ${hb.commit.slice(0, 12)}${hb.machine ? ` on ${hb.machine}` : ''}` : ''}`);
   }
+  if (t.observation) {
+    const o = t.observation;
+    out.push(`observation · ${o.clockMode} clock · ${o.scheduling} scheduling · store ${o.store} · substitutions: ${(o.substitutions ?? []).join(', ') || 'none'} · reads: ${Object.entries(o.reads ?? {}).map(([name, read]) => `${name} ${read.class}`).join(', ')}`);
+  }
   if (t.proxies) out.push(`proxies · ${Object.entries(t.proxies).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ')}`);
   if (t.frames?.lifetime) {
     out.push('', renderPerf({ ...t.frames, late: [] }));

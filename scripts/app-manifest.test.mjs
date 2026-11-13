@@ -720,6 +720,40 @@ test('preload admits the entry shape and refuses malformed names, fields and bou
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// A deploy captures the app and the checkout keeping their relative places, so a generated workspace that named the
+// checkout absolutely (an app under another top folder than the checkout's) led its capture back to the live tree.
+test('a generated workspace names the checkout relatively, and is rewritten when the app moves', async () => {
+  const { ensureShells } = await import('./app-shells.mjs');
+  const { existsSync, mkdirSync, readFileSync, realpathSync, renameSync } = await import('node:fs');
+  const { dirname, isAbsolute } = await import('node:path');
+  const parent = realpathSync(mkdtempSync(resolve(tmpdir(), 'manifest-relative-shell-')));
+  const manifest = { name: 'Rel', app: { id: 'test.relative', name: 'Rel' }, host: { linux: {} }, deploy: { store: { web: '0', linux: '0' } } };
+  // Each path the workspace and its Linux crate name, resolved where Cargo reads it.
+  const paths = (dir) => {
+    const shells = resolve(dir, '.exact/shells');
+    const named = [[shells, 'Cargo.toml'], [resolve(shells, 'linux'), 'Cargo.toml']].flatMap(([at, file]) =>
+      [...readFileSync(resolve(at, file), 'utf8').matchAll(/path = "([^"]+)"/g)].map((m) => [at, m[1]]));
+    assert.ok(named.length > 0);
+    for (const [at, path] of named) {
+      assert.ok(!isAbsolute(path), path);
+      assert.ok(existsSync(resolve(at, path)), path);
+    }
+    return named.map(([, path]) => path);
+  };
+  try {
+    const first = resolve(parent, 'one');
+    mkdirSync(first);
+    writeFileSync(resolve(first, 'app.json'), JSON.stringify(manifest));
+    ensureShells(first, manifest, 'rel');
+    const before = paths(first);
+    const moved = resolve(parent, 'deeper/two');
+    mkdirSync(dirname(moved));
+    renameSync(first, moved);
+    assert.equal(ensureShells(moved, manifest, 'rel').wrote, true);
+    assert.notDeepEqual(paths(moved), before);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60000);
+
 test('adding and removing preload regenerates native shells with the baked accessor', async () => {
   const { ensureShells } = await import('./app-shells.mjs');
   const { readFileSync } = await import('node:fs');

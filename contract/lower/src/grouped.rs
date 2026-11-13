@@ -28,6 +28,7 @@ mod lines;
 mod messages;
 pub(crate) use messages::folds;
 mod native;
+pub(crate) mod shadow;
 mod title;
 mod value;
 
@@ -506,6 +507,15 @@ fn section(
     // is the space above and below it and whether it shows; its text styles
     // reach the rows as they do in any box.
     let classed = class(attrs)?.map(|(_, rows)| rows).unwrap_or_default();
+    let authored: Vec<_> = classed.iter().chain(attrs).cloned().collect();
+    let shadows: Vec<_> = authored.iter().filter(|a| shadow::is_shadow(a)).collect();
+    if cardless && !shadows.is_empty() {
+        return err(
+            "lower-grouped-list",
+            "a section without its card takes no `box-shadow`: the shadow belongs to the card",
+            shadows[0].span,
+        );
+    }
     let drawn = |a: &Attr, row: &StyleId| match row {
         StyleId::MarginTop | StyleId::MarginBottom => true,
         StyleId::Display => shown_or_hidden(&a.value),
@@ -529,8 +539,16 @@ fn section(
         attrs
             .iter()
             .filter(|a| a.name != "background-color")
-            .cloned(),
+            .filter(|a| !shadow::moves_to_card(a))
+            .map(|a| {
+                if !shadows.is_empty() && a.name == "transition" {
+                    shadow::transition(a, false)
+                } else {
+                    a.clone()
+                }
+            }),
     );
+    sheet.push(shadow::mark(false, span));
     let label = |node: &Node, footer: bool| -> Node {
         let Node::Element {
             tag,
@@ -582,8 +600,7 @@ fn section(
             instance: *instance,
         }
     };
-    // A plain list has no card: its rows are the list's own ground, as
-    // UIKit's plain cells and an AppKit table's rows are, not a lighter fill.
+    // Plain rows use the list's ground, as UIKit's plain cells and AppKit's table rows do.
     let mut group = vec![if cardless {
         s("background-color", "transparent", span)
     } else if style == "plain" {
@@ -635,6 +652,11 @@ fn section(
         group.push(m("row-gap", "separator-gap", span));
     }
     group.push(s("overflow", "hidden", span));
+    // The card casts the shadow; the section also contains its header and footer.
+    if !shadows.is_empty() {
+        group.extend(shadow::card(attrs, &authored));
+        group.push(shadow::mark(true, span));
+    }
     let mut styled = |n: &Node| {
         Ok(swipe_rows::grouped(n, &|n, swiped| {
             row(n, !cardless, swiped, class)
