@@ -103,7 +103,7 @@ section binds (`rules/RULES.md`, "Agents").
   (the build: 7 to 13 s), 2.4 min cold. The async lane (`bun scripts/async.mjs`, per commit on
   origin/main) runs the first three with `--workspace`, which covers the sixth, plus the `async lane:` ignored tests,
   the web JS target's conformance run (`host/web-js/conform.mjs --strict`) and its
-  Chrome-oracle Firefox/WebKit steps (`conform-firefox`, `conform-webkit`),
+  Chrome-oracle Firefox/WebKit step (`conform-browsers`),
   the module seam and notifications web drives,
   the separate game workspace's locked tests, the UIKit XCTests, touch smoke and
   the tvOS and watchOS compiles

@@ -12,7 +12,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 async function load(registerTool) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-webmcp-'));
   cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},data={},After=[],Clocked=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{},time=()=>{};`);
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{},time=()=>{},report=f=>({value:f(),pending:false});
+export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
   globalThis.document = { modelContext: { registerTool } };
   globalThis.exact = {};
@@ -145,17 +146,17 @@ test('a refused registration is journalled, and offered again only after the too
 test('a call its caller aborts while it waits never runs; one aborted after dispatch runs to its end', async () => {
   const old = { document: globalThis.document, exact: globalThis.exact };
   const browser = fake();
-  const { dir, tools, rt, held, settle, commit } = await load(browser.registerTool);
+  const { dir, tools, rt, settle, commit } = await load(browser.registerTool);
   try {
     // `slow` owns a request until the test lets it go; `quick` records that it ran.
     const ticket = {}, ran = [];
     tools({
-      slow: [() => () => held.Counting.add(ticket), {}, 'writes', flags, 'Slow.', null, () => 'done', null, face(['web']), 's'],
+      slow: [() => () => { ticket.invocation = rt.Invocation.id; rt.Resources.push({ ticket }); }, {}, 'writes', flags, 'Slow.', null, () => 'done', null, face(['web']), 's'],
       quick: [() => () => ran.push('quick'), {}, 'writes', flags, 'Quick.', null, null, null, face(['web']), null],
     });
     await settle();
     const [slow] = browser.named('slow'), [quick] = browser.named('quick');
-    const finish = async () => { held.Counting.delete(ticket); await commit(); };
+    const finish = async () => { rt.Resources.length = 0; await commit(); };
     const record = id => globalThis.exact.calls.state().calls.find(c => c.id === id);
 
     const first = slow.tool.execute({}, { signal: new AbortController().signal });

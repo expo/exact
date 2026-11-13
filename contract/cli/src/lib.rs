@@ -47,7 +47,7 @@ pub mod picker;
 mod resolve;
 mod retained;
 mod shape_schema;
-pub use retained::{retention_build, Kept, Retained};
+pub use retained::{check_path_reusing, retention_build, Check, Kept, Retained, Stop};
 mod properties;
 mod reach;
 mod rust;
@@ -585,14 +585,17 @@ pub fn rerun_if_changed(path: &Path) {
     // A nearer `node_modules` an install could create or fill: installing
     // edits the `package.json` and lockfile beside it, which exist.
     for consulted in graph.consulted.iter().filter(|path| !path.exists()) {
-        // A package's design not there yet (LLP 1121 D11).
-        if consulted.extension().is_some_and(|e| e == "tamber") {
+        // A package design or bundled SVG image not there yet.
+        if consulted
+            .extension()
+            .is_some_and(|e| e == "tamber" || e.eq_ignore_ascii_case("svg"))
+        {
             println!(
                 "cargo:metadata=exact-optional-input={}",
                 consulted.display()
             );
             if !managed {
-                if let Some(dir) = consulted.parent().filter(|dir| dir.is_dir()) {
+                if let Some(dir) = consulted.ancestors().skip(1).find(|dir| dir.is_dir()) {
                     println!("cargo:rerun-if-changed={}", dir.display());
                 }
             }
@@ -992,6 +995,7 @@ fn compile_loaded(
             &v.agent,
         );
     }
+    native::implementation_imports(path, &app_root, &mut plan)?;
     reach::from_manifest(path, &app_root, &file, &mut plan)?;
     Ok((plan, sites.map(|sites| SourceMap::new(sites, sources))))
 }
@@ -1086,7 +1090,6 @@ fn compile_file_warned(
             fresh
         }
     };
-    retained::keep(file, &held, mapped, &checked.types, &checked.expanded);
     let analysis = contract_analyze::check_all(&checked);
     let mut lower_warnings = Vec::new();
     let result = match analysis {
@@ -1118,6 +1121,7 @@ fn compile_file_warned(
     if let Some(warned) = warned {
         warned.extend(lower_warnings.into_iter().map(CompileError::warning));
     }
+    retained::keep(file, &held, mapped, checked);
     result
 }
 

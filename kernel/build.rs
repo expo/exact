@@ -621,7 +621,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     // ---- StyleId / StyleCodec --------------------------------------------
     writeln!(w, "/// Wire codec of a style row.").unwrap();
     writeln!(w, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]").unwrap();
-    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
+    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, AutoI32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
     writeln!(w, "/// One style row; the discriminant is the mask bit.").unwrap();
     writeln!(w, "#[repr(u8)]").unwrap();
     writeln!(
@@ -1289,6 +1289,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
             Codec::U16 => "value.int(id, 0.0, u16::MAX as f64)? as u16".to_string(),
             Codec::U32 => "value.int(id, 0.0, u32::MAX as f64)? as u32".to_string(),
             Codec::I32 => "value.int(id, i32::MIN as f64, i32::MAX as f64)? as i32".to_string(),
+            Codec::AutoI32 => "value.auto_i32(id)?".to_string(),
             Codec::ColorValue => "value.color_value(id)?".to_string(),
             Codec::KeywordColor(keyword) => format!("value.keyword_color(id, {keyword:?})?"),
             Codec::Vec2 => "value.vec2(id)?".to_string(),
@@ -1355,6 +1356,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
                 format!("RowValue::Number(self.{f} as f64)")
             }
             Codec::ColorValue => format!("RowValue::ColorValue(self.{f})"),
+            Codec::AutoI32 => format!("self.{f}.map(|n| RowValue::Number(f64::from(n))).unwrap_or(RowValue::Enum(\"auto\"))"),
             Codec::KeywordColor(keyword) => {
                 format!("self.{f}.map(RowValue::ColorValue).unwrap_or(RowValue::Enum({keyword:?}))")
             }

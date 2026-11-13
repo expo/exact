@@ -115,6 +115,7 @@ impl Server {
             false => exact_tamber::Class::Rebuild.name(),
         };
         let verify = request["verify"] == json!(true);
+        let files = files_json(&base.snap);
         if verify {
             // Verified against what it was planned on: Contract sources or
             // package designs moved since the scrub opened (its params no
@@ -124,10 +125,11 @@ impl Server {
                     json!({"conflict": true, "message": "the app's components or its packages' designs changed since the scrub opened: open it again", "files": files_json(&base.snap), "stale": []}),
                 );
             }
-            self.write_checks(&texts, &planned, &base.key)?;
+            let key = base.key.clone();
+            self.write_checks(&texts, &planned, &key)?;
         }
         let mut out = json!({
-            "files": files_json(&base.snap),
+            "files": files,
             "changed": planned.changed.iter().map(|(f, t)| json!({"file": f, "token": t})).collect::<Vec<_>>(),
             "class": class,
             "synthetic": planned.synthetic.iter().map(|(expr, values)| json!({"expr": expr, "values": values.iter().map(|v| v.css()).collect::<Vec<_>>()})).collect::<Vec<_>>(),
@@ -151,17 +153,18 @@ impl Server {
     /// The rows a write breaks (theme2's 14:19 ruling): the compiler's
     /// own check of just the literal rows that name a token the write
     /// touches (`contract_lower::rows::check`), under the design before and
-    /// after; a row that passed and fails is refused, in the compiler's
-    /// words, where it is. `before` is laid only when a row fails after.
+    /// after. A newly failing row refuses the write with the first
+    /// diagnostic of the proposed design's build, built in memory, never
+    /// written. `before` is laid only when a row fails after.
     fn rows_check(
-        &self,
+        &mut self,
         texts: &[(String, String)],
         planned: &exact_tamber::Planned,
         app: &contract::tamber_params::AppParams,
         folded: &exact_tamber::Folding,
         retention: &str,
     ) -> Result<(), Value> {
-        let Some((key, rows, paths)) = &self.rows else {
+        let Some((key, rows, paths, left)) = &self.rows else {
             return Ok(());
         };
         // A write that edits a Contract source too (a rename's) leaves the
@@ -173,11 +176,8 @@ impl Server {
         if *key != self.sources_key() || rows.is_empty() || contract {
             return Ok(());
         }
-        // A file a whole build under this retention failed (before the
-        // write, for a reason of its own: an element lowering refuses
-        // before its rows, say) is refused in the build's own words, and
-        // no row's refusal could be them: the rows are the build's (stage
-        // 13 D, the reviews' rounds 2 and 3).
+        // A known failing build keeps accepting design edits, including
+        // repairs; the background build reports its failure.
         if self.checker.seen_failed(retention) {
             return Ok(());
         }
@@ -234,14 +234,47 @@ impl Server {
         if broken.is_empty() {
             return Ok(());
         }
-        let diagnostics: Vec<Value> = broken
-            .iter()
-            .map(|b| {
-                let span = b.error.span;
-                // As tamber/1.15 names a file: the app's relative, a
-                // package's by its name (`tamber_uses::shown`).
+        // The refusal is the build's first, which may precede every row the
+        // write breaks. Lowered as far as the view, reusing the last
+        // check's types, expansion and design scan: a refusal there (the
+        // design's own, a declaration's, a body's) precedes every element's.
+        let design = self.dir.join(&self.design);
+        let root = self.dir.join("app.contract");
+        let mut kept = self.kept.take().map(|(_, kept)| kept);
+        let check = |kept: &mut Option<contract::Kept>, stop| {
+            contract::with_design_text(&design, after.clone(), || {
+                contract::check_path_reusing(&root, kept, stop)
+            })
+        };
+        let view = check(&mut kept, contract::Stop::View);
+        // A whole build of the design as it is passed, the sources load to
+        // the same program (no motion value written into it moved), and the
+        // write reaches no use the row map leaves to the build (an untyped
+        // or motion row, an icon's, any other literal naming a token it
+        // reaches): every element lowers as it did but the rows the write
+        // reaches, so the first of them to fail is the view's first
+        // refusal. The map's own order is the build's.
+        let known = view.first.is_none()
+            && view.reused
+            && self.checker.seen_passed(retention)
+            && !left.reaches(&touched, folded);
+        let row = known
+            .then(|| {
+                contract_lower::rows::first_failing(
+                    rows,
+                    &touched,
+                    &folded.design,
+                    folded,
+                    &exprs,
+                    &app.tokens,
+                )
+            })
+            .flatten();
+        let diagnostic = match (view.first, row) {
+            (Some(e), _) => diagnostic_of(&e, &self.dir),
+            (None, Some(b)) => {
                 let file = paths
-                    .get(span.source_id as usize)
+                    .get(b.error.span.source_id as usize)
                     .map(|p| contract::tamber_uses::shown(p, &self.dir))
                     .unwrap_or_default();
                 diagnostic(
@@ -249,19 +282,29 @@ impl Server {
                     &exact_tamber::Diagnostic {
                         id: b.error.id,
                         message: b.error.message.clone(),
-                        line: span.line,
-                        col: span.col,
+                        line: b.error.span.line,
+                        col: b.error.span.col,
                     },
                 )
-            })
-            .collect();
-        Err(json!({"message": "refused", "diagnostics": diagnostics}))
+            }
+            // Otherwise only the whole build can say, stopped at its first
+            // refusal: collecting the rest would hold every client longer.
+            (None, None) => match check(&mut kept, contract::Stop::Refusal).first {
+                Some(e) => diagnostic_of(&e, &self.dir),
+                None => {
+                    self.kept = kept.map(|kept| (key.clone(), kept));
+                    return Ok(());
+                }
+            },
+        };
+        self.kept = kept.map(|kept| (key.clone(), kept));
+        Err(json!({"message": "refused", "diagnostics": [diagnostic]}))
     }
 
     /// `key`: the retention key of the texts checked (a scrub's, as it was
     /// opened), whose whole build's verdict the rows read.
     pub(super) fn write_checks(
-        &self,
+        &mut self,
         texts: &[(String, String)],
         planned: &exact_tamber::Planned,
         key: &str,
@@ -422,5 +465,137 @@ impl Server {
             crate::tamber_ops::param_values(&set, &app, &self.vocab, &self.dir)?;
         }
         Ok(())
+    }
+}
+
+/// A build's refusal as a write's diagnostic, its file named as tamber/1.15
+/// names one (`tamber_uses::shown`).
+fn diagnostic_of(e: &contract::CompileError, dir: &std::path::Path) -> Value {
+    let file = e
+        .file
+        .as_deref()
+        .map(|p| contract::tamber_uses::shown(p, dir))
+        .unwrap_or_default();
+    json!({"file": file, "line": e.span.line, "col": e.span.col, "id": e.id, "message": e.message})
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn cpu() -> Duration {
+        let mut t = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: a valid timespec for the call to fill.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) },
+            0
+        );
+        Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
+    }
+
+    /// A refusal after 73,392 unchanged expanded rows, with the clone's
+    /// design, once the design's whole build passed: the build's first
+    /// refusal, said without building the app again. Count this thread's
+    /// work so the background build and another test's scheduling cannot
+    /// inflate it.
+    #[test]
+    fn a_refusal_after_an_unchanged_prefix_stays_within_the_budget() {
+        let dir = std::env::temp_dir().join(format!(
+            "exact-tamber-refusal-budget-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clone = include_str!("../../../tamber/tests/fmt/bluesky-clone.tamber");
+        let tokens: String = (0..139)
+            .map(|i| format!("  measure.t{i} = 8px\n"))
+            .collect();
+        let design = format!("{clone}\n{tokens}  measure.late = 8px\n");
+        let names = [
+            "padding-left",
+            "margin-top",
+            "gap",
+            "row-gap",
+            "border-radius",
+            "width",
+        ];
+        let rows: String = (0..139)
+            .map(|i| {
+                let attrs = names
+                    .iter()
+                    .map(|n| format!("{n}=\"measure.t{i}\""))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("      view {attrs}\n")
+            })
+            .collect();
+        let instances = "      Card()\n".repeat(88);
+        let source = format!("component App\n  view\n    column\n{instances}      view width=\"measure.late\"\ncomponent Card\n  view\n    column\n{rows}");
+        std::fs::write(dir.join("app.contract"), source).unwrap();
+        std::fs::write(dir.join("app.tamber"), &design).unwrap();
+        let mut server = Server::start(&dir).unwrap();
+        let request = |value: &str| {
+            json!({"id": 1, "method": "propose", "ops": [
+                {"op": "set-token", "name": "measure.late", "value": value}
+            ]})
+            .to_string()
+        };
+        let warm = server.handle(&request("12px"));
+        assert!(warm[0]["ok"].is_object(), "{warm:?}");
+        // The design as it is, built whole in the background, which the
+        // next answer reads.
+        while server.checker.busy() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        server.handle(&request("12px"));
+        assert!(server.checker.seen_passed(&server.last_key));
+        let run = |server: &mut Server, value: &str, refused: bool| {
+            (0..3)
+                .map(|_| {
+                    let began = cpu();
+                    let reply = server.handle(&request(value));
+                    let took = cpu() - began;
+                    assert_eq!(
+                        reply[0]["error"]["diagnostics"][0]["id"] == "tamber-kind",
+                        refused,
+                        "{reply:?}"
+                    );
+                    took
+                })
+                .min()
+                .unwrap()
+        };
+        let passing = run(&mut server, "12px", false);
+        let refused = run(&mut server, "#202020", true);
+        eprintln!("complete proposal: passing {passing:?}, refused {refused:?}");
+        assert!(
+            refused < Duration::from_millis(100),
+            "refused proposal: {refused:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+            design
+        );
+        let reply = server.handle(&request("#202020"));
+        let written = design.replace("measure.late = 8px", "measure.late = #202020");
+        let built = contract::with_design_text(&dir.join("app.tamber"), written, || {
+            contract::compile_path(&dir.join("app.contract")).unwrap_err()
+        });
+        let d = &reply[0]["error"]["diagnostics"][0];
+        assert_eq!(
+            (&d["id"], &d["message"], &d["line"], &d["col"], &d["file"]),
+            (
+                &json!(built.id),
+                &json!(built.message),
+                &json!(built.span.line),
+                &json!(built.span.col),
+                &json!("app.contract")
+            )
+        );
+        drop(server);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

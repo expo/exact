@@ -43,6 +43,41 @@ enum TitleBarAreaMac {
         let top = view.isFlipped ? band.minY - bounds.minY : bounds.maxY - band.maxY
         return [left - bounds.minX, top, max(0, right - left), band.height]
     }
+
+    /// A second click on the page's ground (`hit`, which no node took as a
+    /// press or a control) in the title bar's band, where the page underlaps
+    /// it: it does what one on the title bar does, as AppKit lets the same
+    /// ground drag the window, unless a `dblclick` listener takes it. True
+    /// when it acted.
+    static func doubleClicked(_ event: NSEvent, on hit: NSView?) -> Bool {
+        guard event.type == .leftMouseDown, event.clickCount == 2, let window = hit?.window,
+              window.styleMask.contains(.titled), window.styleMask.contains(.fullSizeContentView),
+              !window.styleMask.contains(.fullScreen), event.locationInWindow.y >= window.contentLayoutRect.maxY else { return false }
+        let node = hit.flatMap { sequence(first: $0, next: \.superview).lazy.compactMap { $0 as? NodeView }.first }
+        if node?.dblclickListener != nil { return false }
+        switch action(UserDefaults.standard) {
+        case .zoom: window.performZoom(nil)
+        case .minimize: window.performMiniaturize(nil)
+        case .none: break
+        }
+        return true
+    }
+
+    enum Action: Equatable { case zoom, minimize, none }
+    /// What a double click on a title bar does, as System Settings ▸ Desktop
+    /// & Dock sets it ("Double-click a window's title bar to"):
+    /// `AppleActionOnDoubleClick` in the global domain, else the older
+    /// `AppleMiniaturizeOnDoubleClick`, else zoom. "Fill" zooms: AppKit has no
+    /// public call for it, and zooming a window with no maximum size fills the
+    /// screen too.
+    static func action(_ defaults: UserDefaults) -> Action {
+        switch defaults.string(forKey: "AppleActionOnDoubleClick") {
+        case "Minimize": return .minimize
+        case "None": return .none
+        case .some: return .zoom
+        case nil: return defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick") ? .minimize : .zoom
+        }
+    }
 }
 
 extension ExactSession {

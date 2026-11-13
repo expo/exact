@@ -88,7 +88,8 @@ class GamepadModule(context: ExtensionContext) : ExactExtension(context) {
         main.post {
             instances.add(this)
             told = context.pads.list().map { (i, d) -> i to d.id }
-            context.pads.list().forEach { (_, d) -> hatch?.invoke(d.id) }
+            // A pad connected before the module came is named on its disconnect as one that came after is.
+            context.pads.list().forEach { (i, d) -> shape(i, d, false); hatch?.invoke(d.id) }
             context.pads.watch(this) { padsChanged() }
         }
     }

@@ -68,6 +68,17 @@ impl Engine {
             return;
         };
         if *track.target == path {
+            if self
+                .transitions
+                .get(&node)
+                .is_some_and(|t| t.matching(Property::D).is_none())
+            {
+                self.played.remove(&key);
+                self.running.remove(&key);
+                self.pending.remove(&key);
+                self.slots.remove(&key);
+                self.dirty.insert(key);
+            }
             return;
         }
         // Any new path takes the curve back from the host

@@ -143,9 +143,13 @@ impl Native {
                 .ok()
                 .and_then(|v| {
                     Some(format!(
-                        "{}.{}",
+                        "{}.{}{}",
                         v.get("extension")?.as_str()?,
-                        v.get("sync")?.as_str()?
+                        v.get("sync")?.as_str()?,
+                        v["owner"]
+                            .as_str()
+                            .map(|s| format!("#{s}"))
+                            .unwrap_or_default()
                     ))
                 });
             let Some(key) = named else { return call(body) };

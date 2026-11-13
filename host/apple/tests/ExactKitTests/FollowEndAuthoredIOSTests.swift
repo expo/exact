@@ -10,8 +10,9 @@ final class FollowEndAuthoredIOSTests: XCTestCase {
     private var window: UIWindow!
 
     /// A 200-point scroller over twenty 30-point rows (ids 10…29): its end
-    /// is at 400. At `top`, following its end when `follows`.
-    private func fixture(top: CGFloat, follows: Bool) -> (Presenter, UIScrollView) {
+    /// is at 400. At `top`, following its end when `follows`, and scrolling
+    /// smoothly when `smooth`.
+    private func fixture(top: CGFloat, follows: Bool, smooth: Bool = true) -> (Presenter, UIScrollView) {
         let p = Presenter()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         p.viewport.frame = window.bounds
@@ -19,7 +20,7 @@ final class FollowEndAuthoredIOSTests: XCTestCase {
         window.makeKeyAndVisible()
         var ops: [[String: Any]] = [
             ["op": "create", "id": 1, "kind": "view", "props": ["scrollFollowEnd": String(follows)],
-             "style": ["overflow_y": "scroll", "scroll_behavior": "smooth"]],
+             "style": ["overflow_y": "scroll", "scroll_behavior": smooth ? "smooth" : "auto"]],
         ]
         // A prop keeps each row a view, not a flat leaf (LLP 1068 §6.1).
         for i in 0..<20 { ops.append(["op": "create", "id": 10 + i, "kind": "view", "props": ["id": "r\(i)"], "style": ["height": 30.0]]) }
@@ -70,7 +71,9 @@ final class FollowEndAuthoredIOSTests: XCTestCase {
     /// Once the authored scroll is over, the follow is the reader's place:
     /// at the end it follows, elsewhere it does not.
     func testWhereItRestsDecidesTheFollow() {
-        let (p, sv) = fixture(top: 400, follows: true)
+        // Not smooth, so the follow lands at once: a smooth scroller follows
+        // its end with UIKit's scroll animation, which this is not about.
+        let (p, sv) = fixture(top: 400, follows: true, smooth: false)
         defer { p.reset() }
         var ops: [[String: Any]] = []
         for i in 20..<22 { ops.append(["op": "create", "id": 10 + i, "kind": "view", "props": ["id": "r\(i)"], "style": ["height": 30.0]]) }

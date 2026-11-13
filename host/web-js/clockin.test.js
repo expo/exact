@@ -20,6 +20,22 @@ transport({});
 const ticks = (from, interval, n) => Array.from({ length: n }, (_, k) => [from + k * interval, [0xF8]]);
 const change = () => { Sounds.gate(); Sounds.stood(); };
 const now = byte => Sounds.clockIn([[clock.now, [byte]]]);
+
+test('MIDI grants use Rust whitespace and keep FEFF significant', () => {
+  try {
+    for (const [grants, state] of [
+      ['device.midi purpose.midi', 'prompt'],
+      ['device.midi\u0085purpose.midi', 'prompt'],
+      ['\u0085device.midi\tpurpose.midi\u0085', 'prompt'],
+      ['\ufeffdevice.midi purpose.midi', 'denied'],
+    ]) {
+      data.grants = grants;
+      midi({ ports: [['state'], {}] }, false);
+      expect(data.reserved.exactMIDI(null, [], 'ports')).toEqual([state]);
+    }
+  } finally { data.grants = ''; midi({}, true); }
+});
+
 function runClock(bpm, ms) {
   const start = clock.now, interval = 60000 / (24 * bpm);
   let k = 1, edge = start;

@@ -104,7 +104,7 @@ impl<D: DataSource> Bridge<D> {
             .links
             .io
             .and_then(|io| (io.preloads)())
-            .map(|launch| launch.watch_store(|| false));
+            .map(|launch| launch.watch_store(&|| false));
         let crate::store::Endowed {
             bindings,
             snapshot,

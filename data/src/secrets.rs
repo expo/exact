@@ -153,6 +153,7 @@ impl Namespace {
                     options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
                 }
                 let path = directory.join(filename);
+                #[cfg(unix)]
                 let existed = path.exists();
                 let mut file = options.open(path).map_err(|e| e.to_string())?;
                 match crate::try_lock(&file) {

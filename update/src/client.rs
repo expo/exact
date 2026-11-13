@@ -71,6 +71,8 @@ pub struct Client {
     booted_selection: bool,
     started: bool,
     succeeded: bool,
+    /// Shared with every check begun and not yet finished or dropped.
+    checks: std::sync::Arc<()>,
 }
 
 /// An owned check snapshot: fetching it needs no access to the live client.
@@ -80,6 +82,7 @@ pub struct CheckRequest {
     head: String,
     assets_root: PathBuf,
     embedded: HashMap<String, Option<EmbeddedAsset>>,
+    check: std::sync::Arc<()>,
 }
 
 /// A finished download, ready to revalidate against the live client record.
@@ -89,6 +92,7 @@ pub struct DownloadedCheck {
     head: String,
     envelope: Result<crate::Envelope, String>,
     embedded: HashMap<String, Option<EmbeddedAsset>>,
+    check: std::sync::Arc<()>,
 }
 
 impl CheckRequest {
@@ -115,6 +119,7 @@ impl CheckRequest {
             head: self.head,
             envelope,
             embedded: self.embedded,
+            check: self.check,
         }
     }
 }
@@ -175,6 +180,7 @@ impl Client {
             booted_selection: false,
             started: false,
             succeeded: false,
+            checks: Default::default(),
         })
     }
 
@@ -310,6 +316,7 @@ impl Client {
             head,
             assets_root: self.assets_root.clone(),
             embedded: self.embedded.clone(),
+            check: self.checks.clone(),
         })
     }
 
@@ -319,6 +326,10 @@ impl Client {
         if downloaded.dir != self.dir() || self.head_url.as_deref() != Some(&downloaded.head) {
             return Outcome::Refused("the update client changed during its check".into());
         }
+        // Another check still outstanding may have written an entry and
+        // blobs that no record names yet: collection waits for the last.
+        drop(downloaded.check);
+        let collect = std::sync::Arc::strong_count(&self.checks) == 1;
         self.embedded.extend(downloaded.embedded);
         let envelope = match downloaded.envelope {
             Ok(envelope) => envelope,
@@ -327,7 +338,7 @@ impl Client {
         let mut embedded = |name: &str| self.embedded.get(name).cloned().flatten();
         match self
             .store
-            .finish_check(envelope, &downloaded.head, &mut embedded)
+            .finish_check(envelope, &downloaded.head, &mut embedded, collect)
         {
             Ok(Check::Current { .. }) => Outcome::Current,
             Ok(Check::Staged { entry, seq, .. }) => Outcome::Staged { entry, seq },
@@ -535,6 +546,52 @@ mod tests {
             reopened.prepare_selected().unwrap().unwrap().plan.as_ref(),
             b"newer"
         );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// Finishing an older check keeps a newer outstanding one's entry: the
+    /// newer then stages from what it downloaded. A check dropped unfinished
+    /// keeps nothing past the next finish.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+    )]
+    fn an_older_check_finished_first_keeps_a_newer_one_s_download() {
+        let base = temp("check-order");
+        let mut client = Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
+        let fetch = |client: &Client, seq, plan: &[u8]| {
+            client.begin_check().unwrap().fetch(&mut |url| {
+                Ok(if url.ends_with("exact.json") {
+                    head(seq, plan)
+                } else {
+                    plan.to_vec()
+                })
+            })
+        };
+        let entries = |client: &Client| {
+            std::fs::read_dir(client.dir().join("entries"))
+                .unwrap()
+                .count()
+        };
+        let older = fetch(&client, 1, b"older");
+        let newer = fetch(&client, 2, b"newer");
+        let dropped = fetch(&client, 3, b"dropped");
+        drop(dropped);
+        assert!(matches!(
+            client.finish_check(older),
+            Outcome::Staged { seq: 1, .. }
+        ));
+        assert_eq!(entries(&client), 3, "the outstanding newer entry is kept");
+        assert!(matches!(
+            client.finish_check(newer),
+            Outcome::Staged { seq: 2, .. }
+        ));
+        assert_eq!(
+            &*client.prepare_activation().unwrap().unwrap().plan,
+            b"newer"
+        );
+        assert_eq!(entries(&client), 1, "the dropped and older entries go");
         let _ = std::fs::remove_dir_all(base);
     }
 

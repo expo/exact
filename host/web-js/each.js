@@ -3,7 +3,7 @@
 // row is: an element that joins makes one, which asks, unless the boot makes it from a page that answered it
 // (`keptMember`); one that leaves lets only its own ticket go, once the commit that dropped it stands; the others go
 // on. `r` reads their values as `S[]` in the list's order, pending or failed when any element's is.
-import { res, memo, scope, end, untracked, sig, write, eq, say, stood, restoring, owner, Resources, Refusal, checkpoint, booting, equal, conforms } from "./rt.js";
+import { res, memo, scope, end, untracked, sig, write, eq, say, stood, restoring, owner, Resources, Invocation, Refusal, checkpoint, booting, equal, conforms } from "./rt.js";
 import { join, forget } from "./overlay.js";
 
 /** The page's answer for an element of list `name` at its arguments `args()`, while the runtime boots (LLP 1048.000
@@ -36,7 +36,11 @@ export function resEach(name, source, list, key, args, type, elem, zero) {
   const remove = (k, e) => {
     members.delete(k);
     const r = e.g.r;
-    if (r.ticket) { say(`forget ticket ${r.ticket.id} (${name})`); r.ticket = null; }
+    if (r.ticket) {
+      Invocation.letGo(r.ticket);
+      say(`forget ticket ${r.ticket.id} (${name})`);
+      r.ticket = null;
+    }
     end(e.s); Resources.splice(Resources.indexOf(r), 1); forget(r);
   };
   let order = [];
@@ -80,7 +84,7 @@ export function resEach(name, source, list, key, args, type, elem, zero) {
   // `members`: each element's resource in the list's order, once though its key repeats: those a write over the list
   // shows in (overlay.js), and whose answers the page's checkpoint holds (checkpoint.js)
   g.r = { name, source, each: true, members: () => [...new Set(order)].map(e => e.g.r),
-    force: undo => each(r => r.force(undo)), touch: undo => each(r => r.touch(undo)),
+    force: (undo, reasking) => each(r => r.force(undo, reasking)), touch: undo => each(r => r.touch(undo)),
     reconcile: undo => each(r => r.reconcile(undo)), revise: undo => each(r => r.revise(undo)) };
   g.n.resource = g.r;
   return g;

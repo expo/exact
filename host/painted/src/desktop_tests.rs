@@ -31,11 +31,12 @@ impl Services for Fake {
         session: &str,
         id: &str,
         keys: &str,
+        repeat: bool,
         extension: &'static str,
         event: &'static str,
     ) -> Result<(), Refusal> {
         self.said.borrow_mut().push(format!(
-            "register {session} {id} {keys} {extension}.{event}"
+            "register {session} {id} {keys} repeat={repeat} {extension}.{event}"
         ));
         if keys == "Control+Alt+Delete" {
             Err("reserved")
@@ -52,8 +53,10 @@ impl Services for Fake {
         self.said.borrow_mut().push(format!("check {keys}"));
         Err("in-use")
     }
-    fn attention(&self, critical: bool) -> Result<(), String> {
-        self.said.borrow_mut().push(format!("attention {critical}"));
+    fn attention(&self, critical: bool, count: Option<u32>) -> Result<(), String> {
+        self.said
+            .borrow_mut()
+            .push(format!("attention {critical} {count:?}"));
         Err("the window is in front".into())
     }
     fn login(&self) -> Login {
@@ -152,6 +155,13 @@ fn the_windows_implementations_use_the_hosts_services() {
         &mut p,
         json!({"extension": "global-shortcuts", "release": "globalShortcut", "args": {"id": "snap", "keys": "Meta+Shift+2"}}),
     );
+    // `windows.repeat` reaches the host; omitted, it is false.
+    for repeat in [json!(true), json!(false)] {
+        let args = json!({"id": "volume", "keys": "Control+K", "windows": {"repeat": repeat}});
+        let read =
+            json!({"extension": "global-shortcuts", "source": "globalShortcut", "args": args});
+        assert_eq!(call(&mut p, read)["registered"], true);
+    }
 
     let status = call(
         &mut p,
@@ -189,16 +199,34 @@ fn the_windows_implementations_use_the_hosts_services() {
         json!({"extension": "dock", "send": "requestAttention", "args": {"critical": true}}),
     );
     assert_eq!(attended, json!({}));
+    let attend =
+        |args: Json| json!({"extension": "dock", "send": "requestAttention", "args": args});
+    for args in [
+        json!({"windows": {"count": 1}}),
+        json!({"windows": {"count": 7.0}}),
+        json!({"critical": true, "windows": {"count": 7}}),
+    ] {
+        assert_eq!(call(&mut p, attend(args)), json!({}));
+    }
+    for count in [json!(0), json!(2.5), json!(-1), json!("3")] {
+        let refused = call(&mut p, attend(json!({"windows": {"count": count}})));
+        assert_eq!(refused["error"], "TypeError", "{count}: {refused}");
+    }
 
     assert_eq!(
         *fake.said.borrow(),
         [
-            "register 1 snap Meta+Shift+2 global-shortcuts.globalshortcut",
-            "register 1 snap Control+Alt+Delete global-shortcuts.globalshortcut",
+            "register 1 snap Meta+Shift+2 repeat=false global-shortcuts.globalshortcut",
+            "register 1 snap Control+Alt+Delete repeat=false global-shortcuts.globalshortcut",
             "check Meta+K",
             "unregister 1 snap Meta+Shift+2",
+            "register 1 volume Control+K repeat=true global-shortcuts.globalshortcut",
+            "register 1 volume Control+K repeat=false global-shortcuts.globalshortcut",
             "settings",
-            "attention true",
+            "attention true None",
+            "attention false Some(1)",
+            "attention false Some(7)",
+            "attention true Some(7)",
         ]
     );
 

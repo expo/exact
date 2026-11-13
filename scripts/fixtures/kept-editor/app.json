@@ -1,0 +1,20 @@
+{
+  "$schema": "../../app.schema.json",
+  "name": "Kept Editor",
+  "app": {
+    "id": "com.exact.kepteditor",
+    "name": "Kept Editor"
+  },
+  "host": {
+    "macos": { "minimumOS": "14.0" },
+    "linux": {},
+    "web": {}
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "macos": "0",
+      "linux": "0"
+    }
+  }
+}

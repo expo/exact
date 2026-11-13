@@ -21,6 +21,7 @@ beforeAll(async () => {
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/", "'./"));
   writeFileSync(resolve(dir, 'rt.js'), "export const data = {}; export const Store = { get: () => null }; export const Origin = { now: () => globalThis.asker ?? 'app' };\n");
+  writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   // The browser's fetch, which admission binds as it loads: each request recorded, its answer the test's to give.
   globalThis.fetch = (url, init) => { sent.push([String(url), init.redirect]); return new Promise(resolve => answers.push(resolve)); };
   ({ data } = await import(pathToFileURL(resolve(dir, 'rt.js')).href));

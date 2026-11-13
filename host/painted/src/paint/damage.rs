@@ -79,6 +79,8 @@ pub(super) struct Retained {
     pub dark: bool,
     pub unsupported: bool,
     pub focus_ink: bool,
+    /// The scrollbar policy and thumb looks the pixels were painted with.
+    pub scrollbars: (bool, bool, Vec<Option<scrollbar::Look>>),
 }
 impl Painter {
     /// Current accepted paragraph, shared with pixels, hit metadata and the agent.
@@ -111,6 +113,9 @@ impl Painter {
             || !self.overlays.is_empty()
             || (!changes.flow && (self.split.is_none() || changes.keys.is_empty()))
             || self.damage.dark != self.dark
+            // A new scrollbar policy or pointer can show, hide or restyle a
+            // thumb outside the damage: last frame's thumbs, looked at again.
+            || self.damage.scrollbars != self.scrollbars.ink()
             || page != (0., 0.)
             || !scroll.is_empty()
             || pointer.is_some()
@@ -169,12 +174,11 @@ impl Painter {
                 }
             });
             let mut rects = vec![(f.x, f.y, f.width, f.height)];
-            // The new paragraph is not measured yet and may overflow its box
-            // further than the last one did; a box that does not clip it
-            // damages its pane or column.
+            // A paragraph may overflow its box or resize a scrollbar outside
+            // it. Include the pane so old text and scrollbar thumbs are erased.
             if let Some(pane) = clip.filter(|_| n.node_type == NodeType::Text) {
                 let (x, y) = effective_overflow(&n);
-                if x == Overflow::Visible || y == Overflow::Visible {
+                if self.scrollbars.enabled || x == Overflow::Visible || y == Overflow::Visible {
                     rects.push(pane);
                 }
             }

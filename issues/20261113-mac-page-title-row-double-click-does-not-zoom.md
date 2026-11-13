@@ -44,3 +44,14 @@ On a second click in the title-bar area that lands on no control and that no
 `window.performZoom(nil)`, `performMiniaturize(nil)`, or nothing, reading
 `AppleActionOnDoubleClick` from the global domain as AppKit's title bar does.
 This is the drag's existing rule applied to the double-click.
+
+## Fix built, not yet run
+
+`PageScrollView.mouseDown` hands a second click on the page's ground in the
+title bar's band to `TitleBarAreaMac.doubleClicked`, which zooms, minimizes or
+does nothing by `AppleActionOnDoubleClick` (else `AppleMiniaturizeOnDoubleClick`)
+unless a `dblclick` listener takes it. "Fill" zooms: AppKit has no public call
+for it. `TitleRowTapMacTests` covers the ground, a button in the row and the
+setting; it compiles, and has not run: the screen was locked. Close this once
+`bun host/apple/build.mjs --test --only TitleRowTapMacTests` passes on an
+unlocked Mac and a double click on a real title row zooms.

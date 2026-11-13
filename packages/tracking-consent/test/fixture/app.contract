@@ -2,7 +2,7 @@
 // may show before the system's alert (one "Continue", no way to close it,
 // LLP 1133.002 D11), the request, and the advertising identifier, which data code reads
 // and compares with zeros (app.ts).
-use requestTrackingAuthorization, trackingAuthorizationStatus, TrackingStatus from "@exact/tracking-consent"
+use requestTrackingAuthorization, trackingAuthorizationStatus, TrackingStatus from "@exact/tracking-consent/apple"
 
 shape Line
   text: string

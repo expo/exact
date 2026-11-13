@@ -130,7 +130,27 @@ impl<D: DataSource> Presenter<D> {
         let Some(pin) = self.host.kernel().node_by_key(binding.handle).map(|n| n.id) else {
             return Ok(false);
         };
+        // Only a stored session keeps the pin: `finish_group` clears it then.
+        // Otherwise the interaction goes back to what it was, as a pointer
+        // lift's refusal clears its contact's.
+        let before = self.collection_interaction();
         self.set_collection_interaction(Some(pin));
+        let lifted = self.group_start(binding, group, pin, origin, ghost, now);
+        if !matches!(lifted, Ok(true)) {
+            self.set_collection_interaction(before);
+        }
+        lifted
+    }
+
+    fn group_start(
+        &mut self,
+        binding: ReorderBinding,
+        group: String,
+        pin: ViewId,
+        origin: (f32, f32),
+        ghost: bool,
+        now: f64,
+    ) -> Result<bool, String> {
         if let Some(e) = self.refine_collections() {
             return Err(e);
         }

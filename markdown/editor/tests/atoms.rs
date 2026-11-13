@@ -184,6 +184,22 @@ fn the_selection_facts_name_one_selected_atom_and_refuse_link_over_it() {
 }
 
 #[test]
+fn one_link_atom_with_a_partly_bold_label_is_not_mixed() {
+    let atom = "[**Qu**ote](t3-citation:1)";
+    let text = format!("a {atom} b");
+    let mut p = Page::open(&text, "[]");
+    p.e.set_selection(2, 2 + n(atom));
+    let facts = p.e.facts();
+    assert_eq!(facts.atom, atom);
+    assert_eq!(facts.link, "t3-citation:1");
+    assert!(!facts.mixed);
+    let atoms = Atoms::parse(KINDS, "[]");
+    let range = exact_markdown::Range::new(2, 2 + n(atom));
+    let wire = exact_markdown::wire::selection_with(&text, range, &atoms);
+    assert!(wire.contains("\"mixed\":false"), "{wire}");
+}
+
+#[test]
 fn a_face_that_arrives_makes_a_gated_token_an_atom_and_moves_a_caret_inside_it() {
     let mut p = Page::open("hi @src/main.rs now", "[]");
     assert!(p.e.atoms().is_empty());

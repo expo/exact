@@ -3,8 +3,9 @@ use super::*;
 
 type Wake = Arc<dyn Fn() + Send + Sync>;
 
+/// One session's mark that a launch write changed its store.
 #[derive(Default)]
-pub(crate) struct StoreWatch {
+pub struct StoreWatch {
     changed: AtomicBool,
     wake: Mutex<Option<Wake>>,
 }

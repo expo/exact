@@ -1050,12 +1050,14 @@ committed about 35 ms after the touch lifts (alert 30 to 41, menu 29 to 37, five
 until the next collection and is then gone (one root again); resident memory after the first use stays about 8 MB
 above what it was before any, which has not been attributed.
 
-**A select's menu** is painted in the page by the shared presenter, for both default appearance and
-`appearance="none"`. Its rows show the selected option, skip disabled options and commit a choice on a tap.
-A tap outside, Back or Escape dismisses it. Keyboard navigation and a mouse wheel can reach a long list,
-but there is no touch scrolling. The menu is clipped to the page's viewport and stays below hosted views
-such as `EditText` and WebView and below the system bars. Its rows are not exposed as a separate accessible
-menu, and it has no popup-window enter or exit transition. D10's anchored native popup remains unbuilt.
+**A select's menu** is the top layer's menu (`presenter/top/select.rs`), for both default appearance and
+`appearance="none"`, as Material's exposed dropdown menu and a `Spinner` open theirs: a `PopupWindow` hung under
+the select and no narrower than it, a row for each option, the chosen one checked and scrolled into view, a
+disabled one disabled. A tap on a row chooses it (`input`, then `change`); a tap outside, Back or Escape
+dismisses it and chooses nothing; the select keeps the focus while it is open. A key that opens it from a hardware
+keyboard (Space, Enter, an arrow) puts the window's focus at the chosen row; in the window the arrows and Tab move
+it and Enter or Space chooses. TalkBack reads it as a `ListView` of `CheckedTextView` options, counted, the
+chosen one selected. Not seen on a phone yet.
 
 Not built of D10:
 
@@ -1063,7 +1065,7 @@ Not built of D10:
   `android.view.View` with no text, description or children: TalkBack lands on it and has nothing to read (D13).
 - **A text field inside a dialog.** The shape rule admits text and buttons only, so a dialog with an `input` is no
   alert and is refused; nothing hosts a field in a surface's window.
-- A bottom sheet for a chooser or a `dialog` its author lays out (a `modal` route is one: [Sheets](#sheets-and-route-motion-llp-1115001-d10-d12)), a `select`'s anchored native popup, submenus as cascades (a row that opens another
+- A bottom sheet for a chooser or a `dialog` its author lays out (a `modal` route is one: [Sheets](#sheets-and-route-motion-llp-1115001-d10-d12)), submenus as cascades (a row that opens another
   menu replaces the first), a menu or a dialog taller than the window (it is not scrolled), a raster image in a
   menu row, right-to-left placement.
 - The ripple, Material's own type scaling above 100% (sizes are sp taken linearly), and the device's own face.

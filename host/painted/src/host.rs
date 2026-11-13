@@ -1127,7 +1127,7 @@ impl<D: DataSource> Host<D> {
                     || !node
                         .props
                         .str(exact_kernel::PropId::ImageSource)
-                        .is_some_and(|s| s.starts_with("symbol:"))
+                        .is_some_and(crate::image::is_symbol)
                 {
                     continue;
                 }

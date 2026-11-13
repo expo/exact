@@ -173,7 +173,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // A select's press opens its menu (D7).
         if node.props.str(PropId::Type) == Some("select") {
-            self.open_menu(id);
+            self.open_menu(id, false);
             return true;
         }
         // A radio checks, and only checks (x2apps survey #2).
@@ -1006,3 +1006,7 @@ mod range_tests;
 #[cfg(test)]
 #[path = "select_tests.rs"]
 mod select_tests;
+
+#[cfg(test)]
+#[path = "material_touch_tests.rs"]
+mod material_touch_tests;

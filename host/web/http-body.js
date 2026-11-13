@@ -15,9 +15,10 @@ export async function boundedHttpBody(response, limit) {
 // A `text/event-stream` parser (HTML's "Parsing an event stream"), the same
 // rules as the native executor's: lines end at CR, LF or CRLF even across
 // chunks; `data` lines join with LF; `id` persists as the cursor; comments
-// and `retry` are dropped (the host never reconnects, LLP 1069.004). One
-// event over `limit` bytes, or line over `limit + 64`, is refused, never
-// truncated: received bytes for lines, decoded UTF-8 bytes for event data.
+// and `retry` are dropped (the host never reconnects, LLP 1069.004). An
+// event whose data is over `limit` bytes, or a line over `limit + 64`, is
+// refused, never truncated: received bytes for lines, decoded UTF-8 bytes for
+// event data.
 const utf8Length = (s) => { let n = 0; for (const c of s) n += charBytes(c); return n; };
 const charBytes = (c) => { const p = c.codePointAt(0); return p < 0x80 ? 1 : p < 0x800 ? 2 : p < 0x10000 ? 3 : 4; };
 export function eventStream(limit) {
@@ -41,7 +42,8 @@ export function eventStream(limit) {
     if (value.startsWith(' ')) value = value.slice(1);
     if (field === 'data') {
       const bytes = utf8Length(value);
-      if (dataBytes + bytes + 1 > limit) throw Error('an event exceeds the response ceiling');
+      // The line feed stored after a value is the event's only when another field follows: counted then, in `dataBytes`.
+      if (dataBytes + bytes > limit) throw Error('an event exceeds the response ceiling');
       data += value + '\n'; dataBytes += bytes + 1; hasData = true;
     } else if (field === 'event') event = value;
     else if (field === 'id' && !value.includes('\0')) id = value;
@@ -154,6 +156,10 @@ async function renderUpload(url, method, headers, body, limit, message, signal, 
     message({ event: 'exact:sending', id: '\0', data: '', coalesced: 0, received: performance.now() });
     const response = await fetch(url, { method, headers, body, signal, redirect: 'follow' });
     if (body?.byteLength) message({ event: 'exact:progress', id: '\0', data: JSON.stringify({ loaded: body.byteLength, total: body.byteLength }), coalesced: 0, received: performance.now() });
+    if (!response.url && response.type !== 'opaqueredirect') {
+      await response.body?.cancel();
+      return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+    }
     if (response.url && !admits(response.url)) {
       await response.body?.cancel();
       return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);
@@ -290,6 +296,10 @@ export async function readLongPoll(op, init, limit, message, controller, admits)
     try {
       const response = await fetch(url.href, { ...init, signal });
       const drop = () => response.body?.cancel().catch(() => {});
+      if (!response.url && response.type !== 'opaqueredirect') {
+        drop(); replied();
+        return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+      }
       if (response.url && !admits(response.url)) { drop(); replied(); return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`); }
       const status = response.status, type = response.headers.get('content-type') ?? '';
       // Judged by status and headers first: a reply that asks again, or an event stream, is never read.
@@ -592,6 +602,10 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     const response = await (early || fetch(asset ? localAssetURL(url) : url, init));
     // A redirect that left the grants names where it led (podcast F5): the
     // browser followed it, and the response's URL is the last hop's.
+    if (!response.url && response.type !== 'opaqueredirect') {
+      response.body?.cancel().catch(() => {});
+      return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+    }
     if (response.url && (asset
       ? new URL(response.url).origin !== location.origin
       : !admitsNetwork(effective, response.url, 'fetch'))) return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);

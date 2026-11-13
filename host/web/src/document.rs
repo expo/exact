@@ -812,11 +812,13 @@ impl<S: Source> Walk<'_, '_, S> {
                 node.style.display,
                 exact_kernel::Display::Flex | exact_kernel::Display::Grid
             )) << 12);
-        let z = node.style.mask.has(exact_kernel::StyleId::ZIndex).then(|| {
-            node.style
-                .z_index
-                .clamp(-paint_order::Z_MAX, paint_order::Z_MAX)
-        });
+        let z = node
+            .style
+            .mask
+            .has(exact_kernel::StyleId::ZIndex)
+            .then_some(node.style.z_index)
+            .flatten()
+            .map(|z| z.clamp(-paint_order::Z_MAX, paint_order::Z_MAX));
         let z = z.map_or_else(|| "null".into(), |z| z.to_string());
         let mut attrs: Vec<(String, Option<String>)> = Vec::new();
         let mut content: Option<String> = None;

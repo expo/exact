@@ -2,7 +2,7 @@
 //! @ref LLP 1115.002 D4 — the root list stays in the page; details have pane blocks.
 use super::*;
 use exact_kernel::{BlockAxis, Display, HostBlock, HostCover, Kernel, NodeKey};
-use exact_runner::Runner;
+use exact_runner::{instance::InstanceStep, Runner};
 use std::collections::BTreeSet;
 
 // Microsoft list/details: stacked at 320–640 epx, beside at 641; SplitView's
@@ -64,10 +64,15 @@ struct Association {
     route: NodeKey,
     location: String,
 }
+struct RetainedList {
+    key: NodeKey,
+    site: Option<(exact_plan::NodesId, Vec<InstanceStep>)>,
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     pub active: Option<Split>,
-    retained: BTreeMap<NodeKey, Option<ViewId>>,
+    retained: BTreeMap<NodeKey, Option<RetainedList>>,
     refused: BTreeMap<NodeKey, (exact_kernel::StyleProps, Rect4)>,
     logged: BTreeSet<NodeKey>,
     actions: BTreeMap<ViewId, Association>,
@@ -78,6 +83,21 @@ pub(crate) struct State {
     pressing: Option<(NodeKey, bool)>,
 }
 impl State {
+    fn retained_list<D: DataSource>(&self, runner: &Runner<D>, root: ViewId) -> Option<ViewId> {
+        let kernel = runner.kernel();
+        let retained = self.retained.get(&kernel.node(root)?.key)?.as_ref()?;
+        if let Some(list) = kernel.node_by_key(retained.key) {
+            return Some(list.id);
+        }
+        // A remount replaces the view, but the same authored list in the same
+        // keyed instance keeps its split while it has no actionable rows.
+        let site = retained.site.as_ref()?;
+        kernel
+            .preorder_where(&[root], |t, _| t == NodeType::List)
+            .into_iter()
+            .find(|id| runner.site_of(*id).as_ref() == Some(site))
+    }
+
     pub(crate) fn renewed(&mut self, kernel: &Kernel, keys: &[NodeKey]) {
         let renewed = |row: NodeKey| {
             keys.iter().any(|key| {
@@ -180,18 +200,12 @@ impl<D: DataSource> Presenter<D> {
 
     fn split_press(&self, target: ViewId) -> Option<Press> {
         let root = *self.host.shown_stack()?.first()?;
-        let rule = self.host.runner().stack_split(
-            root,
-            self.host.kernel().node(root).and_then(|n| {
-                self.host
-                    .navigation
-                    .split
-                    .retained
-                    .get(&n.key)
-                    .copied()
-                    .flatten()
-            }),
-        )?;
+        let retained = self
+            .host
+            .navigation
+            .split
+            .retained_list(self.host.runner(), root);
+        let rule = self.host.runner().stack_split(root, retained)?;
         let list = rule.list?;
         let row = owner(self.host.runner(), list, target)?;
         if self.host.runner().press_writes_router(row) != Some(true) {
@@ -264,13 +278,20 @@ impl<D: DataSource> Presenter<D> {
             .host
             .navigation
             .split
-            .retained
-            .get(&key)
-            .copied()
-            .flatten();
+            .retained_list(self.host.runner(), root);
         let rule = self.host.runner().stack_split(root, retained);
         if let Some(rule) = &rule {
-            self.host.navigation.split.retained.insert(key, rule.list);
+            let list = rule.list.and_then(|id| {
+                Some(RetainedList {
+                    key: self.host.kernel().node(id)?.key,
+                    site: self.host.runner().site_of(id),
+                })
+            });
+            // An explicit width keeps a split alive while its list is absent.
+            let retained = self.host.navigation.split.retained.entry(key).or_default();
+            if list.is_some() {
+                *retained = list;
+            }
         }
         let rule = rule?;
         if (self.host.navigation.bars.room.is_some()
@@ -495,6 +516,13 @@ impl<D: DataSource> Presenter<D> {
     fn apply_split_to(&mut self, next: Option<Split>) -> Result<(), String> {
         let old = self.host.navigation.split.active.clone();
         let mut changed = old != next;
+        if let Some(root) = old
+            .as_ref()
+            .map(|s| s.root)
+            .filter(|root| next.as_ref().is_none_or(|s| s.root != *root))
+        {
+            self.host.runner_mut().place_blocks(&[(root, None)]);
+        }
         let mut receipts = Vec::new();
         let placeholder = next.as_ref().and_then(|s| s.placeholder);
         if let Some(id) = old
@@ -688,9 +716,17 @@ impl<D: DataSource> Presenter<D> {
         let f = parent.frame;
         let (sx, sy) = self.scroll.get(&s.within).copied().unwrap_or_default();
         let rect = [pane.0 - f.x - sx, pane.1 - f.y - sy, pane.2, pane.3].map(f64::from);
+        let list = [
+            s.rect.0 - f.x - sx,
+            s.rect.1 - f.y - sy,
+            s.list_width,
+            s.rect.3,
+        ]
+        .map(f64::from);
         let placements: Vec<_> = s
             .blocks()
             .map(|id| (id, Some((rect, s.within, None))))
+            .chain(std::iter::once((s.root, Some((list, s.within, None)))))
             .collect();
         self.host.runner_mut().place_blocks(&placements);
     }

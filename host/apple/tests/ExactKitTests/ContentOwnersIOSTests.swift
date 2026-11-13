@@ -1244,6 +1244,29 @@ final class ContentOwnersIOSTests: XCTestCase {
         XCTAssertEqual((pushed + [route, field, card, flying]).filter { p.views[$0.id] != nil }.map(\.id), [], "none returns as the exit ends")
     }
 
+    /// `user-select: all` on a presented route's logical ancestor makes the
+    /// route's text part of one atomic element, as on an ancestor view: the
+    /// route, which holds that element's content in the sheet, is the unit a
+    /// selection takes whole (CSS UI 4 §6.1).
+    func testUserSelectAllOnARoutesLogicalAncestorSelectsTheRouteWhole() throws {
+        let session = try fixture("owner-select-all", CGSize(width: 402, height: 874))
+        let p = session.presenter
+        p.press(try node(session, "sheet").id)
+        _ = try mountSheet()
+        let route = try node(session, "route-sheet")
+        let parent = try XCTUnwrap(p.eventParent(of: route) as? NodeView)
+        let kids = route.container.subviews.compactMap { ($0 as? NodeView).map { Int($0.id) } }
+        p.apply(wireBatch([
+            ["op": "create", "id": 9101, "kind": "text", "props": ["text": "Inside the sheet"], "style": ["font_size": 17.0]],
+            ["op": "children", "id": Int(route.id), "ids": kids + [9101]],
+            ["op": "frame", "id": 9101, "x": 0.0, "y": 0.0, "w": 300.0, "h": 22.0]]))
+        let text = try XCTUnwrap(p.views[9101])
+        XCTAssertNil(text.selectAllElement)
+        p.apply(wireBatch([["op": "style", "id": Int(parent.id), "style": ["user_select": "all"]]]))
+        XCTAssertTrue(text.textSelectable)
+        XCTAssertTrue(text.selectAllElement === route, "the route, not nothing: \(String(describing: text.selectAllElement?.id))")
+    }
+
     /// A presented route's logical ancestors hear its touches through its
     /// sheet's mount (`MountRelay`), as a DOM event bubbles to them: the root
     /// is the listener for a touch on the sheet's content while nothing in

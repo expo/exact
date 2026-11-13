@@ -598,7 +598,14 @@ impl<D: DataSource> Runner<D> {
                         // the value stays and stops being an answer.
                         let upload = self.uploading(i);
                         if !upload {
-                            effects[i] = RequestEffect::Answered;
+                            // An earlier pass's `Later` was never handed out.
+                            if let RequestEffect::Later { requests, .. } =
+                                std::mem::replace(&mut effects[i], RequestEffect::Answered)
+                            {
+                                for request in &requests {
+                                    self.discard_request(request);
+                                }
+                            }
                             pending_res[i] = false;
                             self.resources[i].failed_args = None;
                         }

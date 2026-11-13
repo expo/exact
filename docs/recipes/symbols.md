@@ -27,10 +27,11 @@ Roles include `add`, `close`, `back`, `search`, `share`, `calendar`, `heart` and
 ones are checked at runtime. Role aliases (`gearshape`, `trash`, `chevron-right`)
 build with a `lower-symbol-alias` warning naming the role.
 
-- A role draws everywhere; `sf/<name>` on Apple only. Else add an icon token to
-  `app.tamber`'s `icons`, `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")` (a
-  one-colour SVG), and write `symbol:icon.rain`.
-  Alias matching sources (`icon.shower = icon.rain`); duplicate declarations fail the build.
+- A role draws everywhere; `sf/<name>` on Apple only. For other names, declare
+  `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")` in `app.tamber`'s `icons`,
+  used as `symbol:icon.rain`. Alias identical sources (`icon.shower = icon.rain`);
+  duplicates fail. Web and Linux draw an app's non-template SVGs as written;
+  package icons must be templates.
 - A symbol-only button needs an `aria-label`. A tab is a symbol over its text. A symbol beside
   text that says the same is decoration: `aria-hidden=true`, so VoiceOver reads it once.
 - `activity` is an ECG trace (heart, workouts). Done or not done is `DoneMark` (`exact:content`).
@@ -38,14 +39,14 @@ build with a `lower-symbol-alias` warning naming the role.
   A `color` written on the symbol is its colour, as `currentcolor` paints an icon on the
   web; a row's `forward-chevron` is already grey.
   Emoji and characters (▦ ☏) aren't icons: they ignore the tint and differ by browser.
-- A symbol's font sets its natural size. Use `font="-exact-title1"` to follow the
-  reader's text size. On a page or inside `button appearance="none"`, `width` and
-  `height` size its box, and the glyph scales to fit it, keeping its aspect under
-  both the default `object-fit="fill"` and `object-fit="contain"`. For a 24-point
-  icon box, write `image "symbol:calendar" width=24 height=24`.
+- A role or template icon's `font` sets its natural size (`font="-exact-title1"`
+  follows the reader's text size). On a page or in `button appearance="none"`,
+  `width` and `height` size its box; the glyph keeps its aspect under both
+  `object-fit="fill"` (default) and `"contain"`. For a 24-point box, write
+  `image "symbol:calendar" width=24 height=24`.
   `object-fit="cover"` fills and clips; `"none"` keeps the natural size;
-  `"scale-down"` shrinks it only when it does not fit. A fixed box can therefore
-  keep the glyph the same size when `font-size` changes.
+  `"scale-down"` shrinks it only when it does not fit. A fixed box can keep
+  the glyph's size when `font-size` changes.
 - On iOS, a titled native button's symbol follows its title's font; a symbol-only
   button uses the platform's size. An image's own `font-size` overrides either
   (for example, `font-size="-exact-title1"`). Native button images take no `width`,

@@ -540,10 +540,7 @@ extension NavigationHost {
     /// authored source changed, then run the route hatch — before UIKit lays
     /// the stack out (LLP 1075.003 §3.2, §3.5 "projected defaults"). A plain
     /// tab (PlainTabIOS) has no bar: its route's header is its content.
-    /// Whether a header it lifted keeps its room until the batch being
-    /// applied ends (`coverLifted`).
-    @discardableResult
-    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) -> Bool {
+    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) {
         let nav = stack as? UINavigationController
         if let nav {
             hatchNavigation(nav)
@@ -620,13 +617,12 @@ extension NavigationHost {
             c.hatched = true
             c.ownedScroll = scroller
         }
-        let waits = coverLifted(routes)
+        coverLifted(routes)
         // A route's header shown or hidden in place; a push or pop sets the
         // bar in `willShow` instead, with UIKit's transition.
         if let nav, nav.transitionCoordinator == nil, let top = nav.topViewController as? RouteController, routes.contains(top) {
             showBar(nav, animated: nav.view.window != nil)
         }
-        return waits
     }
 
     /// The header shape and the bar a route shows in its stack
@@ -657,11 +653,10 @@ extension NavigationHost {
     /// layout with `reportCovers`, after the push had begun, so a pushed
     /// route's scroller was still below its header's height then, and every
     /// pushed level-1 title arrived inline and expanded only on a pull.
-    /// Covers reach the runtime outside a batch, after its scroll positions
-    /// are restored; lifted while one is applied, the cover and the runtime's
-    /// answer come after it, and true says so: `sync` then gives UIKit the
-    /// stack after them (`syncAfterBatch`).
-    private func coverLifted(_ routes: [RouteController]) -> Bool {
+    /// Lifted while a batch is applied, the cover reaches the runtime after
+    /// it, and every sync until then holds a stack change (`liftHeld`): the
+    /// sync of the runtime's answer gives it to UIKit (`deliverCovers`).
+    private func coverLifted(_ routes: [RouteController]) {
         var lifted = false
         for c in routes {
             for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) where covers[node.id] != .whole {
@@ -669,9 +664,9 @@ extension NavigationHost {
                 lifted = true
             }
         }
-        guard lifted else { return false }
+        guard lifted else { return }
+        if presenter.applying { liftHeld = true }
         presenter.afterBatch { [weak self] in self?.deliverCovers() }
-        return presenter.applying
     }
 
     /// Write the defaults an authored header gives a navigation item, and

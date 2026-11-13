@@ -217,6 +217,8 @@ pub(crate) fn easing(s: &str) -> Result<TimingFunction, ParseError> {
                             y2: n[3],
                         }
                     }
+                    // A count and at most one position (CSS Easing 1 §3.1).
+                    "steps" if !(1..=2).contains(&args.len()) => return Err(bad()),
                     "steps" => {
                         let count = args
                             .first()

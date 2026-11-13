@@ -1280,3 +1280,22 @@ fn a_canvas_size_reaches_its_surface_and_a_non_size_is_refused() {
     assert_eq!(module.take_error(), "no such canvas");
     assert_eq!(module.agent(id, ""), Some("[(240.0, 360.0)]".into()));
 }
+
+#[cfg(not(target_os = "macos"))]
+mod shader_roster_abi {
+    use super::*;
+
+    static REGISTRY: Registry = Registry {
+        surfaces: &[],
+        shaders: &[("primary_shader", 1), ("shared_shader", 2)],
+    };
+    exact_gpu::module!(REGISTRY);
+
+    #[test]
+    fn shader_roster_comes_from_this_module_without_a_device() {
+        let len = gpu_shader_names();
+        // SAFETY: the ABI keeps its output buffer until the next call.
+        let bytes = unsafe { std::slice::from_raw_parts(gpu_out_ptr(), len as usize) };
+        assert_eq!(bytes, br#"["primary_shader","shared_shader"]"#);
+    }
+}

@@ -435,6 +435,25 @@ impl StyleValue<'_> {
         }
     }
 
+    pub(crate) fn auto_i32(&self, style: StyleId) -> Result<Option<i32>, StyleValueError> {
+        match self {
+            StyleValue::Auto => Ok(None),
+            StyleValue::Text(t) if t.trim().eq_ignore_ascii_case("auto") => Ok(None),
+            StyleValue::Text(t) => {
+                t.trim()
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| StyleValueError::WrongKind {
+                        style,
+                        expected: "integer or auto",
+                    })
+            }
+            _ => self
+                .int(style, i32::MIN as f64, i32::MAX as f64)
+                .map(|n| Some(n as i32)),
+        }
+    }
+
     /// A CSS-valued row's text: text as given, a number (`aspect-ratio: 2`),
     /// a percentage (`transform-origin: 25%`) or `auto` as CSS spells it.
     pub(crate) fn css_text(&self, style: StyleId) -> Result<Cow<'_, str>, StyleValueError> {
@@ -615,7 +634,7 @@ impl StyleValue<'_> {
 
 /// Whether `set_dynamic` reads any text on row `style` besides the CSS-wide
 /// keywords [`StyleValue::unsets`] clears a row with. A number row with no
-/// text arm (`opacity`, `flex-grow`, `z-index`, `font-weight`) refuses every
+/// text arm (`opacity`, `flex-grow`, `font-weight`) refuses every
 /// computed string, where a browser applies one (`opacity: 0.5`), so the
 /// compiler refuses a string-typed binding of such a row as it refuses the
 /// literal (LLP 1017 P1a). The rows listed are those whose conversion has a

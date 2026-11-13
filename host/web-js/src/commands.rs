@@ -1,10 +1,10 @@
 //! What a compiled plan links only because it uses it (LLP 1047.002 D1): the
 //! host commands its actions name, imported from commands.js by name, the
 //! dialog glue its dialogs, alerts, menus and popovers need on the page, and
-//! the pieces its links and iframes need.
+//! the pieces its links, iframes, lists and buttons need.
 use crate::code::Uses;
 use crate::style;
-use exact_kernel::PropId;
+use exact_kernel::{NodeType, PropId};
 use exact_plan::{BindingKind, NodesId, Plan};
 use exact_web::host::template::Parts;
 use std::collections::BTreeSet;
@@ -29,6 +29,30 @@ pub(super) fn links(plan: &Plan, parts: &[Option<Parts>]) -> bool {
 /// iframes.js keeps.
 pub(super) fn iframes(parts: &[Option<Parts>]) -> bool {
     parts.iter().flatten().any(|p| p.tag == "iframe")
+}
+
+/// Whether the view has a List, whose rows list-items.js keeps as list items
+/// (navigation.js `listItem`).
+pub(super) fn lists(plan: &Plan) -> bool {
+    plan.nodes
+        .iter()
+        .any(|n| n.node_type == NodeType::List as u8)
+}
+
+/// Whether a `button` may be other than a platform control (one without
+/// `data-button-style`), whose bound fill is read on the page (button-fill.js).
+/// The style is a static attribute (element.rs `props_of`) unless it is bound.
+pub(super) fn button_fills(plan: &Plan, parts: &[Option<Parts>]) -> bool {
+    parts.iter().zip(plan.nodes.iter()).any(|(p, n)| {
+        p.as_ref().is_some_and(|p| {
+            p.tag == "button"
+                && (!p.props.contains_key("data-button-style")
+                    || n.bindings
+                        .iter()
+                        .map(|b| plan.binding(b))
+                        .any(|b| b.kind == BindingKind::Prop && b.id == PropId::ButtonStyle as u16))
+        })
+    })
 }
 
 /// The names host/web-js/commands.js exports: the host commands a compiled
@@ -151,4 +175,41 @@ pub(super) fn gpu_surfaces() -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    fn emitted(view: &str) -> String {
+        let source = format!(
+            "component App\n  state on = false\n  action go\n    on = not on\n  view\n    column\n{view}"
+        );
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    }
+
+    /// @ref LLP 1047.002 D1 — list-items.js (a List's rows kept as list
+    /// items) is linked only by a plan with a List.
+    #[test]
+    fn list_items_link_only_where_a_plan_has_a_list() {
+        let js = emitted("      list\n        for x in [1, 2] key=x\n          text `${x}`\n");
+        assert!(js.contains("import\"./list-items.js\";"), "{js}");
+        let js = emitted("      for x in [1, 2] key=x\n        text `${x}`\n");
+        assert!(!js.contains("list-items.js"), "{js}");
+    }
+
+    /// @ref LLP 1047.002 D1 — button-fill.js (a bound fill on a button that is
+    /// not a platform control) is linked only by a plan with such a button, or
+    /// one whose style is bound.
+    #[test]
+    fn button_fill_links_only_where_a_button_may_not_be_a_platform_control() {
+        for view in [
+            "      button press=go appearance=\"none\"\n        text \"Go\"\n",
+            "      button press=go buttonStyle=(on ? \"filled\" : \"bordered\")\n        text \"Go\"\n",
+        ] {
+            assert!(emitted(view).contains("import\"./button-fill.js\";"), "{view}");
+        }
+        let js = emitted("      button press=go\n        text \"Go\"\n");
+        assert!(!js.contains("button-fill.js"), "{js}");
+    }
 }

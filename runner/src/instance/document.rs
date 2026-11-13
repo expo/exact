@@ -120,8 +120,9 @@ impl DocTree {
     /// nearest node that sets `color` decides, said when its author wrote
     /// it, and where its author wrote none a start of the neutral sheet's
     /// that sets `color` (`says`'s) stops the walk: a route header's, a
-    /// neutral alert's and its children's but its buttons'. (A field's start
-    /// sets it too, and a field holds no image.)
+    /// neutral alert's and its children's but its buttons', a plain dialog's
+    /// and a default-surface popover's. (A field's start sets it too, and a
+    /// field holds no image.)
     fn symbol_color(&self, node: &DocNode) -> bool {
         use exact_kernel::style::metrics::{column, Column};
         use exact_kernel::PropId;
@@ -140,6 +141,18 @@ impl DocTree {
                 && n.props.str(PropId::SemanticTag) == Some("dialog")
                 && n.props.str(PropId::AccessibilityRole) == Some("alertdialog")
         };
+        // The neutral surface's starts (`alert_context` 13, 15 and 17): a
+        // plain dialog, and a popover that is no menu on the default surface.
+        let surface = |n: &DocNode| {
+            let role = n.props.str(PropId::AccessibilityRole);
+            neutral
+                && if n.props.str(PropId::Popover).is_some() {
+                    role != Some("menu") && n.props.bool(PropId::DefaultSurface) == Some(true)
+                } else {
+                    n.props.str(PropId::SemanticTag) == Some("dialog")
+                        && role != Some("alertdialog")
+                }
+        };
         let button = |n: &DocNode| {
             n.node_type == NodeType::Pressable && n.props.str(PropId::Href).is_none()
                 || exact_kernel::control::ControlKind::of(n.node_type, &n.props)
@@ -152,6 +165,7 @@ impl DocTree {
                 && up.is_some_and(|p| p.props.get(PropId::NavigationKey).is_some())
                 || alert(n)
                 || up.is_some_and(&alert) && !button(n)
+                || surface(n)
         };
         let mut at = Some(node);
         while let Some(n) = at {
