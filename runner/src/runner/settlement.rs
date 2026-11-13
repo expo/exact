@@ -586,7 +586,11 @@ impl<D: DataSource> Runner<D> {
                     if !open {
                         // Idle: a request in flight is let go when this
                         // settlement stands, except an upload's, which goes on;
-                        // the value stays and stops being an answer.
+                        // the value stays and stops being an answer. A refresh
+                        // or a store change asks nothing of it and is not
+                        // remembered: waking asks it anyway (LLP 1161.002 D2).
+                        force.retain(|f| *f != i);
+                        self.reconciling.retain(|r| *r != i);
                         let upload = self.uploading(i);
                         if !upload {
                             effects[i] = RequestEffect::Answered;
@@ -1316,13 +1320,14 @@ impl<D: DataSource> Runner<D> {
             // A resource later in plan order may have written after an
             // earlier reader settled. Repeat against the tentative states;
             // the writer's state already carries the new revision, so it
-            // does not refresh itself.
+            // does not refresh itself, and a reader asleep behind a closed
+            // gate asks nothing (LLP 1161.002 D2).
             let stale_store_reader = states.iter().enumerate().any(|(i, state)| {
                 self.asks_on_store_change(i)
                     && !self.asks_again_after_reply(i)
                     && state
                         .as_ref()
-                        .is_none_or(|state| state.store_revision != revision)
+                        .is_none_or(|state| !state.asleep && state.store_revision != revision)
             });
             if stale_store_reader {
                 continue;

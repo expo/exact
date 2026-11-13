@@ -153,10 +153,11 @@ impl<D: DataSource> Runner<D> {
                 self.resources = resources;
                 self.extensions.readers = c.module_readers;
                 self.release_sampled();
-                // A spent reply's turn read the store: its failure stands, and so does the read.
-                if let Some(i) = self.module_work.reply_reader.take() {
+                // A spent reply's turn read the store: its failure stands, and so does the read,
+                // which a draw of randomness alone doesn't make a contents read (LLP 1069.005 D2).
+                if let Some((i, contents)) = self.module_work.reply_reader.take() {
                     self.resources[i].store_reader = true;
-                    self.resources[i].contents_reader = true;
+                    self.resources[i].contents_reader |= contents;
                 }
                 self.uploads = c.uploads;
                 self.failed_mut = c.failed_mut;
