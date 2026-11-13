@@ -8,6 +8,7 @@ use super::*;
 use exact_textflow::{FlowOptions, FlowShape, Fragment, Options, Prepared};
 use std::ops::Range;
 
+#[derive(Clone)]
 pub(super) struct FlowLayout {
     pub fragments: Vec<Fragment>,
     pub text: Arc<str>,

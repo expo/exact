@@ -154,15 +154,20 @@ pub(super) const fn build_number(set: Option<&str>, default: usize) -> usize {
 
 /// A request's deadline: a thread that aborts the request when it passes,
 /// and ends at once when the request finishes first (the sender drops).
+#[cfg_attr(test, derive(Clone))]
 pub(super) struct Deadline {
     passed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     _done: std::sync::mpsc::Sender<()>,
+    #[cfg(test)]
+    abort: AbortController,
 }
 
 impl Deadline {
     pub(super) fn arm(ms: u32, abort: &AbortController) -> Result<Deadline, String> {
         let (done, wait) = std::sync::mpsc::channel::<()>();
         let passed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(test)]
+        let controlled_abort = abort.clone();
         let (flag, abort) = (passed.clone(), abort.clone());
         std::thread::Builder::new()
             .name("exact-fetch-deadline".into())
@@ -182,11 +187,22 @@ impl Deadline {
         Ok(Deadline {
             passed,
             _done: done,
+            #[cfg(test)]
+            abort: controlled_abort,
         })
     }
 
     pub(super) fn passed(&self) -> bool {
         self.passed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(super) fn expire(&self) {
+        if !self.abort.signal().aborted() {
+            self.passed
+                .store(true, std::sync::atomic::Ordering::Release);
+            self.abort.abort();
+        }
     }
 }
 

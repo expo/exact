@@ -14,8 +14,9 @@ use std::{
     sync::Arc,
 };
 
-/// The host supplies existing absolute directories. Handles pin the selected
-/// directories even if their names are subsequently moved or replaced.
+/// The host supplies existing absolute directories; symbolic link roots are
+/// refused. Handles pin the selected directories even if their names are
+/// subsequently moved or replaced.
 #[derive(Clone, Debug)]
 pub struct AppDirectories {
     roots: Arc<[Option<File>; 3]>,
@@ -320,14 +321,17 @@ impl AppDirectories {
             if !path.is_absolute() {
                 return Err(error("app directory must be absolute"));
             }
-            let file = match File::open(path) {
+            use std::os::unix::fs::OpenOptionsExt;
+            // A trailing slash or `.` must not make O_NOFOLLOW follow the root.
+            let file = match std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(path.components().as_path())
+            {
                 Ok(file) => file,
                 Err(e) if missing_ok && e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(error(e)),
             };
-            if !file.metadata().map_err(error)?.is_dir() {
-                return Err(error("app root is not a directory"));
-            }
             physical[i] = std::fs::canonicalize(path).map_err(error)?;
             roots[i] = Some(file);
         }

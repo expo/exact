@@ -117,18 +117,7 @@ impl Kernel {
         } else {
             Vec::new()
         };
-        // And an absolutely positioned child is placed past the edges the
-        // cover names (`apply`), so its engine style is derived again.
-        let positioned = if edges(before) || edges(cover) {
-            positioned_children(&self.arena, slot)
-        } else {
-            Vec::new()
-        };
-        for slot in std::iter::once(slot)
-            .chain(chain)
-            .chain(blocks)
-            .chain(positioned)
-        {
+        for slot in std::iter::once(slot).chain(chain).chain(blocks) {
             if let (Some(node), Some(layout)) = (self.arena.taffy(slot), self.layout.as_deref_mut())
             {
                 layout.restyle(&self.arena, slot, node);
@@ -221,6 +210,13 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         Some(HostCover::Whole) => s.display = taffy::style::Display::None,
         Some(HostCover::Edges(_)) => {
             let cleared = applied_padding(arena, slot);
+            let [top, right, bottom, left] = added_padding(arena, slot);
+            s.rare.absolute_clearance = taffy::geometry::Rect {
+                top,
+                right,
+                bottom,
+                left,
+            };
             // The authored padding as layout reads it (whole cells under a
             // terminal's space rule), with the clearance (LLP 1123 D3).
             let env = crate::kernel::owner::env_for(arena, slot, &style);
@@ -254,38 +250,19 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         Some(HostCover::Gutter(gutter)) => lay_gutter(s, gutter),
         None => {}
     }
-    // An absolutely positioned child is placed against its parent's padding
-    // box (CSS), which the parent's cover padding does not shrink: a footer
-    // at `bottom: 0` would sit under the tab bar. The bars cover the
-    // parent's edges, so an inset from a covered edge starts where the bar
-    // ends, as on the web the footer rests above the tablist in flow and a
-    // hand-built screen pins it to the safe area. An authored length that
-    // reads the same edge's inset uses the larger of its resolved value and
-    // the cover (LLP 1123 D3); another length adds the cover. A percentage
-    // inset stays as written. A subtree in its own block has no covered parent edge.
-    if s.position == taffy::style::Position::Absolute && !arena.blocks.holds(slot) {
-        if let Some(parent) = arena.parent(slot) {
-            if matches!(arena.cover(parent), Some(HostCover::Edges(_))) {
-                let clearance = added_padding(arena, parent);
-                let env = crate::kernel::owner::env_for(arena, slot, &style);
-                let past = |inset: &mut taffy::style::LengthPercentageAuto,
-                            authored: &Dimension,
-                            edge: Edge| {
-                    let cover = clearance[edge as usize];
-                    let raw = inset.into_raw();
-                    if cover > 0.0 && raw.tag() == taffy::style::CompactLength::LENGTH_TAG {
-                        let value = if credited(authored, edge, &env) {
-                            raw.value().max(cover)
-                        } else {
-                            raw.value() + cover
-                        };
-                        *inset = taffy::style::LengthPercentageAuto::length(value);
-                    }
-                };
-                past(&mut s.inset.top, &style.top, Edge::Top);
-                past(&mut s.inset.right, &style.right, Edge::Right);
-                past(&mut s.inset.bottom, &style.bottom, Edge::Bottom);
-                past(&mut s.inset.left, &style.left, Edge::Left);
+    // The solver sizes and places absolute descendants inside the cleared
+    // containing block (LLP 1123 D3). Mark matching inset references so they
+    // clear the same edge once, after percentages and calculations resolve.
+    if s.position == taffy::style::Position::Absolute {
+        let env = crate::kernel::owner::env_for(arena, slot, &style);
+        for (authored, edge) in [
+            (&style.top, Edge::Top),
+            (&style.right, Edge::Right),
+            (&style.bottom, Edge::Bottom),
+            (&style.left, Edge::Left),
+        ] {
+            if credited(authored, edge, &env) {
+                s.rare.inset_credit |= 1 << edge as u8;
             }
         }
     }
@@ -360,7 +337,7 @@ fn covering(arena: &NodeArena, slot: u32) -> Option<u32> {
 
 /// `slot`'s style changed (`txn::style_changed`, a layout row): its
 /// `display`, `position` or `overflow-y` is its place on the bottom edge's
-/// chain, and an owner's `-exact-safe-area` where its absolute children go.
+/// chain.
 pub(crate) fn style_changed(
     arena: &NodeArena,
     layout: &mut dyn LayoutMirror,
@@ -379,16 +356,6 @@ pub(crate) fn style_changed(
     {
         chain_changed(arena, layout, slot);
     }
-    // An owner's opt-out (LLP 1123 D4) moves where its absolute children
-    // are placed past its cover (`apply`).
-    if mask.has(StyleId::SafeArea) && matches!(arena.cover(slot), Some(HostCover::Edges(_))) {
-        for s in positioned_children(arena, slot) {
-            if let Some(node) = arena.taffy(s) {
-                layout.restyle(arena, s, node);
-                layout.mark_dirty(node);
-            }
-        }
-    }
 }
 
 /// `slot`'s place on the bottom edge's chain may have changed (its
@@ -402,20 +369,6 @@ pub(crate) fn chain_changed(arena: &NodeArena, layout: &mut dyn LayoutMirror, sl
         layout.restyle(arena, above, node);
         layout.mark_dirty(node);
     }
-}
-
-/// The absolutely positioned children of `slot`, which `apply` places past
-/// its cover: derived again whenever the cover's points change (a cover
-/// cleared included, so the caller says when).
-pub(crate) fn positioned_children(arena: &NodeArena, slot: u32) -> Vec<u32> {
-    (arena.children(slot).iter().copied())
-        .filter(|&c| positioned(arena, c))
-        .collect()
-}
-
-/// Whether `slot` lays out absolute: authored so, or a popover (`style::top_layer`).
-fn positioned(arena: &NodeArena, slot: u32) -> bool {
-    crate::style::top_layer::layout_position(arena, slot) == crate::PositionType::Absolute
 }
 
 /// The points a cover adds to the box's padding as layout pads it (`apply`):
@@ -540,16 +493,6 @@ pub(crate) fn children_changed(
         layout.mark_dirty(node);
     }
     if layout.tree_ref().is_some() {
-        // An absolutely positioned child placed past its parent's cover, or
-        // no longer (`apply`): a child attached, or moved here from a
-        // covered box, is derived again.
-        for &c in arena.children(slot) {
-            if positioned(arena, c) {
-                if let Some(node) = arena.taffy(c) {
-                    layout.restyle(arena, c, node);
-                }
-            }
-        }
         // And the scroller at the covered box's bottom edge may be another
         // (`scroller_insets_bottom`), however deep the change, unless the
         // box is that covered box itself (above) or a scroller, where the

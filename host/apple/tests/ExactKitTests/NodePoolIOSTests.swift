@@ -241,9 +241,10 @@ final class NodePoolIOSTests: XCTestCase {
         XCTAssertEqual(text.paragraphPoint(lastLine), lastLine)
         var paints = 0
         _ = UIGraphicsImageRenderer(size: text.bounds.size).image { context in
-            text.eachFragment(context.cgContext) { box, offset in
+            text.eachFragment(context.cgContext) { box, offset, lines in
                 paints += 1
                 XCTAssertEqual(box, text.contentBox())
+                XCTAssertNil(lines)
                 XCTAssertEqual(offset, .zero)
                 XCTAssertTrue(context.cgContext.boundingBoxOfClipPath.contains(lastLine))
             }

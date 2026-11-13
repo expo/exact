@@ -1389,3 +1389,29 @@ fn bundled_sqlite_has_the_wal_page_size_fix() {
         rusqlite::version()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn configuring_storage_refuses_a_symlink_root() {
+    let root = Root::new();
+    std::fs::create_dir_all(root.0.join("outside")).unwrap();
+    std::fs::write(root.0.join("outside/secret"), b"outside").unwrap();
+    std::os::unix::fs::symlink(root.0.join("outside"), root.0.join("data")).unwrap();
+    let mut module = Module::new(HBC.to_vec(), APP, GRANTS);
+    module
+        .configure_storage(
+            root.0.join("data"),
+            root.0.join("cache"),
+            root.0.join("tmp"),
+        )
+        .unwrap();
+    assert!(module.activate().is_err());
+    assert_eq!(
+        std::fs::read(root.0.join("outside/secret")).unwrap(),
+        b"outside"
+    );
+    assert_eq!(
+        std::fs::read_dir(root.0.join("outside")).unwrap().count(),
+        1
+    );
+}
