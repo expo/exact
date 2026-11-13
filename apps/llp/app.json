@@ -5,8 +5,9 @@
   "id": "com.exact.llp",
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#f5f4f0",
+  "theme_color": "#ffffff",
   "background_color": "#ffffff",
+  "color_scheme_dark": { "theme_color": "#000000", "background_color": "#000000" },
   "file_handlers": [
     {
       "action": "/",

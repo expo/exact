@@ -128,7 +128,7 @@ pub(super) struct Book {
     held_counts: HashSet<Run>,
     /// Each ended hop's places wait for the destination's physical release.
     download_ends: HashMap<Run, Vec<(usize, String, bool)>>,
-    /// Redirects and uploads waiting for admission at their destination origin.
+    /// Redirects and prepared file bodies waiting for admission at their origin.
     hops: [VecDeque<Hop>; 2],
     /// Places held from selection until transport preparation consumes them.
     reserved: HashMap<Run, (usize, String)>,
@@ -155,6 +155,15 @@ pub(super) struct Book {
 }
 
 impl Book {
+    #[cfg(test)]
+    pub(super) fn reservations(&self) -> (usize, usize, usize) {
+        (
+            self.in_flight,
+            self.reserved.len(),
+            self.origins.iter().map(HashMap::len).sum(),
+        )
+    }
+
     /// The bytes the parked uploads in `jobs` still need, which admission
     /// counts as taken (LLP 1120 §6 question 8, provisional), wherever in
     /// the queue they wait.
@@ -225,7 +234,7 @@ impl Charged {
     }
 }
 
-/// What a file job's fetch needs once its file is read.
+/// What a file job's fetch needs once its upload or destination is prepared.
 struct FileJob {
     request: Request,
     forced: bool,
@@ -233,6 +242,11 @@ struct FileJob {
     abort: AbortController,
     retiring: AbortRegistration,
     fetch: ibex2::host::Fetch,
+}
+
+struct PreparedUpload {
+    bytes: Vec<u8>,
+    destination: Option<ibex2::stdlib::fetch_async::ResponseBody>,
 }
 
 /// What the finisher tells a sizing reader.
@@ -264,9 +278,9 @@ enum Event {
     Protocol(usize, String, String),
     /// A sizing reader's answer.
     Sized(Run, Result<u64, Outcome>),
-    /// A reader's file, or why not (`None`: it grew past its charge).
-    Read(Run, Result<Vec<u8>, Option<Outcome>>),
-    /// A redirect's next hop.
+    /// A reader's upload and destination, or why not (`None`: it grew past its charge).
+    Read(Run, Result<PreparedUpload, Option<Outcome>>),
+    /// A prepared file body's first hop, or a redirect's next hop.
     Hop(Run, String, Box<dyn FnOnce() + Send>),
 }
 
@@ -485,22 +499,27 @@ impl Machine {
             let previous_lane = r.transport_lane;
             let overlap = r.overlap;
             let hop = &state.book.hops[lane][at];
+            // A destination prepared off-thread keeps its first hop's places.
+            let reserved = state.book.reserved.contains_key(&run);
             // LLP 1162 D1: every shared hop can fall back when held independent
             // exchanges occupy its adapter. An ordered route keeps its slot.
-            let transport_lane = if lane == 0 && overlap && previous_lane == 1 {
+            let transport_lane = if !reserved && lane == 0 && overlap && previous_lane == 1 {
                 shared_route(state, &hop.origin)
             } else {
                 previous_lane
             };
-            if (transport_lane == 0 && previous_lane != 0 && state.book.blocking)
-                || (transport_lane == 1 && state.book.in_flight >= IN_FLIGHT)
-                || at_limit(state, transport_lane, &hop.origin)
+            if !reserved
+                && ((transport_lane == 0 && previous_lane != 0 && state.book.blocking)
+                    || (transport_lane == 1 && state.book.in_flight >= IN_FLIGHT)
+                    || at_limit(state, transport_lane, &hop.origin))
             {
                 at += 1;
                 continue;
             }
             let hop = state.book.hops[lane].remove(at).expect("index");
-            hold(&mut state.book, transport_lane, hop.run, hop.origin);
+            if !reserved {
+                hold(&mut state.book, transport_lane, hop.run, hop.origin);
+            }
             // The start holds its run until it has run (`starter`).
             let r = find(&mut state.running, hop.run).expect("open");
             r.transport_lane = transport_lane;

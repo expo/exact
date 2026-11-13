@@ -67,13 +67,26 @@ impl<D: DataSource> Presenter<D> {
         let b = self.boxes.iter().find(|b| b.id == id)?;
         let content = exact_kernel::svg::scene::content_box(kernel, &node);
         let down = kernel.text_line_offset(&node);
-        let (px, py) = (x - b.rect.0 - content.0, y - b.rect.1 - content.1 - down);
+        let (mut px, mut py) = (x - b.rect.0, y - b.rect.1);
+        let lines = if let Some(fragments) = kernel.fragments(node.key) {
+            let fragment = fragments.iter().find(|g| g.contains(px, py))?;
+            px -= fragment.dx;
+            py -= fragment.dy;
+            fragment.lines.0 as usize..fragment.lines.1 as usize
+        } else {
+            0..usize::MAX
+        };
+        let left = kernel.text_item_box(&node).map_or(0.0, |item| item.x);
+        let (px, py) = (px - content.0 - left, py - content.1 - down);
         // The line whose box the point is in: from a little over the glyphs'
         // ascent above its baseline to their descent below it.
         Some(
             paragraph
                 .layout_runs()
                 .zip(paragraph.baselines())
+                .enumerate()
+                .filter(|(i, _)| lines.contains(i))
+                .map(|(_, line)| line)
                 .flat_map(|(line, baseline)| line.glyphs.iter().map(move |g| (g, *baseline)))
                 .find(|(g, baseline)| {
                     (g.x..g.x + g.w).contains(&px)

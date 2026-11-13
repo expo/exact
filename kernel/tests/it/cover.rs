@@ -3,6 +3,8 @@
 //! whose heading the bar shows takes no space, and clearing either lays the
 //! route out as authored again.
 
+mod sizing;
+
 use exact_kernel::{Env, HostCover, Kernel, NodeType, Offer, Op, StyleId, StyleProps, StyleValue};
 
 fn style(rows: &[(StyleId, StyleValue)]) -> StyleProps {
@@ -91,6 +93,68 @@ fn frame(kernel: &mut Kernel, id: u32) -> (f32, f32, f32, f32) {
         .unwrap();
     let f = kernel.node(id).unwrap().frame;
     (f.x, f.y, f.width, f.height)
+}
+
+#[test]
+fn an_absolute_sheet_sizes_against_the_box_inside_the_cover() {
+    exact_kernel::link_segments();
+    let mut failures = Vec::new();
+    for (row, value, expected) in [
+        (StyleId::Height, "100%", 902.0),
+        (
+            StyleId::MaxHeight,
+            "calc(100% - env(viewport-segment-top 0 1))",
+            402.0,
+        ),
+    ] {
+        let mut kernel = route();
+        kernel
+            .set_segments(
+                1,
+                2,
+                vec![
+                    exact_kernel::Rect::new(0.0, 0.0, 390.0, 451.0),
+                    exact_kernel::Rect::new(0.0, 500.0, 390.0, 451.0),
+                ],
+            )
+            .unwrap();
+        kernel
+            .apply(
+                1,
+                2,
+                &[
+                    Op::SetStyle {
+                        id: 4,
+                        patch: Box::new(style(&[
+                            (StyleId::PositionType, StyleValue::Text("absolute".into())),
+                            (StyleId::Bottom, StyleValue::Number(0.0)),
+                            (StyleId::Left, StyleValue::Number(0.0)),
+                            (StyleId::Height, StyleValue::Number(2000.0)),
+                            (row, StyleValue::Text(value.into())),
+                        ])),
+                    },
+                    Op::SetChildren {
+                        id: 2,
+                        children: vec![4],
+                    },
+                ],
+            )
+            .unwrap();
+        for bottom in [0.0, 49.0, 83.0, 49.0, 0.0] {
+            kernel
+                .set_host_cover(2, Some(HostCover::Edges([0.0, 0.0, bottom, 0.0])))
+                .unwrap();
+            kernel
+                .compute_layout(1, Offer::definite(390.0, 951.0))
+                .unwrap();
+            let f = kernel.node(4).unwrap().frame;
+            let height = expected + 49.0 - bottom;
+            if f.height != height || f.y + f.height != 951.0 - bottom {
+                failures.push(format!("{value}, cover {bottom}: {f:?}, height {height}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// LLP 1123 D3: the route pads `env(safe-area-inset-top)` itself, so its
@@ -263,7 +327,7 @@ fn an_absolute_footer_in_a_covered_route_clears_the_bar_it_rests_on() {
         "the scroller reaches the bottom edge"
     );
     assert_eq!(frame(&mut kernel, 5), (0.0, 721.0, 390.0, 40.0));
-    // A percentage inset is the author's to resolve; it stays as written.
+    // A percentage inset resolves against the same cleared box as sizes.
     kernel
         .apply(
             0,
@@ -276,7 +340,7 @@ fn an_absolute_footer_in_a_covered_route_clears_the_bar_it_rests_on() {
         .unwrap();
     kernel.set_host_cover(4, None).unwrap();
     let (_, y, _, _) = frame(&mut kernel, 5);
-    assert!((y - (844.0 - 84.4 - 40.0)).abs() < 0.5, "{y}");
+    assert!((y - (761.0 - 76.1 - 40.0)).abs() < 0.5, "{y}");
 }
 
 #[test]
@@ -1093,7 +1157,7 @@ fn a_box_moved_onto_the_chain_or_off_it_re_derives_the_route() {
 }
 
 /// Round 2 (Astra, Grok): a footer attached, or moved away, after the
-/// route's cover has settled is placed past it, or no longer; a box that
+/// route's cover has settled is placed past it; a box that
 /// clips across (`overflow-x: hidden`, so its `visible` height scrolls as
 /// the engine computes it) is a scroller the chain stops at; and the
 /// padding the route reports is what layout pads.
@@ -1130,8 +1194,8 @@ fn a_footer_attached_late_a_clipping_box_and_the_reported_padding() {
         844.0 - 83.0 - 20.0,
         "attached late, on the bar"
     );
-    // Moved into the header, which no bar covers: placed as written, at the
-    // foot of its containing block (the positioned route), under the bar.
+    // The static header does not contain the footer: it still rests at the
+    // foot of the positioned route's cleared containing block.
     let moved = [
         Op::SetChildren {
             id: 2,
@@ -1145,8 +1209,8 @@ fn a_footer_attached_late_a_clipping_box_and_the_reported_padding() {
     kernel.apply(1, 3, &moved).unwrap();
     assert_eq!(
         frame(&mut kernel, 8).1,
-        844.0 - 20.0,
-        "no longer past a cover"
+        844.0 - 83.0 - 20.0,
+        "the same containing block through a static parent"
     );
     // The route's own padding at its bottom, as layout pads it: the
     // authored 16, none of the bar's.

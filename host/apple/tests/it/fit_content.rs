@@ -876,3 +876,49 @@ fn a_fitted_sheet_whose_scroller_takes_the_bottom_cover_keeps_its_extent() {
         "the rows' height still: {inset}"
     );
 }
+
+#[test]
+fn anonymous_grid_text_publishes_its_width_position_and_signed_offset() {
+    let plan = contract::compile(r#"component App
+  state track = "50px"
+  action widen
+    track = "100px"
+  view
+    column
+      button testId="widen" press=widen
+        text "Widen"
+      text "XXXX XXXX" testId="wrapped" display="grid" width=100 height=100 line-height="20px" grid-template-columns=track justify-content="center" align-items="center"
+      text "X" testId="negative" display="grid" width=100 height=100 line-height="20px" grid-template-rows="10px" align-items="center"
+"#).unwrap();
+    let (mut host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        600.,
+    )
+    .unwrap();
+    let values = |batch: &str, id: u32| {
+        let batch: serde_json::Value = serde_json::from_str(batch).unwrap();
+        let mut props = std::collections::BTreeMap::new();
+        for op in batch["ops"].as_array().unwrap() {
+            if op["op"] == "props" && op["id"] == id {
+                for (key, value) in op["set"].as_object().unwrap() {
+                    props.insert(key.clone(), value.as_str().unwrap().to_owned());
+                }
+            }
+        }
+        props
+    };
+    let wrapped = view(&host, "wrapped");
+    let props = values(&first, wrapped);
+    assert_eq!(props["textLeft"], "25");
+    assert_eq!(props["textWidth"], "50");
+    assert_eq!(props["textOffset"], "30");
+    assert_eq!(values(&first, view(&host, "negative"))["textOffset"], "-5");
+    let widened = host.dispatch_at(view(&host, "widen"), Event::Press, 0.);
+    let props = values(&widened, wrapped);
+    assert_eq!(props["textLeft"], "0");
+    assert_eq!(props["textWidth"], "100");
+    assert_eq!(props["textOffset"], "40");
+}

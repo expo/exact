@@ -69,20 +69,22 @@ extension NodeView {
         #endif
     }
 
-    /// The paragraph's content box as one column laid it out: `contentBox()`,
-    /// or for a fragmented box the same insets at its unfragmented width (a
-    /// multi-column `text`'s: its column width). Its lines break at this
-    /// width; points mapped by `paragraphPoint` are in its space.
+    /// The paragraph's unfragmented box, including its anonymous item's
+    /// placement and wrapping width (a multi-column `text` uses its column
+    /// width). Points mapped by `paragraphPoint` are in this space.
     func paragraphBox() -> CGRect {
-        // A flex text's lines go down its box as CSS's anonymous flex item (`Kernel::text_line_offset`).
+        // The anonymous text item is placed by the kernel.
         let down = props["textOffset"].flatMap(Double.init).map { CGFloat($0) } ?? 0
         var box = contentBox()
         box.origin.y += down; box.size.height = max(0, box.height - down)
+        let itemWidth = props["textWidth"].flatMap(Double.init).map { CGFloat($0) }
+        box.origin.x += props["textLeft"].flatMap(Double.init).map { CGFloat($0) } ?? 0
+        if let itemWidth { box.size.width = itemWidth }
         #if os(macOS)
         box.origin.y += gridDrop // where layout put it, below the drawn top (`PixelGridMac.swift`)
         #endif
         guard let record = columnRecord, let first = record.fragments.first else { return box }
-        let width = record.columns.isEmpty ? first.rect.width - (layoutBounds.width - box.width) : first.rect.width
+        let width = itemWidth ?? (record.columns.isEmpty ? first.rect.width - (layoutBounds.width - box.width) : first.rect.width)
         return CGRect(x: box.minX, y: box.minY, width: max(0, width), height: 1e7)
     }
 
@@ -95,14 +97,24 @@ extension NodeView {
     }
 
     /// `paragraphPoint` for a caret: a point in the union's gap goes to the
-    /// nearest fragment's edge, so a selection dragged across a gap keeps
-    /// its focus.
+    /// nearest fragment's edge, constrained to its assigned lines, so a
+    /// selection dragged across a gap keeps its focus.
     func caretPoint(_ point: CGPoint) -> CGPoint {
         guard let frags = columnRecord?.fragments, !frags.isEmpty else { return point }
         func gap(_ r: CGRect) -> CGFloat { max(r.minX - point.x, 0, point.x - r.maxX) + max(r.minY - point.y, 0, point.y - r.maxY) }
-        guard let f = frags.min(by: { gap($0.rect) < gap($1.rect) }) else { return point }
+        guard let f = frags.filter({ !isParagraph || !$0.lines.isEmpty }).min(by: { gap($0.rect) < gap($1.rect) }) else { return point }
         let p = CGPoint(x: min(max(point.x, f.rect.minX), f.rect.maxX - 0.5), y: min(max(point.y, f.rect.minY), f.rect.maxY - 0.5))
-        return CGPoint(x: p.x - f.dx, y: p.y - f.dy)
+        var mapped = CGPoint(x: p.x - f.dx, y: p.y - f.dy)
+        if isParagraph, let paragraph = paragraphLayout(), !f.lines.isEmpty {
+            let box = paragraphBox()
+            let lo = f.lines.lowerBound, hi = min(f.lines.upperBound, paragraph.lineBottoms.count)
+            if lo < hi {
+                let top = lo == 0 ? 0 : paragraph.lineBottoms[lo - 1]
+                let bottom = paragraph.lineBottoms[hi - 1]
+                mapped.y = min(max(mapped.y, box.minY + top), box.minY + bottom - 0.5)
+            }
+        }
+        return mapped
     }
 
     /// Whether a point in this view's space hits a fragmented box: only
@@ -114,12 +126,12 @@ extension NodeView {
     #if os(macOS)
     /// Paint a paragraph once per fragment (or once, when it is whole).
     func drawParagraphFragments(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, dirty: NSRect) {
-        eachFragment(ctx) { box, at in
+        eachFragment(ctx) { box, at, lines in
             let dirty = dirty.offsetBy(dx: -at.x, dy: -at.y)
-            paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: box)
-            TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: dirty)
+            paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: box, lines: lines)
+            TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: dirty, lines: lines)
             // Over the ink: the selection's fill, then its glyphs again in the selection's own colour.
-            presenter?.selection.draw(self, paragraph: paragraph, spec: spec, in: ctx, dirty: dirty)
+            presenter?.selection.draw(self, paragraph: paragraph, spec: spec, in: ctx, dirty: dirty, lineRange: lines)
         }
     }
     #endif
@@ -127,14 +139,15 @@ extension NodeView {
     /// `body` once in the content box, or once per fragment: clipped to it,
     /// moved by its offset, with the unfragmented box and that offset (what a
     /// dirty rect in this view's space must be moved back by).
-    func eachFragment(_ ctx: CGContext, _ body: (CGRect, CGPoint) -> Void) {
-        guard let frags = columnRecord?.fragments, !frags.isEmpty else { return body(paragraphBox(), .zero) }
+    func eachFragment(_ ctx: CGContext, _ body: (CGRect, CGPoint, Range<Int>?) -> Void) {
+        guard let frags = columnRecord?.fragments, !frags.isEmpty else { return body(paragraphBox(), .zero, nil) }
         let box = paragraphBox()
         for f in frags {
+            guard !f.lines.isEmpty else { continue }
             ctx.saveGState()
             ctx.clip(to: f.rect)
             ctx.translateBy(x: f.dx, y: f.dy)
-            body(box, CGPoint(x: f.dx, y: f.dy))
+            body(box, CGPoint(x: f.dx, y: f.dy), f.lines)
             ctx.restoreGState()
         }
     }

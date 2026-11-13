@@ -86,6 +86,7 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
             common::absolute::AbsolutePass {
                 area_size: Size { width, height },
                 area_offset: Point::ZERO,
+                clearance: crate::geometry::Rect::ZERO,
                 direction,
                 sizing_mode: SizingMode::InherentSize,
                 #[cfg(feature = "content_size")]

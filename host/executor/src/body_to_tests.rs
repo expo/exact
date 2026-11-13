@@ -191,6 +191,7 @@ pub(in super::super) fn physically_ended(core: &Core) {
 
 #[test]
 fn a_2xx_body_is_written_whole_to_the_file_and_the_response_names_its_size() {
+    let _turn = one_at_a_time();
     for switched in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/big"), b"old").unwrap();
@@ -238,6 +239,7 @@ fn a_2xx_body_is_written_whole_to_the_file_and_the_response_names_its_size() {
 
 #[test]
 fn a_reply_that_is_not_2xx_is_the_response_and_leaves_the_file() {
+    let _turn = one_at_a_time();
     for switched in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/a"), b"old").unwrap();
@@ -261,6 +263,7 @@ fn a_reply_that_is_not_2xx_is_the_response_and_leaves_the_file() {
 
 #[test]
 fn a_body_to_a_file_is_refused_unsent_without_its_grant_parent_or_app_files() {
+    let _turn = one_at_a_time();
     for switched in [false, true] {
         let files = Files::new();
         let (core, opened, woke) = serving_on(GRANTS, switched);
@@ -357,6 +360,7 @@ fn a_body_to_a_file_is_refused_unsent_without_its_grant_parent_or_app_files() {
 
 #[test]
 fn a_body_over_its_ceiling_leaves_the_target() {
+    let _turn = one_at_a_time();
     for switched in [false, true] {
         for path in [
             "/bytes/2000000",
@@ -394,6 +398,7 @@ fn a_body_over_its_ceiling_leaves_the_target() {
 
 #[test]
 fn a_body_ended_mid_way_leaves_the_target() {
+    let _turn = one_at_a_time();
     for switched in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/a"), b"old").unwrap();
@@ -423,6 +428,7 @@ fn a_body_ended_mid_way_leaves_the_target() {
 /// (issues/20261026-independent-http-refuses-ceilings-over-32-mib-on-apple.md).
 #[test]
 fn a_body_to_a_file_is_charged_a_bounded_allowance() {
+    let _turn = one_at_a_time();
     let request = download("/bytes/1", "app:/cache/a").independent_http(1 << 30);
     let (lane, _, limit) = reservation(&request).unwrap();
     assert_eq!(lane, 1);
@@ -541,6 +547,7 @@ fn a_ceiling_open_streams_leave_no_room_for_is_refused_when_made() {
 
 #[test]
 fn a_non_2xx_body_is_held_only_within_its_allowance() {
+    let _turn = one_at_a_time();
     for switched in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/a"), b"old").unwrap();

@@ -216,6 +216,10 @@ struct Shared {
     /// boot: opening makes the directories, and a cold boot opens no app
     /// storage (fieldnotes' `apple_module_replacement_…` test).
     roots: std::sync::OnceLock<Result<ibex2::stdlib::app_fs::AppDirectories, String>>,
+    #[cfg(test)]
+    roots_checked: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    deadline_armed: Mutex<Option<std::sync::mpsc::Sender<Deadline>>>,
     /// Open two-way sockets by stream ticket (LLP 1016.000 D7; `stream.rs`).
     sockets: Mutex<std::collections::HashMap<u64, stream::Socket>>,
     /// Long polls waiting to ask again, by stream ticket (LLP 1016.000 D8;
@@ -236,8 +240,17 @@ impl Shared {
     /// request, which leaves them unopened, or when the host named none.
     pub(crate) fn roots_for(&self, request: &Request) -> body::Roots<'_> {
         request.body_from.as_ref().or(request.body_to.as_ref())?;
+        self.app_roots()
+    }
+    fn app_roots(&self) -> body::Roots<'_> {
         let paths = self.root_paths.get()?;
-        Some(self.roots.get_or_init(|| body::open(paths)))
+        Some(self.roots.get_or_init(|| {
+            body::open(
+                paths,
+                #[cfg(test)]
+                self.roots_checked.lock().unwrap().clone(),
+            )
+        }))
     }
 }
 
@@ -409,6 +422,10 @@ impl Core {
             http_cache: std::sync::OnceLock::new(),
             root_paths: std::sync::OnceLock::new(),
             roots: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            roots_checked: Mutex::default(),
+            #[cfg(test)]
+            deadline_armed: Mutex::default(),
             sockets: Mutex::default(),
             retrying: Mutex::default(),
             uploads: stream::Uploads::default(),
@@ -1153,10 +1170,6 @@ fn worker(
             shared.abort.signal().register(move || abort.abort())
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let files = Files {
-                roots: shared.roots_for(&request),
-                grants: &grants,
-            };
             // A source's narrower scope runs on this worker's own transport,
             // so it reuses the connections that transport keeps.
             let scoped = match scoped_grants(&grants, request.grants.as_deref()) {
@@ -1174,7 +1187,7 @@ fn worker(
                 forced,
                 work,
                 &abort,
-                &files,
+                &grants,
                 overlap && class == RequestClass::Read,
                 (&shared, ticket, class),
             )
@@ -1205,13 +1218,6 @@ impl Core {
     }
 }
 
-/// What a body read from an app file needs: where the files are, and the
-/// app's grants (the request's own scope narrows them).
-struct Files<'a> {
-    roots: body::Roots<'a>,
-    grants: &'a str,
-}
-
 #[allow(clippy::too_many_arguments)]
 fn execute(
     fetch: Result<&ibex2::host::Fetch, &str>,
@@ -1219,7 +1225,7 @@ fn execute(
     forced: bool,
     work: Option<Work>,
     abort: &AbortController,
-    files: &Files<'_>,
+    grants: &str,
     overlap: bool,
     cache_job: (&Arc<Shared>, u64, RequestClass),
 ) -> Outcome {
@@ -1268,6 +1274,13 @@ fn execute(
         // A deadline that cannot be kept is refused, never silently none.
         Err(why) => return failed(FailureKind::Refused, why),
     };
+    #[cfg(test)]
+    if let (Some(armed), Some(deadline)) = (
+        cache_job.0.deadline_armed.lock().unwrap().as_ref(),
+        deadline.as_ref(),
+    ) {
+        let _ = armed.send(deadline.clone());
+    }
     // The body from an app file, read now, as late as can be, and refused
     // before anything is sent (LLP 1108 D6 R2). The deadline or an abort
     // ends the request while the file is read, and nothing is sent.
@@ -1283,11 +1296,15 @@ fn execute(
             None
         }
     };
-    if let Err(outcome) = body::resolve(files.roots, files.grants, &mut request, &ended) {
+    let roots = match body::prepare(cache_job.0, &request, &ended) {
+        Ok(roots) => roots,
+        Err(outcome) => return outcome,
+    };
+    if let Err(outcome) = body::resolve(roots.as_ref(), grants, &mut request, &ended) {
         return outcome;
     }
     // The file a 2xx body goes to (LLP 1108 D6 R2): staged before sending.
-    let staged = match body_to::stage(files.roots, files.grants, &request) {
+    let staged = match body_to::stage(roots.as_ref(), grants, &request) {
         Ok(staged) => staged,
         Err(outcome) => return outcome,
     };
@@ -1312,7 +1329,7 @@ fn execute(
         request.cache
     };
     if shared_cache.is_some() {
-        if let Err(outcome) = cache::granted(files.grants, &request) {
+        if let Err(outcome) = cache::granted(grants, &request) {
             return outcome;
         }
         if let Err(error) = reach::admit_cached(&request) {
