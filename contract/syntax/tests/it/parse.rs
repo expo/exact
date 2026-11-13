@@ -361,7 +361,7 @@ fn unknown_declarations_name_atom_among_expected_forms() {
         err.message,
         concat!(
             "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, ",
-            "`keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `use`, ",
+            "`keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `source`, `use`, ",
             "`component`, or `members`, found `banana`"
         )
     );

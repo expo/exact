@@ -853,6 +853,12 @@ impl Lowerer<'_> {
                         format!("a native button draws its own `{name}`: {alternative}"),
                     );
                 }
+                // Nothing fires `toggle` at a button: say that, not that a native one refuses it.
+                Some(crate::tags::AttrTarget::Handler("toggle")) => {
+                    if let Some(e) = crate::handlers::unheard_toggle("button", attrs, a) {
+                        return Err(e);
+                    }
+                }
                 Some(crate::tags::AttrTarget::Handler(h))
                     if !matches!(
                         h,

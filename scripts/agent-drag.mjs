@@ -61,6 +61,12 @@ const still = (r, target) => (Array.isArray(r.scrolledBy) && r.scrolledBy.every(
   ? [`nothing scrolled: the scroller is at the end of its range, or its content fits it; if it should scroll, \`layout ${target}\` shows its height, and one as tall as its content is in a column that grows with it (\`min-height=0\` on that column, the compiler's \`lower-scroll-grows\`)`]
   : []);
 
+/** The software keyboard's top in the viewport's space while it shows (`state.keyboard`), else Infinity. */
+async function keyboardTop(s) {
+  const k = (await s.op({ op: 'state' })).keyboard;
+  return k?.visible && Number.isFinite(k.top) ? k.top : Infinity;
+}
+
 function dragLeg(opts) {
   const { dx, dy, from, press = 0, over = 250, hold = 0 } = opts, drag = { press, over, hold };
   if (![...(opts.to === undefined ? [dx, dy] : []), press, over, hold].every(Number.isFinite) || [press, over, hold].some((v) => v < 0)) throw new MalformedOperation('drag: expected finite dx, dy and non-negative press, over and hold (ms)');
@@ -141,15 +147,21 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
+  // Under real touches a drag may also end over the software keyboard while it shows, as a person's drag to dismiss
+  // it does (LLP 1080.000 §11): below the viewport under `interactive-widget="resizes-content"`. The touch runner's
+  // aim judges the point against the keyboard's box (`reaches`); a visible keyboard's top sends it there.
+  let keyboard;
+  const reaches = async (p) => inside(p) || carrier.touches && inside([p[0], 0])
+    && p[1] >= (keyboard ??= await keyboardTop(s)) && p[1] <= (layout.screen ? layout.screen.h - layout.screen.y : Infinity);
   if (opts.path) {
     let point = [...start];
     for (const leg of legs) {
       point = [point[0] + leg.dx, point[1] + leg.dy];
-      if (!inside(point)) throw new Error(`drag: path waypoint (${point}) leaves the viewport (${vp.w} × ${vp.h})`);
+      if (!await reaches(point)) throw new Error(`drag: path waypoint (${point}) leaves the viewport (${vp.w} × ${vp.h})`);
     }
   }
 
-  if (vp && !(inside(start) && inside(end))) {
+  if (vp && !(inside(start) && await reaches(end))) {
     // A scroller dragged further than the viewport reaches scrolls the whole way (euxy FRICTION 14). On iOS it is the
     // scroll view's own drag, which a viewport does not bound, under real touches too: a held real stroke scrolls less
     // than its length (a 300-point one scrolled Reflow 214) and an unheld one flings, so real strokes would not scroll

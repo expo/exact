@@ -3,7 +3,7 @@
 //! or through a `fn` body, is refused (`analyze-task-gate-clock`).
 
 use super::AnalyzeError;
-use contract_syntax::{Component, Expr, FnDecl, Span, Stmt, TaskKind, TemplatePart};
+use contract_syntax::{Component, Expr, FnDecl, Span, Stmt, TaskKind};
 use std::collections::BTreeSet;
 
 /// Every gate or key of `c`'s tasks that reads the clock.
@@ -112,48 +112,14 @@ fn clock<'a>(
             }
             None
         }
-        Expr::Template(parts, _) => parts.iter().find_map(|p| match p {
-            TemplatePart::Expr(e) => clock(e, c, fns, seen, bound),
-            TemplatePart::Text(_) => None,
-        }),
-        Expr::Some(a, _)
-        | Expr::Member(a, _, _)
-        | Expr::NamedArg(_, a, _)
-        | Expr::Unary(_, a, _)
-        | Expr::Typed(a, _, _) => clock(a, c, fns, seen, bound),
-        Expr::Arrow { params, body, .. } => {
+        _ => e.scoped_operands().find_map(|(x, binds)| {
+            if binds.is_empty() {
+                return clock(x, c, fns, seen, bound);
+            }
             let mut locals = bound.clone();
-            locals.extend(params.iter().map(String::as_str));
-            clock(body, c, fns, seen, &locals)
-        }
-        Expr::Binary(_, a, b, _) => {
-            clock(a, c, fns, seen, bound).or_else(|| clock(b, c, fns, seen, bound))
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => clock(value, c, fns, seen, bound).or_else(|| {
-            let mut locals = bound.clone();
-            locals.insert(name);
-            clock(body, c, fns, seen, &locals)
+            locals.extend(binds.iter());
+            clock(x, c, fns, seen, &locals)
         }),
-        Expr::Ternary(a, b, d, _) => clock(a, c, fns, seen, bound)
-            .or_else(|| clock(b, c, fns, seen, bound))
-            .or_else(|| clock(d, c, fns, seen, bound)),
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => clock(subject, c, fns, seen, bound)
-            .or_else(|| {
-                let mut locals = bound.clone();
-                locals.insert(var);
-                clock(some, c, fns, seen, &locals)
-            })
-            .or_else(|| clock(none, c, fns, seen, bound)),
-        Expr::List(items, _) => items.iter().find_map(|e| clock(e, c, fns, seen, bound)),
-        Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => None,
     }
 }
 
@@ -329,56 +295,13 @@ fn trigger_reads<'e>(
                 read.2 = Some(field);
             }
         }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
-        Expr::Call(_, args, _) | Expr::List(args, _) => args
-            .iter()
-            .for_each(|a| trigger_reads(a, slots, bound, out)),
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    trigger_reads(x, slots, bound, out);
-                }
+        _ => {
+            for (x, binds) in e.scoped_operands() {
+                let depth = bound.len();
+                bound.extend(binds.iter());
+                trigger_reads(x, slots, bound, out);
+                bound.truncate(depth);
             }
-        }
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => trigger_reads(x, slots, bound, out),
-        Expr::Binary(_, a, b, _) => {
-            trigger_reads(a, slots, bound, out);
-            trigger_reads(b, slots, bound, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            trigger_reads(a, slots, bound, out);
-            trigger_reads(b, slots, bound, out);
-            trigger_reads(c, slots, bound, out);
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            trigger_reads(subject, slots, bound, out);
-            trigger_reads(none, slots, bound, out);
-            bound.push(var);
-            trigger_reads(some, slots, bound, out);
-            bound.pop();
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            trigger_reads(value, slots, bound, out);
-            bound.push(name);
-            trigger_reads(body, slots, bound, out);
-            bound.pop();
-        }
-        Expr::Arrow { params, body, .. } => {
-            bound.extend(params.iter().map(String::as_str));
-            trigger_reads(body, slots, bound, out);
-            bound.truncate(bound.len() - params.len());
         }
     }
 }

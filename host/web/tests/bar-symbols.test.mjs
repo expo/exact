@@ -119,7 +119,7 @@ for (const root of [16, 20, 24]) for (const engine of ['chromium', 'firefox', 'w
     // The glue marks headers iOS makes bars of. Nothing moves when the painter runs on the page, whose
     // symbols have the source document.rs writes (which writes the mark too, `document.rs`'s own test).
     await page.evaluate(() => globalThis.project());
-    expect(await page.evaluate(() => [...document.querySelectorAll('header[data-exact-bar]')].map((h) => h.parentElement.id))).toEqual(['bar', 'titled', 'readout', 'app-menu', 'popover-route', 'dialog-route']);
+    expect(await page.evaluate(() => [...document.querySelectorAll('header[data-exact-bar]')].map((h) => h.parentElement.id))).toEqual(['bar', 'titled', 'headless', 'readout', 'app-menu', 'popover-route', 'dialog-route']);
     const boxes = () => page.evaluate(() => [...document.querySelectorAll('#exact-root [id]')].map((e) => [e.id, ...Object.values(e.getBoundingClientRect().toJSON()).slice(0, 4)]));
     await page.evaluate(() => {
       for (const e of document.querySelectorAll('#exact-root img')) e.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${e.dataset.font}' height='${e.dataset.font}'/%3E`;
@@ -163,17 +163,19 @@ for (const root of [16, 20, 24]) for (const engine of ['chromium', 'firefox', 'w
     expect(near(await size('blank-i'), [bar, bar], 0.06)).toBe(true);
     expect(near(await size('constrained-i'), [bar, bar], 0.06)).toBe(true);
     expect(near(await size('app-menu-i'), [bar * scale, bar * scale], 0.06)).toBe(true);
+    // A header of its Back control alone, no heading, is a bar with no title (issue #364).
+    expect(near(await size('headless-i'), [bar * scale, bar * scale], 0.06)).toBe(true);
     // A native button with a symbol alone is as tall as one with a word beside it.
     expect(await Promise.all(['native', 'native-free', 'native-command'].map(async id => (await size(id))[1])))
       .toEqual(Array(3).fill((await size('worded'))[1]));
     // An item inside the title's pressable is an item; one inside another item is not, as the kernel's walk has them.
     // Beside words (a bell that gains a count, the title's chevron), inside a box of the item's or another item, in a
-    // bar's tablist, in a header iOS makes no bar of (a route with no bar, a header with no heading text, one whose
-    // heading is a row, one whose author wrote `appearance: none`), outside a route's header or a bar, a symbol keeps
+    // bar's tablist, in a header iOS makes no bar of (a route with no bar, one whose heading is a row, one whose
+    // author wrote `appearance: none`), outside a route's header or a bar, a symbol keeps
     // its size.
     expect([await size('bell-i'), await size('tapped-i')]).toEqual([await size('loose-i'), await size('loose-i')]);
-    expect(await Promise.all(['counted-i', 'title-i', 'inner-i', 'nested-i', 'tab-i', 'full-i', 'headless-i', 'row-i', 'own-bar-i', 'unrouted-i', 'page-i', 'sized'].map(size)))
-      .toEqual([[15 * scale, 15 * scale], [11 * scale, 11 * scale], [15 * scale, 15 * scale], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [root * scale, root * scale], [root * scale, root * scale], [20, 20]].map((box) => box.map(round)));
+    expect(await Promise.all(['counted-i', 'title-i', 'inner-i', 'nested-i', 'tab-i', 'full-i', 'row-i', 'own-bar-i', 'unrouted-i', 'page-i', 'sized'].map(size)))
+      .toEqual([[15 * scale, 15 * scale], [11 * scale, 11 * scale], [15 * scale, 15 * scale], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [root * scale, root * scale], [root * scale, root * scale], [20, 20]].map((box) => box.map(round)));
     expect(await Promise.all(['readout-i', 'site-nav-i', 'site-links-i', 'site-menu-i'].map(size))).toEqual([[20, 20], [20, 20], [20, 20], [20, 20]]);
     await page.evaluate(() => document.getElementById('relative').insertAdjacentHTML('beforeend', '<span data-exact-text>3</span>'));
     await settled();

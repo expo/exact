@@ -837,9 +837,10 @@ impl<D: DataSource> Host<D> {
         self.runner.release_work()
     }
 
-    /// The hosts the app may reach (LLP 1016 D6), as the data crate declares them.
+    /// The hosts the app may reach (LLP 1016 D6): the data crate's grants and
+    /// the origins its declared sources carry (LLP 1162.001 D3).
     pub fn grants(&mut self) -> String {
-        self.runner.data().grants().to_string()
+        self.runner.grants()
     }
 
     /// The app's `app:/data`, `app:/cache` and `app:/tmp`, as storage

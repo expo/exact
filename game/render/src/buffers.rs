@@ -134,24 +134,8 @@ impl Targets {
         retained: bool,
         samples: u32,
     ) -> Self {
-        let texture = |format, sample_count, usage| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("game offscreen"),
-                    size: wgpu::Extent3d {
-                        width: size.0,
-                        height: size.1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default())
-        };
+        let texture =
+            |format, sample_count, usage| attachment(device, size, format, sample_count, usage);
         let depth = texture(
             wgpu::TextureFormat::Depth32Float,
             samples,
@@ -207,6 +191,61 @@ impl Targets {
             tone_bind,
         }
     }
+
+    /// Particle counting stores colour and samples depth between passes. Share
+    /// the resolve and tone binding so the live frame's effect bindings stay valid.
+    pub fn for_counting(&self, device: &wgpu::Device) -> Self {
+        Self {
+            size: self.size,
+            samples: self.samples,
+            retained: true,
+            color: if self.samples == 1 {
+                self.resolved.clone()
+            } else {
+                attachment(
+                    device,
+                    self.size,
+                    wgpu::TextureFormat::Rgba16Float,
+                    self.samples,
+                    wgpu::TextureUsages::RENDER_ATTACHMENT,
+                )
+            },
+            depth: attachment(
+                device,
+                self.size,
+                wgpu::TextureFormat::Depth32Float,
+                self.samples,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
+            resolved: self.resolved.clone(),
+            tone_bind: self.tone_bind.clone(),
+        }
+    }
+}
+
+fn attachment(
+    device: &wgpu::Device,
+    size: (u32, u32),
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+    usage: wgpu::TextureUsages,
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("game offscreen"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
 }
 
 /// A direct frame's attachments at its target's own size: at 4x, MSAA colour in

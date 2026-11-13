@@ -980,6 +980,10 @@ impl Loader<'_> {
                 .chain(refused)
                 .collect());
         }
+        if let Some(s) = (self.units.iter().skip(1)).find_map(|u| u.file.sources.first()) {
+            let why = format!("`source {}` is declared outside the app's root file: a declared source is `app.contract`'s, as its resources are (LLP 1162.001 D1)", s.name);
+            return Err(vec![name_error("contract-source-root", why, s.span)]);
+        }
         self.splice_members();
         Ok((self.merge(), scopes))
     }
@@ -1356,6 +1360,8 @@ impl Loader<'_> {
             library: Vec::new(),
             library_packages: Vec::new(),
             fns: all!(fns),
+            // A declared source is the root file's (LLP 1162.001 D1).
+            sources: std::mem::take(&mut files[0].sources),
             modules: all!(modules),
             components: all!(components),
             // Each block is spliced into its component (LLP 1091.002 D4).

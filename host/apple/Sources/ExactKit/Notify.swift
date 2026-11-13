@@ -8,7 +8,9 @@
 // posted it, held until that session can hear it. A remote notification's
 // payload is its sender's: its click opens the payload's top-level
 // `navigate` as a local notification's opens, and nothing else of the
-// payload is read (LLP 1133.004 §9 P5). A notification shows with the app in front
+// payload is read (LLP 1133.004 §9 P5). A chosen action is the app's
+// declared action, read against its declarations (NotifyActions.swift).
+// A notification shows with the app in front
 // too, as a browser shows a page's, and sounds only when its content has a
 // sound (a silent post has none).
 import Foundation
@@ -32,19 +34,61 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     }
     weak var app: ExactApp?
     var activate: ((ExactSession) -> Void)?
+    /// Boots a session with no view for a background action that launched
+    /// the app with none (iOS: `bootForWake`).
+    var boot: ((ExactSession) -> Void)?
+    /// A background boot must be able to read AfterFirstUnlock secrets (LLP 1133.017 D6).
+    var firstUnlockAvailable: () -> Bool = {
+        #if os(iOS)
+        NotificationFirstUnlock.available()
+        #else
+        true
+        #endif
+    }
+    /// The background actions held open, by session (NotifyActions.swift).
+    var opened: [ObjectIdentifier: [OpenAction]] = [:]
+    /// The centre's registered categories, read and replaced; a test stands
+    /// in for them, since an XCTest process has no notification centre.
+    var categories: (read: (@escaping (Set<UNNotificationCategory>) -> Void) -> Void, write: (Set<UNNotificationCategory>) -> Void) = (
+        read: { reply in
+            guard NotificationPresenter.available else { return reply([]) }
+            UNUserNotificationCenter.current().getNotificationCategories { categories in
+                DispatchQueue.main.async { reply(categories) }
+            }
+        },
+        write: {
+            guard NotificationPresenter.available else { return }
+            UNUserNotificationCenter.current().setNotificationCategories($0)
+        })
+    /// Each session's declarations belong to one plan generation, never to defaults.
+    var currentCategories: [ObjectIdentifier: (generation: Int, categories: [String: [DeclaredAction]], ready: Bool)] = [:]
+    var registeredCategories: [String: [DeclaredAction]] = [:]
+    var categoryUpdates: [() -> Void] = []
+    var reconcilingCategories = false
     private var delivered = Set<String>()
     private var order: [String] = []
 
-    func install(on app: ExactApp, activate: ((ExactSession) -> Void)?) {
+    func install(on app: ExactApp, activate: ((ExactSession) -> Void)?, boot: ((ExactSession) -> Void)?) {
         self.app = app
         self.activate = activate
+        self.boot = boot
+        #if os(iOS)
+        _ = firstUnlockAvailable() // Keep the marker even in an app with no secrets.
+        #endif
         guard Self.available else { return }
         let center = UNUserNotificationCenter.current()
         if center.delegate == nil || center.delegate === self { center.delegate = self }
     }
 
-    func deliver(_ response: UNNotificationResponse, to chosen: ExactSession? = nil) {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+    /// `done` once the app may be suspended: at once, or when a background
+    /// action has ended.
+    func deliver(_ response: UNNotificationResponse, to chosen: ExactSession? = nil, done: @escaping () -> Void = {}) {
+        switch response.actionIdentifier {
+        case UNNotificationDefaultActionIdentifier: break
+        case UNNotificationDismissActionIdentifier: return done()
+        default: return chose(response, to: chosen, done: done)
+        }
+        defer { done() }
         let notification = response.notification
         let request = notification.request
         // A remote notification's `userInfo` could name any session and
@@ -78,7 +122,7 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
 
     /// Whether this is the first delivery of a notification: the delegate
     /// and a scene's launch options may both hand over one tap.
-    private func firstDelivery(_ id: String, _ date: Date) -> Bool {
+    func firstDelivery(_ id: String, _ date: Date) -> Bool {
         let key = "\(id):\(date.timeIntervalSince1970)"
         guard delivered.insert(key).inserted else { return false }
         order.append(key)
@@ -92,26 +136,32 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
         // A notification an older build scheduled carries its session fields
         // and `navigate` at the top level of `userInfo`.
         guard let entry = info["exact"] as? [AnyHashable: Any] ?? (info["navigate"] != nil ? info : nil),
-              let label = entry["session"] as? String,
-              let owner = entry["owner"] as? String else { return }
+              entry["session"] is String, entry["owner"] is String else { return }
         let location = (entry["navigate"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        guard firstDelivery(id, date) else { return }
-        let sessions = app?.sessions.filter { $0.state != .destroyed } ?? []
-        let sameProcess = (entry["process"] as? String).map { $0 == app?.notificationProcessID } ?? true
-        let session: ExactSession?
-        if sameProcess { session = sessions.first { $0.notificationOwnerID == owner } }
-        else { session = sessions.first { $0.label == label } ?? sessions.first }
-        guard let session else {
-            let line = "notification click refused: session \(label) is gone"
-            sessions.forEach { $0.log(line) }
-            if sessions.isEmpty { FileHandle.standardError.write(Data("\(line)\n".utf8)) }
-            return
-        }
+        guard firstDelivery(id, date), let session = postingSession(entry) else { return }
         if let location { session.openLocation(location) }
         else if let name = entry["extension"] as? String, let event = entry["event"] as? String {
             session.raiseModuleEvent(extension: name, event: event, args: entry["args"] as? String ?? "[]", activation: true)
         }
         activate?(session)
+    }
+
+    /// The session that posted the entry: by its owner identity in this
+    /// process; by its label, else the first live one, for a post of a
+    /// previous process. Nil, journaled, when it is gone.
+    func postingSession(_ entry: [AnyHashable: Any]) -> ExactSession? {
+        guard let label = entry["session"] as? String, let owner = entry["owner"] as? String else { return nil }
+        let sessions = app?.sessions.filter { $0.state != .destroyed } ?? []
+        let sameProcess = (entry["process"] as? String).map { $0 == app?.notificationProcessID } ?? true
+        let session: ExactSession?
+        if sameProcess { session = sessions.first { $0.notificationOwnerID == owner } }
+        else { session = sessions.first { $0.label == label } ?? sessions.first }
+        if session == nil {
+            let line = "notification click refused: session \(label) is gone"
+            sessions.forEach { $0.log(line) }
+            if sessions.isEmpty { FileHandle.standardError.write(Data("\(line)\n".utf8)) }
+        }
+        return session
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -123,10 +173,7 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     /// here, on the main thread: a session's navigation reaches its views, and
     /// the record of what was delivered is read and written on one thread.
     func receive(_ response: UNNotificationResponse, to session: ExactSession? = nil, then done: (() -> Void)? = nil) {
-        let handle = {
-            self.deliver(response, to: session)
-            done?()
-        }
+        let handle = { self.deliver(response, to: session) { done?() } }
         if Thread.isMainThread { handle() } else { DispatchQueue.main.async(execute: handle) }
     }
 
@@ -139,8 +186,10 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
 
 extension ExactApp {
     /// Install at launch, before the system can deliver a launching tap.
-    public func installNotificationClicks(activate: ((ExactSession) -> Void)? = nil) {
-        NotificationPresenter.shared.install(on: self, activate: activate)
+    /// `boot` receives the selected session and boots it with no view for a
+    /// background launch (LLP 1133.017 D7; iOS's `bootForWake`).
+    public func installNotificationClicks(boot: ((ExactSession) -> Void)? = nil, activate: ((ExactSession) -> Void)? = nil) {
+        NotificationPresenter.shared.install(on: self, activate: activate, boot: boot)
         PushRegistration.listen()
     }
 

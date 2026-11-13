@@ -350,6 +350,15 @@ pub fn compatibility_id_pinned(
         compat.inputs["typescriptModule"] = serde_json::Value::String(module.into());
         compat.id = compatibility_digest(&compat.inputs);
     }
+    // The origins its declared sources carry are the binary's grants too
+    // (LLP 1162.001 D3): an update that declares another is a new cohort.
+    if let (Some(plan), Some(ceiling)) = (&plan, compat.inputs["grantCeiling"].as_str()) {
+        let ceiling = exact_runner::grants::with_declared(ceiling, plan);
+        if compat.inputs["grantCeiling"] != ceiling.as_str() {
+            compat.inputs["grantCeiling"] = serde_json::Value::String(ceiling);
+            compat.id = compatibility_digest(&compat.inputs);
+        }
+    }
     crate::reach::derive(app_dir, platform, plan.as_ref(), &mut compat)?;
     // The plans that ship, each resolved once (the receipt writes the entry
     // plans): an even-odd icon in any moves the id (stage 14 C2,

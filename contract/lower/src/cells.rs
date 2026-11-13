@@ -45,12 +45,8 @@ fn literal<'a>(attrs: &'a [Attr], name: &str) -> Option<Option<&'a str>> {
 pub(crate) fn sectioned(children: &[Node]) -> bool {
     children.iter().any(|child| match child {
         Node::Element { tag, .. } => tag == "section",
-        Node::When {
-            then, otherwise, ..
-        } => sectioned(then) || sectioned(otherwise),
-        Node::Each { body, .. } => sectioned(body),
-        Node::Match { some, none, .. } => sectioned(&some.1) || sectioned(none),
         Node::Use { .. } | Node::Children { .. } => false,
+        region => region.child_lists().into_iter().any(sectioned),
     })
 }
 

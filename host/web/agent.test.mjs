@@ -1121,9 +1121,47 @@ test('tree forwards its target and preserves host annotations and runner errors'
     return request.target === 'missing' ? {error:'no view matches missing'} : {roots:[7],nodes:[{id:7,type:'WebView'}]};
   };
   const reply = f.exact.agent({op:'tree',target:'panel',shallow:true});
-  expect(requests[0]).toEqual({op:'tree',target:'panel',shallow:true});
+  expect(requests).toEqual([{op:'tree'}, {op:'tree',target:'panel',shallow:true}]);
   expect(reply.nodes[0]).toEqual({id:7,type:'WebView',focused:false,url:'/guest',loading:false,guest:[{tag:'button',depth:0,text:'guest'}]});
   expect(f.exact.agent({op:'tree',target:'missing'})).toEqual({error:'no view matches missing'});
+});
+
+test('a targeted wasm tree reads logical runs with browser activity inherited from their paragraph', () => {
+  const f = fixture();
+  vm.runInContext(declaration('tree'), f);
+  const list = { isConnected: true, dataset: { view: '3' } };
+  const copy = { isConnected: false, dataset: { view: '4', testid: 'shared' } };
+  const detail = { isConnected: true, dataset: { view: '6' } };
+  const run = { isConnected: false, dataset: { view: '7', testid: 'shared' } };
+  f.views = new Map([[7, run], [6, detail], [4, copy], [3, list]]);
+  let mode;
+  f.routeFlags = () => el => mode === 'modal' ? 1 : mode === 'narrow' && (el === list || el === copy) ? 2 : 0;
+  f.ask = request => {
+    // The runner sees a pushed stack, with no native pane report.
+    const nodes = [
+      { id: 3, type: 'View', props: {}, inactive: true, hidden: true },
+      { id: 4, parent: 3, type: 'Text', props: { testId: 'shared' }, inactive: true, hidden: true },
+      { id: 6, type: 'Text', props: {} },
+      { id: 7, parent: 6, type: 'Text', props: { testId: 'shared' } },
+    ];
+    if (request.target === undefined) return { roots: [3, 6], nodes };
+    const id = typeof request.target === 'number' ? request.target : 7;
+    return { roots: [id], nodes: nodes.filter(n => n.id === id) };
+  };
+  for (const [at, id, inactive] of [['wide', 4, false], ['narrow', 7, false], ['modal', 4, true]]) {
+    mode = at;
+    const copies = f.exact.agent({ op: 'tree' }).nodes.filter(n => n.props.testId === 'shared');
+    expect((copies.find(n => !n.inactive) ?? copies[0]).id).toBe(id);
+    for (const [target, expected] of [['shared', id], [4, 4], [7, 7]]) {
+      const full = copies.find(n => n.id === expected);
+      for (const shallow of [false, true]) {
+        const reply = f.exact.agent({ op: 'tree', target, shallow });
+        expect(reply.roots).toEqual([expected]);
+        expect([!!reply.nodes[0].inactive, !!reply.nodes[0].hidden]).toEqual([!!full.inactive, !!full.hidden]);
+      }
+    }
+    expect(!!copies.find(n => n.id === id).inactive).toBe(inactive);
+  }
 });
 
 // Uncontrolled fields live in the presenter; inspection must read what the

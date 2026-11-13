@@ -1823,6 +1823,30 @@
       "name": "rel",
       "kind": "str",
       "_comment": "@ref LLP 1141.002 D1: HTML's rel, a set of space-separated tokens read ASCII case-insensitively. On a `link` or `form`, HTML's meaning, written into the web DOM. On a root tab, the token `search` names the app's search tab (`Kernel::root_tabs`), which iOS 18 and later show as a `UISearchTab`; the web's tab button carries no rel."
+    },
+    {
+      "id": 305,
+      "name": "tip",
+      "kind": "str",
+      "_comment": "@ref LLP 1035.006.000 D1: a tip's title, which teaches what the element does; empty, no tip. The element's `id` names the tip, so the platform remembers it across launches. iOS, iPadOS and macOS show it as TipKit's popover over the element, or over the bar or toolbar item that stands for it, when TipKit says it may; the person can close it. Other hosts show nothing (D4). Using it links the `tips` capability."
+    },
+    {
+      "id": 306,
+      "name": "tipMessage",
+      "kind": "str",
+      "_comment": "@ref LLP 1035.006.000 D1: the line under a tip's title (TipKit's `message`)."
+    },
+    {
+      "id": 307,
+      "name": "tipImage",
+      "kind": "str",
+      "_comment": "@ref LLP 1035.006.000 D1: the symbol beside a tip's title (TipKit's `image`), written as an `image`'s symbol source: `symbol:<role>` or `symbol:sf/<name>`."
+    },
+    {
+      "id": 308,
+      "name": "tipDone",
+      "kind": "bool",
+      "_comment": "@ref LLP 1035.006.000 D2: the person has done what the tip teaches. The platform retires the tip for good (TipKit's `invalidate(reason: .actionPerformed)`); it stays retired when this is false again or the app relaunches."
     }
   ],
   "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback. refused: keywords the wire carries and the compiler refuses an author, because no presenter builds them (LLP 1043.000 §3 D1); `contract vocab` lists the others. No wire reads it, so it is outside the digest.",

@@ -856,10 +856,10 @@ impl<D: DataSource> Presenter<D> {
         for item in &plan.leading {
             button(self, b, item);
         }
-        if let Some((_, rect)) = texts.iter().find(|(node, _)| *node == plan.heading) {
+        if let Some((heading, rect)) = texts.iter().find(|(node, _)| Some(*node) == plan.heading) {
             let place = (*rect, frame);
             let title = plan.title.clone();
-            self.access_bar_node(b, plan.heading, 0, role::HEADING, 0, title, place);
+            self.access_bar_node(b, *heading, 0, role::HEADING, 0, title, place);
         }
         for item in &plan.trailing {
             button(self, b, item);

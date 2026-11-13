@@ -1099,6 +1099,22 @@ impl Plan {
         Some((each.next()?, each.next()?))
     }
 
+    /// The declared row of source `name`, when the runner answers it with
+    /// one HTTP request (LLP 1162.001).
+    pub fn fetch_named(&self, name: &str) -> Option<&FetchesRow> {
+        self.fetches
+            .iter()
+            .find(|f| self.str(self.sources[f.source.0 as usize].name) == name)
+    }
+
+    /// A declared source's parts in `range`, each as `(name, value)`.
+    pub fn fetch_parts(&self, range: FetchPartsRange) -> impl Iterator<Item = (&str, &str)> {
+        let start = range.start as usize;
+        self.fetch_parts[start..start + range.len as usize]
+            .iter()
+            .map(|p| (self.str(p.name), self.str(p.value)))
+    }
+
     /// The native module row of source `name`, when a module answers it
     /// rather than the app's data (LLP 1133.002 D13).
     pub fn module_named(&self, name: &str) -> Option<&ModulesRow> {

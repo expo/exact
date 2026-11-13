@@ -1,4 +1,4 @@
-import { views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
+import { views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
 import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
@@ -30,7 +30,7 @@ function apply(batch) {
   host.listSelection?.before();
   prepareContexts(batch);
   for (const s of followedScrolls.values()) {
-    s.scrolled();
+    s.observed();
   }
   const focusCommands = [];
   const collectionOp = batch.ops?.find((op) => op.op === "collections");
@@ -873,6 +873,20 @@ function apply(batch) {
   for (const snapshot of collectionOp?.items ?? []) {
     followScroll(views.get(snapshot.view), false);
   }
+  // A scroll the batch asks for wins over the end-follow, and owns the
+  // followed scrollers it moves until it settles (LLP 1070.000 §15).
+  const reveals = [];
+  for (const command of focusCommands) {
+    const el = command.name === "scrollIntoView" ? liveById(command.args?.[0], root) : null;
+    if (el) {
+      reveals.push([ownFollowed(el), command.args?.[3] ?? "auto"]);
+    }
+  }
+  for (const [el, offsets] of pendingScrolls) {
+    if (followedScrolls.has(el) && Object.entries(offsets).some(([name, offset]) => el[name] !== offset)) {
+      ownFollowed(el);
+    }
+  }
   for (const s of followedScrolls.values()) {
     settleFollow(s);
   }
@@ -902,7 +916,11 @@ function apply(batch) {
         }
       }
       const s = followedScrolls.get(el);
-      if (s) {
+      if (s?.owned && !agentMode && el.style.scrollBehavior === "smooth") {
+        // settles at its `scrollend`
+      } else if (s?.owned) {
+        releaseFollowed(s);
+      } else if (s) {
         rememberScroll(s);
       }
     }
@@ -933,6 +951,14 @@ function apply(batch) {
         inertAncestor,
         log
       });
+    }
+  }
+  // An instant reveal has landed; a smooth one settles at its `scrollend`.
+  for (const [owned, behavior] of reveals) {
+    for (const s of owned) {
+      if (behavior === "instant" || behavior === "auto" && getComputedStyle(s.el).scrollBehavior !== "smooth") {
+        releaseFollowed(s);
+      }
     }
   }
   focusAutofocus();

@@ -1,21 +1,24 @@
-//! Bounded native I/O, shared with Apple. A nonblocking socketpair makes
-//! completions and admission refusals visible to the Linux display loop.
+//! Bounded native I/O: the executor Apple shares (`exact-executor`). A
+//! nonblocking socketpair makes completions and admission refusals visible
+//! to the Linux display loop.
 use crate::wake::Stream as UnixStream;
+pub use exact_executor::pump;
+use exact_executor::{Core, WorkerBudget};
 use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
-#[path = "../../apple/src/executor_core.rs"]
-mod core;
-#[path = "../../apple/src/executor_pump.rs"]
-pub mod pump;
 /// Each test thread shares a worker budget among its presenters. The
 /// dev-dependency enables this for integration tests; production shares one process bound.
-const ISOLATE_WORKER_BUDGET: bool = cfg!(any(test, feature = "test-budget"));
+const BUDGET: WorkerBudget = if cfg!(any(test, feature = "test-budget")) {
+    WorkerBudget::Thread
+} else {
+    WorkerBudget::Process
+};
 
 /// Ordered native work plus explicitly independent HTTP, with a poll wake.
 pub struct Executor {
-    core: core::Core,
+    core: Core,
     wake: UnixStream,
     note: Option<String>,
 }
@@ -31,7 +34,7 @@ impl Executor {
     /// Start native transport owners from the app's grants.
     pub fn start(grants: &str) -> Self {
         #[cfg(unix)]
-        core::stream::listen::install(listen_module());
+        exact_executor::listen::install(listen_module());
         let (wake, signal) = UnixStream::pair().expect("executor socketpair");
         wake.set_nonblocking(true).expect("nonblocking wake");
         signal.set_nonblocking(true).expect("nonblocking signal");
@@ -61,7 +64,7 @@ impl Executor {
             }
         };
         // The other owners, scoped grants and streams take the same transports as the first
-        let core = core::Core::start_on(
+        let core = Core::start_on(
             bindings,
             grants,
             Box::new(move || {
@@ -74,6 +77,7 @@ impl Executor {
             } else {
                 std::sync::Arc::new(ibex2::host::Host::new)
             },
+            BUDGET,
         );
         core.enable_http_cache();
         // Linux starts programs for data code, and so does this host where it
@@ -183,32 +187,13 @@ impl Executor {
 /// The listener this host links (LLP 1133.005 D13: a plain dependency here,
 /// as the SVG island rasterizer is).
 #[cfg(unix)]
-fn listen_module() -> core::stream::listen::Module {
+fn listen_module() -> exact_executor::listen::Module {
     use exact_listen::abi::*;
-    core::stream::listen::Module {
+    exact_executor::listen::Module {
         open: exact_listen_open,
         send: exact_listen_send,
         buffered: exact_listen_buffered,
         view: exact_listen_view,
         close: exact_listen_close,
-    }
-}
-
-#[cfg(test)]
-mod wire_tests {
-    #[test]
-    #[ignore = "async lane: real WebSocket handshake"]
-    fn socket_protocols_on_portable_transport() {
-        super::core::stream::protocol_tests::protocols(super::portable_host);
-    }
-
-    /// The Linux host's own transport (rustls): an app's abort closes a held
-    /// write's connection, and the server sees it end (shared with Apple's
-    /// platform transport, `executor_tests.rs`).
-    #[test]
-    fn an_app_aborted_held_write_closes_its_connection_on_rustls() {
-        super::core::tests::abort::an_aborted_held_write_closes_its_connection(
-            super::portable_host,
-        );
     }
 }

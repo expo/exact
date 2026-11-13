@@ -296,10 +296,38 @@ function answer(source: string, args: unknown[], store: Store): unknown {
     // the middle of a buffer, the buffer itself, and a DataView, each once.
     case "upload": {
       const all = new Uint8Array([9, 0, 255, 128, 10, 13, 0, 9]);
-      const body = args[0] === "buffer" ? all.buffer : args[0] === "dataview" ? new DataView(all.buffer, 1, 6) : all.subarray(1, 7);
+      const bodies = {
+        buffer: all.buffer, view: all.subarray(1, 7), dataview: new DataView(all.buffer, 1, 6),
+        wide: new Uint16Array(all.buffer, 2, 2), one: all.subarray(1, 2), two: all.subarray(1, 3),
+        emptyBuffer: new ArrayBuffer(0), emptyView: all.subarray(3, 3), emptyDataView: new DataView(all.buffer, 3, 0),
+      };
+      const body = bodies[text(args, 0) as keyof typeof bodies];
       const sent = fetch("https://api.castle.xyz/blob", { method: "POST", headers: { "content-type": "image/png" }, body });
       all[1] = 7; // a write after the call changes nothing sent
       return sent.then(r => r.text());
+    }
+    case "largeUpload": {
+      const offset = args[0] === "buffer" ? 0 : 1;
+      const all = new Uint8Array(2_000_000 + offset * 2).fill(0xa5);
+      const bytes = all.subarray(offset, offset + 2_000_000);
+      for (let i = 0; i < 256; i++) bytes[i] = i;
+      const body = args[0] === "buffer" ? all.buffer : args[0] === "dataview" ? new DataView(all.buffer, offset, bytes.length) : bytes;
+      const sent = fetch("https://api.castle.xyz/blob", {
+        method: "POST", body,
+        get cache() { all.fill(0); return "default"; },
+      });
+      all.fill(7);
+      return sent.then(r => r.text());
+    }
+    case "parallelUpload": {
+      const all = new Uint8Array([9, 0, 255, 9]);
+      const send = (body: BodyInit) => fetch("https://api.castle.xyz/blob", { method: "POST", body }).then(r => r.text());
+      const first = send(all.subarray(1, 3));
+      all[1] = 128;
+      const second = send(new DataView(all.buffer, 1, 2));
+      const empty = send(new ArrayBuffer(0));
+      all.fill(0);
+      return Promise.all([first, second, empty]).then(replies => replies.join("/"));
     }
     case "typedUpload": {
       const forms = new URLSearchParams({ code: "a b" });

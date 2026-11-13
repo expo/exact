@@ -77,7 +77,7 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
         .flatten()
         .filter(|instruction| instruction.op == Opcode::Send)
         .map(|instruction| plan.str(StrId(instruction.args[1] as u32)))
-        .filter(|source| plan.module_named(source).is_none())
+        .filter(|source| plan.module_named(source).is_none() && plan.fetch_named(source).is_none())
         .map(quoted)
         .collect();
     writeln!(
@@ -95,7 +95,10 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
         let name = plan.str(row.name);
         // The runner's own sources and a native module's names are not the
         // data module's to answer (LLP 1133.002 D13).
-        if exact_plan::runner_owned_source(name) || plan.module_named(name).is_some() {
+        if exact_plan::runner_owned_source(name)
+            || plan.module_named(name).is_some()
+            || plan.fetch_named(name).is_some()
+        {
             continue;
         }
         write!(out, "  {}: {{ args: [", quoted(name)).unwrap();
@@ -248,7 +251,9 @@ fn summary(plan: &Plan, out: &mut String) {
         .iter()
         .filter(|row| {
             let name = plan.str(row.name);
-            !exact_plan::runner_owned_source(name) && plan.module_named(name).is_none()
+            !exact_plan::runner_owned_source(name)
+                && plan.module_named(name).is_none()
+                && plan.fetch_named(name).is_none()
         })
         .collect();
     if sources.is_empty() {

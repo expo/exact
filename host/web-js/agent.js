@@ -382,7 +382,11 @@ export function install(exact) {
         if (req.target != null) {
           const hit = targetOf(nodes, req.target);
           if (!hit) return { error: `no view matches ${req.target}` };
-          nodes = req.shallow ? [hit] : nodes.filter(n => n === hit || views.get(hit.id).contains(views.get(n.id)));
+          const start = nodes.indexOf(hit);
+          let end = start + 1;
+          // Logical descendants include runs held off the page by text flow.
+          while (end < nodes.length && nodes[end].depth > hit.depth) end++;
+          nodes = nodes.slice(start, req.shallow ? start + 1 : end);
           roots = [hit.id];
         }
         // A hatch's regions and parts, under their node (LLP 1075.003.000.001 §3.4, §3.5; hatches.js).

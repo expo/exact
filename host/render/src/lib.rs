@@ -462,7 +462,9 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     // transport's connections to an origin are reused (a fresh TLS
     // connection per render cost RealWorld most of its latency, measured
     // 2026-09-28); one that hit its deadline, with work in flight, is dropped.
-    let grants = exact_runner::DataSource::grants(&settling).to_string();
+    // The origins its declared sources carry too (LLP 1162.001 D3).
+    let grants =
+        exact_runner::grants::with_declared(exact_runner::DataSource::grants(&settling), plan);
     let executor = EXECUTORS
         .with(|pool| {
             let mut pool = pool.borrow_mut();
@@ -995,7 +997,7 @@ pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::proc
         }
     };
     if let Some(dist) = serve {
-        let grants = data().grants().to_string();
+        let grants = exact_runner::grants::with_declared(data().grants(), &decoded);
         let config = Serve {
             dist,
             port,

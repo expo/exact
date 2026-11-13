@@ -748,18 +748,12 @@ fn scrolls_a_grouped_list(tag: &str, attrs: &[Attr], children: &[Node]) -> bool 
                     children,
                     ..
                 } => out.push((tag, attrs, children)),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    level(then, out);
-                    level(otherwise, out);
+                Node::Use { .. } => {}
+                node => {
+                    for list in node.child_lists() {
+                        level(list, out);
+                    }
                 }
-                Node::Each { body, .. } => level(body, out),
-                Node::Match { some, none, .. } => {
-                    level(&some.1, out);
-                    level(none, out);
-                }
-                Node::Use { .. } | Node::Children { .. } => {}
             }
         }
     }

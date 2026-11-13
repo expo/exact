@@ -40,41 +40,24 @@ enum Kind {
 
 /// Each popover's literal id, and what it is.
 fn popovers<'a>(nodes: &'a [Node], out: &mut BTreeMap<&'a str, Kind>) {
-    for n in nodes {
-        let children: Vec<&Node> = match n {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                if let (true, Some(id)) = (
-                    has(attrs, "popover") || tag == "dialog",
-                    literal(attrs, "id"),
-                ) {
-                    let kind = match (tag.as_str(), has(attrs, "role"), literal(attrs, "role")) {
-                        ("dialog", ..) | (_, _, Some("menu" | "alertdialog")) => Kind::Menu,
-                        (_, false, _) | (_, true, Some(_)) => Kind::Other,
-                        (_, true, None) => Kind::Unknown,
-                    };
-                    // Two arms that say different things leave it unsettled.
-                    let settled = *out.entry(id).or_insert(kind);
-                    if settled != kind {
-                        out.insert(id, Kind::Unknown);
-                    }
-                }
-                children.iter().collect()
-            }
-            Node::When {
-                then, otherwise, ..
-            } => then.iter().chain(otherwise).collect(),
-            Node::Each { body, .. } => body.iter().collect(),
-            Node::Match { some, none, .. } => some.1.iter().chain(none).collect(),
-            Node::Use { children, .. } => children.iter().collect(),
-            Node::Children { .. } => Vec::new(),
+    for n in Node::walk(nodes) {
+        let Node::Element { tag, attrs, .. } = n else {
+            continue;
         };
-        for c in children {
-            popovers(std::slice::from_ref(c), out);
+        if let (true, Some(id)) = (
+            has(attrs, "popover") || tag == "dialog",
+            literal(attrs, "id"),
+        ) {
+            let kind = match (tag.as_str(), has(attrs, "role"), literal(attrs, "role")) {
+                ("dialog", ..) | (_, _, Some("menu" | "alertdialog")) => Kind::Menu,
+                (_, false, _) | (_, true, Some(_)) => Kind::Other,
+                (_, true, None) => Kind::Unknown,
+            };
+            // Two arms that say different things leave it unsettled.
+            let settled = *out.entry(id).or_insert(kind);
+            if settled != kind {
+                out.insert(id, Kind::Unknown);
+            }
         }
     }
 }
@@ -127,19 +110,11 @@ fn walk(nodes: &[Node], in_menu: bool, ids: &BTreeMap<&str, Kind>, out: &mut Vec
                     in_menu || has(attrs, "popover") && literal(attrs, "role") == Some("menu");
                 walk(children, menu, ids, out);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, in_menu, ids, out);
-                walk(otherwise, in_menu, ids, out);
+            node => {
+                for list in node.child_lists() {
+                    walk(list, in_menu, ids, out);
+                }
             }
-            Node::Each { body, .. } => walk(body, in_menu, ids, out),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, in_menu, ids, out);
-                walk(none, in_menu, ids, out);
-            }
-            Node::Use { children, .. } => walk(children, in_menu, ids, out),
-            Node::Children { .. } => {}
         }
     }
 }

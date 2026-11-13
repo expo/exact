@@ -10,7 +10,7 @@ mod derives;
 
 use crate::calls::CAPTURE;
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{Binding, Component, Expr, Node, Owner, Param, Span, Stmt, TemplatePart};
+use contract_syntax::{Binding, Component, Expr, Node, Owner, Param, Span, Stmt};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[cfg(test)]
@@ -514,13 +514,9 @@ fn expression_call(c: &Component, name: &str) -> Option<Span> {
         first_free(e, &|n| n == name, &mut |_| false).map(|(_, span)| span)
     }
     fn in_nodes(nodes: &[Node], name: &str) -> Option<Span> {
-        nodes.iter().find_map(|n| match n {
-            Node::Children { .. } => None,
+        Node::walk(nodes).find_map(|n| match n {
             Node::Element {
-                positional,
-                attrs,
-                children,
-                ..
+                positional, attrs, ..
             } => positional
                 .iter()
                 .find_map(|e| in_expr(e, name))
@@ -531,33 +527,8 @@ fn expression_call(c: &Component, name: &str) -> Option<Span> {
                         }
                         value => in_expr(value, name),
                     })
-                })
-                .or_else(|| in_nodes(children, name)),
-            Node::Use { args, children, .. } => args
-                .iter()
-                .find_map(|a| in_expr(&a.value, name))
-                .or_else(|| in_nodes(children, name)),
-            Node::When {
-                cond,
-                then,
-                otherwise,
-                ..
-            } => in_expr(cond, name)
-                .or_else(|| in_nodes(then, name))
-                .or_else(|| in_nodes(otherwise, name)),
-            Node::Each {
-                list, key, body, ..
-            } => in_expr(list, name)
-                .or_else(|| in_expr(key, name))
-                .or_else(|| in_nodes(body, name)),
-            Node::Match {
-                subject,
-                some,
-                none,
-                ..
-            } => in_expr(subject, name)
-                .or_else(|| in_nodes(&some.1, name))
-                .or_else(|| in_nodes(none, name)),
+                }),
+            n => n.exprs().find_map(|e| in_expr(e, name)),
         })
     }
     c.derives
@@ -1145,60 +1116,15 @@ fn member_path(e: &Expr, name: &str) -> Option<String> {
         }
     }
     let mut best: Option<String> = None;
-    let mut visit = |x: &Expr| {
+    for x in e.walk() {
         if let Some(c) = chain(x).filter(|_| matches!(x, Expr::Member(..)) && root(x) == Some(name))
         {
             if best.as_ref().is_none_or(|b| c.len() > b.len()) {
                 best = Some(c);
             }
         }
-    };
-    walk_exprs(e, &mut visit);
-    best
-}
-
-/// Visit `e` and every expression inside it.
-fn walk_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
-    f(e);
-    match e {
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) | Expr::Ident(..) => {}
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                walk_exprs(x, f)
-            }
-        }),
-        Expr::List(items, _) => items.iter().for_each(|a| walk_exprs(a, f)),
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => walk_exprs(x, f),
-        Expr::Call(_, args, _) => args.iter().for_each(|a| walk_exprs(a, f)),
-        Expr::Binary(_, a, b, _) => {
-            walk_exprs(a, f);
-            walk_exprs(b, f);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            walk_exprs(a, f);
-            walk_exprs(b, f);
-            walk_exprs(c, f);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            walk_exprs(subject, f);
-            walk_exprs(some, f);
-            walk_exprs(none, f);
-        }
-        Expr::Let { value, body, .. } => {
-            walk_exprs(value, f);
-            walk_exprs(body, f);
-        }
-        Expr::Arrow { body, .. } => walk_exprs(body, f),
     }
+    best
 }
 
 /// The first free name in `e` (not bound by a `let`, a `match` or an arrow
@@ -1215,59 +1141,22 @@ fn first_free(
         hit: &mut dyn FnMut(&str) -> bool,
         bound: &mut Vec<String>,
     ) -> Option<(String, Span)> {
-        let within =
-            |name: &str, x: &Expr, bound: &mut Vec<String>, hit: &mut dyn FnMut(&str) -> bool| {
-                bound.push(name.to_string());
-                let found = walk(x, calls, hit, bound);
-                bound.pop();
-                found
-            };
         match e {
             Expr::Ident(name, span) => {
-                (!bound.contains(name) && hit(name)).then(|| (name.clone(), *span))
+                return (!bound.contains(name) && hit(name)).then(|| (name.clone(), *span));
             }
-            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) => None,
-            Expr::List(items, _) => items.iter().find_map(|a| walk(a, calls, hit, bound)),
-            Expr::Template(parts, _) => parts.iter().find_map(|p| match p {
-                TemplatePart::Expr(x) => walk(x, calls, hit, bound),
-                _ => None,
-            }),
-            Expr::Some(x, _)
-            | Expr::Member(x, _, _)
-            | Expr::NamedArg(_, x, _)
-            | Expr::Typed(x, _, _)
-            | Expr::Unary(_, x, _) => walk(x, calls, hit, bound),
-            Expr::Call(name, args, span) => {
-                if !bound.contains(name) && calls(name) {
-                    return Some((name.clone(), *span));
-                }
-                args.iter().find_map(|a| walk(a, calls, hit, bound))
+            Expr::Call(name, _, span) if !bound.contains(name) && calls(name) => {
+                return Some((name.clone(), *span));
             }
-            Expr::Binary(_, a, b, _) => {
-                walk(a, calls, hit, bound).or_else(|| walk(b, calls, hit, bound))
-            }
-            Expr::Ternary(a, b, c, _) => walk(a, calls, hit, bound)
-                .or_else(|| walk(b, calls, hit, bound))
-                .or_else(|| walk(c, calls, hit, bound)),
-            Expr::Match {
-                subject,
-                var,
-                some,
-                none,
-                ..
-            } => walk(subject, calls, hit, bound)
-                .or_else(|| within(var, some, bound, hit))
-                .or_else(|| walk(none, calls, hit, bound)),
-            Expr::Let {
-                name, value, body, ..
-            } => walk(value, calls, hit, bound).or_else(|| within(name, body, bound, hit)),
-            Expr::Arrow { params, body, .. } => {
-                bound.extend(params.iter().cloned());
-                let found = walk(body, calls, hit, bound);
-                bound.truncate(bound.len() - params.len());
-                found
-            }
+            _ => {}
         }
+        e.scoped_operands().find_map(|(x, binds)| {
+            let depth = bound.len();
+            bound.extend(binds.iter().map(String::from));
+            let found = walk(x, calls, hit, bound);
+            bound.truncate(depth);
+            found
+        })
     }
     walk(e, calls, hit, &mut Vec::new())
 }

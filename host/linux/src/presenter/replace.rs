@@ -23,6 +23,7 @@ impl<D: DataSource> Presenter<D> {
             scroll_end,
             wheel_free,
             snap_rested,
+            glides,
             page,
             focus_out,
             autofocus_from,
@@ -159,6 +160,7 @@ impl<D: DataSource> Presenter<D> {
         // last rested on.
         wheel_free.clear();
         snap_rested.clear();
+        *glides = Default::default();
         *page = (0.0, 0.0);
         focus_out.clear();
         *autofocus_from = None;

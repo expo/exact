@@ -1315,6 +1315,12 @@ impl<D: DataSource> Bridge<D> {
         // `tap @t` / `type @t` answer a held device request (LLP 1069.007
         // D4) before any view is looked up.
         let out = match self.host.as_mut() {
+            Some(h)
+                if exact_runner::agent::field_str(&request, "op").as_deref() == Some("actions")
+                    && exact_runner::agent::field_bool(&request, "drain") =>
+            {
+                h.take_ended_actions()
+            }
             Some(h) => h.answer_hold(&request).unwrap_or_else(|| h.agent(&request)),
             None => exact_runner::agent::error("not booted"),
         };

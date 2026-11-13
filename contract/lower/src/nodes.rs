@@ -156,6 +156,7 @@ impl Lowerer<'_> {
         menus::check_menu_keys(expanded, parent_tag.is_none())?;
         values::check_position_area(expanded)?;
         menus::check_invoker(tag, expanded)?;
+        crate::tips::check(expanded, *span)?;
         crate::alert_parts::check_authored(expanded)?;
         tags::check_exclusion(&t, expanded, self.parent_positioned)?;
         // @ref LLP 1121 D3 — a motion token an expansion carried in (a
@@ -596,6 +597,10 @@ impl Lowerer<'_> {
             {
                 continue;
             }
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+                self.errors.push(e);
+                continue;
+            }
             if let Err(e) = self.attr(
                 tag,
                 contract_syntax::payload_control(tag, attrs),
@@ -844,20 +849,17 @@ impl Lowerer<'_> {
             );
         }
         if t.node_type.is_text_leaf() {
-            // Regions have no node of their own: a dynamic Markdown
-            // paragraph's each/when still produces only text runs.
-            // An image in the text is the paragraph's own child (LLP
-            // 1011.002), never a run's: its box is placed in the paragraph.
+            // Regions have no node of their own: a `for`, `if` or `match`
+            // among a paragraph's runs produces only its runs (LLP 1011.002
+            // D1). An image in the text is the paragraph's own child, never
+            // a run's: its box is placed in the paragraph.
             fn run(c: &Node, images: bool) -> bool {
                 match c {
                     Node::Element { tag, .. } => {
                         matches!(tag.as_str(), "text" | "time") || images && tag == "image"
                     }
-                    Node::Each { body, .. } => body.iter().all(|c| run(c, images)),
-                    Node::When {
-                        then, otherwise, ..
-                    } => then.iter().chain(otherwise).all(|c| run(c, images)),
-                    _ => false,
+                    Node::Use { .. } | Node::Children { .. } => false,
+                    region => region.children().all(|c| run(c, images)),
                 }
             }
             // A `text` that holds runs, not a string or a `time` value.
@@ -870,11 +872,8 @@ impl Lowerer<'_> {
             fn has_image(c: &Node) -> bool {
                 match c {
                     Node::Element { tag, .. } => tag == "image",
-                    Node::Each { body, .. } => body.iter().any(has_image),
-                    Node::When {
-                        then, otherwise, ..
-                    } => then.iter().chain(otherwise).any(has_image),
-                    _ => false,
+                    Node::Use { .. } | Node::Children { .. } => false,
+                    region => region.children().any(has_image),
                 }
             }
             let columns = expanded

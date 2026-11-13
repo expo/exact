@@ -136,20 +136,20 @@ probe.workspace = true
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.each(['host/apple/src/executor_core.rs', 'host/apple/src/executor_async.rs'])(
+test.each(['host/executor/src/lib.rs', 'host/executor/src/async.rs'])(
   '%s touches native apps and web rendering', (path) => {
     expect(hostsTouched([path])).toEqual(allHosts);
   },
 );
 
 test.each([
-  ['executor_process.rs', ['web', 'macos', 'linux']],
-  ['executor_process_supervise.rs', ['web', 'macos', 'linux']],
-  ['executor_process_off.rs', ['web', 'ios', 'tvos', 'windows', 'android']],
-  ['executor_order_tests.rs', ['macos', 'ios', 'tvos']],
-])('%s touches only the hosts that compile it', (file, hosts) => {
-  expect(hostsTouched([`host/apple/src/${file}`])).toEqual(hosts);
-  expect(hostsTouched([`host/apple/src/${file}`], appAt('apps/realworld'))).toEqual(hosts);
+  ['host/executor/src/process.rs', ['web', 'macos', 'linux']],
+  ['host/executor/src/process_supervise.rs', ['web', 'macos', 'linux']],
+  ['host/executor/src/process_off.rs', ['web', 'ios', 'tvos', 'windows', 'android']],
+  ['host/apple/src/executor_order_tests.rs', ['macos', 'ios', 'tvos']],
+])('%s touches only the hosts that compile it', (path, hosts) => {
+  expect(hostsTouched([path])).toEqual(hosts);
+  expect(hostsTouched([path], appAt('apps/realworld'))).toEqual(hosts);
 });
 
 test('only the selected app touches its hosts', () => {

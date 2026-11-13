@@ -9,7 +9,7 @@
 //! the package doesn't provide is the deferred limit (QUEUE).
 
 use crate::LowerError;
-use contract_syntax::{Component, Expr, File, Node, Span, Stmt, TemplatePart};
+use contract_syntax::{Component, Expr, File, Node, Span, Stmt};
 
 /// The host sources a library may not read (D6).
 const HOST: [&str; 3] = ["exactDelivery", "exactSurface", "exactCanvasPerformance"];
@@ -222,19 +222,7 @@ fn provided(
 
 /// Whether `nodes` use component `name`, a fill's too.
 fn uses(nodes: &[Node], name: &str) -> bool {
-    nodes.iter().any(|n| match n {
-        Node::Use {
-            name: used,
-            children,
-            ..
-        } => used == name || uses(children, name),
-        Node::Element { children, .. } | Node::Each { body: children, .. } => uses(children, name),
-        Node::When {
-            then, otherwise, ..
-        } => uses(then, name) || uses(otherwise, name),
-        Node::Match { some, none, .. } => uses(&some.1, name) || uses(none, name),
-        Node::Children { .. } => false,
-    })
+    Node::walk(nodes).any(|n| matches!(n, Node::Use { name: used, .. } if used == name))
 }
 
 /// A `fn`: which parameters' `displayMode` it reads, itself or through a
@@ -419,29 +407,12 @@ impl Cx<'_, '_> {
     /// Each read in `e`, each name bound in its own scope.
     fn expr(&mut self, e: &Expr, held: &[String]) {
         match e {
-            Expr::Number(..)
-            | Expr::Str(..)
-            | Expr::Bool(..)
-            | Expr::None(..)
-            | Expr::Ident(..) => {}
             Expr::Member(base, field, span) => {
                 if field == "displayMode" && self.scan.viewport(base, held) {
                     self.found.reads.push(*span);
                 }
                 self.expr(base, held);
             }
-            Expr::Template(parts, _) => {
-                for p in parts {
-                    if let TemplatePart::Expr(x) = p {
-                        self.expr(x, held);
-                    }
-                }
-            }
-            Expr::List(items, _) => items.iter().for_each(|a| self.expr(a, held)),
-            Expr::Some(x, _)
-            | Expr::NamedArg(_, x, _)
-            | Expr::Typed(x, _, _)
-            | Expr::Unary(_, x, _) => self.expr(x, held),
             Expr::Call(name, args, span) => {
                 for a in args {
                     self.expr(a, held);
@@ -458,15 +429,6 @@ impl Cx<'_, '_> {
                         .params
                         .extend(tainted.into_iter().map(|i| (name.clone(), i)));
                 }
-            }
-            Expr::Binary(_, a, b, _) => {
-                self.expr(a, held);
-                self.expr(b, held);
-            }
-            Expr::Ternary(a, b, c, _) => {
-                self.expr(a, held);
-                self.expr(b, held);
-                self.expr(c, held);
             }
             Expr::Match {
                 subject,
@@ -494,6 +456,11 @@ impl Cx<'_, '_> {
                     .cloned()
                     .collect();
                 self.expr(body, &inner);
+            }
+            _ => {
+                for x in e.operands() {
+                    self.expr(x, held);
+                }
             }
         }
     }

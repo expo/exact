@@ -639,6 +639,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "contextMagnify" => AttrTarget::Prop(p("contextMagnify")),
         // @ref LLP 1021 §5.1 — the popover a node's context menu shows, and its preview row.
         "contextPopover" | "contextPreview" => AttrTarget::Prop(p(name)),
+        // @ref LLP 1035.006.000 D1, D2 — a tip over the element, and whether its lesson is done.
+        "tip" | "tipMessage" | "tipImage" | "tipDone" => AttrTarget::Prop(p(name)),
         "emojiPicker" => AttrTarget::Prop(p("emojiPicker")),
         "backgroundMaterial" => AttrTarget::Prop(p("backgroundMaterial")),
         "glassGroup" => AttrTarget::Prop(p("glassGroup")),
@@ -1258,18 +1260,13 @@ pub(crate) fn host_transform_recipients(
                     });
                     collect(lower, children, Some(index), false, boxes);
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    collect(lower, then, parent, repeated, boxes);
-                    collect(lower, otherwise, parent, repeated, boxes);
+                Node::Use { .. } | Node::Children { .. } => {}
+                node => {
+                    let repeated = repeated || matches!(node, Node::Each { .. });
+                    for list in node.child_lists() {
+                        collect(lower, list, parent, repeated, boxes);
+                    }
                 }
-                Node::Each { body, .. } => collect(lower, body, parent, true, boxes),
-                Node::Match { some, none, .. } => {
-                    collect(lower, &some.1, parent, repeated, boxes);
-                    collect(lower, none, parent, repeated, boxes);
-                }
-                _ => {}
             }
         }
     }
@@ -1433,12 +1430,8 @@ impl crate::Lowerer<'_> {
         fn words(node: &Node) -> bool {
             match node {
                 Node::Element { tag, .. } => tag == "text" || tag == "image",
-                Node::When {
-                    then, otherwise, ..
-                } => then.iter().chain(otherwise).all(words),
-                Node::Each { body, .. } => body.iter().all(words),
-                Node::Match { some, none, .. } => some.1.iter().chain(none).all(words),
                 Node::Use { .. } | Node::Children { .. } => false,
+                node => node.children().all(words),
             }
         }
         let has = |name: &str| attrs.iter().any(|a| a.name == name);

@@ -65,7 +65,7 @@ package class ScrollView: UIScrollView {
         (superview as? NodeView)?.queueScrollEvent()
         guard let node = superview as? NodeView, node.props["scrollStart"] == "end" || node.props["scrollFollowEnd"] == "true",
               node.presenter?.collections.entries[node.id]?.snapshot.horizontal != true,
-              !isTracking, !isDecelerating, contentSize.height > 0 else { return }
+              !isTracking, !isDecelerating, contentSize.height > 0, !node.authorOwnsScroll(self) else { return }
         let end = { (inset: UIEdgeInsets) in max(-inset.top, self.contentSize.height + inset.bottom - self.bounds.height) }
         guard contentOffset.y >= end(was) - 1, was.bottom != keptInset.bottom else { return }
         contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(keptInset)), in: self)
@@ -258,12 +258,16 @@ final class PaddedRefreshControl: UIRefreshControl {
 extension Presenter {
     func restoreScrollPositions() {
         let ids = scrollers.union(pendingScrolls).union(materialNodes)
+        // What the batch's `scrollIntoView`s will move, and the scrollers it writes `scrollTop` to.
+        let names = Set(session?.pendingElementScrolls ?? [])
+        let authored = (names.isEmpty ? [] : views.values.filter { $0.props["id"].map(names.contains) == true })
+            + ids.compactMap { views[$0] }.filter { $0.pendingScrollTop != nil || $0.pendingScrollLeft != nil }
         for id in ids {
             guard let node = views[id] else { continue }
             // Navigation can resize a native port after its row projection.
             // Settle that layout before restoring or authoring an offset.
             if node.groupedOwner { node.scrollView?.layoutIfNeeded() }
-            if !collections.owns(node.id) { node.restoreScrollPosition() }
+            if !collections.owns(node.id) { node.restoreScrollPosition(authored: authored.contains { $0.isDescendant(of: node) }) }
             if let material = node.materialView { node.sendSubviewToBack(node.glassSlot ?? material) }
         }
         // Every capture is restored before any authored offset lands: a
@@ -375,7 +379,9 @@ extension NodeView {
         if groupedOwner { readingAnchors = presenter?.groupedLists?.scrollAnchors(for: id) ?? [] }
         else { anchors(in: sv) }
     }
-    func restoreScrollPosition() {
+    /// `authored`: the batch asks for a scroll of it (a `scrollIntoView` of
+    /// something in it, which comes after the batch), which wins over the end-follow.
+    func restoreScrollPosition(authored: Bool = false) {
         defer { followedScroll = nil; readingAnchors.removeAll(keepingCapacity: true); scrollAnchor = nil }
         guard props["scrollFollowEnd"] == "true", let sv = scrollView else {
             if let sv = scrollView {
@@ -396,7 +402,13 @@ extension NodeView {
         }
         let minimum = -sv.adjustedContentInset.top
         let maximum = max(minimum, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
-        let prior = followedScroll ?? (top: maximum, end: true, start: false)
+        // The app's scroll owns the offset until it settles: the end is not
+        // followed meanwhile, `scrollFollowEnd` turning true included (no
+        // capture: the port stays where it is), and once it settles only
+        // where it rests at the end (LLP 1070.000 §15).
+        let owned = authored || authorOwnsScroll(sv)
+        let prior = followedScroll ?? (owned ? (top: sv.contentOffset.y, end: false, start: false) : (top: maximum, end: true, start: false))
+        let follows = prior.end && !owned
         // At rest at the start, UIKit's new minimum follows an inset change.
         // A captured physical offset would replay the obsolete inset instead.
         let restingStart = groupedOwner && prior.start && !(sv.isTracking || sv.isDragging || sv.isDecelerating)
@@ -408,7 +420,7 @@ extension NodeView {
             activeReadingAnchor = anchor.node
             top += (scrollRect(anchor.node, in: sv)?.minY ?? anchor.y) - anchor.y
         }
-        let y = Self.followedTop(current: sv.contentOffset.y, minimum: minimum, maximum: maximum, end: prior.end, top: top,
+        let y = Self.followedTop(current: sv.contentOffset.y, minimum: minimum, maximum: maximum, end: follows, top: top,
                                  moving: sv.isTracking || sv.isDragging || sv.isDecelerating)
         let inactive = window == nil || presenter?.navigation.isInactiveRoute(containing: self) == true
         retainedScrollTop = !prior.end && top > maximum && (inactive || retainedScrollTop != nil) ? top : nil
@@ -419,7 +431,7 @@ extension NodeView {
         // keep a surviving row in place by moving the offset by its shift
         // only, without clamping, as UIKit's own contentOffsetAdjustment does.
         if sv.isTracking || sv.isDecelerating {
-            if prior.end { followsEndAfterInteraction = true }
+            if follows { followsEndAfterInteraction = true }
             else if top != prior.top {
                 if groupedOwner {
                     if sv.contentOffset.y != top { sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: top), in: sv, clamped: false) }
@@ -432,11 +444,13 @@ extension NodeView {
         if presenter?.elementScrolls.revealing(sv) != nil {
             // An element reveal heads for where its target now is instead (`IntoView.swift`).
             presenter?.elementScrolls.retarget(sv)
+        } else if authoredScrollAnimating {
+            // A smooth `scrollTop` write runs on to its target, as UIKit's own animation does.
         } else if sv.contentOffset.y != y {
             // `scroll-behavior: smooth`: an end that moved down (a message
             // appended) is followed with UIKit's scroll animation, as a
             // smooth `scrollTop` write is; a shrink or a jump up lands at once.
-            let animate = prior.end && y > sv.contentOffset.y && style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes && window != nil
+            let animate = follows && y > sv.contentOffset.y && style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes && window != nil
             followingEndAnimated = animate
             sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: y), in: sv), animated: animate)
         }
@@ -496,6 +510,7 @@ extension NodeView {
         let initial = target()
         guard sv.contentOffset != initial else { return }
         let inset = sv.adjustedContentInset.top
+        authoredScrollAnimating = animated
         sv.setContentOffset(initial, animated: animated)
         if !animated, sv.adjustedContentInset.top != inset {
             sv.layoutIfNeeded()

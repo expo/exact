@@ -4,7 +4,7 @@
 use exact_runner::{CacheMode, Outcome, Redirect, Request};
 use serde_json::{json, Value as Json};
 
-pub(crate) fn request_from_json(text: &str) -> Result<Request, String> {
+pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Request, String> {
     let j: Json = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let field = |k: &str| j.get(k).and_then(Json::as_str).map(str::to_string);
     let mut headers = Vec::new();
@@ -38,9 +38,9 @@ pub(crate) fn request_from_json(text: &str) -> Result<Request, String> {
         method: field("method").ok_or("no method")?,
         url: field("url").ok_or("no url")?,
         headers,
-        // A BufferSource body travels as base64 beside the text one.
-        body: match field("body_base64") {
-            Some(b64) => exact_runner::agent::unbase64(&b64).ok_or("a body that is not base64")?,
+        // A BufferSource body arrives beside its metadata through the bytes door.
+        body: match body {
+            Some(bytes) => bytes.to_vec(),
             None => field("body").unwrap_or_default().into_bytes(),
         },
         stream: j.get("stream").and_then(Json::as_bool).unwrap_or(false),

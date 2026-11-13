@@ -85,7 +85,7 @@ pub(super) fn route_bar_symbols() {
     for root in [16., 20., 24., 16.] {
         assert!(p.set_text_scale(root / 16.).is_none());
         let bar = root * 1.2941;
-        for name in ["status", "relative", "sized", "inherited"] {
+        for name in ["status", "relative", "sized", "inherited", "headless"] {
             let (w, h) = size(&mut p, name);
             assert!((w - bar * 1.2).abs() < 0.06, "{name} at {root}: {w}");
             assert!((h - bar * 1.2).abs() < 0.06, "{name} at {root}: {h}");
@@ -105,7 +105,7 @@ pub(super) fn route_bar_symbols() {
             assert_eq!(size(&mut p, name).1, size(&mut p, "worded").1);
         }
         for name in [
-            "counted", "nested", "tab", "no-bar", "authored", "headless", "page", "readout",
+            "counted", "nested", "tab", "no-bar", "authored", "page", "readout",
         ] {
             assert_eq!(size(&mut p, name), (22., 20.), "{name} at {root}");
         }

@@ -386,7 +386,8 @@ extension Agent {
             },
             "at": [Agent.r2(local.x), Agent.r2(local.y)], // the viewport point, as `tap` replies it
             "window": [Agent.r2(p.x), Agent.r2(p.y)], // the window point, as the dispatch log records touches
-            "viewport": [Agent.r2(vp.pageSize.width), Agent.r2(vp.pageSize.height)], // where a drag must end
+            "viewport": [Agent.r2(vp.pageSize.width), Agent.r2(vp.pageSize.height)], // where a drag must end, or
+            "keyboard": keyboardBox().map { [$0.minX, $0.minY, $0.width, $0.height].map(Agent.r2) } ?? NSNull(), // over it (§11)
             // The Exact node the window's hit test finds there: where the dispatch log must see the touch land.
             "hit": TouchLog.landing(seen)["node"] ?? NSNull(),
             // In a grouped list, the row and part it must land on too.
@@ -396,6 +397,20 @@ extension Agent {
         ]
         if let native { aim["native"] = native }
         return ["aim": aim]
+    }
+
+    /// The software keyboard's box in the viewport's space while it shows
+    /// (`state.keyboard.visible`), nil otherwise: a real drag may end over it,
+    /// as a person's drag to dismiss it does (LLP 1080.000 §11). Under
+    /// `interactive-widget="resizes-content"` it lies below the viewport.
+    func keyboardBox() -> CGRect? {
+        #if os(iOS)
+        guard let container = presenter.keyboardContainer, presenter.keyboardGuideTop(in: container) != nil else { return nil }
+        let vp = presenter.viewport, r = container.convert(container.keyboardLayoutGuide.layoutFrame, to: vp)
+        return r.offsetBy(dx: -vp.pageOrigin.x, dy: -vp.pageOrigin.y)
+        #else
+        return nil
+        #endif
     }
 
     /// Where UIKit shows `row` of the menu it presents for `pop`, or why a

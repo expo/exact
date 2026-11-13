@@ -35,6 +35,34 @@ impl<'a> Grants<'a> {
     }
 }
 
+/// The grant each of `plan`'s declared sources carries, `net.fetch <origin>`,
+/// once each, in the plan's order (LLP 1162.001 D3).
+pub fn declared(plan: &exact_plan::Plan) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for row in &plan.fetches {
+        let line = format!("net.fetch {}", plan.str(row.origin));
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+/// `grants`, the data module's, with `plan`'s declared lines after it that
+/// it does not already have: what a host endows its executor with.
+pub fn with_declared(grants: &str, plan: &exact_plan::Plan) -> String {
+    let mut out = grants.to_string();
+    for line in declared(plan) {
+        if !grants.lines().any(|l| l.trim() == line) {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&line);
+        }
+    }
+    out
+}
+
 /// How the runner reads an I/O grant line (`net.fetch …`, `secret.keep …`),
 /// when an archive links I/O (LLP 1047.001): its own lines (devices, auth)
 /// it reads itself. An archive without I/O names no grant grammar, and the

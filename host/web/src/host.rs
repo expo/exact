@@ -566,7 +566,8 @@ impl<D: DataSource> Host<D> {
         for w in host.runner.take_store_writes() {
             batch.store(&w);
         }
-        batch.grants(host.runner.data().grants());
+        // The origins its declared sources carry too (LLP 1162.001 D3).
+        batch.grants(&host.runner.grants());
         host.emit_textflow(&mut batch);
         let batch = host.complete(batch, None);
         Ok((host, batch))

@@ -126,8 +126,8 @@ theorem mapM_good {α β} {f : α → Result β} : ∀ {xs : List α},
 theorem ite_pos {α} {c : Prop} [Decidable c] {a b : α} (h : c) : (if c then a else b) = a := by simp [h]
 theorem ite_neg {α} {c : Prop} [Decidable c] {a b : α} (h : ¬ c) : (if c then a else b) = b := by simp [h]
 
-theorem formatting_good {p : Program} {f vs} : GoodR (ValTy p · .string) (formatting f vs) := by
-  cases h : formatting f vs with
+theorem formatting_good {p : Program} {tables f vs} : GoodR (ValTy p · .string) (formatting tables f vs) := by
+  cases h : formatting tables f vs with
   | ok v => obtain ⟨s, rfl⟩ := formatting_str h; simp [GoodR, ValTy]
   | error e => obtain ⟨w, rfl⟩ := formatting_err h; simp [GoodR, Legit]
 
@@ -971,7 +971,8 @@ theorem read_notPending (t : Route.Table) (v : Value) (f : Route.Router → Opti
   · exact NotPending.ok _
   · exact NotPending.err (by simp)
 
-theorem formatting_notPending (f : String) (args : List Value) : NotPending (formatting f args) :=
+theorem formatting_notPending (tables : Format.Tables) (f : String) (args : List Value) :
+    NotPending (formatting tables f args) :=
   fun _ h => by obtain ⟨w, rfl⟩ := formatting_err h; simp
 
 theorem text_notPending (tables : Format.Tables) (args : List Value) : NotPending (text tables args) :=
@@ -995,7 +996,7 @@ theorem stdlib_notPending (env : Env) (f : String) (args : List Value) : NotPend
   split
   all_goals try dsimp only
   all_goals first
-    | exact formatting_notPending _ _
+    | exact formatting_notPending _ _ _
     | exact sortByKeys_notPending _ _ _
     | exact text_notPending _ _
     | exact NotPending.ok _

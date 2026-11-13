@@ -122,6 +122,29 @@ pub(super) fn stack_lines(children: &[Node], own: &[Attr]) -> Vec<Node> {
                     span: *span,
                 }
             }
+            // A `match` has no condition to choose by: its arms count the
+            // fewer, as `part` counts them.
+            Node::Match {
+                tag,
+                subject,
+                some,
+                none,
+                span,
+            } => {
+                let start = Count::Known(texts.low());
+                *texts = start.clone();
+                let arm = some.1.iter().map(|n| line(n, texts, keep)).collect();
+                let after = std::mem::replace(texts, start);
+                let none = none.iter().map(|n| line(n, texts, keep)).collect();
+                *texts = Count::Known(after.low().min(texts.low()));
+                Node::Match {
+                    tag: *tag,
+                    subject: subject.clone(),
+                    some: (some.0.clone(), arm),
+                    none,
+                    span: *span,
+                }
+            }
             Node::Element { tag, span, .. } if tag == "text" && !hidden(c) => {
                 let at = *span;
                 let size =

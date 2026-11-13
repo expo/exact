@@ -854,6 +854,16 @@ fn substitute(entry: &Value, interface: &Value) -> Result<String, String> {
     if !literal.is_empty() {
         out.insert("literal".into(), Value::Array(literal));
     }
+    // The options whose literals are the app's declarations, a list of
+    // records each named by its `declares` field (LLP 1133.004 stage 2: the
+    // actions a notification category shows, registered at launch).
+    let declares: Map<String, Value> = (object(&entry["options"]).iter())
+        .filter(|(_, ty)| ty["literal"] == true)
+        .filter_map(|(option, ty)| Some((option.clone(), ty["declares"].as_str()?.into())))
+        .collect();
+    if !declares.is_empty() {
+        out.insert("declares".into(), Value::Object(declares));
+    }
     // The options that name a handler, each a string literal (LLP 1133.034 D5).
     let handlers: Vec<Value> = (object(&entry["options"]).iter())
         .filter(|(_, ty)| ty.as_str().is_some_and(|t| bare(t).0 == "handler"))

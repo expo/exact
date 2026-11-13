@@ -70,6 +70,7 @@ impl Lowerer<'_> {
                 sources.entry(m.name.clone()).or_insert((params, ty));
             }
         }
+        let fetches = self.declared_sources(file, &mut sources)?;
         for (name, (params, ty)) in &sources {
             let mut ids = Vec::with_capacity(params.len());
             for p in params {
@@ -77,6 +78,23 @@ impl Lowerer<'_> {
             }
             let ty = self.ty_id(ty)?;
             let id = self.b.source(name, &ids, ty);
+            if let Some(f) = fetches.get(name) {
+                let params: Vec<&str> = f.params.iter().map(String::as_str).collect();
+                let headers: Vec<(&str, &str)> = (f.headers.iter())
+                    .map(|(n, v)| (n.as_str(), v.as_str()))
+                    .collect();
+                self.b.fetch(
+                    id,
+                    &f.method,
+                    &f.url,
+                    &f.origin,
+                    &params,
+                    &headers,
+                    f.body,
+                    &f.document,
+                    &f.pointer,
+                );
+            }
             if let Some(m) = file.modules.iter().find(|m| m.name == *name) {
                 self.b.module(
                     id,

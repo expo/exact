@@ -30,3 +30,5 @@ serde_json = "1.0"
 [dev-dependencies]
 # Compiles every app's Contract source for the incremental-equals-full test.
 contract = { path = "../contract/cli" }
+# The format data a table bakes, for the locales oracle (LLP 1054.000.003 D6).
+contract-lower = { path = "../contract/lower" }

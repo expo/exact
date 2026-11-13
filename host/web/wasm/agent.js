@@ -128,11 +128,30 @@ function nodeDetail(id, plan = false) {
   return node;
 }
 function tree(request) {
-  const reply = ask(request), flag = routeFlags(root), flags = new Map();
-  // the page's route flags, not the runner's: it knows no pane, so it would hide a split's list shown beside its detail (LLP 1153 D8); a node's flags are at least its parent's, and one off the page (a flowed paragraph's run) takes its parent's, or the runner's when the read starts at it
-  for (const node of reply.nodes ?? []) {
-    const el = views.get(node.id), up = flags.get(node.parent), f = el?.isConnected ? Math.max(flag(el), up ?? 0) : up ?? (node.hidden ? 2 : node.inactive ? 1 : 0);
+  const flag = routeFlags(root), flags = new Map();
+  const activity = node => {
+    const el = views.get(node.id), up = flags.get(node.parent);
+    const f = el?.isConnected ? Math.max(flag(el), up ?? 0) : up ?? (node.hidden ? 2 : node.inactive ? 1 : 0);
     flags.set(node.id, f);
+    return f;
+  };
+  // Read logical ancestors for targeted reads: flowed runs can be detached from the DOM.
+  // The browser knows which split lists remain live beside their detail (LLP 1153 D8).
+  if (request.target != null) {
+    const nodes = ask({ op: "tree" }).nodes ?? [];
+    for (const node of nodes) activity(node);
+    if (typeof request.target === "string") {
+      const matches = nodes.filter(node => node.props?.testId === request.target);
+      const target = matches.find(node => !flags.get(node.id)) ?? matches[0];
+      if (target) {
+        request = { ...request, target: target.id };
+      }
+    }
+  }
+  const reply = ask(request);
+  // Detached runs inherit their logical parent's flags.
+  for (const node of reply.nodes ?? []) {
+    const el = views.get(node.id), f = activity(node);
     delete node.inactive;
     delete node.hidden;
     if (f) {

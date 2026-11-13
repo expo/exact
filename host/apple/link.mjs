@@ -74,13 +74,13 @@ export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? '
 
 /** The capabilities with a Swift half, by name, and the product of
  * `Package.swift` (its `capabilities` table) each is. */
-const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown', 'ExactMarkdown'], ['surfaces', 'ExactSurfaces'], ['drag', 'ExactDrag'], ['media_picker', 'ExactMediaPicker'], ['auth_session', 'ExactAuthSession'], ['numerals', 'ExactNumerals']];
+const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown', 'ExactMarkdown'], ['surfaces', 'ExactSurfaces'], ['drag', 'ExactDrag'], ['media_picker', 'ExactMediaPicker'], ['auth_session', 'ExactAuthSession'], ['numerals', 'ExactNumerals'], ['tips', 'ExactTips']];
 
 /** The capabilities a development build links only as production would
  * (LLP 1047.001.000 F): each links a framework that costs every iOS launch
- * its images (PhotosUI, AuthenticationServices, ~300 each; SwiftUI), and the
- * agent's substitutes answer without the first two. */
-const BY_USE_IN_DEVELOPMENT = ['media_picker', 'auth_session', 'numerals'];
+ * its images (PhotosUI, AuthenticationServices, ~300 each; SwiftUI; TipKit),
+ * and the agent's substitutes answer without the first two. */
+const BY_USE_IN_DEVELOPMENT = ['media_picker', 'auth_session', 'numerals', 'tips'];
 
 /** What the archive links (LLP 1047.001 D2, D4, D6; LLP 1047 D8): for a
  * production build, the plan's use-set, as the bake's graph names it, the
@@ -103,11 +103,12 @@ export function appleComposition(graph, production, ahead = [], granted = false)
   return { link, products };
 }
 
-/** The system frameworks only a capability's Swift half brings, and so
- * absent from an executable whose composition does not link it (LLP
- * 1047.001.000 §6, the check's first form). SafariServices belongs to
- * @exact/in-app-browser in ExactAppModules, not a SwiftPM capability product. */
-const CAPABILITY_FRAMEWORKS = [['@exact/in-app-browser', 'SafariServices'], ['ExactMediaPicker', 'PhotosUI'], ['ExactAuthSession', 'AuthenticationServices'], ['ExactNumerals', 'SwiftUI'], ['ExactSnapshot', 'WidgetKit'], ['ExactSnapshot', 'ActivityKit']];
+/** The system frameworks only a capability's Swift half brings, each with
+ * the products that may bring it, and so absent from an executable whose
+ * composition links none of them (LLP 1047.001.000 §6, the check's first
+ * form). SafariServices belongs to @exact/in-app-browser in ExactAppModules,
+ * not a SwiftPM capability product. */
+const CAPABILITY_FRAMEWORKS = [['SafariServices', ['@exact/in-app-browser']], ['PhotosUI', ['ExactMediaPicker']], ['AuthenticationServices', ['ExactAuthSession']], ['SwiftUI', ['ExactNumerals', 'ExactTips']], ['TipKit', ['ExactTips']], ['WidgetKit', ['ExactSnapshot']], ['ActivityKit', ['ExactSnapshot']]];
 
 export function appleLaunchFrameworks(destination, product) {
   return destination === 'ios' && ['ExactIOS', 'ExactHostIOS'].includes(product) ? ['SafariServices'] : [];
@@ -183,10 +184,10 @@ function machoCommands(executable) {
 /** An executable links no framework that only an unlinked capability
  * brings: the next import of one into the core fails the build by name
  * instead of costing every launch silently. */
-export function assertCapabilityFrameworks(executable, products, allowedFrameworks = []) {
+export function assertCapabilityFrameworks(executable, products, allowedFrameworks = [], frameworks = CAPABILITY_FRAMEWORKS) {
   const loaded = loadedDylibs(executable);
-  const stray = CAPABILITY_FRAMEWORKS.filter(([product, framework]) => !products.includes(product) && !allowedFrameworks.includes(framework) && loaded.some((path) => path.includes(`/${framework}.framework/`) && path.endsWith(`/${framework}`)));
-  if (stray.length) throw new Error(`host/apple: ${basename(executable)} links ${stray.map(([product, framework]) => `${framework} (only ${product} may)`).join(', ')}, which its composition does not link: an import outside the capability's module brings it to every launch`);
+  const stray = frameworks.filter(([framework, owners]) => !owners.some((owner) => products.includes(owner)) && !allowedFrameworks.includes(framework) && loaded.some((path) => path.includes(`/${framework}.framework/`) && path.endsWith(`/${framework}`)));
+  if (stray.length) throw new Error(`host/apple: ${basename(executable)} links ${stray.map(([framework, owners]) => `${framework} (only ${owners.join(' or ')} may)`).join(', ')}, which its composition does not link: an import outside the capability's module brings it to every launch`);
 }
 
 /** Whether a build links by its plan (LLP 1047.001 D6): production always;

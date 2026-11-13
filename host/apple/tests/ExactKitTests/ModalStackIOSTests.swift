@@ -1,6 +1,7 @@
 #if os(iOS)
 import UIKit
 import XCTest
+import Network
 @testable import ExactKit
 
 /// Sheets and their navigation stacks (LLP 1075.003 §9, LLP 1035.003 D5):
@@ -139,6 +140,147 @@ final class ModalStackIOSTests: XCTestCase {
         }
         let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
         try checkHistoryJump(session, in: nav, destination: "/inline")
+    }
+
+    func testBackHistoryMenuInThePrimaryStack() throws {
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "Back history is opened with a real long press")
+        }
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "build.mjs --test --ios starts the XCTest touch runner")
+        }
+        for authoredNavigate in [false, true] {
+            let session = try fixture("primary-back-history-menu-\(authoredNavigate)", fullScreen: true)
+            defer { session.destroy(); window?.isHidden = true }
+            for target in ["detail", "detail-chat", "chat-detail", "detail-chat"] {
+                try press(session, target)
+                XCTAssertEqual(Agent(session: session).clock(["settle": true])["settled"] as? Bool, true)
+            }
+            try checkHistoryMenu(session, in: XCTUnwrap(session.presenter.navigation.primaryNavigation), authoredNavigate: authoredNavigate)
+        }
+    }
+
+    func testBackHistoryMenuInThePresentedStack() throws {
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "Back history is opened inside UIKit's sheet")
+        }
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "build.mjs --test --ios starts the XCTest touch runner")
+        }
+        for authoredNavigate in [false, true] {
+            let session = try fixture("presented-back-history-menu-\(authoredNavigate)", fullScreen: true)
+            defer { session.destroy(); window?.isHidden = true }
+            let agent = Agent(session: session)
+            XCTAssertTrue(session.navigate("/detail"))
+            XCTAssertEqual(agent.clock(["settle": true])["settled"] as? Bool, true)
+            let primary = try XCTUnwrap(session.presenter.navigation.primaryNavigation), background = primary.viewControllers
+            XCTAssertTrue(session.navigate("/sheet"))
+            XCTAssertEqual(agent.clock(["settle": true])["settled"] as? Bool, true)
+            for target in ["sheet-detail", "detail-chat", "chat-detail", "detail-chat"] {
+                try press(session, target)
+                XCTAssertEqual(agent.clock(["settle": true])["settled"] as? Bool, true)
+            }
+            let secondary = try XCTUnwrap(session.presenter.navigation.modalNavigation)
+            try checkHistoryMenu(session, in: secondary, authoredNavigate: authoredNavigate)
+            XCTAssertTrue(session.presenter.navigation.modalNavigation === secondary)
+            XCTAssertEqual(primary.viewControllers, background)
+        }
+    }
+
+    private func checkHistoryMenu(_ session: ExactSession, in nav: UINavigationController, authoredNavigate: Bool) throws {
+        let original = nav.viewControllers
+        XCTAssertEqual(original.count, 5)
+        let root = try node(session, "navigation")
+        if !authoredNavigate { root.handlers.remove("navigate") }
+        let journalBefore = session.agent(#"{"op":"logs","since":0}"#)
+        let touch = try HistoryTouches(self)
+        defer { touch.connection.cancel() }
+        func elements() throws -> [[String: Any]] {
+            try XCTUnwrap(touch.ask(["op": "tree"])["elements"] as? [[String: Any]])
+        }
+        let before = try elements()
+        let container = try XCTUnwrap(session.presenter.navigation.observation()["nativeBack"] as? String)
+        let owner = try XCTUnwrap(before.firstIndex { $0["identifier"] as? String == container })
+        let depth = try XCTUnwrap(before[owner]["depth"] as? Int)
+        let buttons = before.dropFirst(owner + 1).prefix { ($0["depth"] as? Int ?? 0) > depth }
+            .filter { $0["identifier"] as? String == "BackButton" && $0["type"] as? String == "Button" }
+        let back = try XCTUnwrap(buttons.count == 1 ? buttons.first : nil, "Back belongs to the active navigation container")
+        func at(_ element: [String: Any]) throws -> [String: Any] {
+            let frame = try XCTUnwrap(element["frame"] as? [Double])
+            let point = CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2)
+            let window = try XCTUnwrap(window), scene = try XCTUnwrap(window.windowScene)
+            let fixed = window.screen.fixedCoordinateSpace.convert(point, from: scene.coordinateSpace)
+            return ["point": [point.x, point.y], "screen": [fixed.x, fixed.y],
+                    "display": [window.screen.bounds.width, window.screen.bounds.height]]
+        }
+        var hold = try at(back)
+        hold.merge(["op": "drag", "to": hold["point"]!, "screenTo": hold["screen"]!, "press": 0.8, "hold": 0.0, "velocity": 0.0]) { _, new in new }
+        XCTAssertEqual(try touch.ask(hold)["done"] as? Bool, true)
+        let after = try elements()
+        let evidence = XCTAttachment(data: try JSONSerialization.data(withJSONObject: after, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        evidence.name = "Back history after the XCTest long press"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        guard let menu = after.firstIndex(where: { $0["type"] as? String == "Menu" }) else {
+            throw XCTSkip("UIKit exposed no Back-history menu to XCTest on \(UIDevice.current.systemVersion); the interaction is unqualified. Native stack: \(nav.viewControllers.compactMap { ($0 as? RouteController)?.key })")
+        }
+        XCTAssertEqual(nav.viewControllers, original, "opening history must not perform an adjacent Back")
+        let menuDepth = try XCTUnwrap(after[menu]["depth"] as? Int)
+        let contents = after.dropFirst(menu + 1).prefix { ($0["depth"] as? Int ?? 0) > menuDepth }
+        let entries = contents.filter { ["MenuItem", "Button"].contains($0["type"] as? String ?? "") && $0["label"] as? String == "Detail" }
+        XCTAssertEqual(entries.count, 2, "the menu contains both visits to /detail")
+        var tap = try at(XCTUnwrap(entries.last))
+        tap["op"] = "tap"
+        XCTAssertEqual(try touch.ask(tap)["done"] as? Bool, true)
+        XCTAssertEqual(Agent(session: session).clock(["settle": true])["settled"] as? Bool, true)
+        // The authored handler uses go(URL), which resolves the most recent matching visit.
+        let expected = Array(original.prefix(authoredNavigate ? 4 : 2))
+        let target = try XCTUnwrap(expected.last as? RouteController)
+        XCTAssertEqual(nav.viewControllers, expected)
+        XCTAssertEqual(session.presenter.navigation.selectedKey, target.key)
+        XCTAssertEqual(root.props["navigationKey"], target.key)
+        XCTAssertEqual(session.routerOp?["url"] as? String, "/detail")
+        let journalAfter = session.agent(#"{"op":"logs","since":0}"#)
+        XCTAssertEqual(journalAfter.components(separatedBy: "(follow)").count - journalBefore.components(separatedBy: "(follow)").count, authoredNavigate ? 1 : 0)
+        XCTAssertEqual(journalAfter.components(separatedBy: "(back)").count, journalBefore.components(separatedBy: "(back)").count)
+    }
+
+    private final class HistoryTouches {
+        let connection: NWConnection
+        let test: XCTestCase
+
+        init(_ test: XCTestCase) throws {
+            self.test = test
+            let env = ProcessInfo.processInfo.environment
+            let port = try XCTUnwrap(env["EXACT_TOUCH_PORT"].flatMap(UInt16.init).flatMap(NWEndpoint.Port.init(rawValue:)))
+            connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+            connection.start(queue: .main)
+            _ = try ask(["token": try XCTUnwrap(env["EXACT_TOUCH_TOKEN"]), "app": try XCTUnwrap(Bundle.main.bundleIdentifier)])
+        }
+
+        func ask(_ request: [String: Any]) throws -> [String: Any] {
+            var reply: [String: Any]?, failure: Error?, bytes = Data()
+            var data = try JSONSerialization.data(withJSONObject: request)
+            data.append(10)
+            connection.send(content: data, completion: .contentProcessed { if let error = $0 { failure = error } })
+            func receive() {
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, ended, error in
+                    if let data { bytes.append(data) }
+                    if let end = bytes.firstIndex(of: 10) {
+                        do { reply = try JSONSerialization.jsonObject(with: bytes.prefix(upTo: end)) as? [String: Any] }
+                        catch { failure = error }
+                    } else if let error { failure = error }
+                    else if ended { failure = NSError(domain: "HistoryTouches", code: 1, userInfo: [NSLocalizedDescriptionKey: "XCTest touch runner disconnected"]) }
+                    else { receive() }
+                }
+            }
+            receive()
+            test.waitFor("XCTest answers \(request["op"] ?? "hello")", cap: 150) { reply != nil || failure != nil }
+            if let failure { throw failure }
+            let result = try XCTUnwrap(reply)
+            XCTAssertNil(result["error"], "\(result)")
+            return result
+        }
     }
 
     func testBackHistoryFinishesHeaderSearchBeforeDispatching() throws {
@@ -344,7 +486,7 @@ final class ModalStackIOSTests: XCTestCase {
     }
 
     private func checkHistoryJump(_ session: ExactSession, in nav: UINavigationController, destination: String, remaining: Int = 2) throws {
-        XCTAssertEqual(nav.viewControllers.count, 4, "the menu can skip more than one route")
+        XCTAssertEqual(nav.viewControllers.count, 4, "a history jump can skip more than one route")
         let expected = Array(nav.viewControllers.prefix(remaining))
         let target = try XCTUnwrap(expected.last as? RouteController)
         let popped = try XCTUnwrap(nav.popToViewController(target, animated: true))

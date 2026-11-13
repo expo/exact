@@ -32,17 +32,18 @@ exact-route = { path = "../../route" }
 exact-raster = { path = "../raster" }
 exact-svg-file = { path = "../svg-file" }
 exact-runner = { path = "../../runner" }
-exact-grants = { path = "../../grants" }
-# The executor for a request that leaves the process (LLP 1016 D2): ibex2's
-# standard library for a Rust consumer (ibex LLP 0068) — no engine, no
-# loader — taken from the sibling checkout, as Weird Castle takes exact2.
+# The executor for a request that leaves the process (LLP 1016 D2).
+exact-executor = { path = "../executor" }
+# Its transport: ibex2's standard library for a Rust consumer (ibex LLP 0068)
+# — no engine, no loader — taken from the sibling checkout, as Weird Castle
+# takes exact2.
 # `websocket`: the transport for an app's WebSockets (exactStream sockets); the
 # vendored v4 crate gates it behind a default feature (27275f3d4), which
 # default-features = false had turned off.
 ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false, features = ["websocket"] }
 
 serde_json = "1.0"
-# The URL type ibex2's hop gate takes (LLP 1133.036 D6).
+# A launch request's URL is checked before it is sent (src/launch_preloads.rs).
 url = "2.5"
 
 # Default features for registry crates already in this host's graph, which
@@ -78,8 +79,6 @@ zeroize = "1"
 zerotrie = "0.2"
 
 [dev-dependencies]
-# The listener the executor's tests install in place of the library (LLP 1133.005).
-exact-listen = { path = "../listen" }
 exact-logic = { path = "../../logic" }
 caltrain = { path = "../../apps/caltrain" }
 caltrain-data = { path = "../../apps/caltrain/data" }

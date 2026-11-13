@@ -18,19 +18,6 @@ use crate::LowerError;
 use contract_syntax::inline::calls::shown;
 use contract_syntax::{Attr, Expr, Node, Span, TemplatePart};
 
-/// The children of a node, through choices.
-pub(super) fn arms(node: &Node) -> Vec<&[Node]> {
-    match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => vec![children],
-        Node::When {
-            then, otherwise, ..
-        } => vec![then, otherwise],
-        Node::Match { some, none, .. } => vec![&some.1, none],
-        Node::Each { body, .. } => vec![body],
-        Node::Children { .. } => Vec::new(),
-    }
-}
-
 /// One piece of a name: written text, or a `${…}` hole.
 #[derive(Clone, PartialEq)]
 enum Piece {
@@ -220,7 +207,7 @@ fn ids<'a>(nodes: &'a [Node], out: &mut Vec<(Name, &'a Node)>) -> Option<()> {
                 out.push((Name::of(&id.value)?, node));
             }
         }
-        for list in arms(node) {
+        for list in node.child_lists() {
             ids(list, out)?;
         }
     }
@@ -354,7 +341,7 @@ fn route_keys<'a>(nodes: &'a [Node], out: &mut Vec<&'a Attr>) {
                 continue;
             }
         }
-        for list in arms(node) {
+        for list in node.child_lists() {
             route_keys(list, out);
         }
     }

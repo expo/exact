@@ -270,6 +270,12 @@ impl<'a> Layout<'a> {
                 self.ty(ty);
             }
         }
+        for source in &file.sources {
+            self.ty(&source.shape);
+            for ty in source.params.iter().filter_map(|p| p.ty.as_ref()) {
+                self.ty(ty);
+            }
+        }
         for style in file
             .styles
             .iter()

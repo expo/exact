@@ -79,6 +79,8 @@ pub struct File {
     pub library_packages: Vec<String>,
     /// `fn` declarations, in order (LLP 1017 P5).
     pub fns: Vec<FnDecl>,
+    /// `source` declarations (LLP 1162.001): the root file's only.
+    pub sources: Vec<SourceDecl>,
     /// Native modules' sources and sends, read from packages (LLP 1133.001).
     pub modules: Vec<crate::ModuleDecl>,
     /// `test` declarations, in order (LLP 1017 P7) — normally in a file of
@@ -286,6 +288,33 @@ pub struct FnDecl {
     pub ret: TypeExpr,
     /// The body, one expression.
     pub body: Expr,
+    /// Where.
+    pub span: Span,
+}
+/// `source name(param: type, …) as shape T` and its request's lines (LLP
+/// 1162.001 D1): a source the runner answers with one HTTP request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceDecl {
+    /// The source's name, which a `resource` or a `send` calls.
+    pub name: String,
+    /// Typed parameters.
+    pub params: Vec<Param>,
+    /// The answer's shape.
+    pub shape: TypeExpr,
+    /// The request's lines, in order, as written; lowering reads them.
+    pub lines: Vec<SourceLine>,
+    /// Where.
+    pub span: Span,
+}
+/// One line of a `source`: a key (`url`, `method`, `header`, `body`,
+/// `graphql`, `pointer`) and its words, each a string literal's text or a
+/// bare word.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceLine {
+    /// The key.
+    pub key: String,
+    /// Its words.
+    pub words: Vec<String>,
     /// Where.
     pub span: Span,
 }

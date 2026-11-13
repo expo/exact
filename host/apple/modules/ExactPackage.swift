@@ -215,8 +215,15 @@ public final class ExactPackageContext {
     /// (LLP 1133.004 D6, D7): the host's notification delegate reads it and
     /// raises the event, a person's activation, on the session that posted
     /// it. Empty, and a line in the journal, for `args` that are not JSON.
-    public func activation(_ name: String, _ args: [Any], navigate: String? = nil) -> [AnyHashable: Any] {
-        activationFn(name, args, navigate)
+    /// `chosen` is the argument, an object, that a declared action the
+    /// person chose writes its `action` and `reply` into (stage 2).
+    public func activation(_ name: String, _ args: [Any], navigate: String? = nil, chosen: Int? = nil) -> [AnyHashable: Any] {
+        var info = activationFn(name, args, navigate)
+        if let chosen, var entry = info["exact"] as? [String: Any] {
+            entry["chosen"] = chosen
+            info["exact"] = entry
+        }
+        return info
     }
 
     /// The app's handler `handler` run for the work `handle` names (LLP

@@ -647,7 +647,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
     func applicationWillFinishLaunching(_ notification: Notification) {
         LaunchKind.install()
-        exact.installNotificationClicks { session in windows.first { $0.session === session }?.front() }
+        exact.installNotificationClicks(boot: nil, activate: { session in windows.first { $0.session === session }?.front() })
         exact.installWakes()
         exact.installReach()
     }

@@ -1,7 +1,7 @@
 # A native event stream or byte stream may be cut by its transport's own limits
 
 **Status:** Open
-**Systems:** vendor/ibex ibex2 transport (rustls_http.rs, darwin_http.mm), host/apple executor_stream.rs
+**Systems:** vendor/ibex ibex2 transport (rustls_http.rs, darwin_http.mm), host/executor/src/stream.rs
 **Author:** Claude (Fable 5.2), from the review of LLP 1016.000 D11
 **Date:** 2026-11-11
 
@@ -9,7 +9,7 @@
 
 Read from the code by two reviewers and not yet driven. An HTTP stream (`exactStream` on an
 `http:` or `https:` URL: server-sent events, or bytes) that is not an upload is opened with no
-timeout of its own (`host/apple/src/executor_stream.rs`, `req.timeout` stays `None`), so the
+timeout of its own (`host/executor/src/stream.rs`, `req.timeout` stays `None`), so the
 transport's defaults apply to it:
 
 - the portable transport (Linux, Windows, Android, and macOS under a proxy) builds its agent

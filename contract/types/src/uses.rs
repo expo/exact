@@ -13,52 +13,36 @@ pub(crate) fn check_prop_names(
     sink: &mut Sink,
     explained: &mut Vec<contract_syntax::Span>,
 ) {
-    for n in nodes {
-        match n {
-            Node::Use {
-                name,
-                args,
-                children,
-                span,
-            } => {
-                if let Some(target) = file.components.iter().find(|c| &c.name == name) {
-                    if let Some(a) = args
-                        .iter()
-                        .find(|a| !target.props.iter().any(|p| p.name == a.name))
-                    {
-                        sink.push(checks::unknown_props(target, args, a.span));
-                        let unknown: Vec<_> = args
-                            .iter()
-                            .filter(|a| !target.props.iter().any(|p| p.name == a.name))
-                            .collect();
-                        let missing: Vec<&str> = target
-                            .props
-                            .iter()
-                            .filter(|p| !args.iter().any(|a| a.name == p.name))
-                            .map(|p| p.name.as_str())
-                            .collect();
-                        if let ([given], [meant]) = (unknown.as_slice(), missing.as_slice()) {
-                            if contract_syntax::suggestion(&given.name, [*meant]) == Some(*meant) {
-                                explained.push(*span);
-                            }
-                        }
-                    }
+    for n in Node::walk(nodes) {
+        let Node::Use {
+            name, args, span, ..
+        } = n
+        else {
+            continue;
+        };
+        let Some(target) = file.components.iter().find(|c| &c.name == name) else {
+            continue;
+        };
+        if let Some(a) = args
+            .iter()
+            .find(|a| !target.props.iter().any(|p| p.name == a.name))
+        {
+            sink.push(checks::unknown_props(target, args, a.span));
+            let unknown: Vec<_> = args
+                .iter()
+                .filter(|a| !target.props.iter().any(|p| p.name == a.name))
+                .collect();
+            let missing: Vec<&str> = target
+                .props
+                .iter()
+                .filter(|p| !args.iter().any(|a| a.name == p.name))
+                .map(|p| p.name.as_str())
+                .collect();
+            if let ([given], [meant]) = (unknown.as_slice(), missing.as_slice()) {
+                if contract_syntax::suggestion(&given.name, [*meant]) == Some(*meant) {
+                    explained.push(*span);
                 }
-                check_prop_names(children, file, sink, explained);
             }
-            Node::Element { children, .. } => check_prop_names(children, file, sink, explained),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                check_prop_names(then, file, sink, explained);
-                check_prop_names(otherwise, file, sink, explained);
-            }
-            Node::Each { body, .. } => check_prop_names(body, file, sink, explained),
-            Node::Match { some, none, .. } => {
-                check_prop_names(&some.1, file, sink, explained);
-                check_prop_names(none, file, sink, explained);
-            }
-            Node::Children { .. } => {}
         }
     }
 }

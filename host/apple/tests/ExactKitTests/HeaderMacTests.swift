@@ -430,6 +430,34 @@ final class HeaderMacTests: XCTestCase {
         q.toolbar.detach()
     }
 
+    /// Issue #364: a header of buttons and no heading is the bar with no
+    /// title. The window keeps the app's name, and every button is a
+    /// trailing item, as SwiftUI's automatic placement puts an action. A
+    /// text beside the buttons is something the toolbar has no place for:
+    /// the header paints whole.
+    func testAHeaderOfButtonsAloneIsTheBarWithNoTitle() throws {
+        let p = fixture(extra: [children(10, [11, 13, 14])])
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        XCTAssertEqual(window.title, "Shelf", "no heading: the app's name")
+        XCTAssertEqual(identifiers(), [back, "exact.command.11", "exact.command.13", "exact.command.14"])
+        XCTAssertFalse(try XCTUnwrap(p.toolbar.items[11]).isNavigational, "with no heading every button trails")
+        XCTAssertTrue(try node(p, 10).isHidden, "the bar shows the header")
+        XCTAssertEqual(p.covers.delivered, [10: .whole])
+        let add = try XCTUnwrap(p.toolbar.items[13])
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(add.action), to: add.target, from: add))
+        XCTAssertEqual(pressed, [13])
+        let summary = try XCTUnwrap(p.toolbar.summary["header"] as? [String: Any])
+        XCTAssertEqual((summary["items"] as? [[String: Any]])?.map { $0["place"] as? String }, ["trailing", "trailing", "trailing"])
+        // A text that is no heading beside them: the header is the page's, whole.
+        p.apply(wireBatch(view(16, "text", ["text": "Library"]) + [children(10, [16, 11, 13, 14])]))
+        XCTAssertEqual(identifiers(), [back])
+        XCTAssertFalse(try node(p, 10).isHidden)
+        XCTAssertEqual(p.covers.delivered, [:])
+        p.toolbar.detach()
+    }
+
     /// `appearance: none` written on the header keeps it the page's (LLP
     /// 1075.003 §9.10, the shared rule's `AUTHORED`); on one of its buttons
     /// the whole header paints, since the window's bar shows a header whole

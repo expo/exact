@@ -1444,7 +1444,9 @@ cargo run -q -p contract -- types path/to/app.contract -o path/to/app.contract.d
 
 In `app.ts`, use `import type { Sources, Answer } from './app.contract.d.ts'`.
 Annotate the provider map as `Sources`; each function takes `(args, store, storage)` and
-returns its declared result or a Promise of it. An `Answer` dispatcher can call
+returns its declared result or a Promise of it. A `source` declared in `app.contract`
+is the runner's to answer, so `Sources` leaves it out ([Declared
+sources](contract-for-agents.md#declared-sources)). An `Answer` dispatcher can call
 `sources[source](args, store, storage)` without casts. `bun install --frozen-lockfile` installs the pinned `tsc`.
 An answer is held to its shape exactly, on every executor: each declared field
 present (an `undefined` one is missing, as `JSON.stringify` leaves it out), none
@@ -2355,9 +2357,60 @@ grant beside this one: see [Push](#push).
   it starts the app. `navigate=` is reduced by the router's `location_of`
   (`app://thread/42` becomes `/thread/42`).
 - A click without `navigate=` is `notificationclick` on the root component's
-  outermost node: the tag and the notification's `{tag, data, title, body}`,
-  delivered once, in order, after first pixel; one that starts the app (macOS,
-  iOS) is held until then. A click always brings the app forward.
+  outermost node: the tag and the notification's `{tag, data, title, body,
+  action, reply}`, delivered once, in order, after first pixel; one that
+  starts the app (macOS, iOS) is held until then. A click always brings the
+  app forward. `action` and `reply` are none for a click.
+- `actions=[NotificationAction(action=, title=, foreground=, destructive=,
+  authenticationRequired=, placeholder=)]` (macOS, iOS) gives a post the
+  buttons the system shows when the notification is pressed and held, on the
+  Lock Screen too. The list is written out, a literal (`contract-module-literal`):
+  the build reads each list the app writes, and the host registers each as a
+  category at launch, named by its actions' names joined by commas
+  (`approve,note`). An action name means one thing in the app: one written
+  twice differently is refused (`contract-module-declared`). Names must be
+  nonempty, contain neither `,` nor `=`, and occur once per list. A list has
+  at most four actions; Apple's banners show only the first two
+  ([Apple's category guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/SupportingNotificationsinYourApp.html)).
+  Exact registers the union of live sessions' declared categories, preserving
+  an embedder's own categories. Replacing or ending one session does not remove
+  another's categories. Conflicting definitions of one category are neither
+  registered nor authorized until the conflict ends. An embedder's existing
+  category wins a name collision; Exact refuses its own conflicting category.
+  Removing Exact's last declaration releases its ownership of the name.
+  The host registers categories before data code starts. Responses wait for the
+  destination's current declarations, registration and data activation after a
+  cold launch or plan replacement. The system's action identifier includes its definition's
+  revision: an old button cannot satisfy a changed unlock requirement, even
+  when the category name stays the same. `e.action` remains the authored name.
+  Data code's
+  post may name only a list the app's Contract writes (`TypeError`
+  otherwise). `placeholder=some("Note")` makes the action a text field;
+  `destructive` and `authenticationRequired` are the platform's flags (the
+  device must be unlocked first). Choosing one is `notificationclick` with
+  `action` its name and `reply` what the person typed; it never opens the
+  post's `navigate=`.
+- An action with `foreground=true` brings the app forward, as a click does.
+  With `foreground=false`, a running app is not brought forward. On iOS a
+  terminated app starts with no view; macOS has no notification-specific
+  cold-launch path and may show its ordinary startup window. Before the first
+  unlock after a device restart, iOS refuses the response before booting or
+  activating data. Locking again after that first unlock does not refuse it.
+  The handler runs as a background action (LLP 1133.004 stage 2), and the app
+  is kept running until the work the handler started has ended (its requests
+  and native statements answered, its storage written) or the system's time
+  for it, about 30 seconds, runs out. It is the person's
+  act: it may make the request the action exists for, with the app's kept
+  credentials. It shows nothing: a permission prompt is refused
+  `person-required`, a name only the foreground may call is refused, and so
+  are the host commands a wake may not run (`copyText`, `share`,
+  `playSound`, …). A session that needs a sign-in it does not have cannot
+  sign in there; post a notification that asks the person to open the app.
+  An expired action is discarded even if the session has not booted yet;
+  opening the app later does not run it. An action with no handler settles
+  immediately as unheard. Replacing its runner releases an action's held
+  completion as superseded; a response still awaiting declarations waits for
+  the replacement.
 - A remote notification's click opens its payload's `navigate` and nothing
   else ([Push](#push)).
 - `setAppBadge(contents=)` sets the app icon's badge, best effort: a number, no
@@ -2387,7 +2440,9 @@ posted (`{title, body, tag, silent, data, showTrigger, navigate, delivered,
 ref}`, a tag replacing its older one, `closeNotification` removing it, an
 entry for later `delivered: false` until `clock` passes it); `state.badge` is
 the badge (a number, `"flag"` or `null`). `tap @ref` on a delivered entry is
-its click; `--notification '<entry>'` relaunches the app with one, as the
+its click; `tap @ref <action>` chooses one of its `actions`, `tap @ref
+'<action>=<text>'` with a typed reply, a background action running hidden
+as `state.wake` shows it (`origin` `action`); `--notification '<entry>'` relaunches the app with one, as the
 system hands a closed app its click. Scheduling is one time per call: a daily
 reminder posts the next one when the app runs.
 
@@ -2461,8 +2516,19 @@ or origin, never through the app's `protocol_handlers`. Nothing else of the
 payload is read and no event is raised; without `navigate` the app only comes
 forward. A server writes that string, so a route must not act on being opened.
 No app code runs when a push arrives: `content-available` does nothing (the
-`remote-notification` background mode is refused), `mutable-content` changes
-nothing (no service extension is built), and a `category` shows no actions.
+`remote-notification` background mode is refused), and `mutable-content`
+changes nothing (no service extension is built).
+
+`aps.category` names one of the categories the app declares with
+`@exact/notifications`' `actions=` (above), by its actions' names joined by
+commas (`"category": "approve,note"`); a name the app did not declare shows
+no actions. A chosen action is `notificationclick` with the tag the
+notification's identifier (`apns-collapse-id` when the server set one), the
+action's name and the typed reply; `data`, `title` and `body` are empty, and
+nothing else of the payload reaches the app, so the app looks up what the
+action is about by that identifier. An explicitly selected session receives the
+push action if it declares it; otherwise the first matching live session does.
+A background action runs as a local post's does.
 
 The system answers a registration on the app delegate. When the package
 loads, the app delegate is given the two methods that carry the answer where
@@ -2595,7 +2661,7 @@ login:<NAME>` name is a shell variable's (`[A-Za-z_][A-Za-z0-9_]*`).
 Under the agent nothing runs unless the drive names it: `--process
 <target>=<executable>` runs that file in the target's place,
 `--process <target>=script:<file.json>` answers from a script with no process
-(the format is `host/apple/src/executor_process_script.rs`'s), and
+(the format is `host/executor/src/process_script.rs`'s), and
 `--process <target>=real` runs the granted program itself. A script's events,
 restart delays and readiness move with `clock`; a real child's run on the
 wall, which `clock +<ms> real` waits for. `--login-env NAME=value`
@@ -3628,7 +3694,7 @@ A data crate answers the view's sources in Rust instead of `app.ts`: an app's
 | `query(source, args)` | Answer now, with no I/O: the build bakes this into the plan for the first frame. `Err(DataError::Unavailable(…))` leaves the resource unbaked; every host asks again at launch. |
 | `answer(store, source, args)` | At run time: `Answer::Now(value)`, or `Answer::Later(request)` for the host to run (storage, `fetch`). The default is `query`. A resource the build left unbaked is asked at boot, before the host has started storage. There `Err(DataError::Unavailable(…))`, `UnknownSource`, `BadArguments` or `Interface` refuses the boot: the app does not start (the agent says `the app booted with an error`; a release build shows no view). On a resource with something to show (its type's zero, or a declared placeholder), `Failed(code, …)` boots with the resource failed (`failure(x)`); `DeferredAtBake` and `Answer::Later` boot with it pending; `Overrun` boots with it pending and asks again twice, at 250 ms and 1 s, and a third fails the resource while the app runs on. A row that is another resource's `else source()` has nothing to show and must answer now: there each of these refuses the boot too. A source that needs storage answers `Answer::Later` and finishes in `parse`. |
 | `parse(store, source, args, outcome)` | What the host brought back for that request: answer, or hand back one more request. |
-| `app_id()` | The app's identity, which names its storage: `com.example.my-app-3f9a2c` (`exact new` writes the name and six random hex digits), or for a game `com.exact.<Game::ID>` unless its app.json names one. A source with no id has no app storage on Apple and Linux. |
+| `app_id()` | The app's identity, which names its storage: `com.example.my-app-3f9a2c` (`exact new` writes the name and six random hex digits), or for a game `com.exact.<Game::ID>` unless its app.json names one. A source that names none takes app.json's `app.id` in the app's build, so its storage (`app:/data`, kept answers, `persist` states, an agent drive's `--storage`) is the app's; one that names its own keeps it, so write the same id as app.json or leave it out. |
 | `grants()` | One grant per line, the lines `app.ts`'s `grants` takes (`net.fetch …`, `sqlite.open …`, `fs.read …`). |
 
 An app `exact new` made outside this checkout that answers in Rust writes its own Cargo workspace

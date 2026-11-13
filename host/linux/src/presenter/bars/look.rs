@@ -122,8 +122,8 @@ pub struct Button {
 pub struct Top {
     /// The route whose header it is.
     pub route: ViewId,
-    /// The heading.
-    pub heading: ViewId,
+    /// The heading: none for a header of buttons alone, whose bar has no title.
+    pub heading: Option<ViewId>,
     /// The title.
     pub title: String,
     /// Whether it has the Up arrow: the route is pushed.
@@ -407,11 +407,11 @@ impl Layout {
         // whichever is further, and moves back from what trails where it
         // would reach it (`TopAppBarLayout`).
         let room = right - left - 2.0 * edge;
-        if !top.title.is_empty() && room > 0.0 {
+        if let Some(heading) = top.heading.filter(|_| !top.title.is_empty() && room > 0.0) {
             let p = line(engine, &top.title, TITLE_LARGE, scale, room);
             let x = (inputs.sides.0 + dp(metric::TOP_TITLE_INSET)).max(left) + edge;
             let at = (x.min(right - edge - p.width), middle(p.height));
-            items.push(Item::Text(p, at, Role::OnSurface.color(dark), top.heading));
+            items.push(Item::Text(p, at, Role::OnSurface.color(dark), heading));
         }
         let container = match top.scrolled {
             true => Role::SurfaceContainer,
@@ -582,7 +582,7 @@ mod tests {
         };
         let top = Top {
             route: 1,
-            heading: 2,
+            heading: Some(2),
             title: title.into(),
             up: false,
             leading: Vec::new(),

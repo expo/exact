@@ -171,12 +171,11 @@ export function hostsTouched(paths, app) {
     const platform = local !== null ? directory
       : /^(apple|ios|macos|tvos|watchos|web|linux|windows|android|terminal)(?:-|$)/.exec(directory)?.[1];
     let hosts = all;
-    // The executor core is included by Linux and the web's native renderer.
-    // Its process transport is selected by the compilation target, and the ordering tests belong to Apple's ABI.
-    if (local === null && /^host\/apple\/src\/executor_/.test(p)) {
-      if (p === 'host/apple/src/executor_order_tests.rs') hosts = apple;
-      else if (p === 'host/apple/src/executor_process_off.rs') hosts = ['web', 'ios', 'tvos', 'windows', 'android'];
-      else if (/\/executor_process(?:_|\.)/.test(p)) hosts = ['web', 'macos', 'linux'];
+    // The executor serves every native host and the web's native renderer.
+    // Its process transport is selected by the compilation target.
+    if (local === null && directory === 'executor') {
+      if (p === 'host/executor/src/process_off.rs') hosts = ['web', 'ios', 'tvos', 'windows', 'android'];
+      else if (/^host\/executor\/src\/process(?:_|\.)/.test(p)) hosts = ['web', 'macos', 'linux'];
     } else if (local === null && ['raster', 'svg-raster'].includes(directory)) hosts = [...apple, ...linux];
     else if (local === null && directory === 'linux-update') hosts = ['linux'];
     else if (local === null && ['linux', 'ink'].includes(directory)) hosts = macUses(`exact-${directory}`) ? ['macos', ...linux] : linux;

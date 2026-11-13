@@ -1688,10 +1688,17 @@ device's. See
 [the locale fixture](../host/web-js/conformance/locale) and
 [the string tests](../contract/cli/tests/it/strings.rs).
 
-`formatTime`, `formatDate`, and `formatNumber` are deterministic formatting calls
-with specific accepted format literals. They print en-US whatever the viewer's
-locale, and their vocabulary is not a general `Intl` options object. App-specific
-wording belongs in app `fn`s.
+`formatTime`, `formatDate`, `formatDay` and `formatNumber` are deterministic
+formatting calls with specific accepted format literals. They format in the
+locale of the strings table the app shows, as `Intl` formats it: with a `de` table
+`formatDate(at, offset, "medium")` is `26.09.2026` and `formatNumber(1234.5,
+"decimal")` is `1.234,5`, and `setLocale` moves them with the text. An app with no
+tables, or only English ones, prints en-US. A table's region is its formats' region,
+so an app that wants British dates ships `strings/en-GB.json` (it may be `{}`).
+The viewer's forced 12- or 24-hour clock applies; dates are Gregorian in every
+locale ([formatting by locale](contract-grammar.md#formatting-by-locale)). Their
+vocabulary is not a general `Intl` options object. App-specific wording belongs in
+app `fn`s.
 
 ## Testing, diagnostics, and delivery
 

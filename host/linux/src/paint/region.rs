@@ -170,7 +170,6 @@ impl Picture {
         if publication.frames().len() > exact_kernel::region::REGION_NODES {
             return Err("content mounted node limit".into());
         }
-        let mut owners = BTreeMap::new();
         let mut scroll = BTreeMap::new();
         let mut ordinals = BTreeMap::new();
         for (ordinal, f) in publication.frames().iter().enumerate() {
@@ -198,30 +197,6 @@ impl Picture {
                     ),
                 );
             }
-            if node.node_type != NodeType::Text || node.is_inline_run() {
-                continue;
-            }
-            let artifact = publication
-                .paint_artifact(f.node)
-                .ok_or("content text lacks final paint offer")?;
-            let native = artifact
-                .payload::<crate::content_region::NativeText>()
-                .ok_or("content text lacks native owner")?;
-            if native.paint_context().scale().to_bits() != painter.scale.to_bits() {
-                return Err("content native text raster context mismatch".into());
-            }
-            if node.paragraph_stamp().as_ref() != Some(artifact.request().stamp())
-                || !native.matches(artifact.request())
-            {
-                return Err("content paint/source revision mismatch".into());
-            }
-            let paragraph = native
-                .paragraph()
-                .ok_or("intrinsic answer cannot paint final content")?;
-            owners.insert(
-                node.key,
-                (paragraph.clone(), native.palette(painter.dark).to_vec()),
-            );
         }
         enum Visit {
             Enter(ViewId),
@@ -282,14 +257,26 @@ impl Picture {
             } else {
                 match node.node_type {
                     NodeType::Text => {
-                        let (p, palette) = owners
-                            .get(&node.key)
-                            .ok_or("content paragraph owner absent")?;
-                        Payload::Text(
-                            p.clone(),
-                            palette.clone(),
-                            inline_frame::Captured::new(scene.kernel, &node, p, palette),
-                        )
+                        let artifact = publication
+                            .paint_artifact(node.key)
+                            .ok_or("content text lacks final paint offer")?;
+                        let native = artifact
+                            .payload::<crate::content_region::NativeText>()
+                            .ok_or("content text lacks native owner")?;
+                        if native.paint_context().scale().to_bits() != painter.scale.to_bits() {
+                            return Err("content native text raster context mismatch".into());
+                        }
+                        if node.paragraph_stamp().as_ref() != Some(artifact.request().stamp())
+                            || !native.matches(artifact.request())
+                        {
+                            return Err("content paint/source revision mismatch".into());
+                        }
+                        let p = native
+                            .paragraph()
+                            .ok_or("intrinsic answer cannot paint final content")?;
+                        let palette = native.palette(painter.dark).to_vec();
+                        let inline = inline_frame::Captured::new(scene.kernel, &node, p, &palette);
+                        Payload::Text(p.clone(), palette, inline)
                     }
                     NodeType::Image => scene.images.get(&id).map_or(Payload::Empty, |image| {
                         Payload::Image(

@@ -103,6 +103,18 @@ impl<D: DataSource> Swappable<D> {
             native: None,
         }
     }
+    /// The app's identity from its manifest (`app.json`'s `app.id`), for an
+    /// embedded source that names none (`DataSource::app_id`'s default). The
+    /// hosts key the app's storage roots, kept answers and persisted states by
+    /// this id; without one a native host gives the app no storage, and an
+    /// agent drive's named store (`--storage`) would be memory. A source that
+    /// names its own id keeps it: its users' files are already under it.
+    pub fn named(mut self, app: &str) -> Self {
+        if self.app_id.is_empty() {
+            self.app_id = app.into();
+        }
+        self
+    }
     /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
     pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
         self.preloads = preloads.to_vec();
@@ -542,7 +554,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 let embedded = embedded
                     .replacement(plan, receipt, module)
                     .map_err(|e| format!("{e:?}"))?;
-                let mut source = Self::configured(embedded, self.mode, self.loader);
+                let mut source =
+                    Self::configured(embedded, self.mode, self.loader).named(&self.app_id);
                 source.preloader = self.preloader;
                 source.native = self.native;
                 return Ok(source);
@@ -600,7 +613,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             }
             if let Some((source, make)) = self.native {
                 if meta["source"].as_str() == Some(source) {
-                    let mut native = Self::configured(make(), self.mode, self.loader);
+                    let mut native =
+                        Self::configured(make(), self.mode, self.loader).named(&self.app_id);
                     native.preloads = self.preloads.clone();
                     native.preloader = self.preloader;
                     native.native = self.native;

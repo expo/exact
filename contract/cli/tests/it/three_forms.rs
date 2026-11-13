@@ -71,3 +71,15 @@ fn a_footer_that_chooses_its_text_is_one_text() {
         assert_eq!(e.id, "lower-grouped-list", "{e}");
     }
 }
+
+#[test]
+fn a_footer_that_chooses_its_text_by_a_match_is_one_text() {
+    let list = |footer: &str| {
+        let footer: String = footer.lines().map(|l| format!("        {l}\n")).collect();
+        format!("component App\n  state who: option<string> = some(\"Ada\")\n  view\n    list appearance=\"auto\"\n      section\n        row\n          text \"x\"\n{footer}")
+    };
+    same(
+        &list("footer\n  match who\n    case some(n)\n      text `Signed in as ${n}` testId=\"f\"\n    case none\n      text \"Signed out\" testId=\"f\""),
+        &list("footer\n  text (match who { case some(n) => `Signed in as ${n}`, case none => \"Signed out\" }) testId=\"f\""),
+    );
+}

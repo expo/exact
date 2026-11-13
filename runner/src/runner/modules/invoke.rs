@@ -126,6 +126,7 @@ impl<D: DataSource> Runner<D> {
             Some("device") => CallOrigin::Device,
             Some("wake") => CallOrigin::Wake,
             Some("tool") => CallOrigin::Tool,
+            Some("action") => CallOrigin::Action,
             _ => CallOrigin::App,
         };
         let extension = self.plan.str(row.extension).to_owned();

@@ -74,27 +74,6 @@ fn refusal(id: &str, message: String, span: Span) -> CompileError {
     }
 }
 
-fn visit(nodes: &[Node], f: &mut impl FnMut(&Node)) {
-    for n in nodes {
-        f(n);
-        match n {
-            Node::Element { children, .. } | Node::Use { children, .. } => visit(children, f),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                visit(then, f);
-                visit(otherwise, f);
-            }
-            Node::Each { body, .. } => visit(body, f),
-            Node::Match { some, none, .. } => {
-                visit(&some.1, f);
-                visit(none, f);
-            }
-            Node::Children { .. } => {}
-        }
-    }
-}
-
 /// A length the driver's style reader cannot resolve: `calc()` or `env()`,
 /// which the kernel lays out but the drawn box does not take.
 fn calculated(e: &Expr) -> bool {
@@ -237,7 +216,7 @@ pub fn check(file: &File) -> Result<(), Vec<CompileError>> {
         }
     }
     for c in &file.components {
-        visit(&c.view, &mut |n| {
+        Node::walk(&c.view).for_each(|n| {
             if let Node::Element {
                 tag,
                 attrs: a,

@@ -1,18 +1,20 @@
 //! Bounded native I/O (LLP 1016 / 1041 / 1162). Reads and parallel sends
 //! overlap on six shared HTTP workers while retaining ordered delivery.
 //! Independent HTTP shares them; its held sockets cannot occupy the ordered worker.
-use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
-use std::ffi::c_void;
-#[path = "executor_core.rs"]
-mod core;
-pub use core::preload::{
+pub use exact_executor::preload::{
     Control as PreloadControl, Definition as Preload, Event as PreloadEvent, Fact as PreloadFact,
     Observation as PreloadObservation, Observer as PreloadObserver, Preloads,
 };
-#[path = "executor_pump.rs"]
-pub mod pump;
+pub use exact_executor::pump;
+use exact_executor::{Core, WorkerBudget};
+use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
+use std::ffi::c_void;
 /// Independent tests have separate worker budgets; production shares one process bound.
-const ISOLATE_WORKER_BUDGET: bool = cfg!(test);
+const BUDGET: WorkerBudget = if cfg!(test) {
+    WorkerBudget::Thread
+} else {
+    WorkerBudget::Process
+};
 
 /// Schedule a pump on the presenter's thread. Must enqueue asynchronously;
 /// called under the retirement guard, never synchronously reenter Exact.
@@ -20,7 +22,7 @@ pub type WakeFn = extern "C" fn(ctx: *mut c_void);
 
 /// Native executor with admission reservations through undrained outcomes.
 pub struct Executor {
-    core: core::Core,
+    core: Core,
 }
 
 /// What the process an executor starts in is (LLP 1133.007 §8, D6).
@@ -61,7 +63,7 @@ impl Executor {
         launch: Launch,
     ) -> Self {
         Self::start_with(wake, launch, |wake| {
-            core::Core::start_switched(bindings, grants, wake)
+            Core::start_switched(bindings, grants, wake, BUDGET)
         })
     }
     /// [`Executor::start`] with every owner's transport made by `host`. A
@@ -74,7 +76,7 @@ impl Executor {
         host: impl Fn() -> ibex2::host::Host + Send + Sync + 'static,
     ) -> Self {
         Self::start_with(wake, Launch::here(), |wake| {
-            core::Core::start_on(bindings, grants, wake, std::sync::Arc::new(host))
+            Core::start_on(bindings, grants, wake, std::sync::Arc::new(host), BUDGET)
         })
     }
     #[cfg(test)]
@@ -85,13 +87,13 @@ impl Executor {
         wake: Option<(WakeFn, *mut c_void)>,
     ) -> Self {
         Self::start_with(wake, Launch::here(), |wake| {
-            core::Core::test_start(asynchronous, bindings, grants, wake)
+            Core::test_start(asynchronous, bindings, grants, wake, BUDGET)
         })
     }
     fn start_with(
         wake: Option<(WakeFn, *mut c_void)>,
         launch: Launch,
-        core: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> core::Core,
+        core: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> Core,
     ) -> Self {
         exact_runner::local_network::launch_once(local_network_prompts);
         let wake = wake.map(|(f, ctx)| (f, ctx as usize));

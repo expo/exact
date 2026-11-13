@@ -547,9 +547,16 @@ impl PlanBuilder {
         self.plan.router = Some(slot);
     }
 
-    /// One locale's texts, `(key, text)` sorted by key; the first locale is
-    /// the base. @ref LLP 1060 D3.
-    pub fn locale(&mut self, name: &str, rtl: bool, texts: &[(&str, &str)]) -> LocalesId {
+    /// One locale's texts, `(key, text)` sorted by key, and its format data
+    /// (`""` for none); the first locale is the base. @ref LLP 1060 D3;
+    /// LLP 1054.000.003 D6.
+    pub fn locale(
+        &mut self,
+        name: &str,
+        rtl: bool,
+        format: &str,
+        texts: &[(&str, &str)],
+    ) -> LocalesId {
         let start = self.plan.texts.len() as u32;
         for (key, text) in texts {
             let key = self.str(key);
@@ -557,9 +564,11 @@ impl PlanBuilder {
             self.plan.texts.push(TextsRow { key, text });
         }
         let name = self.str(name);
+        let format = self.str(format);
         self.plan.locales.push(LocalesRow {
             name,
             rtl,
+            format,
             texts: TextsRange {
                 start,
                 len: texts.len() as u32,
@@ -571,6 +580,12 @@ impl PlanBuilder {
     /// The root slot holding the resolved locale. @ref LLP 1060 D4.
     pub fn set_locale(&mut self, slot: SlotsId) {
         self.plan.locale = Some(slot);
+    }
+
+    /// The root slot holding the locale the formatters format in.
+    /// @ref LLP 1054.000.003 D6.
+    pub fn set_format(&mut self, slot: SlotsId) {
+        self.plan.format = Some(slot);
     }
 
     /// A derive.
@@ -708,6 +723,53 @@ impl PlanBuilder {
             substitute: self.str(substitute),
         };
         self.plan.modules.push(row);
+    }
+
+    /// A source declared in Contract (LLP 1162.001): the runner answers
+    /// `source` with one HTTP request. `params` are its parameters' names, in
+    /// order; `headers` its request headers as written; `body` is empty,
+    /// `json` or `graphql`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fetch(
+        &mut self,
+        source: SourcesId,
+        method: &str,
+        url: &str,
+        origin: &str,
+        params: &[&str],
+        headers: &[(&str, &str)],
+        body: &str,
+        document: &str,
+        pointer: &str,
+    ) {
+        let range = |b: &mut Self, parts: &mut dyn Iterator<Item = (&str, &str)>| {
+            let start = b.plan.fetch_parts.len() as u32;
+            for (name, value) in parts {
+                let row = FetchPartsRow {
+                    name: b.str(name),
+                    value: b.str(value),
+                };
+                b.plan.fetch_parts.push(row);
+            }
+            FetchPartsRange {
+                start,
+                len: b.plan.fetch_parts.len() as u32 - start,
+            }
+        };
+        let params = range(self, &mut params.iter().map(|p| (*p, "")));
+        let headers = range(self, &mut headers.iter().copied());
+        let row = FetchesRow {
+            source,
+            method: self.str(method),
+            url: self.str(url),
+            origin: self.str(origin),
+            params,
+            headers,
+            body: self.str(body),
+            document: self.str(document),
+            pointer: self.str(pointer),
+        };
+        self.plan.fetches.push(row);
     }
 
     /// A native module's event the root hears (LLP 1133.004 D6): `action`

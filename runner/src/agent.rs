@@ -51,6 +51,12 @@ pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         // Whether the app must finish work an answer started (`must_finish`):
         // what a host's quit waits for, cheaper than `state`.
         Some("background") => format!("{{\"mustFinish\":{}}}", runner.must_finish()),
+        // Recent background action endings for diagnostics (LLP 1133.004
+        // stage 2). A host drains delivery through `take_ended_actions`.
+        Some("actions") => format!("{{\"ended\":{}}}", runner.ended_actions()),
+        // What the app's literals declare (LLP 1133.004 stage 2): the
+        // notification categories a host registers at launch.
+        Some("declared") => runner.declared_values().to_string(),
         // A polled module source's ask in flight (LLP 1133.009 D10 item 7):
         // what a jump waits for before it replies.
         Some("polls") => format!("{{\"asking\":{}}}", runner.polls_asking()),

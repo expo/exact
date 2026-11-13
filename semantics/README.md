@@ -997,7 +997,7 @@ the host presents no frames (the harness never does): due at
 ## Formatting and localized text
 
 `formatTime`, `formatDate`, `formatDay` and `formatNumber` (`Contract/Format.lean`) are
-the runner's (`runner/src/stdlib.rs`, `runner/src/format.rs`) transcribed:
+the runner's (`runner/src/stdlib.rs`, `runner/src/format/`) transcribed:
 `en-US` at the fixed UTC offset the call names, the wall time truncated
 then shifted and held to years 1–9999 (else `""`), the calendar by
 Hinnant's `civil_from_days` over integers, compact numbers from the
@@ -1013,6 +1013,22 @@ locale slot, the key, then each name and its value through `toString`;
 `{$name}`/`{name}` and the `\{`, `\}`, `\\` escapes. The host's `place`
 event (a viewer locale other than the base) is not delivered by the
 harness, so only the base table is read there.
+
+Each takes the format locale last (LLP 1054.000.003 D6), as the embedding
+writes the call: `""` in a program whose tables all format as `en` does,
+which is the `en-US` above, else the format slot (`#format`, initialized to
+the base table's name after the locale slot and left out of the
+observation, as the runner's and the JS target's are). Its table's record
+(`contract/lower/src/formats.rs`) rides in that table's (key, text) pairs
+under `Format.formatKey`, a key no table can hold, and `Format.recordOf`,
+`styledIn`, `compactIn`, `dateIn`, `timeIn` and `dayIn` are
+`runner/src/format/locale.rs` transcribed over it. The corpus's
+`localized-formats` reads a German base, and `localized-formats-at` a base named
+with an extension (`de-AT-u-nu-latn`) whose money has its own symbols.
+Outside the semantics: a localized
+formatter in a `fn`, whose body the compiler expands where it is called and
+so reads the format slot there, while the semantics evaluates a `fn` closed
+over its parameters (as it does `t` there, which reads the locale slot).
 
 ## Queued sends and gated tasks (LLP 1092)
 

@@ -46,7 +46,9 @@ import AppKit
 
 /// What the window's bar shows of a route's header.
 struct WindowHeader {
-    let route: NodeView, header: NodeView, heading: NodeView
+    /// Its heading: none for a header of buttons alone, whose window keeps
+    /// the title it has without one.
+    let route: NodeView, header: NodeView, heading: NodeView?
     /// The heading's text: the window's title, under an authored document
     /// title (the head's) and over the app's name.
     let title: String
@@ -135,7 +137,7 @@ struct WindowHeader {
             return nil
         }
         if let why = refusal(in: rule.header) { return .kept(why) }
-        var read = WindowHeader(route: route, header: rule.header, heading: rule.heading, title: rule.heading.accessibleText,
+        var read = WindowHeader(route: route, header: rule.header, heading: rule.heading, title: rule.heading?.accessibleText ?? "",
                                 leading: rule.leading.filter(shown), trailing: rule.trailing.filter(shown), backs: backs)
         read.subtitle = subtitle
         if let list = rule.segments, shown(list), let tabs = titleTabs(of: list) { (read.segments, read.tabs) = (list, tabs) }

@@ -6,7 +6,7 @@
 // and needs a wasm Caltrain dist, so the async lane's web-build-test step
 // runs it; the glue step skips it.
 import { test, expect } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -144,3 +144,148 @@ check('tree --ax on Caltrain: complete coverage, the station controls named, no 
     expect(r.ax.findings).toEqual([]);
   } finally { await s.close(); if (tmp) rmSync(tmp, { recursive: true, force: true }); }
 }, 120000);
+
+const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'));
+const splitCheck = missing || process.env.EXACT_GLUE_FAST === '1' ? check : need('fixture',
+  JSON.parse(readFileSync(resolve(wasmDist, 'bake.json'), 'utf8')).binary?.configuration?.flags?.EXACT_WEB_LINK === 'all'
+    ? null : 'build Caltrain with EXACT_WEB_LINK=all bun host/web/build.mjs caltrain-web --wasm');
+
+splitCheck('chromium: wasm and JS agree on split activity and tree targets', async () => {
+  const dir = mkdtempSync(resolve(target, 'split-activity-'));
+  let server, session;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({
+      name: 'Split Activity', app: { id: 'com.exact.caltrain', name: 'Split Activity' }, host: { web: {} },
+    }));
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  tab items "/"
+    person "/people/:id"
+    edit "/edit"
+  tab saved "/saved"
+
+component App
+  state recorded = ""
+  action show(id: string)
+    nav = push(nav, path("person", id))
+  action pick(name: string)
+    nav = select(nav, name)
+  action modal
+    nav = push(nav, "/edit")
+  action back
+    nav = back(nav)
+  action record(name: string)
+    recorded = name
+  view
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back" width="100%" height="100%" display="flex" flex-direction="column"
+      for t in nav.tabs key=t.name
+        column role="tabpanel" id=\`panel-\${t.name}\` flex=1 position="relative"
+          for e in t.stack key=e.id
+            column navigationKey=\`\${e.id}\` navigationPresentation=(e.name == "edit" ? "modal" : "") testId=\`route-\${e.name}\` position="absolute" inset=0
+              if e.name == "items"
+                list
+                  button press=show("alpha") testId="row-alpha"
+                    text "Alpha"
+                  button press=show("beta") testId="row-beta"
+                    text "Beta"
+              if e.name == "person"
+                button press=modal testId="open-modal"
+                  text "Edit"
+              if e.name == "edit"
+                button press=back id="back" testId="close-modal"
+                  text "Close"
+              box position="relative" width=240 height=100
+                text testId="flow-paragraph" width=240 height=100 font-size=16 line-height="24px"
+                  text testId="flow-run"
+                    text e.name testId="flow-shared"
+                box position="absolute" left=80 top=0 width=20 height=20 wrap-flow="both" shape-outside="circle()"
+              button press=record(e.name) testId="shared"
+                text e.name
+      row role="tablist"
+        button role="tab" aria-controls="panel-items" aria-selected=(nav.tab == "items") press=pick("items") testId="tab-items"
+          text "Items"
+        button role="tab" aria-controls="panel-saved" aria-selected=(nav.tab == "saved") press=pick("saved") testId="tab-saved"
+          text "Saved"
+`);
+    const plan = resolve(dir, 'app.plan');
+    const compiled = spawnSync(compiler, ['build', resolve(dir, 'app.contract'), '-o', plan], { encoding: 'utf8' });
+    expect(compiled.status, compiled.stderr).toBe(0);
+    const jsDist = resolve(dir, 'dist');
+    const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'split-activity', '--out', jsDist, '--render', 'none'], {
+      cwd: ROOT, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
+    expect(status, stdout + stderr).toBe(0);
+    const results = [];
+    for (const [kind, dist] of [['JS', jsDist], ['wasm', wasmDist]]) {
+      server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+        const path = new URL(req.url).pathname;
+        const file = Bun.file(path === '/__plan' ? plan : resolve(dist, path === '/' ? 'index.html' : path.slice(1)));
+        return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
+      } });
+      session = await open({ host: 'web', url: server.url.href, size: [1000, 800] });
+      if (kind === 'wasm') await session.carrier.evaluate("fetch('/__plan').then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b), true))");
+      const snapshots = [];
+      const read = async (listFlags, selected) => {
+        await session.clock('settle');
+        const nodes = (await session.tree()).nodes;
+        const flags = id => nodes.filter(n => n.props.testId === id).map(n => [!!n.inactive, !!n.hidden]);
+        expect(flags('row-beta'), kind).toEqual([listFlags]);
+        const copies = nodes.filter(n => n.props.testId === 'shared');
+        const active = copies.find(n => !n.inactive) ?? copies[0];
+        expect((await session.tree('shared', { shallow: true })).nodes[0].id, kind).toBe(active.id);
+        expect((await session.tree('shared')).roots, kind).toEqual([active.id]);
+        const runs = nodes.filter(n => n.props.testId === 'flow-shared');
+        const activeRun = runs.find(n => !n.inactive) ?? runs[0];
+        expect(activeRun.props.text, kind).toBe(selected);
+        const byId = new Map(nodes.map(n => [n.id, n]));
+        const subtree = node => [node, ...(node.children ?? []).flatMap(id => subtree(byId.get(id)))];
+        const summary = node => [node.id, node.children, !!node.inactive, !!node.hidden];
+        for (const name of ['flow-shared', 'flow-run', 'flow-paragraph']) {
+          const candidates = nodes.filter(n => n.props.testId === name);
+          const expected = candidates.find(n => !n.inactive) ?? candidates[0];
+          for (const [target, hit] of [[name, expected], ...candidates.map(n => [n.id, n])]) {
+            for (const shallow of [false, true]) {
+              const reply = await session.tree(target, { shallow });
+              const context = `${kind} ${name} ${selected} target=${target} shallow=${shallow}`;
+              expect(reply.roots, context).toEqual([hit.id]);
+              expect(reply.nodes.map(summary), context).toEqual((shallow ? [hit] : subtree(hit)).map(summary));
+            }
+          }
+        }
+        if (selected === 'items' || selected === 'person') {
+          const run = nodes.find(n => n.props.testId === 'flow-run' && !n.inactive);
+          expect(await session.carrier.evaluate(`!exact.views.get(${run.id}).isConnected`), kind).toBe(true);
+        }
+        await session.tap('shared');
+        expect((await session.state()).slots.recorded, kind).toBe(selected);
+        snapshots.push(['row-beta', ...flags('row-beta'), ...copies.map(n => [!!n.inactive, !!n.hidden]),
+          ...runs.map(n => [!!n.inactive, !!n.hidden])]);
+      };
+      await session.tap('row-alpha');
+      for (const width of [1000, 420, 1000]) {
+        await session.resize(width, 800);
+        await read([width < 900, width < 900], width < 900 ? 'person' : 'items');
+      }
+      await session.tap('row-beta');
+      expect((await session.state()).navigation.url, kind).toBe('/people/beta');
+      await read([false, false], 'items');
+      await session.tap('tab-saved');
+      await read([true, true], 'saved');
+      await session.tap('tab-items');
+      await read([false, false], 'items');
+      await session.tap('open-modal');
+      await read([true, false], 'edit');
+      await session.resize(420, 800);
+      await read([true, true], 'edit');
+      await session.resize(1000, 800);
+      await session.tap('close-modal');
+      await read([false, false], 'items');
+      results.push(snapshots);
+      await session.close(); session = null;
+      server.stop(true); server = null;
+    }
+    expect(results[1]).toEqual(results[0]);
+  } finally {
+    await session?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);

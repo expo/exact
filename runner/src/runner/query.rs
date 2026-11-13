@@ -127,6 +127,14 @@ impl<D: DataSource> Runner<D> {
         if self.plan.module_named(&source).is_some() {
             return self.module_answer(i, &source, args);
         }
+        // A source declared in Contract is the runner's to ask (LLP 1162.001).
+        if self.plan.fetch_named(&source).is_some() {
+            self.log(lines::query(&resource, &source));
+            self.count_ask(i);
+            return self
+                .fetch_answer(&source, args)
+                .map_err(|error| RunnerError::Data { resource, error });
+        }
         // @ref LLP 1038 D5 / §8 — distinguish asked sources from compiled boot values.
         self.log(lines::query(&resource, &source));
         self.count_ask(i);

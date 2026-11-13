@@ -884,7 +884,7 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
                 // Trailing optional parameters (`slice`'s `end`) may be
                 // omitted from a call the roster resolved; lowering fills
                 // their defaults (LLP 1088 D2).
-                if !(f.min_arity()..=f.arity()).contains(&args.len()) {
+                if !(f.min_arity()..=f.params().len()).contains(&args.len()) {
                     return err(
                         "type-arity",
                         checks::call_arity(

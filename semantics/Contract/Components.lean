@@ -92,6 +92,9 @@ structure CProgram where
   `Program.locale`). -/
   strings : List (String × List (String × String)) := []
   locale : Option String := .none
+  /-- The format locale's slot, when a formatter reads a table's format data
+  (LLP 1054.000.003 D6; the tables carry the data under `Format.formatKey`). -/
+  format : Option String := .none
   deriving Repr, Inhabited
 
 /-- Root resources followed by every child's device facts in declaration
@@ -106,9 +109,13 @@ def CProgram.resources (p : CProgram) : List ResourceDecl :=
 /-- The resolved locale's slot, as `contract lean` writes it: a root state
 of the base locale (the first table's), after the router's. -/
 def CProgram.localeStates (p : CProgram) : List StateDecl :=
-  match p.locale with
-  | .some x => [{ name := x, ty := .string, init := .str ((p.strings.head?.map (·.1)).getD "") }]
-  | .none => []
+  let base := Expr.str ((p.strings.head?.map (·.1)).getD "")
+  (match p.locale with
+    | .some x => [{ name := x, ty := .string, init := base }]
+    | .none => []) ++
+  (match p.format with
+    | .some x => [{ name := x, ty := .string, init := base }]
+    | .none => [])
 
 def CProgram.component? (p : CProgram) (name : String) : Option CComponent :=
   p.components.find? (·.name == name)

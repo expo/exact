@@ -716,7 +716,9 @@ data_source! {
     /// The app identity, reverse-DNS (LLP 1023 D5) — the one declaration:
     /// bake writes it into the plan header, and boot refuses a plan whose
     /// header names a different app. Empty is unnamed — a fixture or a
-    /// stand-in — and unnamed matches anything.
+    /// stand-in — and unnamed matches anything. An app's generated entry
+    /// gives an unnamed source its manifest's `app.id`
+    /// (`exact_logic::Swappable::named`), which names its storage.
     fn app_id(&self) -> &str {
         ""
     }

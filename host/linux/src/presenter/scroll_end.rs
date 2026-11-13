@@ -11,6 +11,8 @@ pub(super) enum Completion {
     Reader,
     Edge(ReorderToken),
     Collection,
+    /// An element's smooth reveal (`glide.rs`): over when it lands.
+    Glide,
 }
 
 #[derive(Clone, Copy)]
@@ -130,7 +132,10 @@ impl<D: DataSource> Presenter<D> {
             let continuing = self.scroll_end_frame_blocked(view)
                 || (completion == previous.kind
                     && (held
-                        || matches!(completion, Completion::Edge(_) | Completion::Collection)));
+                        || matches!(
+                            completion,
+                            Completion::Edge(_) | Completion::Collection | Completion::Glide
+                        )));
             if !continuing && self.scroll_end_finished(view, &previous) {
                 self.scroll_end.completed.push_back((
                     view,
@@ -147,7 +152,7 @@ impl<D: DataSource> Presenter<D> {
         let due = match completion {
             Completion::Instant => self.host.now(),
             Completion::Reader => self.host.now() + 100.,
-            Completion::Edge(_) | Completion::Collection => f64::INFINITY,
+            Completion::Edge(_) | Completion::Collection | Completion::Glide => f64::INFINITY,
         };
         self.scroll_end.pending.insert(
             view,
@@ -335,6 +340,7 @@ impl<D: DataSource> Presenter<D> {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
             Completion::Collection => false,
             Completion::Reader if self.scroll_end.held.contains(&view) => false,
+            Completion::Glide => !self.gliding(view),
             _ => pending.due <= self.host.now(),
         }
     }

@@ -230,18 +230,11 @@ fn nodes(list: &mut [Node], tokens: &Tokens, out: &mut Rewritten) {
                 }
                 nodes(children, tokens, out);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                nodes(then, tokens, out);
-                nodes(otherwise, tokens, out);
+            node => {
+                for list in node.child_lists_mut() {
+                    nodes(list, tokens, out);
+                }
             }
-            Node::Each { body, .. } => nodes(body, tokens, out),
-            Node::Match { some, none, .. } => {
-                nodes(&mut some.1, tokens, out);
-                nodes(none, tokens, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }

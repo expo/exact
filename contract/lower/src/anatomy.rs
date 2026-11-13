@@ -145,50 +145,25 @@ fn word(name: &str) -> bool {
 /// The element of `nodes` written at `span`, at any depth: its tag, its
 /// attributes and its children.
 fn element(nodes: &[Node], span: Span) -> Option<(&str, &[Attr], &[Node])> {
-    nodes.iter().find_map(|n| match n {
+    Node::walk(nodes).find_map(|n| match n {
         Node::Element {
             tag,
             attrs,
             children,
             span: s,
             ..
-        } => (*s == span)
-            .then_some((tag.as_str(), attrs.as_slice(), children.as_slice()))
-            .or_else(|| element(children, span)),
-        Node::Use { children, .. } | Node::Each { body: children, .. } => element(children, span),
-        Node::When {
-            then, otherwise, ..
-        } => element(then, span).or_else(|| element(otherwise, span)),
-        Node::Match { some, none, .. } => element(&some.1, span).or_else(|| element(none, span)),
-        Node::Children { .. } => None,
+        } if *s == span => Some((tag.as_str(), attrs.as_slice(), children.as_slice())),
+        _ => None,
     })
 }
 
 /// Every element's span in `nodes`, at any depth (a fill this view passes
 /// to a component it uses among them: it writes them).
 fn element_spans(nodes: &[Node], out: &mut Vec<Span>) {
-    for n in nodes {
-        match n {
-            Node::Element { children, span, .. } => {
-                out.push(*span);
-                element_spans(children, out);
-            }
-            Node::Use { children, .. } | Node::Each { body: children, .. } => {
-                element_spans(children, out)
-            }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                element_spans(then, out);
-                element_spans(otherwise, out);
-            }
-            Node::Match { some, none, .. } => {
-                element_spans(&some.1, out);
-                element_spans(none, out);
-            }
-            Node::Children { .. } => {}
-        }
-    }
+    out.extend(Node::walk(nodes).filter_map(|n| match n {
+        Node::Element { span, .. } => Some(*span),
+        _ => None,
+    }));
 }
 
 /// The styles a node's `class` names: one, or each side of a choice.
@@ -769,16 +744,10 @@ fn holds_children(nodes: &[Node], span: Span) -> bool {
         Node::Element {
             children, span: s, ..
         } if *s == span => children.iter().any(|c| matches!(c, Node::Children { .. })),
-        Node::Element { children, .. }
-        | Node::Use { children, .. }
-        | Node::Each { body: children, .. } => holds_children(children, span),
-        Node::When {
-            then, otherwise, ..
-        } => holds_children(then, span) || holds_children(otherwise, span),
-        Node::Match { some, none, .. } => {
-            holds_children(&some.1, span) || holds_children(none, span)
-        }
-        Node::Children { .. } => false,
+        n => n
+            .child_lists()
+            .into_iter()
+            .any(|list| holds_children(list, span)),
     })
 }
 
@@ -792,107 +761,35 @@ fn conditions(nodes: &[Node], out: &mut Vec<String>) {
 /// The names `e` reads inside a `?:` or a `match` (`inside`, once one is
 /// entered), but those bound there: a `match` arm's, an arrow's, a `let`'s.
 fn reads(e: &Expr, bound: &mut Vec<String>, inside: bool, out: &mut Vec<String>) {
-    match e {
-        Expr::Ident(name, _) => {
-            if inside && !bound.contains(name) && !out.contains(name) {
-                out.push(name.clone());
-            }
+    if let Expr::Ident(name, _) = e {
+        if inside && !bound.contains(name) && !out.contains(name) {
+            out.push(name.clone());
         }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) => {}
-        Expr::Ternary(a, b, c, _) => {
-            for x in [a, b, c] {
-                reads(x, bound, true, out);
-            }
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            reads(subject, bound, true, out);
-            bound.push(var.clone());
-            reads(some, bound, true, out);
-            bound.pop();
-            reads(none, bound, true, out);
-        }
-        Expr::Arrow { params, body, .. } => {
-            let mark = bound.len();
-            bound.extend(params.iter().cloned());
-            reads(body, bound, inside, out);
-            bound.truncate(mark);
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            reads(value, bound, inside, out);
-            bound.push(name.clone());
-            reads(body, bound, inside, out);
-            bound.pop();
-        }
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let contract_syntax::TemplatePart::Expr(x) = p {
-                    reads(x, bound, inside, out);
-                }
-            }
-        }
-        Expr::List(items, _) | Expr::Call(_, items, _) => {
-            for x in items {
-                reads(x, bound, inside, out);
-            }
-        }
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => reads(x, bound, inside, out),
-        Expr::Binary(_, a, b, _) => {
-            reads(a, bound, inside, out);
-            reads(b, bound, inside, out);
-        }
+    }
+    let inside = inside || matches!(e, Expr::Ternary(..) | Expr::Match { .. });
+    for (x, binds) in e.scoped_operands() {
+        let mark = bound.len();
+        bound.extend(binds.iter().map(String::from));
+        reads(x, bound, inside, out);
+        bound.truncate(mark);
     }
 }
 
 fn walk_conditions(nodes: &[Node], bound: &mut Vec<String>, out: &mut Vec<String>) {
     for n in nodes {
-        match n {
-            Node::Element {
-                attrs, children, ..
-            } => {
-                for a in attrs
-                    .iter()
-                    .filter(|a| a.name == "class" || !rows_of(a).is_empty())
-                {
-                    reads(&a.value, bound, false, out);
-                }
-                walk_conditions(children, bound, out);
+        if let Node::Element { attrs, .. } = n {
+            for a in attrs
+                .iter()
+                .filter(|a| a.name == "class" || !rows_of(a).is_empty())
+            {
+                reads(&a.value, bound, false, out);
             }
-            Node::Use { children, .. } => walk_conditions(children, bound, out),
-            Node::Each {
-                var, index, body, ..
-            } => {
-                let mark = bound.len();
-                bound.push(var.clone());
-                bound.extend(index.clone());
-                walk_conditions(body, bound, out);
-                bound.truncate(mark);
-            }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk_conditions(then, bound, out);
-                walk_conditions(otherwise, bound, out);
-            }
-            Node::Match { some, none, .. } => {
-                let mark = bound.len();
-                bound.push(some.0.clone());
-                walk_conditions(&some.1, bound, out);
-                bound.truncate(mark);
-                walk_conditions(none, bound, out);
-            }
-            Node::Children { .. } => {}
+        }
+        for (list, binds) in n.scoped_child_lists() {
+            let mark = bound.len();
+            bound.extend(binds.iter().map(String::from));
+            walk_conditions(list, bound, out);
+            bound.truncate(mark);
         }
     }
 }

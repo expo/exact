@@ -967,6 +967,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::GlassGroup => "glassGroup",
             // Interactive glass and a menu's order are UIKit's; a page has neither.
             PropId::GlassInteractive | PropId::MenuOrder => continue,
+            // A page has no tip system (LLP 1035.006.000 D4).
+            PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",
             // tvOS's focus guide; a browser's Tab order is sequential.
             PropId::FocusGuide => continue,

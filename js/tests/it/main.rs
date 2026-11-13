@@ -56,7 +56,7 @@ mod wrappers;
 /// with, as a harness standing in for a host's executor needs. These
 /// harnesses test the module, not admission: a re-ask's place in a native
 /// executor is tested through the real one (`admission.rs`, and the core's
-/// `executor_again_tests.rs`).
+/// `host/executor/src/again_tests.rs`).
 pub fn runnable(dispatch: exact_runner::Dispatch) -> exact_runner::Dispatch {
     use exact_runner::{Dispatch, Work};
     match dispatch {

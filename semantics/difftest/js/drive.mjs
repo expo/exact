@@ -291,7 +291,8 @@ async function drive(code, c, hostSources) {
     names.forEach((group, g) => {
       if (g === 1) storeLines(); // after the slots, as observe.rs writes them
       group.forEach((name, i) => {
-        // The locale slot (`#locale`) is no root slot the runner shows.
+        // The locale and format slots (`#locale`, `#format`) are no root slots
+        // the runner shows.
         if (name.startsWith('#')) return;
         let v;
         try { v = state[g][i](); } catch (e) { notes.push(`# js: ${['slot', 'derive', 'resource'][g]} ${name}: ${e.message}`); return; }

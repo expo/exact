@@ -117,7 +117,51 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
         format!("import{{{}}}from\"./facts.js\";", imports.join(","))
     };
     // The tools after the modules, whose origins they stand beside (calls.js).
-    Ok(facts + &modules(plan, body) + &crate::calls::tools(plan, body))
+    Ok(facts + &modules(plan, body) + &crate::calls::tools(plan, body) + &fetches(plan, body))
+}
+
+/// The sources declared in Contract (LLP 1162.001), which fetches.js answers
+/// as the runner's `fetches.rs` does: each by its name, `[method, url,
+/// origin, parameter names, headers, body, document, pointer, parameter
+/// types, answer type, its grant]`, the grant `net.fetch <origin>`
+/// normalized as the build normalizes a module's (admission's
+/// `createGrantSet` takes no other). Returns the import, empty for a plan
+/// with none.
+fn fetches(plan: &Plan, body: &mut String) -> String {
+    if plan.fetches.is_empty() {
+        return String::new();
+    }
+    let json = |s: &str| serde_json::to_string(s).unwrap();
+    let rows: Vec<String> = (plan.fetches.iter())
+        .map(|row| {
+            let signature = &plan.sources[row.source.0 as usize];
+            let names: Vec<String> = plan.fetch_parts(row.params).map(|(n, _)| json(n)).collect();
+            let headers: Vec<String> = (plan.fetch_parts(row.headers))
+                .map(|(n, v)| format!("[{},{}]", json(n), json(v)))
+                .collect();
+            let types: Vec<String> = (signature.params.iter())
+                .map(|p| crate::emit::type_json(plan, plan.source_params[p.0 as usize].ty))
+                .collect();
+            let grant = format!("net.fetch {}", plan.str(row.origin));
+            format!(
+                "{}:[{},{},{},[{}],[{}],{},{},{},[{}],{},{}]",
+                json(plan.str(signature.name)),
+                json(plan.str(row.method)),
+                json(plan.str(row.url)),
+                json(plan.str(row.origin)),
+                names.join(","),
+                headers.join(","),
+                json(plan.str(row.body)),
+                json(plan.str(row.document)),
+                json(plan.str(row.pointer)),
+                types.join(","),
+                crate::emit::type_json(plan, signature.ty),
+                exact_runner::grants::normalized_json(&grant),
+            )
+        })
+        .collect();
+    let _ = write!(body, "$fetches({{{}}});", rows.join(","));
+    "import{fetches as $fetches}from\"./fetches.js\";".into()
 }
 
 /// The extensions the plan's module names, events and package views belong to, each

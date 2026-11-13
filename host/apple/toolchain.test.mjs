@@ -1,11 +1,12 @@
-import { test, expect } from 'bun:test';
-import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { test, expect, spyOn } from 'bun:test';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { appleCommand, crossSdk } from './toolchain.mjs';
 import { decodeProfile } from './devices.mjs';
 import { appleCrossReport, CROSS_IOS_ROWS, distributionToolchain, ensureWatchSimulatorSDK, installWatchSimulatorSDK } from './sdk.mjs';
+import { iosTestRuns } from './xctest.mjs';
 
 test('Windows Metal preserves deployment targets and path operands through Wine, while native hosts keep xcrun', () => {
   const root = mkdtempSync(resolve(tmpdir(), "exact Metal's "));
@@ -297,3 +298,131 @@ test.skipIf(!process.env.EXACT_APPLE_CODESIGN || (process.platform !== 'darwin' 
     expect(() => decodeProfile(cms, 'linux')).toThrow('cannot decode provisioning profile');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// The built test products and simulator tools are fixtures; no simulator or compiler runs here.
+async function iosRunsFixture(body) {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-ios-runs-')), udid = root.split('/').pop();
+  const savedPath = process.env.PATH, record = resolve(tmpdir(), `exact-touches-${udid}.runner.json`);
+  let opening;
+  try {
+    const pkg = resolve(root, 'package'), products = resolve(root, 'products');
+    mkdirSync(resolve(pkg, 'tests/ExactKitTests'), { recursive: true });
+    mkdirSync(products);
+    writeFileSync(resolve(pkg, 'tests/ExactKitTests/FixtureTests.swift'), `class FixtureTests: XCTestCase {
+      func testHosted() { throw missing("scene", "window") }
+      func testTouch() { throw missing("touch", "Back") }
+    }`);
+    writeFileSync(resolve(products, 'built.xctestrun'), '{}');
+    writeFileSync(record, JSON.stringify({ port: 1234, token: 'fixture-token' }));
+    writeFileSync(resolve(root, 'plutil'), '#!/bin/sh\nif [ "$4" = "-" ]; then cat "$5"; else cp "$5" "$4"; fi\n');
+    writeFileSync(resolve(root, 'xcrun'), '#!/bin/sh\nexit 0\n');
+    for (const name of ['plutil', 'xcrun']) chmodSync(resolve(root, name), 0o755);
+    process.env.PATH = `${root}:${savedPath}`;
+    opening = spyOn(await import('./touches.mjs'), 'openTouches');
+    await body({ root, opening, options: { pkg, products, destination: `id=${udid}`, udid, env: {}, canvasGpu: 'gpu', hostSource: 'host.swift', triple: 'arm64-apple-ios-simulator', run: () => {} } });
+  } finally {
+    opening?.mockRestore();
+    process.env.PATH = savedPath;
+    rmSync(record, { force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1', true]]) test(`hosted accessibility preserves ${prior ?? 'an absent setting'} when simulator boot ${bootFails ? 'fails' : 'succeeds'}`, () => iosRunsFixture(async ({ root, options }) => {
+  writeFileSync(resolve(options.pkg, 'tests/ExactKitTests/FixtureTests.swift'), `class FixtureTests: XCTestCase {
+    func testHosted() { throw missing("accessibility", "UIKit") }
+  }`);
+  const setting = resolve(root, 'setting'), eventsFile = resolve(root, 'events');
+  if (prior !== null) writeFileSync(setting, `${prior}\n`);
+  writeFileSync(eventsFile, '');
+  writeFileSync(resolve(root, 'xcrun'), [
+    '#!/bin/sh',
+    'fixture=${0%/*}',
+    'printf "%s\\n" "$5" >> "$fixture/events"',
+    'case "$5" in',
+    '  read) [ -f "$fixture/booted" ] && cat "$fixture/setting" ;;',
+    '  write) if [ "$9" = "true" ]; then echo 1; else echo 0; fi > "$fixture/setting" ;;',
+    '  delete) rm -f "$fixture/setting" ;;',
+    'esac',
+  ].join('\n'));
+  const bootFailure = new Error('simulator boot failed'), ran = [];
+  let reported;
+  try {
+    await iosTestRuns({ ...options, run: (command, args) => {
+      if (args[1] === 'bootstatus') {
+        if (bootFails) throw bootFailure;
+        writeFileSync(resolve(root, 'booted'), '');
+      } else if (args[3] === 'defaults') {
+        const result = spawnSync(command, args, { encoding: 'utf8' });
+        expect(result.status, result.stderr).toBe(0);
+      }
+    }, runApple: (command, args) => {
+      if (command !== 'xcodebuild') return;
+      if (args.includes('-only-testing:ExactKitTests/FixtureTests/testHosted')) {
+        ran.push('hosted');
+        expect(readFileSync(setting, 'utf8').trim()).toBe('1');
+      } else if (args.includes('-only-testing:ExactKitTests/Canvas2DGpuStressTests')) ran.push('gpu');
+    } });
+  } catch (error) { reported = error; }
+  expect(ran).toEqual(bootFails ? ['gpu'] : ['hosted', 'gpu']);
+  expect(reported).toBe(bootFails ? bootFailure : undefined);
+  expect(readFileSync(eventsFile, 'utf8').trim().split('\n').filter(Boolean))
+    .toEqual(bootFails ? [] : ['read', 'write', prior === null ? 'delete' : 'write']);
+  expect(existsSync(setting) ? readFileSync(setting, 'utf8').trim() : null).toBe(prior);
+}));
+
+for (const kept of [false, true]) test(`hosted touches keep device ownership through the test and ${kept ? 'leave a reused runner' : 'end their own runner'}`, () => iosRunsFixture(async ({ opening, options }) => {
+  const events = [];
+  let locked = false;
+  opening.mockImplementation(async () => {
+    if (locked) throw new Error('touches already held');
+    locked = true;
+    events.push('open');
+    return {
+      kept, pid: 123,
+      async handoff() { events.push('handoff'); await Promise.resolve(); return { port: 1234, token: 'fixture-token' }; },
+      async close() { events.push('close'); locked = false; },
+      async end() { events.push('end'); locked = false; return null; },
+    };
+  });
+  await iosTestRuns({ ...options, runApple: (command, args, { env } = {}) => {
+    if (!args.includes('-only-testing:ExactKitTests/FixtureTests/testTouch')) return;
+    events.push('test');
+    expect(locked, 'the hosted fixture still owns the device').toBe(true);
+    expect(env.TEST_RUNNER_EXACT_TOUCH_PORT).toBe('1234');
+    expect(env.TEST_RUNNER_EXACT_TOUCH_TOKEN).toBe('fixture-token');
+    expect(args).toContain('NO');
+  } });
+  expect(events).toEqual(['open', 'handoff', 'test', kept ? 'close' : 'end']);
+  expect(locked).toBe(false);
+}));
+
+for (const [phase, kept] of [['setup', false], ['handoff', false], ['test and cleanup', false], ['test and cleanup', true]]) test(`the GPU tests still run after a ${kept ? 'reused' : 'new'} touch runner's ${phase} failure`, () => iosRunsFixture(async ({ opening, options }) => {
+  const failure = new Error(`touch ${phase}`), cleanupFailure = new Error('touch cleanup'), ran = [];
+  let cleaned = false;
+  opening.mockImplementation(async () => {
+    if (phase === 'setup') throw failure;
+    return {
+      kept, pid: 123,
+      handoff() { if (phase === 'handoff') throw failure; return { port: 1234, token: 'fixture-token' }; },
+      async close() { cleaned = true; if (phase === 'test and cleanup') throw cleanupFailure; },
+      async end() { cleaned = true; return phase === 'test and cleanup' ? cleanupFailure : null; },
+    };
+  });
+  let reported;
+  try {
+    await iosTestRuns({ ...options, runApple: (command, args) => {
+      if (command !== 'xcodebuild') return;
+      const selected = args.filter(a => a.startsWith('-only-testing:'));
+      const suite = selected.some(a => a.includes('Canvas2DGpuStressTests')) ? 'gpu'
+        : selected.some(a => a.endsWith('/testTouch')) ? 'touch'
+          : selected.some(a => a.endsWith('/testHosted')) ? 'hosted' : 'bare';
+      ran.push(suite);
+      if (suite === 'touch' && phase === 'test and cleanup') throw failure;
+    } });
+  } catch (error) { reported = error; }
+  expect(ran).toEqual(['bare', 'hosted', ...(phase === 'test and cleanup' ? ['touch'] : []), 'gpu']);
+  expect(cleaned).toBe(phase !== 'setup');
+  if (phase === 'test and cleanup') expect(reported.errors).toEqual([failure, cleanupFailure]);
+  else expect(reported).toBe(failure);
+}));

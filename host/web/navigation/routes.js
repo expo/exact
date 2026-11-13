@@ -442,7 +442,7 @@ const siteHeader = (header, links = 0) => {
 }, asWritten = (header) => header.matches(`${authored}, [data-exact-site]`);
 // The items of the bar iOS makes of a shown `header`, or null where it makes none: kernel/src/bars.rs `header_bar`,
 // ported to the elements both runtimes write alike, since the JS target keeps no kernel to ask. `walk` is `Walk::walk`:
-// a bar's header holds one heading, and an item is a pressable it reaches, not the title's, or a disabled button. A header drawn as written is no bar.
+// a bar's header holds one heading, or none and only what the bar places (`unplaced`: a node that is no box), and an item is a pressable it reaches, not the title's, or a disabled button. A header drawn as written is no bar.
 function barItems(route, header) {
   if (route.getAttribute("data-navigationbar") === "none" || viewChildren(route)[0] !== header || asWritten(header)) {
     return null;
@@ -451,10 +451,18 @@ function barItems(route, header) {
   const holds = (el) => [...el.children].some((child) => !layer(child) && (child.matches(heading) || holds(child)));
   const disabled = (el) => el.matches("button[disabled]") && !el.hasAttribute("role") && root?.getAttribute("aria-busy") !== "true";
   // `fact::DISABLED`, dimmed whether or not it presses; a `button` element carries no `role` unless it has another one (element.rs); until input is ready, the glue disables every control itself (glue.js)
-  let headings = 0, tap = null;
+  // `fact::BOX`: a plain box, a `div` that is no text or a semantic box (element.rs `element`)
+  const box = (el) => el.localName === "div" ? !el.hasAttribute("data-exact-text") : /^(main|header|nav|section|footer|article|aside)$/.test(el.localName);
+  let headings = 0, tap = null, placed = 0, unplaced = false, searches = 0, tablists = 0;
   const items = [], walk = (node) => {
     for (const child of node.children) {
-      if (layer(child) || child.matches(`[role=tablist], input[type="search"], ${authored}`)) {
+      if (layer(child)) {
+        continue;
+      }
+      if (child.matches(`[role=tablist], input[type="search"], ${authored}`)) {
+        placed++;
+        // The bar has one place for a search field and one for a tablist: a second is unplaced.
+        if (child.matches('input[type="search"]') && searches++ || child.matches("[role=tablist]") && tablists++) unplaced = true;
         continue;
       }
       // a layer, the bar's segments, its search field, or what its author wrote `appearance: none` on (iOS projects none of it): no item
@@ -466,13 +474,16 @@ function barItems(route, header) {
         } else {
           items.push(child);
         }
-      } else if (!child.matches("[role=status]") || holds(child)) {
+      } else if (child.matches("[role=status]") && !holds(child)) {
+        placed++;
+      } else {
+        unplaced ||= !box(child);
         walk(child);
       }
     }
   };
   walk(header);
-  return headings === 1 ? items : null;
+  return headings === 1 || headings === 0 && !unplaced && (items.length > 0 || placed > 0) ? items : null;
 }
 /** Mark every route's bar and site header on a page rendered ahead of time (host/web-js/render.mjs), which runs no projection, as document.rs marks them. */
 export function markBars(node) {

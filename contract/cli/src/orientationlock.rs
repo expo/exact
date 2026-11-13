@@ -30,19 +30,11 @@ fn locks(file: &File) -> Vec<(&Expr, Span, bool)> {
                     }
                     walk(children, boxed, out);
                 }
-                Node::Use { children, .. } => walk(children, boxed, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, boxed, out);
-                    walk(otherwise, boxed, out);
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, boxed, out);
+                    }
                 }
-                Node::Each { body, .. } => walk(body, boxed, out),
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, boxed, out);
-                    walk(none, boxed, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

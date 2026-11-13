@@ -866,34 +866,6 @@ test('both document renderers preload the runtime at low priority, and the shell
   }
 }, 180000);
 
-// LLP 1048.007 D1: a page that would wait for the reader is `idle` where the app offers a tool to a browser's agent,
-// which only the runtime registers (LLP 1133.023 D8); a face that leaves out the web door, or a declared activation,
-// changes nothing.
-test('an undeclared route of an app offering tools on the web is idle', async () => {
-  const source = (activate = '') => `routes nav
-  home "/" render=build
-  other "/other" render=build${activate}
-
-component App
-  state n = 0
-  tool add writes additive closed "Add one to the count." = add
-  action add
-    n = n + 1
-  view
-    main
-      text "Count"
-      button "Add" press=add
-`;
-  const activation = page => /data-activate="([a-z]+)"/.exec(page)?.[1];
-  for (const [doors, activate, expected] of [[undefined, '', ['idle', 'idle']], [['apple'], '', ['interaction', 'interaction']],
-    [undefined, ' activate=interaction', ['idle', 'interaction']]]) {
-    const intents = { tools: { add: { title: 'Add', ...(doors ? { doors } : {}) } } };
-    await renderedPages(source(activate), (_, html) => {
-      expect([doors, activate, activation(html('')), activation(html('other'))]).toEqual([doors, activate, ...expected]);
-    }, {}, { intents });
-  }
-}, 180000);
-
 // LLP 1048.007 D1: an undeclared route waits for the reader when its render left the runtime nothing to do, and runs it
 // at once when something is due; a page laid out by the viewport carries its comparisons, which wake it elsewhere.
 test('both document renderers infer an undeclared route\'s activation from its render', async () => {

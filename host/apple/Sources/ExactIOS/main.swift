@@ -202,7 +202,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         session = exact.makeSession(delegate: adapter, label: "main")
         #if !os(tvOS)
-        exact.installNotificationClicks()
+        // A notification's background action that launched the app with no scene boots it with none (LLP 1133.004 stage 2).
+        exact.installNotificationClicks(boot: { $0.bootForWake() }, activate: nil)
         // A wake that launched the app with no scene boots it with none (LLP 1133.017 D7).
         exact.installWakes { session.bootForWake() }
         // A tool call that launched the app with no scene boots it the same way (LLP 1133.023 D7).

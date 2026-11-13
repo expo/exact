@@ -119,14 +119,55 @@ fn review_timer_error_does_not_accept_an_invalidated_press_or_swipe() {
 }
 
 #[test]
-#[ignore = "QUEUE: hidden pending content lacks a final paint offer"]
 fn review_hidden_pending_content_paints() {
     let _service = crate::content_region::test_service();
-    let mut p = actions::boot(&actions::source(), true, actions::Rows::default());
-    let _gate = actions::block_body(&mut p, 100.);
-    actions::ack(&mut p);
+    let source = actions::source();
+    let mut ordinary = actions::boot(&source, false, actions::Rows::default());
+    let mut p = actions::boot(&source, true, actions::Rows::default());
+    let body = actions::id(&p, "body-message-0");
+    let key = p.host.kernel().node(body).unwrap().key;
+    let first = actions::ack(&mut p);
+    let gate = actions::block_body(&mut p, 100.);
+    let retained = actions::ack(&mut p);
+    assert_eq!(retained.pixels.data(), first.pixels.data());
+    assert!(
+        !p.host
+            .content_region()
+            .unwrap()
+            .text_snapshot(key)
+            .unwrap()
+            .current
+    );
+
     actions::action(&mut p, "hide", 150.);
-    actions::ack(&mut p);
+    let hidden = actions::ack(&mut p);
+    assert_ne!(hidden.pixels.data(), retained.pixels.data());
+    actions::action(&mut ordinary, "body-change", 100.);
+    actions::action(&mut ordinary, "hide", 150.);
+    assert_eq!(
+        hidden.pixels.data(),
+        actions::ack(&mut ordinary).pixels.data()
+    );
+    assert!(p.box_of(body).is_none());
+    let region = p.host.content_region().unwrap();
+    assert!(region.receipt().unwrap().current);
+    assert!(region.publication_painted());
+    assert!(region.text_snapshot(key).is_none());
+    assert_eq!(region.work_counts(), (1, 0, 0));
+
+    drop(gate);
+    let end = Instant::now() + Duration::from_secs(90);
+    while p.host.content_region().unwrap().work_counts().0 != 0 {
+        assert!(Instant::now() < end, "obsolete body work never completed");
+        std::thread::yield_now();
+    }
+    assert!(!p.host.poll_content_region().unwrap());
+    let region = p.host.content_region().unwrap();
+    assert_eq!(region.work_counts(), (0, 0, 0));
+    assert!(region.refusal().is_none());
+    assert!(region.publication_painted());
+    assert!(region.text_snapshot(key).is_none());
+    assert_eq!(actions::ack(&mut p).pixels.data(), hidden.pixels.data());
 }
 
 #[test]

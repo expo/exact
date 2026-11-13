@@ -42,6 +42,7 @@ pub mod state;
 mod tap;
 mod test_steps;
 pub mod tool;
+mod walk;
 
 pub use ast::*;
 pub use clock::{resolve_clock_timelines, resolve_clock_timelines_in};
@@ -60,6 +61,7 @@ pub use parser::{
 pub use sequence::Sequence;
 pub use share::share_calls;
 pub use spans::VisitSpans;
+pub use walk::{Binds, Walk};
 
 /// A token range in one source file. Lines and byte columns are 1-based.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]

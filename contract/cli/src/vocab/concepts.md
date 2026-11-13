@@ -616,10 +616,10 @@ component App
 More: docs/recipes/after-a-write.md
 
 ## resource: a read from the data module
-names: source, sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
+names: sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
 
-`resource name = source(args) as shape T else empty()` asks the source in `app.ts` and shows its
-answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
+`resource name = source(args) as shape T else empty()` asks the source in `app.ts`
+(or a declared `source`) and shows its answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
 `else empty()`, the shape's zero. `pending(name)`: a request out; `failed(name)`: no answer;
 `current(name)`: it shows its arguments' answer. `when cond` asks nothing while `cond` is
 false. Only the root declares one.
@@ -636,11 +636,44 @@ component App
       text `${hits.length} found` testId="n"
 ```
 
-- The source answers exactly the shape (an extra field fails it), and a failed fetch is data, not
-  an exception. A child takes what it shows as props; `refresh name` in an action asks again.
-- `transient` after the shape: the answer is never kept on the device for the next launch.
+- `app.ts` answers exactly the shape (an extra field fails it); a failed fetch is data, not
+  an exception; `refresh name` in an action asks again. A child takes what it shows as props.
+- `transient` after the shape: the answer is never kept for the next launch.
 
 More: docs/recipes/fetch-loading-error.md
+
+## source: one HTTP request declared in Contract (a GET, a GraphQL query), with no data module
+names: declared, http, get, rest, endpoint, url, api, graphql, json, pointer
+
+`source name(param: type) as shape T`, at the top of `app.contract`, then `fetch()`'s lines:
+`url` (required; `{param}` puts the argument in, encoded), `method` (`GET` unless named),
+`header "Name" "value"` (`{param}`, or `{secret:name}` for a secret the data module keeps),
+`body json` (the parameters as one JSON object) or `graphql "…"` (a `POST` of the operation and
+its variables), and `pointer "/data/items"` (a JSON Pointer to the answer). The runner makes the
+request, so an app whose sources are all declared needs no `app.ts` and its native build links no
+JavaScript engine. The URL's origin is its grant. The answer reads the shape's fields by name
+and ignores the rest; an absent `option` field is `none`.
+
+```contract
+shape Current
+  temperature_2m: number
+
+source weather(latitude: number, longitude: number) as shape Current
+  url "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
+  pointer "/current"
+
+component App
+  resource now = weather(52.52, 13.41) as shape Current
+  view
+    text `${now.temperature_2m}°` testId="temp"
+```
+
+- `failure(now)`: `offline`, `timeout` or `refused` as the network failed, `error` for a status
+  outside 200–299 or a GraphQL `errors` (its `extensions.code` is `reason`), `shape` for an answer
+  outside the shape. Token refresh, pagination, offline queues and overlays stay in `app.ts`.
+- A `send` may use one with `method "POST"` and `body json`; rename a field in a `derive`.
+
+More: docs/recipes/declared-source.md
 
 ## match: take an option apart (some, none)
 names: case, option, optional, null, undefined, nullable

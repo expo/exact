@@ -307,7 +307,9 @@ impl<D: DataSource> Presenter<D> {
                 Top {
                     route: r.route,
                     heading: r.shape.heading,
-                    title: kernel.bar_text(r.shape.heading).unwrap_or_default(),
+                    title: (r.shape.heading)
+                        .and_then(|heading| kernel.bar_text(heading))
+                        .unwrap_or_default(),
                     up: r.pushed,
                     leading: buttons(&r.shape.leading),
                     trailing: buttons(&r.shape.trailing),

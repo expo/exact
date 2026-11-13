@@ -162,3 +162,35 @@ fn a_symbol_beside_the_heading_in_its_row_is_the_titles() {
         "a text in the row is the subtitle"
     );
 }
+
+/// Issue #364: a route's first `header` that holds buttons and no heading is
+/// the bar with no title, so the compiler says nothing of it; one that also
+/// holds a text is not, and `lower-header-no-bar` names the text and both
+/// repairs.
+#[test]
+fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
+    let route = |header: &str| {
+        let header: String = header.lines().map(|l| format!("          {l}\n")).collect();
+        format!("routes nav\n  home \"/\"\ncomponent App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    main navigationKey=`${{top(nav).id}}` width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n          header\n{header}          scroll flex=1\n            text \"body\"\n")
+    };
+    for header in [
+        "  button press=go aria-label=\"Add\"\n    image \"symbol:add\"",
+        "  row\n    button press=go aria-label=\"Add\"\n      image \"symbol:add\"\n  view flex=1\n  text \"Live\" role=\"status\"",
+    ] {
+        assert_eq!(crate::warnings::warned(&route(header)), [], "{header}");
+    }
+    let src =
+        route("  text \"Inbox\"\n  button press=go aria-label=\"Add\"\n    image \"symbol:add\"");
+    assert_eq!(
+        crate::warnings::warned(&src),
+        [("lower-header-no-bar".to_string(), 11)]
+    );
+    let (_, warnings) = contract::compile_warned(&src);
+    let m = &warnings[0].message;
+    assert!(
+        m.contains("holds no heading, and this text in it is not a bar item")
+            && m.contains("one `text role=\"heading\"`")
+            && m.contains("a header of buttons alone is the bar"),
+        "{m}"
+    );
+}

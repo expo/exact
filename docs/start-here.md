@@ -138,6 +138,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |an entry or settings form|`grouped-form`|
 |a sheet that edits the row tapped, filled with its values|`edit-sheet`|
 |rows added and removed in a form|`editable-rows`|
+|JSON from an HTTP endpoint (a `GET`, a GraphQL query) with no data module, so no JavaScript engine|`declared-source`|
 |a write that may be refused|`after-a-write`|
 |a failure the person must acknowledge (an alert with OK)|`error-alert`|
 |tabular digits: numeric columns or values changing in place|`numeric-readout`|
@@ -146,6 +147,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a chat that opens at its newest message|`chat-thread`|
 |a long list or grid that loads more|`long-lists`|
 |a welcome at first launch|`first-launch`|
+|a tip that teaches a control until it is used (TipKit)|`tips`|
 |records kept across launches, a saved library (`state` holds values, not records): a JSON file, SQLite, grants|`files-and-grants`|
 |dice, a shuffle, a random pick or name (Contract has no `random()`: copy the recipe's `roll`)|`random-rolls`, `random-and-shuffle`|
 |location, or anything the person must allow|`permissions`|

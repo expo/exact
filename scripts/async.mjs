@@ -115,7 +115,7 @@ export function glueWorkers(cores = availableParallelism(), load = loadavg()[0])
   return Math.max(1, Math.floor((cores - load) / 2));
 }
 // Glue files left out: `bundle-size` reads RealWorld's production app.js (`EXACT_REALWORLD_JS`), which no step prepares
-// before the glue; `document-agent` fails here (QUEUE.md, "Nine web-js document and build tests fail on main")
+// before the glue; `document-agent` fails here (QUEUE.md, "Seven web-js document-agent cases fail on main")
 const LEFT_OUT = /^host\/web-js\/(bundle-size|document-agent)\.test\.mjs$/;
 /** The glue step's files: every test file of the web hosts, of the modules and of `scripts/`, so a new one runs without
  * being named, less `LEFT_OUT`'s. */
