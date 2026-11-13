@@ -399,4 +399,15 @@ extension NavigationHost {
         return 0
     }
 }
+
+extension RouteController {
+    /// Whether a presentation covers this route, which then keeps its own safe area under the keys (LLP 1127.000 D9):
+    /// its controller, or one that holds it, presents another, an active search controller aside (UIKit presents one
+    /// over its field's context, covering nothing).
+    var presentedOver: Bool {
+        sequence(first: self as UIViewController, next: \.parent).contains { c in
+            c.presentedViewController.map { !($0 is UISearchController) && !$0.isBeingDismissed } == true
+        }
+    }
+}
 #endif

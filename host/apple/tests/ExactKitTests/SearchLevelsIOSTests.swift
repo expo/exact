@@ -194,6 +194,34 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(try node(session, "search").props["value"], "x", "Back keeps the text")
     }
 
+    /// The docked keys are a region of the window, as SwiftUI's keyboard region is: expanded, the detail beside the
+    /// list whose bar field took them takes the part they cover as its bottom cover, as the field's own route does, so
+    /// its content height leaves the keys out (a route's edge scroller is inset instead, LLP 1116.000 D1.2).
+    func testTheDetailBesideTheFieldTakesTheKeysAsItsSafeArea() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let p = session.presenter, navigation = p.navigation, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book shows") { has(session, "book-a") && split.detail.viewControllers.count == 1 && !agent.nativeInFlight() }
+        let (list, search) = try listSearch(split)
+        let book = try XCTUnwrap(split.detail.topViewController as? RouteController)
+        let height = book.node.bounds.height
+        guard case .edges(let rest)? = navigation.covers[book.node.id] else { return XCTFail("no cover at rest") }
+        let keys: CGFloat = 300
+        setKeyboard(p, top: 800 - keys, responder: search.controller.searchBar.searchTextField)
+        _ = agent.clock(["settle": true])
+        for route in [list, book] {
+            guard case .edges(let edges)? = navigation.covers[route.node.id] else { return XCTFail("\(route.node.id): no cover") }
+            XCTAssertEqual(edges.bottom, keys, accuracy: 0.5, "\(route.node.id): the keys are its bottom cover")
+        }
+        XCTAssertEqual(book.node.bounds.height, height - (keys - rest.bottom), accuracy: 0.5, "the detail's content ends at the keys")
+        setKeyboard(p, top: nil, responder: search.controller.searchBar.searchTextField)
+        _ = agent.clock(["settle": true])
+        guard case .edges(let edges)? = navigation.covers[book.node.id] else { return XCTFail("no cover") }
+        XCTAssertLessThan(edges.bottom, keys, "the keys gone, its cover is the window's safe area again")
+    }
+
     // MARK: helpers
 
     private func boot(size: CGSize = CGSize(width: 402, height: 874), regular: Bool = false) throws -> (ExactSession, SplitIOS) {

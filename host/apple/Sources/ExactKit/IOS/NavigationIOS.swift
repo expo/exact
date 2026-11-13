@@ -258,13 +258,15 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// viewport's frame, extent and inset.
     func fitContentViewport(in block: CGRect? = nil) {
         #if os(iOS)
-        // Under a search in the bar the route keeps its layout (`block(in:)`)
-        // and takes the keys as safe area, as SwiftUI's keyboard region is:
-        // UIKit insets its edge scroller so the last rows reach above them.
-        // A visual viewport takes them as its inset instead, without reflow.
+        // @ref LLP 1127.000 D9 — the docked keys are a region of the window, as SwiftUI's keyboard region is: a route
+        // they cover takes the part they cover as bottom safe area, whichever column's field took them, so UIKit insets
+        // its edge scroller and its content height leaves them out. The route whose own editor takes them is shortened
+        // instead (`block(in:)`), a visual viewport takes them as its inset, `overlays-content` lets them cover, and a
+        // route under a presentation keeps its own.
         if let presenter = host?.presenter {
             var keys: CGFloat = 0
-            if contentViewport == nil, presenter.editsInBar(of: view), let top = presenter.keyboardTop, let window = view.window {
+            if contentViewport == nil, presenter.keyboardPolicy != "overlays-content", !presenter.edits(in: view), !presentedOver,
+               let top = presenter.keyboardTop, let window = view.window {
                 let edge = view.convert(CGPoint(x: 0, y: top), from: window).y
                 keys = max(0, view.bounds.maxY - edge - (view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom))
             }
