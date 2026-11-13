@@ -6,6 +6,7 @@
 //! Kernel validation precedes every write; a refusal leaves the kernel untouched.
 mod admission;
 mod advance;
+mod capture;
 mod native_timers;
 pub use native_timers::NativeTimer;
 use native_timers::Timer;
@@ -408,6 +409,11 @@ pub struct Runner<D: DataSource> {
     reuse: bool,
     /// The 2D canvases (LLP 1056 D4), when Canvas 2D is linked.
     canvases: Option<Box<dyn canvas2d::CanvasEngine>>,
+    canvas_owner: std::sync::Arc<()>,
+    canvas_captures: Vec<(
+        crate::Request,
+        std::sync::Weak<std::sync::Mutex<crate::canvas_capture::CaptureState>>,
+    )>,
     /// Requests in flight (LLP 1016): at most one per resource or mutation.
     pending: Vec<PendingReq>,
     /// This commit let a request go: `conclude` tells the source what is still in flight.
@@ -866,6 +872,8 @@ impl<D: DataSource> Runner<D> {
             shown: Default::default(),
             reuse: false,
             canvases: links.canvas.map(|engine| engine()),
+            canvas_owner: std::sync::Arc::new(()),
+            canvas_captures: Vec::new(),
             pending: Vec::new(),
             pending_mut: Vec::new(),
             announced: Default::default(),
@@ -1058,6 +1066,7 @@ impl<D: DataSource> Runner<D> {
         let receipt = runner.apply(ops)?;
         runner.samples_stood();
         runner.publish_surfaces(surfaces);
+        runner.pin_canvas_captures();
         let line = lines::boot(carried.is_some(), runner.kernel.live_count(), receipt.epoch);
         runner.log(line);
         runner.persist_boot();

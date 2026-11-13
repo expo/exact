@@ -140,6 +140,10 @@ package protocol Canvas2DCanvases: AnyObject {
     func forget(_ id: UInt32)
     func load(_ srcs: [String])
     func waitForReplays(timeout: TimeInterval)
+    /// The kept bitmap of canvas `id` as a PNG, nil when it cannot be
+    /// encoded (LLP 1056 D9, as amended for expo/exact#188). `snapshot` runs
+    /// the copy synchronously and marks it owned before encoding begins.
+    func capture(_ id: UInt32, lifetime: UInt64, generation: UInt32, sequence: UInt64, width: Int, height: Int, snapshot: @escaping (() -> Bool) -> Bool, done: @escaping (Data?) -> Void)
 }
 
 extension Canvas2DCanvases {
@@ -258,4 +262,5 @@ final class NoCanvas2D: Canvas2DCanvases {
     func forget(_ id: UInt32) {}
     func load(_ srcs: [String]) {}
     func waitForReplays(timeout: TimeInterval) {}
+    func capture(_ id: UInt32, lifetime: UInt64, generation: UInt32, sequence: UInt64, width: Int, height: Int, snapshot: @escaping (() -> Bool) -> Bool, done: @escaping (Data?) -> Void) { done(nil) }
 }

@@ -249,10 +249,11 @@ export function createFileStore(appId) {
     },
     // Trusted host only: a picked file's entry, backed by the browser's File
     // rather than bytes read into memory (LLP 1069.002 D5).
-    putBlob(path, blob) {
+    putBlob(path, blob, refusal = () => undefined) {
       path = normalizePath(path);
       requireBelowRoot(path);
       return run(true, (records, changes) => {
+        const refused = refusal(); if (refused) throw refused;
         directory(records, parentOf(path));
         const previous = records.get(path);
         if (previous && previous.kind !== 'file') throw failure('write needs a regular file', 'EISDIR');
@@ -508,7 +509,7 @@ export async function bodyTarget(appId, grants, path) {
     // Until the file starts to be replaced, the request's end refuses the write: `refusal()`, asked just before, says
     // whether the request has ended and with what, and `ended` aborts when it may have, rejecting the write at once.
     // Once the file starts to be replaced the write waits for it, so a request never fails while its file changes.
-    async put(response, limit, ended, refusal = () => undefined) {
+    async put(response, limit, ended, refusal = () => undefined, publishRefusal) {
       try {
         // A browser rejects the read with its own words, so the overflow is kept to say why.
         let size = 0, over = null;
@@ -522,7 +523,7 @@ export async function bodyTarget(appId, grants, path) {
           refused = refusal();
           if (refused) throw refused;
           replacing = true;
-          return store.putBlob(normalized, blob);
+          return store.putBlob(normalized, blob, publishRefusal);
         }).catch(error => { throw error === refused ? error : named(error.message, error.code); });
         if (ended) {
           await new Promise((done, failed) => {

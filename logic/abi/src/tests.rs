@@ -100,6 +100,10 @@ impl DataSource for Fixture {
                 Ok(Answer::Later(request))
             }
             "surface-capture" => Ok(Answer::Later(Request::capture_surface("world"))),
+            "canvas-capture" => Ok(Answer::Later(Request::capture_canvas(
+                "sketch",
+                "app:/tmp/sketch.png",
+            ))),
             "surface-restore" => Ok(Answer::Later(Request::restore_surface(
                 "world",
                 vec![0, 128, 255],
@@ -150,6 +154,10 @@ fn surface_requests_and_outcomes_round_trip_without_becoming_storage_or_http() {
     );
     for (source, expected) in [
         ("surface-capture", Request::capture_surface("world")),
+        (
+            "canvas-capture",
+            Request::capture_canvas("sketch", "app:/tmp/sketch.png"),
+        ),
         (
             "surface-restore",
             Request::restore_surface("world", vec![0, 128, 255]),

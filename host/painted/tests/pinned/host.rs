@@ -72,8 +72,18 @@ fn text<D: DataSource>(p: &Presenter<D>, test_id: &str) -> String {
 }
 
 fn boxed<D: DataSource>(p: &mut Presenter<D>, test_id: &str) -> PaintedBox {
-    let id = view(p, test_id);
-    p.boxes().iter().find(|b| b.id == id).copied().unwrap()
+    let ids: Vec<_> = p
+        .host()
+        .kernel()
+        .find_by_test_id(test_id)
+        .into_iter()
+        .map(|key| p.host().kernel().node_by_key(key).unwrap().id)
+        .collect();
+    p.boxes()
+        .iter()
+        .find(|b| ids.contains(&b.id))
+        .copied()
+        .unwrap()
 }
 
 #[test]
@@ -544,12 +554,12 @@ fn agent_requests_answer_on_the_wire() {
     let t = handle(&mut p, &format!("{{\"op\":\"tap\",\"id\":{id}}}"));
     assert!(t.starts_with(&format!("{{\"tapped\":{id},\"at\":[")), "{t}");
     assert!(has(&p, "stations-screen"));
+    let field = view(&p, "station-search");
     let w = handle(
         &mut p,
-        &format!("{{\"op\":\"tap\",\"id\":{id},\"wheel\":[0,50]}}"),
+        &format!("{{\"op\":\"tap\",\"id\":{field},\"wheel\":[0,50]}}"),
     );
     assert!(w.contains("\"wheel\":[0,50]"), "{w}");
-    let field = view(&p, "station-search");
     let ty = handle(
         &mut p,
         &format!("{{\"op\":\"type\",\"id\":{field},\"text\":\"Sunny\"}}"),
@@ -611,7 +621,7 @@ fn a_reload_carries_state_and_starts_the_pictures_over() {
         .reload(crate::caltrain_plan(), caltrain_data::Caltrain)
         .unwrap();
     assert!(error.is_none(), "{error:?}");
-    assert!(has(&p, "stations-screen"), "the screen slot carried");
+    assert!(has(&p, "stations-screen"), "the route carried");
     assert_eq!(p.page(), (0.0, 0.0), "scroll does not survive a restart");
     assert_eq!(p.host().runner().place(), &place);
     assert_eq!(

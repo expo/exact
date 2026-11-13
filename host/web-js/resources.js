@@ -70,6 +70,9 @@ export { lateReaders, lateIdle };
 const sameReq = (a, b) =>
   a &&
   b &&
+  !a.canvas &&
+  !b.canvas &&
+  a.scope === b.scope &&
   a.storage === b.storage &&
   a.method === b.method &&
   a.url === b.url &&

@@ -327,7 +327,6 @@ impl Request {
             fetch: None,
         }
     }
-
     /// An auth session (`openAuthSession`, LLP 1069.006 D1): the body is
     /// [`crate::auth::Session`]'s JSON; the independent lane, a 64 KiB reply.
     pub fn auth(body: Vec<u8>) -> Request {
@@ -339,7 +338,6 @@ impl Request {
             ..Request::native(body)
         }
     }
-
     /// An auth session, for the host's auth arm, not the network.
     pub fn is_auth(&self) -> bool {
         self.url == crate::auth::AUTH_URL
@@ -347,7 +345,6 @@ impl Request {
             && self.storage.is_none()
             && self.surface.is_none()
     }
-
     /// A long native call, for the source's native handler, not the network.
     pub fn is_native(&self) -> bool {
         self.url == NATIVE_URL
@@ -355,7 +352,6 @@ impl Request {
             && self.storage.is_none()
             && self.surface.is_none()
     }
-
     /// Whether the request may change something at its server: an `http:`
     /// or `https:` request whose method is not safe (RFC 9110 §9.2.1), and
     /// no stream, socket, long poll or held request. One its answer lets go
@@ -375,7 +371,6 @@ impl Request {
             && self.long_poll.is_none()
             && !self.is_held()
     }
-
     /// Native ordered lane is mandatory for storage and continuations, even
     /// when an invalid HTTP annotation will cause their admission to refuse.
     pub fn is_ordered(&self) -> bool {
@@ -383,7 +378,6 @@ impl Request {
             || self.storage.is_some()
             || self.continuation.is_some()
     }
-
     /// Eligible for read or parallel-send overlap (LLP 1162 D1).
     pub fn is_plain_http(&self) -> bool {
         self.http == HttpScheduling::Ordered
@@ -401,7 +395,6 @@ impl Request {
             && self.body_from.is_none()
             && self.body_to.is_none()
     }
-
     /// A `GET`.
     pub fn get(url: &str) -> Request {
         Request {
@@ -436,7 +429,6 @@ impl Request {
             fetch: None,
         }
     }
-
     /// A two-way WebSocket to a `ws:` or `wss:` URL (LLP 1016.003 D1): a
     /// stream whose `parse` receives `open`, each frame in order and the
     /// close, and whose mapper and the module's mutations send on it through
@@ -449,7 +441,6 @@ impl Request {
         };
         request.independent_http(1 << 20)
     }
-
     /// A `POST` of a JSON text.
     pub fn post_json(url: &str, json: &str) -> Request {
         Request {
@@ -484,7 +475,6 @@ impl Request {
             fetch: None,
         }
     }
-
     /// Host storage work as a bounded protocol payload (LLP 1027.001 D2).
     pub fn storage(payload: Vec<u8>) -> Self {
         Self {
@@ -492,7 +482,6 @@ impl Request {
             ..Self::get("")
         }
     }
-
     /// Capture the complete carried state of one named live surface.
     pub fn capture_surface(name: impl Into<String>) -> Self {
         Self {
@@ -530,6 +519,11 @@ impl Request {
         let capability = match surface {
             SurfaceRequest::Capture { name } => format!("surface.read {name}"),
             SurfaceRequest::Restore { name, .. } => format!("surface.write {name}"),
+            // The app's own pixels need no grant; writing them needs
+            // `fs.write`, which the host's write checks (LLP 1133.009 D10).
+            SurfaceRequest::Canvas { path, .. } => {
+                return crate::canvas_capture::path_refusal(path).map_or(Ok(()), Err);
+            }
         };
         let admitted: Vec<_> = admitted
             .lines()
@@ -871,6 +865,16 @@ pub enum SurfaceRequest {
         name: String,
         /// The complete carried state; hosts never project or truncate it.
         bytes: Vec<u8>,
+    },
+    /// Write the kept bitmap of a 2D canvas as a PNG file
+    /// ([`crate::canvas_capture`]).
+    Canvas {
+        /// The authored canvas surface name.
+        name: String,
+        /// The `app:/` file to write.
+        path: String,
+        /// The runner's owned drawing boundary; absent until the requesting commit stands.
+        job: Option<crate::canvas_capture::CaptureJob>,
     },
 }
 

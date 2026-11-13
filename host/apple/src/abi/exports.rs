@@ -421,6 +421,12 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.request_active(ticket)), |_| 0)
         }
 
+        /// Mark an owned pixel copy before the presenter starts encoding it.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_snapshotted(rt: u32, ticket: u64) -> u8 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.canvas_snapshotted(ticket)), |_| 0)
+        }
+
         /// Complete presenter-owned surface work; the input is bytes or a failure message.
         #[no_mangle]
         pub extern "C" fn exact_fulfill_surface(rt: u32, ticket: u64, kind: u32, len: usize, now_ms: f64) -> u32 {

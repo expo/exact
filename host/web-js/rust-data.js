@@ -132,6 +132,11 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // an in-flight request is not kept for newer arguments whose request differs only in being held.
       return { req: { method, url, headers, cache, ...(prefetch ? { prefetch: true } : {}), held, body: text.decode(body), raw: body, http: held ? `${http} held` : http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, cancel: tag < 9 && /^(GET|HEAD)$/i.test(method), socket: tag === 11, protocols, longPoll } };
     }
+    if (tag === 16) {
+      const surface = r.str(), path = r.str(), scoped = r.u8(), scope = r.str();
+      if (scoped > 1) throw new Error('invalid grant scope tag');
+      return { req: { canvas: { surface, path }, scope: scoped ? scope : null } };
+    }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
     if (tag === 5) { const payload = r.bytes(r.u32()), scoped = r.u8() === 1, scope = r.str(); return { req: { storage: text.decode(payload), scope: scoped ? scope : null } }; }
@@ -323,9 +328,9 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   data.fetch = (req, message, controller) => {
     if (!req.stream) {
       const call = req[CALL];
-      if (!call) return run(req, controller?.signal);
+      if (!call) return run(req, controller?.signal, controller);
       // A held request's reply, a failure too, is a held reply for `clock held` (the runner's `held_replies`).
-      return run(req, controller?.signal).then(o => {
+      return run(req, controller?.signal, controller).then(o => {
         if (call.held) { call.held = 0; heldReply(call); }
         o[CALL] = call;
         return o;

@@ -74,7 +74,7 @@ import { quiet, quietFor } from './quiet.mjs';
 import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
-import { appleDeadStrip, stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, linksByPlan } from './link.mjs';
+import { appleDeadStrip, recordMinimumOS, stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, linksByPlan } from './link.mjs';
 export { appIcon, appleEmbedOnly, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
 import { runMac, IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode, appleEmbedOnly, appleSdkName, compilesSwiftHost, xcodeRefusal } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
@@ -714,6 +714,8 @@ async function main(args, lockHeld = false) {
   // A development archive (--development) ships no dSYM, so SwiftPM writes no debug info for dsymutil to gather (~5 s).
   const swiftArgs = ['build', '-c', swiftWhole ? 'release' : 'debug', '--scratch-path', swiftBuildRoot, ...(swiftWhole ? [] : ['-Xswiftc', '-O', ...appleDeadStrip]), ...(args.includes('--development') ? ['-debug-info-format', 'none'] : []),
     ...(production && optimize === 'size' ? ['-Xswiftc', '-Osize', '-Xswiftc', '-Xfrontend', '-Xswiftc', '-internalize-at-link'] : [])], executableLink = [];
+  // The app's own `minimumOS` when the compiles are the floor's: recorded in each product after its link (recordMinimumOS).
+  let recordedMinimum = null;
   if (ios) {
     swiftArgs.push(
       '--triple', iosTripleFor(app, device, tv, compiled.ios),
@@ -732,9 +734,11 @@ async function main(args, lockHeld = false) {
     // `designRequiresCompatibility`: the link records the iOS 18 SDK (macOS's
     // case below says why); this later `-platform_version` wins.
     if (designCompatible(app, 'ios')) swiftArgs.push('-Xlinker', '-platform_version', '-Xlinker', destination, '-Xlinker', targets.ios, '-Xlinker', COMPATIBLE_SDK.ios);
-    // Compiled for the floor (`compiledTargets`), the executable still links for the app's `minimumOS`, which this
-    // later `-platform_version` records. Only the products' links take it, so the compiles stay every app's.
-    else if (compiled.ios !== targets.ios) executableLink.push('-Xlinker', '-platform_version', '-Xlinker', destination, '-Xlinker', targets.ios, '-Xlinker', read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
+    // Compiled for the floor (`compiledTargets`), the executable still records the app's `minimumOS`: written into its
+    // LC_BUILD_VERSION once it is linked (recordMinimumOS). As a `-platform_version` among the products' link flags it
+    // made SwiftPM compile the whole host again whenever the minimum differed from the last build's (~33 s on a Linux
+    // builder, expo/exact-build#176), so every product links with every app's arguments.
+    else if (compiled.ios !== targets.ios) recordedMinimum = targets.ios;
     // A development device archive ships no dSYM. Its debug map names the object files it was linked from, under the
     // app's build directory, whose path holds the app's id; relative to that directory, the executable names no app.
     if (device && args.includes('--development')) executableLink.push('-Xlinker', '-oso_prefix', '-Xlinker', `${appleArtifacts(app, { destination }).owner}/`);
@@ -993,7 +997,10 @@ async function main(args, lockHeld = false) {
   if (shared) env.EXACT_CORE_FRAMEWORK = relative(pkg, shared.xcframework);
   // A Clip's executable name may also be its parent's or a sample host's.
   const clipBin = simulatorClip ? resolve(mkdtempSync(resolve(binDir, '.clip-')), simulatorClip.executable) : null;
-  const intents = tv || !packaged.has('intents') ? null : buildIntents({ app, compat: bakedCompat, directory: resolve(linkRoot, 'intents'), sdkName, sdk, triple: moduleTripleFor(app, ios, device, tv), platform: ios ? 'ios' : 'macos', deployment: ios ? targets.ios : targets.macos, swiftc, runApple });
+  // Its object is linked into the products, so it compiles for their link target: the floor when the app's own minimum is
+  // written after the link (`recordedMinimum`), or `ld` refuses an object newer than the link. Its generated code needs
+  // only iOS 17 (intents.mjs `floor`); the metadata still reads the app's minimum.
+  const intents = tv || !packaged.has('intents') ? null : buildIntents({ app, compat: bakedCompat, directory: resolve(linkRoot, 'intents'), sdkName, sdk, triple: moduleTripleFor(app, ios, device, tv, recordedMinimum ? compiled : targets), platform: ios ? 'ios' : 'macos', deployment: ios ? targets.ios : targets.macos, swiftc, runApple });
   // The shared scratch links one app at a time: another app's build of this
   // destination waits here (seconds once ExactKit is compiled), and the
   // executable is in this build's private stage before the claim is let go.
@@ -1233,6 +1240,7 @@ async function main(args, lockHeld = false) {
       writeFileSync(linked, from);
       const executable = p === 'ExactClip' ? clipBin : resolve(binDir, p === product ? paths.executable : p);
       copyFileSync(resolve(swiftBinDir, p), executable);
+      if (recordedMinimum) recordMinimumOS(executable, recordedMinimum);
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.

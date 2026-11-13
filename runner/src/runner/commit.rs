@@ -215,6 +215,7 @@ impl<D: DataSource> Runner<D> {
         self.hear_forgotten();
         // Every commit ends so: what the source set aside is kept or let go.
         self.keep_sent(refused);
+        self.pin_canvas_captures();
         self.sample();
     }
 
@@ -943,6 +944,7 @@ impl<D: DataSource> Runner<D> {
         self.next_ticket += 1;
         let name = self.target_name(target);
         let mut request = request;
+        crate::canvas_capture::from_fetch(&mut request);
         self.number_data_call(&mut request);
         request.reach = self.reach_of(self.origin_for(Some(target)));
         self.log(super::lines::enqueued(ticket, &name, &request));

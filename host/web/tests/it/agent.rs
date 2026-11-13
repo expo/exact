@@ -88,7 +88,6 @@ fn state_is_typed_json_with_field_names() {
     // deck, and its focus).
     for slot in [
         "\"nowMs\":1787915400000",
-        "\"screen\":\"home\"",
         "\"stationId\":null",
         "\"query\":\"\"",
         "\"material\":\"glass\"",
@@ -99,6 +98,8 @@ fn state_is_typed_json_with_field_names() {
     }
     let json: serde_json::Value = serde_json::from_str(&state).unwrap();
     let derives = &json["derives"];
+    assert_eq!(derives["screen"], "home");
+    assert_eq!(derives["current"]["url"], "/");
     assert_eq!(derives["selectedId"], "mv");
     assert_eq!(derives["tv"], false);
     assert_eq!(derives["skyOn"], true);

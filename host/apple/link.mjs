@@ -2,7 +2,7 @@
 // targets it compiles and links for, and the SDK its executable records, with the
 // device launch link of LLP 1047.001.001.
 import { spawnSync } from './toolchain.mjs';
-import { readFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 /** Save a distributed image's symbols before removing its local symbol table.
@@ -165,9 +165,8 @@ export function dylibInstallNames(executable) {
 }
 
 /** Load commands bounded by their own slice, so build checks need no host's Mach-O tools. */
-function machoCommands(executable) {
-  let bytes;
-  try { bytes = readFileSync(executable); } catch (e) { throw new Error(`host/apple: cannot read ${executable}: ${e.message}`); }
+function machoCommands(executable, bytes = null) {
+  if (!bytes) try { bytes = readFileSync(executable); } catch (e) { throw new Error(`host/apple: cannot read ${executable}: ${e.message}`); }
   const invalid = () => { throw new Error(`host/apple: ${basename(executable)} has an invalid 64-bit Mach-O`); };
   const slice = (at, size) => {
     if (!Number.isSafeInteger(at) || !Number.isSafeInteger(size) || at < 0 || size < 32 || at + size > bytes.length) invalid();
@@ -215,6 +214,22 @@ export function assertCapabilityFrameworks(executable, products, allowedFramewor
  * and plan restarts). */
 export function linksByPlan(production, args) {
   return production || (args.includes('--link') && args[args.indexOf('--link') + 1] === 'plan');
+}
+
+/** Write the app's `minimumOS` into every slice's `LC_BUILD_VERSION` (its `minos`), after a link for the SDK's floor
+ * (`compiledTargets`). Passing it to SwiftPM as a `-platform_version` link flag instead made SwiftPM compile the whole
+ * Swift host again for every app whose minimum differed from the previous build's (about 33 s, expo/exact-build#176);
+ * the compiles are the floor's either way, and the linker records nothing else from it. */
+export function recordMinimumOS(executable, version) {
+  const [major, minor = 0, patch = 0] = String(version).split('.').map(Number);
+  if (![major, minor, patch].every(n => Number.isInteger(n) && n >= 0 && n < 256) || major > 65535) throw new Error(`host/apple: ${version} is not a minimum OS version`);
+  const bytes = readFileSync(executable);
+  for (const commands of machoCommands(executable, bytes)) {
+    const versions = commands.filter(({ cmd }) => cmd === 0x32);
+    if (versions.length !== 1 || versions[0].bytes.length < 24) throw new Error(`host/apple: ${basename(executable)} has no single LC_BUILD_VERSION to record minimumOS ${version} in`);
+    versions[0].bytes.writeUInt32LE((major << 16 | minor << 8 | patch) >>> 0, 12);
+  }
+  writeFileSync(executable, bytes);
 }
 
 /** The SDK the linker recorded in an executable (`LC_BUILD_VERSION`) is the

@@ -9,7 +9,7 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // The module runs in a vm with stand-in browser globals.
 import { expect, test } from 'bun:test';
 import vm from 'node:vm';
-import { glueDeclarations } from './glue-fixture.mjs';
+import { glueCase, glueDeclarations } from './glue-fixture.mjs';
 
 const source = readFileSync(new URL('../canvas2d-glue.js', import.meta.url), 'utf8');
 
@@ -165,4 +165,33 @@ test('removal loads no Canvas 2D piece and a removal queued during loading relea
   frames.shift()(); frames.shift()();
   await pending;
   expect([loads, w.observed.size, w.sent]).toEqual([1, 0, []]);
+});
+
+
+test('a failed Canvas 2D helper rejects queued captures and preserves the destination', async () => {
+  const source = readFileSync(new URL('../navigation.js', import.meta.url), 'utf8');
+  const frames = [], tracked = [], answers = [];
+  let destination = 'keep';
+  const make = new Function('requestAnimationFrame', `${glueDeclarations(source, ['afterPaint', 'afterPaintPieces'])}; return afterPaintPieces;`)(fn => frames.push(fn));
+  const pieces = make(async () => { throw new Error('canvas helper did not load'); }, { views: new Map(), agent: () => true });
+  const wasm = readFileSync(new URL('../glue.js', import.meta.url), 'utf8');
+  const apply = new Function('pieces', 'host', 'holds', 'track', 'safelyFulfill', 'encoder', 'storageService', 'scopedGrantSet', `return op => { switch (op.op) {
+    ${glueCase(wasm, 'canvasCapturePrepare')}
+    ${glueCase(wasm, 'canvasCapture')}
+  } };`)(pieces, { incarnation: 1 }, () => true, p => tracked.push(p.catch(e => e)),
+    (_owner, ticket, kind, status, _headers, bytes) => answers.push([ticket, kind, status, JSON.parse(new TextDecoder().decode(bytes))]),
+    new TextEncoder(), async () => ({ writePng: async (_path, bytes) => { destination = bytes; } }), () => null);
+  apply({ op: 'canvasCapturePrepare', ticket: 7 });
+  apply({ op: 'canvasCapture', ticket: 8, path: 'app:/tmp/shot.png' });
+  await Promise.resolve();
+  const loading = pieces.pending();
+  frames.shift()(); frames.shift()();
+  await loading;
+  // The loader has failed; drain its rejection callbacks, with no external work left.
+  await new Promise(setImmediate);
+  expect(answers.map(([ticket, kind, status, error]) => [ticket, kind, status, error.name]).sort()).toEqual([
+    [7, 0, 400, 'EncodingError'], [8, 0, 400, 'EncodingError'],
+  ]);
+  await Promise.all(tracked);
+  expect(destination).toBe('keep');
 });

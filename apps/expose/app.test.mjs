@@ -4,6 +4,221 @@ import { open } from '../../scripts/agent.mjs';
 import { checkOp, ratio } from '../../scripts/agent-check.mjs';
 import schema from '../../kernel/tables/schema.json';
 
+test('routes restore every screen from its URL', async () => {
+  for (const [url, screen] of [
+    ['/', 'lock-screen'], ['/home', 'home-screen'], ['/messages', 'inbox-screen'],
+    ['/messages/nico', 'thread-screen'], ['/reader', 'reader-screen'],
+    ['/reader/loud-clock', 'article-screen'], ['/settings', 'settings-screen'],
+    ['/settings/intelligence', 'page-intelligence'], ['/settings/display', 'page-display'],
+    ['/settings/about', 'page-about'],
+  ]) {
+    const session = await open({ host: 'web', app: 'expose', url,
+      failFetch: 'https://' });
+    try {
+      await session.clock('settle');
+      expect((await session.state()).navigation.url).toBe(url);
+      expect((await session.find(screen)).inactive).not.toBe(true);
+      await session.carrier.reset({ keep: true, failFetch: 'https://' });
+      await session.clock('settle');
+      expect((await session.state()).navigation.url).toBe(url);
+      expect((await session.find(screen)).inactive).not.toBe(true);
+    } finally {
+      await session.close();
+    }
+  }
+}, 30_000);
+
+test('covered conversations keep their own names and transcripts', async () => {
+  const session = await open({ host: 'web', app: 'expose', url: '/messages/expose', failFetch: 'https://' });
+  const threads = () => session.carrier.evaluate(`Array.from(document.querySelectorAll('[data-testid="thread-screen"]'), el => el.textContent)`);
+  try {
+    await session.clock('settle');
+    const before = await threads();
+    expect(before[0]).toContain('Expose');
+    await session.tap('thread-add-key');
+    await session.clock('settle');
+    expect(await threads()).toEqual(before);
+    expect(await session.carrier.evaluate(`document.querySelector('[data-testid="page-intelligence"] [data-testid="back-settings"]').textContent`)).toContain('Messages');
+    await session.tap('back-settings');
+    await session.type('expose', '/messages/nico');
+    await session.clock('settle');
+    const covered = await threads();
+    expect(covered).toHaveLength(2);
+    expect(covered[0]).toBe(before[0]);
+    expect(covered[1]).toContain('Nico');
+    expect(covered[1]).not.toBe(covered[0]);
+  } finally {
+    await session.close();
+  }
+});
+
+for (const [url, button, back, parent] of [
+  ['/', 'notice-reader', 'back-reader', '/reader'],
+  ['/home', 'widget-reader', 'back-reader', '/reader'],
+  ['/', 'notice-update', 'back-settings', '/settings'],
+  ['/home', 'app-typetour', 'back-settings', '/settings'],
+]) {
+  test(`${button} opens its declared parent from ${url}`, async () => {
+    const session = await open({ host: 'web', app: 'expose', url, failFetch: 'https://' });
+    try {
+      await session.clock('settle');
+      await session.tap(button);
+      await session.tap(back);
+      expect((await session.state()).navigation.url).toBe(parent);
+    } finally {
+      await session.close();
+    }
+  });
+}
+
+for (const [name, url, first, second, screen, restored, back] of [
+  ['settings pages', '/settings', 'row-about', 'row-about-model', 'page-about', '/settings/about', 'back-settings'],
+  ['Ask Expose', '/reader', 'article-loud-clock', 'ask-expose', 'article-screen', '/reader/loud-clock', 'back-reader'],
+  ['conversation settings', '/messages', 'thread-expose', 'thread-add-key', 'thread-screen', '/messages/expose', 'thread-back'],
+  ['apps', '/home', 'app-settings', 'row-app-messages', 'settings-screen', '/settings', 'home-bar'],
+]) {
+  test(`browser Back followed by the app Back returns through ${name}`, async () => {
+    const session = await open({ host: 'web', app: 'expose', url, failFetch: 'https://' });
+    try {
+      await session.tap(first);
+      const visit = (await session.find(screen)).id;
+      await session.tap(second);
+      if (name === 'settings pages')
+        expect(await session.carrier.evaluate(`document.querySelector('[data-testid="page-intelligence"] [data-testid="back-settings"]').textContent`)).toContain('About');
+      await session.tap('expose', { history: -1 });
+      await session.clock('settle');
+      expect((await session.state()).navigation.url).toBe(restored);
+      expect((await session.find(screen)).id).toBe(visit);
+      await session.tap(back);
+      await session.clock('settle');
+      expect((await session.state()).navigation.url).toBe(url);
+    } finally {
+      await session.close();
+    }
+  }, 30_000);
+}
+
+test('a Back control names the visit it returns to', async () => {
+  for (const [from, url, screen, back] of [
+    ['/messages', '/settings/display', 'page-display', 'back-settings'],
+    ['/settings', '/reader/loud-clock', 'article-screen', 'back-reader'],
+    ['/settings/about', '/settings/display', 'page-display', 'back-settings'],
+  ]) {
+    const session = await open({ host: 'web', app: 'expose', url: from, failFetch: 'https://' });
+    try {
+      await session.clock('settle');
+      await session.type('expose', url);
+      await session.clock('settle');
+      const label = await session.carrier.evaluate(`Array.from(document.querySelectorAll('[data-testid="${screen}"] [data-testid="${back}"]')).at(-1).textContent`);
+      expect(label).toContain({ '/messages': 'Messages', '/settings': 'Settings', '/settings/about': 'About' }[from]);
+      await session.tap(back);
+      await session.clock('settle');
+      expect((await session.state()).navigation.url).toBe(from);
+    } finally {
+      await session.close();
+    }
+  }
+}, 30_000);
+
+test('Send keeps focus in the conversation on top', async () => {
+  const session = await open({ host: 'web', app: 'expose', url: '/messages/expose', failFetch: 'https://' });
+  try {
+    await session.clock('settle');
+    await session.tap('thread-add-key');
+    await session.tap('intelligence-chat');
+    await session.clock('settle');
+    await session.type('composer', 'Hello');
+    await session.tap('send');
+    await session.clock('settle');
+    const focused = await session.carrier.evaluate(`(() => {
+      const threads = Array.from(document.querySelectorAll('[data-testid="thread-screen"]'));
+      return threads.length === 2 && threads[1].contains(document.activeElement)
+        && document.activeElement.getAttribute('data-testid') === 'composer';
+    })()`);
+    expect(focused).toBe(true);
+  } finally {
+    await session.close();
+  }
+});
+
+test('Reader retains its caller when an article extends a different chain', async () => {
+  const session = await open({ host: 'web', app: 'expose', url: '/settings', failFetch: 'https://' });
+  try {
+    await session.tap('row-app-reader');
+    const reader = (await session.find('reader-screen')).id;
+    await session.tap('article-loud-clock');
+    await session.tap('expose', { history: -1 });
+    expect((await session.state()).navigation.url).toBe('/reader');
+    expect((await session.find('reader-screen')).id).toBe(reader);
+  } finally {
+    await session.close();
+  }
+});
+
+test('browser history visits settings, articles and conversations', async () => {
+  const session = await open({ host: 'web', app: 'expose', failFetch: 'https://' });
+  const at = async (url, screen) => {
+    await session.clock('settle');
+    expect((await session.state()).navigation.url).toBe(url);
+    expect((await session.find(screen)).inactive).not.toBe(true);
+  };
+  try {
+    await session.tap('lock-unlock');
+    await session.tap('app-settings');
+    for (const page of ['display', 'intelligence', 'about']) {
+      await session.tap(`row-${page}`);
+      await at(`/settings/${page}`, `page-${page}`);
+      await session.tap('expose', { history: -1 });
+      await at('/settings', 'settings-screen');
+      await session.tap('expose', { history: 1 });
+      await at(`/settings/${page}`, `page-${page}`);
+      await session.tap('back-settings');
+      await at('/settings', 'settings-screen');
+    }
+    await session.tap('home-bar');
+    await session.tap('app-reader');
+    await session.tap('article-loud-clock');
+    await at('/reader/loud-clock', 'article-screen');
+    await session.tap('expose', { history: -1 });
+    await at('/reader', 'reader-screen');
+    await session.tap('expose', { history: 1 });
+    await at('/reader/loud-clock', 'article-screen');
+    await session.tap('back-reader');
+    await at('/reader', 'reader-screen');
+    for (const id of ['grayscale', 'lilt', 'nine-days', 'assistant']) {
+      await session.tap(`article-${id}`);
+      await at(`/reader/${id}`, 'article-screen');
+      await session.tap('back-reader');
+      await at('/reader', 'reader-screen');
+    }
+    await session.tap('article-loud-clock');
+    await session.tap('ask-expose');
+    await at('/messages/expose', 'thread-screen');
+    await session.tap('thread-add-key');
+    await at('/settings/intelligence', 'page-intelligence');
+    await session.tap('home-bar');
+    await session.tap('app-messages');
+    for (const id of ['expose', 'nico', 'crew', 'mom', 'builds']) {
+      await session.tap(`thread-${id}`);
+      await at(`/messages/${id}`, 'thread-screen');
+      await session.type('composer', 'A draft');
+      await session.tap('thread-back');
+      await at('/messages', 'inbox-screen');
+      expect((await session.state()).slots.draft).toBe('');
+      await session.tap('expose', { history: 1 });
+      await at(`/messages/${id}`, 'thread-screen');
+      await session.tap('thread-back');
+      await at('/messages', 'inbox-screen');
+    }
+    await session.tap('status-time');
+    await at('/', 'lock-screen');
+    await session.tap('notice-nico');
+    await at('/messages/nico', 'thread-screen');
+  } finally {
+    await session.close();
+  }
+}, 30_000);
+
 test('signal fills have readable Apple text and marks in both schemes', () => {
   const source = readFileSync(new URL('./app.contract', import.meta.url), 'utf8');
   const parts = readFileSync(new URL('./parts.contract', import.meta.url), 'utf8');
@@ -36,7 +251,7 @@ test('signal fills have readable Apple text and marks in both schemes', () => {
 // Build first with `bun host/web/build.mjs expose`.
 for (const appearance of ['system', 'light', 'dark']) {
   test(`Expose text remains readable with ${appearance} appearance`, async () => {
-    const session = await open({ host: 'web', app: 'expose', failFetch: 'https://api.open-meteo.com' });
+    const session = await open({ host: 'web', app: 'expose', failFetch: 'https://' });
     try {
       await session.clock('+1000');
       await session.clock('data');
@@ -94,7 +309,7 @@ for (const appearance of ['system', 'light', 'dark']) {
 test('a body that fails after its headers ends the turn, and Clear aborts one still answering', async () => {
   const { answer } = await import('./app.ts');
   const store = { get: name => (name === 'assistant.key' ? 'sk-test' : null) };
-  const thread = () => answer('conversation', ['expose'], store);
+  const thread = () => answer('conversations', [['expose'], 0, 0], store)[0];
   const fetch = globalThis.fetch, native = globalThis.__exact_message;
   try {
     // The native path reads one JSON body: a 200 that is not JSON.

@@ -658,6 +658,7 @@ dependencies = [
 name = "canvas-gallery-apple"
 version = "0.1.0"
 dependencies = [
+ "canvas-gallery-data",
  "exact-apple",
  "exact-js",
  "exact-js-bake",
@@ -666,9 +667,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvas-gallery-data"
+version = "0.1.0"
+dependencies = [
+ "exact-data",
+ "exact-plan",
+ "exact-runner",
+]
+
+[[package]]
 name = "canvas-gallery-linux"
 version = "0.1.0"
 dependencies = [
+ "canvas-gallery-data",
  "exact-js",
  "exact-js-bake",
  "exact-linux",
@@ -678,9 +689,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvas-gallery-logic"
+version = "0.1.0"
+dependencies = [
+ "canvas-gallery-data",
+ "exact-logic-abi",
+]
+
+[[package]]
 name = "canvas-gallery-web"
 version = "0.1.0"
 dependencies = [
+ "canvas-gallery-data",
  "exact-js-bake",
  "exact-js-web",
  "exact-logic",

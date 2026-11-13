@@ -14,7 +14,7 @@ import * as source from '__APP_TS__';
 import { createSecretFacade, hasGrant, inOverlay, overlaying, setAppGrantSet } from './admission.js';
 import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
-import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
+import { canvasCommitted, checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
@@ -525,6 +525,18 @@ export function install(data, mixed = false, modules = null) {
   data.grants = setAppGrantSet(tsGrantSet);
   const storage = globalThis.__exactRender ? renderStorage(null) : storageOf(tsGrantSet);
   if (globalThis.__exactRender) { data.watchedInRender = watchedInRender; data.refusedInRender = refusedInRender; }
+  globalThis.captureCanvas = (surface, path) => {
+    if (overlaying.on) return Promise.reject(inOverlay('captureCanvas()'));
+    if (answering.mapper || answering.mapperCall) return Promise.reject(new Error("captureCanvas() is unavailable in a stream's mapper: capture in the answer that opens the stream"));
+    const call = answering.call, active = () => !!call && !call.settled && (call.wanted?.() ?? call.turn) && !call.ticket?.r?.gone;
+    if (globalThis.__exactRender) return refuseInRender('captureCanvas()', call);
+    if (!active()) return Promise.reject(new DOMException('captureCanvas() requires a live answer: call it directly or after await', 'InvalidStateError'));
+    return ordinary(() => {
+      const ready = canvasCommitted(surface, active);
+      return Promise.all([ready, import('./canvas-capture.js')]).then(([, m]) =>
+        m.captureCanvas(surface, path, (path, png) => m.writeCanvas(appId, tsGrantSet, path, png, active), ready, active));
+    });
+  };
   // The module's storage, as the runner's `state.background` (LLP 1097 D8).
   if (storage) data.background = () => ({ queued: queue.length, inFlight: head ? 1 : 0, ...counts });
   // A rejection nothing handled reaches the journal, as on every host (D8):
