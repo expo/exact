@@ -217,12 +217,19 @@ const skipped = /(^|[\\/])(target|dist(?:\.previous)?|\.build|node_modules)([\\/
 const shaderDigests = new Map();
 const toolingEnv = { ...buildEnv, CARGO_TARGET_DIR: app.target };
 const reflectBin = resolve(app.target, 'debug/exact-gpu-reflect');
+const reflectBuild = ['the GPU tools (exact-gpu-reflect)', 'cargo', ['build', '-q', '-p', 'exact-gpu-reflect'], { cwd: root, env: toolingEnv }];
 function reflectShaders(tree) {
   if (!existsSync(reflectBin)) {
-    const built = phased('the GPU tools (exact-gpu-reflect)', 'cargo', ['build', '-q', '-p', 'exact-gpu-reflect'], { cwd: root, env: toolingEnv });
+    const built = phased(...reflectBuild);
     if (built.status !== 0) throw new Error(`exact-gpu-reflect did not build (exit ${built.status ?? built.signal})`);
   }
   return shaderInterfaceDigests(tree, reflectBin);
+}
+// The shader check below needs the tool. A cold build of it is long, so it
+// runs owned and asynchronously here, where a signal can stop it.
+if (!existsSync(reflectBin)) {
+  const built = await startup.owned(own => phasedAsync(...reflectBuild, own));
+  if (built.status !== 0) throw new Error(`exact-gpu-reflect did not build (exit ${built.status})`);
 }
 // A completed build may predate a source-tree deletion or restoration. Mirror
 // every declared tree before any compiler/server process starts. A truly

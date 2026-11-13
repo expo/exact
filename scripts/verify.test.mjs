@@ -11,6 +11,7 @@ import { resolve, toNamespacedPath } from 'node:path';
 import { applyPattern, createApp } from '../game/new.mjs';
 import { findings } from '../host/apple/feel/analyze.mjs';
 import { chromium } from './agent-launch.mjs';
+import { ancestors, parentsOf } from './processes.mjs';
 import { ago, appServer, buildProgress, buildWarnings, draftFields, fixedType, groups, judgeRelaunch, judgeReload, movedClock, persistedStates, pinnedLaunch, recordedServerAddress, refusalsOf, relaunchFacts, relaunchStore, reloadLine, reloadNote, report, reusable, savedChanges, screenTexts, serverUrl, shotName, storedTexts, warningsOfBuild } from './verify.mjs';
 import { semanticsSummary } from './verify-semantics.mjs';
 
@@ -1478,4 +1479,15 @@ test('every drive after the build, and the run recorded, select the app the call
 test('verify shows a drive build as it starts and as it runs, not its other lines', () => {
   const lines = ['building for ios: app.contract changed', 'waiting for the build in another drive', '  still building (60 s): Compiling exact-kernel', 'kept the plan', 'warning: x'];
   assert.deepEqual(lines.filter(buildProgress), lines.slice(0, 3));
+});
+
+test('a server owner two processes up is found on every platform: the parent table, then the walk up it', () => {
+  // `ps -A -o pid=,ppid=` pads its columns; Win32_Process's lines are as written.
+  const posix = parentsOf('    1     0\n  420     1\n  500   420\n  612   500\n');
+  assert.deepEqual(ancestors(612, posix), ['612', '500', '420']);
+  const windows = parentsOf('0 0\r\n4 0\r\n7100 4\r\n7200 7100\r\n7300 7200\r\n');
+  assert.deepEqual(ancestors(7300, windows), ['7300', '7200', '7100', '4']);
+  assert.deepEqual(ancestors(7300, new Map()), ['7300'], 'a parent table that could not be read');
+  assert.deepEqual(ancestors(10, new Map([[10, 11], [11, 10]])), ['10', '11'], 'a reused pid makes no loop');
+  assert.ok(ancestors().includes(String(process.ppid)));
 });

@@ -1,6 +1,7 @@
 # A mixed-encoding colour reverse skips CSS shortening
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The reversing check compares the new target with the reversing-adjusted start in one encoding (Value::same, OKLab when the two differ), so a reversal between a legacy and a modern colour is shortened.
 **Systems:** motion
 **Severity:** P2
 **Author:** Grok 4.7

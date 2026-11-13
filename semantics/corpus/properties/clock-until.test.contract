@@ -14,7 +14,9 @@ test "a wait does not fire a pending timer"
   clock +100
   reload
 
-test "fields need an observation adapter"
+test "field waits read the observation without firing a timer"
   clock data
   clock until state session.phase == "ready" within 1000
-  expect state screen == "home"
+  expect state session.phase == "ready"
+  expect state screen == "lock"
+  expect state ticks == 0

@@ -1,6 +1,7 @@
 # A nested RichEdit message leaves composition stuck
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A composition end that arrives while the hook holds the fields is kept and applied after the outer dispatch, and a start whose dispatch fails begins no composition, so composing never outlives its end.
 **Systems:** host/windows
 **Severity:** P2
 **Author:** Grok 4.7

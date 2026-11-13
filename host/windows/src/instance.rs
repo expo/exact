@@ -74,22 +74,32 @@ pub(crate) enum Settled {
     Busy,
 }
 
+/// How long a launch waits between tries.
+#[cfg_attr(not(windows), allow(dead_code))]
+const PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Try until the launch is the instance, has been handed over, or `patience`
-/// has passed with the mutex still held; `pause` waits between tries.
+/// has passed with the mutex still held. `elapsed` is the monotonic time since
+/// the first try; each try is given the time left, which bounds how long it
+/// may block, and `pause` waits the time it is given between tries.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn settle(
-    mut attempt: impl FnMut() -> Attempt,
+    mut attempt: impl FnMut(std::time::Duration) -> Attempt,
     patience: std::time::Duration,
-    mut pause: impl FnMut() -> std::time::Duration,
+    mut elapsed: impl FnMut() -> std::time::Duration,
+    mut pause: impl FnMut(std::time::Duration),
 ) -> Settled {
-    let mut waited = std::time::Duration::ZERO;
     loop {
-        match attempt() {
+        match attempt(patience.saturating_sub(elapsed())) {
             Attempt::Free => return Settled::First,
             Attempt::Answered => return Settled::Handed,
-            Attempt::Taken if waited >= patience => return Settled::Busy,
-            Attempt::Taken => waited += pause(),
+            Attempt::Taken => {}
         }
+        let left = patience.saturating_sub(elapsed());
+        if left.is_zero() {
+            return Settled::Busy;
+        }
+        pause(left.min(PAUSE));
     }
 }
 
@@ -204,8 +214,9 @@ mod imp {
         let message = super::encode(args);
         let mut mutex = std::ptr::null_mut();
         let mut failed = false;
+        let started = std::time::Instant::now();
         let settled = super::settle(
-            || {
+            |left| {
                 let held = unsafe { CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr()) };
                 if held.is_null() {
                     failed = true;
@@ -216,17 +227,14 @@ mod imp {
                     return super::Attempt::Free;
                 }
                 unsafe { CloseHandle(held) };
-                match hand_over(&name, &message) {
+                match hand_over(&name, &message, left) {
                     true => super::Attempt::Answered,
                     false => super::Attempt::Taken,
                 }
             },
             PATIENCE,
-            || {
-                let pause = Duration::from_millis(50);
-                std::thread::sleep(pause);
-                pause
-            },
+            || started.elapsed(),
+            std::thread::sleep,
         );
         match settled {
             _ if failed => {
@@ -287,8 +295,9 @@ mod imp {
         })
     }
 
-    /// Hand `message` to the running instance's window, if it is there and answers.
-    fn hand_over(name: &[u16], message: &[u16]) -> bool {
+    /// Hand `message` to the running instance's window, if it is there and
+    /// answers within `patience` (a millisecond at least).
+    fn hand_over(name: &[u16], message: &[u16], patience: Duration) -> bool {
         let class = wide("Static");
         let data = COPYDATASTRUCT {
             dwData: ARGUMENTS,
@@ -319,7 +328,7 @@ mod imp {
                 0,
                 &data as *const COPYDATASTRUCT as isize,
                 SMTO_ABORTIFHUNG,
-                PATIENCE.as_millis() as u32,
+                patience.as_millis().clamp(1, u32::MAX as u128) as u32,
                 &mut answer,
             )
         };
@@ -366,33 +375,67 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::Cell, time::Duration};
 
     /// A launch that finds the mutex held never becomes a second session:
     /// it is handed over, or ends once its patience runs out; one that finds
     /// it gone (the first has just ended) becomes the instance.
     #[test]
     fn a_launch_that_finds_the_app_running_never_runs_beside_it() {
-        use std::time::Duration;
-        let pause = || Duration::from_millis(50);
         let patience = Duration::from_secs(5);
+        let clock = Cell::new(Duration::ZERO);
+        let (elapsed, pause) = (|| clock.get(), |d: Duration| clock.set(clock.get() + d));
         let mut tries = 0;
-        let mut never = || {
+        let never = |_: Duration| {
             tries += 1;
             Attempt::Taken
         };
-        assert_eq!(settle(&mut never, patience, pause), Settled::Busy);
+        assert_eq!(settle(never, patience, elapsed, pause), Settled::Busy);
         assert_eq!(tries, 101, "it tried for its whole patience");
+        assert_eq!(clock.get(), patience);
+        clock.set(Duration::ZERO);
         let mut answers = [Attempt::Taken, Attempt::Taken, Attempt::Answered].into_iter();
-        assert_eq!(
-            settle(|| answers.next().unwrap(), patience, pause),
-            Settled::Handed
-        );
+        let answered = |_: Duration| answers.next().unwrap();
+        assert_eq!(settle(answered, patience, elapsed, pause), Settled::Handed);
         let mut ends = [Attempt::Taken, Attempt::Free].into_iter();
+        let ended = |_: Duration| ends.next().unwrap();
+        assert_eq!(settle(ended, patience, elapsed, pause), Settled::First);
         assert_eq!(
-            settle(|| ends.next().unwrap(), patience, pause),
+            settle(|_: Duration| Attempt::Free, patience, elapsed, pause),
             Settled::First
         );
-        assert_eq!(settle(|| Attempt::Free, patience, pause), Settled::First);
+    }
+
+    /// A try that blocks spends the launch's patience: it is given only the
+    /// time left, and the launch ends once none is.
+    #[test]
+    fn a_slow_try_spends_the_patience_it_was_given() {
+        let patience = Duration::from_secs(5);
+        let clock = Cell::new(Duration::ZERO);
+        let (elapsed, pause) = (|| clock.get(), |d: Duration| clock.set(clock.get() + d));
+        let mut given = Vec::new();
+        let unanswered = |left: Duration| {
+            given.push(left);
+            clock.set(clock.get() + left);
+            Attempt::Taken
+        };
+        assert_eq!(settle(unanswered, patience, elapsed, pause), Settled::Busy);
+        assert_eq!(given, [patience]);
+        assert_eq!(clock.get(), patience);
+        clock.set(Duration::ZERO);
+        let mut given = Vec::new();
+        let slow = |left: Duration| {
+            given.push(left);
+            clock.set(clock.get() + left.min(Duration::from_secs(2)));
+            Attempt::Taken
+        };
+        assert_eq!(settle(slow, patience, elapsed, pause), Settled::Busy);
+        assert_eq!(
+            given,
+            [5000, 2950, 900].map(Duration::from_millis),
+            "each try is given what is left after the tries and pauses before it"
+        );
+        assert_eq!(clock.get(), patience);
     }
 
     #[test]

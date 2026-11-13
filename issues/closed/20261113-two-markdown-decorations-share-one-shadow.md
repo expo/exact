@@ -1,6 +1,7 @@
 # Two markdown decorations share one shadow under earlier glyphs
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A Markdown decoration belongs to its span (the run and its neighbours with the same lines and link), and decoration shadows merge only within one span, so a later span's shadow paints in its own step after the earlier glyphs.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

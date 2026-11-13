@@ -37,6 +37,7 @@ pub mod rng;
 pub mod script;
 mod settle;
 mod shrink;
+mod state_path;
 mod suggest;
 pub mod types;
 pub mod verify;
@@ -486,13 +487,17 @@ fn chunks(lines: &[String]) -> Vec<&[String]> {
 pub fn expectations(s: &Scripted) -> Result<(), String> {
     let plan = compile(&s.case)?;
     let oracle = oracle::Oracle::for_case(&plan, &s.case);
-    let (rust, _) = observe::run(plan, oracle, &s.case.events);
-    expectations_on(s, &rust)?;
+    let (rust, _) = observe::run(plan.clone(), oracle, &s.case.events);
+    expectations_on(s, &plan, &rust)?;
     property_corpus::check(&s.case, &rust, true)
 }
 
-/// Check expectations against an observation already produced by the runner.
-pub fn expectations_on(s: &Scripted, rust: &[String]) -> Result<(), String> {
+/// Check expectations against either evaluator's observation using the compiled shapes.
+pub fn expectations_on(
+    s: &Scripted,
+    plan: &exact_plan::Plan,
+    rust: &[String],
+) -> Result<(), String> {
     let steps = chunks(rust);
     let mut k = 0;
     for item in &s.items {
@@ -505,9 +510,11 @@ pub fn expectations_on(s: &Scripted, rust: &[String]) -> Result<(), String> {
             Item::Expect(e, _) => {
                 let step = steps.get(k).copied().unwrap_or(&[]);
                 let ok = match e {
-                    Expect::State(name, comparison, values) => {
-                        script::state_holds(script::state_value(step, name), *comparison, values)
-                    }
+                    Expect::State(name, comparison, values) => script::state_holds(
+                        crate::state_path::value(plan, step, name),
+                        *comparison,
+                        values,
+                    ),
                     Expect::Text(id, v) => step.contains(&format!(
                         "view {} {}",
                         observe::quote(id),

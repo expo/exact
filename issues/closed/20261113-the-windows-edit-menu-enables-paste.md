@@ -1,6 +1,7 @@
 # The Windows edit menu enables Paste from the system clipboard
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Under the agent's memory clipboard the edit menu enables Paste from that board's text, which its paste reads; otherwise from the Windows clipboard's CF_UNICODETEXT.
 **Systems:** host/windows
 **Severity:** P2
 **Author:** Grok 4.7

@@ -23,7 +23,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 #[cfg(target_os = "linux")]
@@ -142,6 +141,8 @@ struct Stream {
     position: usize,
     done: bool,
     ended: bool,
+    /// Set by `close`, under this lock: the reader reads nothing after it.
+    closed: bool,
 }
 
 /// One `write` call: its bytes, how many the device has taken, and the call's answer.
@@ -165,7 +166,6 @@ struct Connection {
     options: Json,
     open: bool,
     stream: Arc<(Mutex<Stream>, Condvar)>,
-    stop: Arc<AtomicBool>,
     outbox: Arc<(Mutex<Outbox>, Condvar)>,
 }
 
@@ -318,24 +318,21 @@ fn configure(fd: i32, options: &Json) -> Result<(), String> {
 }
 
 /// The connection's reader: reads while the undelivered bytes are under `bound`, waiting on the descriptor.
-fn read_loop(
-    file: Arc<File>,
-    stream: Arc<(Mutex<Stream>, Condvar)>,
-    stop: Arc<AtomicBool>,
-    bound: usize,
-    notifier: Notifier,
-) {
+fn read_loop(file: Arc<File>, stream: Arc<(Mutex<Stream>, Condvar)>, bound: usize, notifier: Notifier) {
     let mut buf = vec![0u8; 4096];
     let (lock, room) = &*stream;
-    while !stop.load(Ordering::Relaxed) {
+    loop {
         {
             let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
             // Backpressure (D8): nothing more is read until a delivery makes room.
-            while s.pending.len() >= bound && !stop.load(Ordering::Relaxed) {
+            while s.pending.len() >= bound && !s.closed {
                 s = room
                     .wait_timeout(s, std::time::Duration::from_millis(100))
                     .unwrap_or_else(|e| e.into_inner())
                     .0;
+            }
+            if s.closed {
+                break;
             }
         }
         let mut p = PollFd {
@@ -347,32 +344,53 @@ fn read_loop(
         if unsafe { poll(&mut p, 1, 100) } <= 0 {
             continue;
         }
-        let room_left = {
-            let s = lock.lock().unwrap_or_else(|e| e.into_inner());
-            bound.saturating_sub(s.pending.len()).clamp(1, buf.len())
-        };
-        match (&*file).read(&mut buf[..room_left]) {
-            Ok(0) => {
-                finish(&stream, "NetworkError");
-                break;
-            }
-            Ok(n) => lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .pending
-                .extend_from_slice(&buf[..n]),
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {
-                continue
-            }
-            // EIO or ENXIO: the port went away (D9).
-            Err(_) => {
-                finish(&stream, "NetworkError");
-                break;
-            }
+        match read_ready(&file, &stream, &mut buf, bound) {
+            Step::Took => notifier.changed("serial.serialInput"),
+            Step::Again => {}
+            Step::Closed | Step::Gone => break,
         }
-        notifier.changed("serial.serialInput");
     }
     notifier.changed("serial.serialInput");
+}
+
+/// What one read of the connection's descriptor did.
+#[derive(Debug, PartialEq)]
+enum Step {
+    /// Bytes are in the stream.
+    Took,
+    /// Nothing was there after all.
+    Again,
+    /// The connection is closed: nothing was read.
+    Closed,
+    /// The port went away; the stream says so.
+    Gone,
+}
+
+/// Reads what the descriptor has, with the stream's lock held: `close` sets `closed` under the lock, so the bytes
+/// that arrive after it are left to the port's next reader, never appended to this stream. The descriptor does not
+/// block.
+fn read_ready(file: &File, stream: &(Mutex<Stream>, Condvar), buf: &mut [u8], bound: usize) -> Step {
+    let mut s = stream.0.lock().unwrap_or_else(|e| e.into_inner());
+    if s.closed {
+        return Step::Closed;
+    }
+    let room_left = bound.saturating_sub(s.pending.len()).clamp(1, buf.len());
+    match (&*file).read(&mut buf[..room_left]) {
+        Ok(0) => {
+            finish(&mut s, "NetworkError");
+            Step::Gone
+        }
+        Ok(n) => {
+            s.pending.extend_from_slice(&buf[..n]);
+            Step::Took
+        }
+        Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => Step::Again,
+        // EIO or ENXIO: the port went away (D9).
+        Err(_) => {
+            finish(&mut s, "NetworkError");
+            Step::Gone
+        }
+    }
 }
 
 /// The connection's writer: writes the oldest write's bytes as the device takes them, waiting on the descriptor
@@ -424,8 +442,7 @@ fn write_loop(file: Arc<File>, outbox: Arc<(Mutex<Outbox>, Condvar)>) {
     }
 }
 
-fn finish(stream: &Arc<(Mutex<Stream>, Condvar)>, code: &str) {
-    let mut s = stream.0.lock().unwrap_or_else(|e| e.into_inner());
+fn finish(s: &mut Stream, code: &str) {
     let at = s.position + s.pending.len();
     s.errors.push(json!({ "at": at, "code": code }));
     s.done = true;
@@ -521,18 +538,12 @@ impl Serial {
             .min(MOST);
         self.next += 1;
         let handle = format!("serial-{}", self.next);
-        let (file, stream, stop) = (
+        let (file, stream) = (
             Arc::new(file),
             Arc::new((Mutex::new(Stream::default()), Condvar::new())),
-            Arc::new(AtomicBool::new(false)),
         );
-        let (f, s, st, notifier) = (
-            file.clone(),
-            stream.clone(),
-            stop.clone(),
-            self.context.notifier(),
-        );
-        std::thread::spawn(move || read_loop(f, s, st, bound, notifier));
+        let (f, s, notifier) = (file.clone(), stream.clone(), self.context.notifier());
+        std::thread::spawn(move || read_loop(f, s, bound, notifier));
         let outbox = Arc::new((Mutex::new(Outbox::default()), Condvar::new()));
         let (f, o) = (file.clone(), outbox.clone());
         std::thread::spawn(move || write_loop(f, o));
@@ -549,7 +560,6 @@ impl Serial {
                 options,
                 open: true,
                 stream,
-                stop,
                 outbox,
             },
         );
@@ -614,7 +624,7 @@ impl Serial {
             return json!({ "error": "InvalidStateError" });
         };
         c.open = false;
-        c.stop.store(true, Ordering::Relaxed);
+        c.stream.0.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
         c.stream.1.notify_all();
         let aborted = {
             let mut o = c.outbox.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -627,7 +637,8 @@ impl Serial {
         }
         // Closing the port releases it: exclusive mode ends now, since the
         // reader thread holds the descriptor until its next poll (100 ms),
-        // and dropping this handle lets that be the last.
+        // though it reads nothing more, and dropping this handle lets that
+        // be the last.
         if let Some(file) = c.file.take() {
             // SAFETY: no argument.
             unsafe { ioctl(file.as_raw_fd(), TIOCNXCL) };
@@ -763,5 +774,28 @@ impl Package for Serial {
         for h in handles {
             self.close(&h);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Bytes that arrive after `close` stay in the port for its next reader: the closed stream gains none.
+    #[test]
+    fn a_closed_connection_reads_nothing_more() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let file = File::from(std::os::fd::OwnedFd::from(reader));
+        let stream = (Mutex::new(Stream::default()), Condvar::new());
+        let mut buf = [0u8; 16];
+        writer.write_all(b"before").unwrap();
+        assert_eq!(read_ready(&file, &stream, &mut buf, 64), Step::Took);
+        writer.write_all(b"after").unwrap();
+        stream.0.lock().unwrap().closed = true;
+        assert_eq!(read_ready(&file, &stream, &mut buf, 64), Step::Closed);
+        assert_eq!(stream.0.lock().unwrap().pending, b"before");
+        let mut left = [0u8; 16];
+        let n = (&file).read(&mut left).unwrap();
+        assert_eq!(&left[..n], b"after");
     }
 }

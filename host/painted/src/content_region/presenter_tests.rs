@@ -1290,3 +1290,31 @@ fn retained_actions_input_clock_presents_timer_that_invalidates_event() {
         }
     }
 }
+
+/// A retained text is drawn under its own overflow clip, as the live walk
+/// draws it: its nowrap glyphs stop at its padding edge.
+#[test]
+fn retained_text_stays_inside_its_overflow_clip() {
+    let _service = crate::content_region::test_service();
+    let source = APP.replace(
+        "text title href=link press=activate testId=\"paragraph\" font-size=20 color=\"light-dark(#ff0000,#0000ff)\"",
+        "text \"WWWWWWWWWWWWWWWW\" testId=\"paragraph\" width=50 white-space=\"nowrap\" overflow-x=\"hidden\" overflow-y=\"hidden\" font-size=20 color=\"#ff0000\"",
+    );
+    let mut p = region_from(&source);
+    p.frame();
+    ready(&mut p);
+    let frame = p.frame();
+    assert!(p.last_frame_succeeded);
+    let paragraph = p.host.kernel().node(id(&p, "paragraph")).unwrap().frame;
+    let width = frame.width() as usize;
+    let red = |p: &[u8]| p[0] > 128 && p[1] < 100 && p[2] < 100;
+    let inside = frame.data().chunks_exact(4).filter(|p| red(p)).count();
+    let past = frame
+        .data()
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(i, p)| (i % width) as f32 >= paragraph.width + 2.0 && red(p))
+        .count();
+    assert!(inside > 20, "the text paints");
+    assert_eq!(past, 0, "no glyph past the text's padding edge");
+}

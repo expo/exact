@@ -1,6 +1,7 @@
 # Remote canvas images are kept with no bound
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A remote canvas image is fetched as an img's is, spooled to a file and stopped past its 64 MB byte limit, and an image over the img pixel limit is refused before it is decoded; releasing decoded images needs the runner to forget a handle and is issues/20261113-decoded-canvas-images-are-never-released.md.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

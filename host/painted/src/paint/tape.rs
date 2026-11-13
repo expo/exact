@@ -79,6 +79,12 @@ enum Op {
     Gradient(Shape, GradientPaint, Transform),
     Backdrop(Shape, BackdropFilter, Transform),
     Shadow(Shape, [u8; 4], f32, Shape, Transform),
+    BoxShadow(
+        Option<([u8; 4], f32, Shape)>,
+        Shape,
+        Vec<border::BorderFill>,
+        Transform,
+    ),
     TextBlur(f32),
     Border(border::BorderFill, Transform),
     Image(Arc<Bitmap>, Rect4, Vec<Shape>, Transform, Option<[u8; 4]>),
@@ -105,18 +111,31 @@ pub(crate) struct Tape {
 }
 
 /// The backend a tape is recorded through; a clone shares what it records.
+/// It keeps a projective plane only for a backend that draws one (`planes`),
+/// and otherwise lets the painter record its software warp.
 #[derive(Clone, Default)]
-pub(crate) struct Recorder(Rc<RefCell<Vec<Op>>>);
+pub(crate) struct Recorder {
+    ops: Rc<RefCell<Vec<Op>>>,
+    planes: bool,
+}
 
 impl Recorder {
+    /// A recorder for a tape `target` will replay.
+    pub(crate) fn for_target(target: &dyn Backend) -> Self {
+        Self {
+            ops: Rc::default(),
+            planes: target.supports_planes(),
+        }
+    }
+
     fn push(&self, op: Op) {
-        self.0.borrow_mut().push(op);
+        self.ops.borrow_mut().push(op);
     }
 
     /// What was recorded, as a tape; the recorder starts again empty.
     pub(crate) fn tape(&self) -> Tape {
         Tape {
-            ops: std::mem::take(&mut *self.0.borrow_mut()),
+            ops: std::mem::take(&mut *self.ops.borrow_mut()),
         }
     }
 }
@@ -153,6 +172,17 @@ impl Backend for Recorder {
         self.push(Op::Shadow(*shape, color, sigma, *outer, ts));
         true
     }
+    /// The blur and its bands both: which one draws is the replaying
+    /// backend's to say.
+    fn box_shadow(
+        &mut self,
+        blurred: Option<([u8; 4], f32, Shape)>,
+        outer: &Shape,
+        bands: &dyn Fn() -> Vec<border::BorderFill>,
+        ts: Transform,
+    ) {
+        self.push(Op::BoxShadow(blurred, *outer, bands(), ts));
+    }
     fn text_blur(&mut self, sigma: f32) {
         self.push(Op::TextBlur(sigma));
     }
@@ -176,8 +206,10 @@ impl Backend for Recorder {
         self.push(Op::Island(pixels, dst, ts, mode));
     }
     fn plane_begin(&mut self, h: [f32; 9]) -> bool {
-        self.push(Op::PlaneBegin(h));
-        true
+        if self.planes {
+            self.push(Op::PlaneBegin(h));
+        }
+        self.planes
     }
     fn plane_end(&mut self) {
         self.push(Op::PlaneEnd);
@@ -264,6 +296,9 @@ impl Tape {
                 Op::Backdrop(s, f, ts) => b.backdrop_filter(s, f, t(*ts)),
                 Op::Shadow(s, c, sigma, outer, ts) => {
                     b.blurred_shadow(s, *c, *sigma, outer, t(*ts));
+                }
+                Op::BoxShadow(blurred, outer, bands, ts) => {
+                    b.box_shadow(*blurred, outer, &|| bands.clone(), t(*ts))
                 }
                 Op::TextBlur(sigma) => b.text_blur(*sigma),
                 Op::Border(part, ts) => b.fill_border(part, t(*ts)),
@@ -359,5 +394,41 @@ mod tests {
             before.alpha() == 0 || before.green() > 0,
             "nothing where it was before the move"
         );
+    }
+
+    /// A box shadow on a tape draws on a backend without a blur of its own,
+    /// as its bands, as the live walk draws it there.
+    #[test]
+    fn a_tape_keeps_a_box_shadows_bands() {
+        let shadow = super::super::shadow::ShadowPaint::lifted(1.0);
+        let outer = Shape::rect((10.0, 10.0, 20.0, 20.0));
+        let tape = record(|b| {
+            let bands = || shadow.fills(&outer, [0.0; 4]);
+            b.box_shadow(
+                shadow.blurred(&outer),
+                &outer,
+                &bands,
+                Transform::identity(),
+            )
+        });
+        let mut raster = crate::raster::Raster::new();
+        raster.begin(60.0, 60.0, 1.0);
+        tape.replay(&mut raster, &mut TextEngine::new(), Transform::identity());
+        let pixels = raster.finish().unwrap();
+        let below = pixels.pixel(20, 34).unwrap();
+        assert!(below.alpha() > 0, "the shadow under the box: {below:?}");
+    }
+
+    /// A plane is kept only for a backend that draws one; for another the
+    /// recorder declines it, so the painter records its software warp.
+    #[test]
+    fn a_tape_keeps_a_plane_only_for_a_backend_that_draws_one() {
+        let h = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let cpu = crate::raster::Raster::new();
+        let mut for_cpu = Recorder::for_target(&cpu);
+        assert!(!for_cpu.plane_begin(h));
+        assert!(for_cpu.tape().ops.is_empty());
+        let mut for_canvas = Recorder::for_target(&crate::canvas::Recorder::new());
+        assert!(for_canvas.plane_begin(h));
     }
 }

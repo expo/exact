@@ -1,6 +1,7 @@
 # Answer tiles in a Windows contrast theme paint the label in the same colour as the fill
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** In a contrast theme (prefersContrast custom) a correct or wrong AnswerTile is the theme's Highlight fill under HighlightText, its mark included, as Badge's role tints are.
 **Systems:** contract content library, Windows contrast palette
 **Severity:** P2
 **Author:** Grok 4.7

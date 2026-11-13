@@ -1,6 +1,7 @@
 # A failed canvas shadow leaves its texture registered on the shared renderer
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A failed shadow ends the shadow loop without returning, so the overrides the replay installed are cleared and their textures destroyed before it returns the failure.
 **Systems:** canvas vello GPU replay
 **Severity:** P2
 **Author:** Grok 4.7

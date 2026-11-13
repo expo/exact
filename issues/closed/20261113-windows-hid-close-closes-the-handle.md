@@ -1,6 +1,7 @@
 # Windows HID close closes the handle before the reader exits
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The last release cancels the reader's read until the reader thread has returned, joins it, and only then closes the handle.
 **Systems:** packages/hid
 **Severity:** P2
 **Author:** Grok 4.7

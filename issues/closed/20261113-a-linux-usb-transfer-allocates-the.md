@@ -1,6 +1,7 @@
 # A Linux USB transfer allocates the caller's length and wraps wLength
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Linux refuses a control transfer longer than 65,535 bytes and a bulk transfer longer than usbfs takes with TypeError before allocating its buffer, so wLength no longer wraps.
 **Systems:** packages/usb
 **Severity:** P2
 **Author:** Grok 4.7

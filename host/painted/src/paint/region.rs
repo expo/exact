@@ -778,6 +778,15 @@ impl<'a> Replay<'a> {
                         ));
                     }
                     n.paint.paint(painter.backend.as_mut(), g, parent);
+                    // The overflow clip holds a text's own lines, as the
+                    // live walk clips them (CSS Overflow 3 §3), and the
+                    // children; the leave pops it.
+                    if let Some(shape) = field::overflow_clip(&g.outer, n.paint.widths, n.axes) {
+                        painter.backend.push_clip(&shape, parent);
+                        clips.push(clip);
+                        let own = bbox(parent, shape.rect);
+                        clip = Some(clip.map_or(own, |c| intersect(c, own)));
+                    }
                     match &n.payload {
                         Payload::Empty => {}
                         Payload::Image(image, fit, tint) => {
@@ -806,12 +815,6 @@ impl<'a> Replay<'a> {
                                 parent,
                             );
                         }
-                    }
-                    if let Some(shape) = field::overflow_clip(&g.outer, n.paint.widths, n.axes) {
-                        painter.backend.push_clip(&shape, parent);
-                        clips.push(clip);
-                        let own = bbox(parent, shape.rect);
-                        clip = Some(clip.map_or(own, |c| intersect(c, own)));
                     }
                 }
                 Command::Leave(i) => {

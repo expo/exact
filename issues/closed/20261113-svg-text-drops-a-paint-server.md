@@ -1,6 +1,7 @@
 # SVG text drops a paint server and its fallback colour
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A text run resolves url() as a shape does: a missing server paints its fallback colour, a one-stop gradient its colour, and a gradient is attached for the host (painting gradients on text is still owed on the painted and Apple hosts, which draw no fill for one).
 **Systems:** kernel
 **Severity:** P2
 **Author:** Grok 4.7

@@ -1,6 +1,7 @@
 # Canvas letter spacing and word spacing stay at the font size from when they were set
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Both recorders keep a spacing as written plus px and em parts, and resolve em, ex and ch (half an em) against the font in force when text is measured or its Font record is sent.
 **Systems:** canvas recorder
 **Severity:** P2
 **Author:** Grok 4.7

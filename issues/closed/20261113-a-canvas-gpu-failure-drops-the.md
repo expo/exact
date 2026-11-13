@@ -1,6 +1,7 @@
 # A canvas GPU failure drops the pixels it accumulated
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** When the GPU fails a replay, Core Graphics continues from a copy of the GPU's last pixels and the tracked state, applies the failed lists, and shows that bitmap.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

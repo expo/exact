@@ -1,6 +1,7 @@
 # A content region's trial tree skips order and tables
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The trial tree marks its tables to be made, so a region's table cells share the table's grid, and its frames place a row's cells from the table's origin as publication does; CSS order was already fixed (2d76891a2), and the alert title, which the region's text protocol cannot measure yet, is issues/20261113-a-content-region-lays-an-alert-out.md.
 **Systems:** kernel
 **Severity:** P2
 **Author:** Grok 4.7

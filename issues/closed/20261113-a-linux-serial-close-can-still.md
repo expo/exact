@@ -1,6 +1,7 @@
 # A Linux serial close can still read into a finished stream
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The reader reads with its stream's lock held and stops at a flag close sets under that lock, so no byte is read into a closed stream and later bytes stay in the port for its next reader.
 **Systems:** packages/serial
 **Severity:** P2
 **Author:** Grok 4.7

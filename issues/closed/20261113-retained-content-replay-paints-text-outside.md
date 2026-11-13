@@ -1,6 +1,7 @@
 # Retained content replay paints text outside its overflow clip
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Replay pushes a node's overflow clip before its content, so a retained text's lines are drawn under it as the live walk draws them, and the node's leave pops it as before.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

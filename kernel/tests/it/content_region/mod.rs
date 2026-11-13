@@ -1205,3 +1205,4 @@ mod projection;
 
 // Split-profile acceptance tests; baseline uses a separate existing-API fragment.
 mod split_facts;
+mod table;

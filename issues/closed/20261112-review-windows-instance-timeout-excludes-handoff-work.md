@@ -1,6 +1,7 @@
 # Windows instance handoff does not enforce its five-second deadline
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A later launch measures its five seconds on a monotonic clock across its tries and pauses, and gives each handoff only the time left.
 **Systems:** Windows launch, host/windows/src/instance.rs
 **Author:** Codex
 **Date:** 2026-11-12

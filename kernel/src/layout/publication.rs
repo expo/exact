@@ -203,7 +203,7 @@ pub(super) fn publish(
         let displacement = tree
             .tables
             .flat(slot)
-            .then(|| super::table::displacement(arena, tree, slot));
+            .then(|| super::table::displacement(arena, tree, slot, arena.taffy(slot)));
         let displaced = displacement
             .is_some_and(|d| tree.displacements.insert(slot, d) != Some(d) || parent_moved);
         let descend_all = full

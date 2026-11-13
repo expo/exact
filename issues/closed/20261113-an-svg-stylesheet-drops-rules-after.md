@@ -1,6 +1,7 @@
 # An SVG stylesheet drops rules after a nested at-rule
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** An at-rule's block ends at the brace that closes it, counted by depth, so a nested at-rule is dropped whole and the rules after it are read.
 **Systems:** host/svg-file
 **Severity:** P2
 **Author:** Grok 4.7

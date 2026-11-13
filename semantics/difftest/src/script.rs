@@ -27,7 +27,7 @@ pub enum Event {
 /// What a corpus test expects of the runner after the steps before it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expect {
-    /// `expect state name == literal`: the observation line's value text.
+    /// `expect state path == literal`: the resolved observation value's text.
     State(String, contract_syntax::StateComparison, Vec<String>),
     /// `expect text "id" == "value"`.
     Text(String, String),
@@ -361,11 +361,6 @@ fn until(arg: &str, span: contract_syntax::Span) -> Result<Item, String> {
         .strip_prefix("until state ")
         .and_then(|s| s.split_once(" == "))
         .ok_or("clock until needs a state path and a literal")?;
-    if path.contains('.') {
-        return Err(format!(
-            "clock until: {path} needs a field adapter; expect state reads only top-level observation values"
-        ));
-    }
     let (literal, within) = rest
         .rsplit_once(" within ")
         .ok_or("clock until needs a bound")?;
@@ -374,14 +369,6 @@ fn until(arg: &str, span: contract_syntax::Span) -> Result<Item, String> {
         literal: serde_json::from_str(literal).map_err(|e| e.to_string())?,
         within: within.parse::<u64>().map_err(|e| e.to_string())?,
         span,
-    })
-}
-
-/// The same top-level value for expectations and state waits.
-pub(crate) fn state_value<'a>(step: &'a [String], name: &str) -> Option<&'a str> {
-    ["slot", "derive", "resource"].iter().find_map(|kind| {
-        let prefix = format!("{kind} {name} ");
-        step.iter().find_map(|line| line.strip_prefix(&prefix))
     })
 }
 
@@ -432,14 +419,6 @@ fn kind_name(kind: &str) -> String {
 
 fn step_kind(step: &Step) -> String {
     match step {
-        Step::Clock { arg, .. }
-            if arg.strip_prefix("until state ").is_some_and(|s| {
-                s.split_once(" == ")
-                    .is_some_and(|(path, _)| path.contains('.'))
-            }) =>
-        {
-            "clock until (field path)".into()
-        }
         Step::Clock { arg, .. } => format!("clock {}", arg.split_whitespace().next().unwrap_or("")),
         Step::Tap {
             form, modifiers, ..
@@ -624,16 +603,23 @@ mod tests {
     }
 
     #[test]
-    fn until_field_and_index_paths_stop_apart() {
+    fn until_missing_field_and_index_paths_land_then_stop() {
         for path in ["session.phase", "rows.0"] {
             let source = format!("{APP}\ntest \"field\"\n  clock data\n  clock until state {path} == \"ready\" within 100\n  tap \"add\"\n");
             let s = scripted("until", &source, None).unwrap().remove(0);
             assert_eq!(s.delivery.taken, 1);
-            assert_eq!(s.case.events, [Event::Land]);
+            assert_eq!(s.case.events, [Event::Land, Event::Land]);
             assert_eq!(
                 s.delivery.stopped.as_ref().unwrap().1,
-                "clock until (field path)"
+                "clock until (not met)"
             );
+            assert!(s
+                .delivery
+                .stopped
+                .as_ref()
+                .unwrap()
+                .2
+                .contains("<not printed>"));
         }
     }
 

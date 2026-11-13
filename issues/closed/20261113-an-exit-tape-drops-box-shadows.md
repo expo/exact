@@ -1,6 +1,7 @@
 # An exit tape drops box-shadows and 3D planes the recorder claimed
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A tape keeps a box shadow's blur and its bands, and the replaying backend draws the bands when it declines the blur; a recorder keeps a 3D plane only for a backend that draws planes, so for any other the painter records its software warp.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

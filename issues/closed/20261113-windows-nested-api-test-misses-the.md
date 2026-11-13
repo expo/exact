@@ -1,6 +1,7 @@
 # Windows nested api-test misses the server owner
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** withAppServer reads every process's parent from one table, CIM's Win32_Process on Windows and ps elsewhere, so a run nested two levels under the server's owner finds it.
 **Systems:** scripts
 **Severity:** P2
 **Author:** Grok 4.7

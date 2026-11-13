@@ -165,7 +165,7 @@ export function appleArtifacts(app, { destination = 'macos', composition, trust 
   const namespace = resolve(owner, destination, target, composition, trust);
   // `product` is the Swift package's; `executable`, what it is linked to, is the app's name, as Xcode's (a sample host keeps its own).
   const product = destination === 'macos' ? (host ? 'ExactHostMac' : 'ExactMac') : (host ? 'ExactHostIOS' : 'ExactIOS');
-  const executable = host ? product : appleExecutableName(app);
+  const executable = host ? product : appleExecutableName(app, destination !== 'macos');
   const products = resolve(namespace, host ? 'host' : 'standalone');
   // The Swift host is the same code for every app, so its compile is shared:
   // one SwiftPM scratch per destination, deployment target and trust, whatever
@@ -273,7 +273,7 @@ export function copyAppleStaticTrees(source, target, trees = APPLE_STATIC_TREES.
 }
 
 /** Install the assembled bundle on the simulator, saying a development build put over another kind (`replacedNote`) unless the caller kept that one (`said`). */
-export function install(dev, bundle, app, host = false, said = false, executable = host ? 'ExactHostIOS' : appleExecutableName(app)) {
+export function install(dev, bundle, app, host = false, said = false, executable = host ? 'ExactHostIOS' : appleExecutableName(app, true)) {
   if (!bundle || !existsSync(bundle)) throw new Error('build the selected app with --ios first');
   assertAppleIdentity(app, resolve(bundle, executable));
   const replaced = !host && !said && bundle.includes('/development/') ? installedBuild(dev.udid, app.id) : null, r = read('xcrun', ['simctl', 'install', dev.udid, bundle]);
@@ -403,7 +403,7 @@ export const bundleVersion = () => ({
 });
 
 /** The iOS `Info.plist` from the manifest (LLP 1030 D2: one declaration; `build.mjs` consumes what it generates). The dev client's local-networking permission is `host.ios.localNetworking` (a string: the prompt); the store-required version numbers are counters bake owns, not authored. */
-export const infoPlist = (app, device = false, { executable = appleExecutableName(app), id = app.id, name = app.displayName, development = null, icon = {}, distribution = null, distributed = false, reach = null, tv = false, clip = false } = {}) => {
+export const infoPlist = (app, device = false, { executable = appleExecutableName(app, true), id = app.id, name = app.displayName, development = null, icon = {}, distribution = null, distributed = false, reach = null, tv = false, clip = false } = {}) => {
   const ios = app.manifest.host?.ios ?? {};
   // tvOS reuses the manifest's iOS section; Apple TV is device family 3.
   const families = tv ? [3] : (ios.deviceFamily ?? ['iphone', 'ipad']).map((f) => (f === 'ipad' ? 2 : 1));

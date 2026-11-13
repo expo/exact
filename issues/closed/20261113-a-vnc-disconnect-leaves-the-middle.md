@@ -1,6 +1,7 @@
 # A VNC disconnect leaves the middle and right buttons held
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A session whose client disconnects holding the primary, middle or right button queues the cancel that releases the hold, not only for the primary.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

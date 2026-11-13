@@ -1,6 +1,7 @@
 # Windows Desk reads a whole file before applying its 1 MB cap
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Open reads at most one byte past Windows Desk's 1 MB limit and refuses a longer file from that, never reading it whole.
 **Systems:** apps/windows-desk
 **Severity:** P2
 **Author:** Grok 4.7

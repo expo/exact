@@ -1,6 +1,7 @@
 # D3D12 device teardown does not unregister its exception handler
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The D3D12 debug-message handler's registration keeps the handle AddVectoredExceptionHandler returned and the last device passes it to RemoveVectoredExceptionHandler; a device registers only once its construction can no longer fail.
 **Systems:** vendor/wgpu-hal, Windows GPU backend
 **Author:** Codex
 **Date:** 2026-11-12

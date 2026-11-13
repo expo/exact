@@ -245,13 +245,19 @@ impl Tables {
 /// are the grid's items beside it, not its children in the engine, so
 /// publication moves them by this, and they follow their row's box. Anything
 /// else (static, sticky, whose insets the host applies) moves nothing.
-pub(super) fn displacement(arena: &NodeArena, tree: &LayoutTree, slot: u32) -> (f32, f32) {
+/// `node` is `slot`'s handle in `tree`.
+pub(super) fn displacement(
+    arena: &NodeArena,
+    tree: &LayoutTree,
+    slot: u32,
+    node: Option<NodeId>,
+) -> (f32, f32) {
     use crate::generated::PositionType;
     let moved = matches!(
         crate::style::top_layer::layout_position(arena, slot),
         PositionType::Relative | PositionType::Absolute
     );
-    let Some(node) = arena.taffy(slot).filter(|_| moved) else {
+    let Some(node) = node.filter(|_| moved) else {
         return (0.0, 0.0);
     };
     let Some(origin) = tree.grid_origin(node) else {
@@ -267,6 +273,38 @@ fn is_box(arena: &NodeArena, owner: u32, child: u32) -> bool {
     arena.style(child).display != Display::None
         && !arena.blocks.holds(child)
         && table_of(arena, child) != Some(owner)
+}
+
+impl LayoutTree {
+    /// Mark the tables among a trial tree's `slots` to be made before its
+    /// layout, as [`LayoutTree::of_subtrees`] does.
+    pub(crate) fn find_tables(&mut self, arena: &NodeArena, slots: &[u32]) {
+        self.tables.find(arena, slots);
+    }
+
+    /// Where publication places `slot`'s children from, in a tree whose
+    /// handle for `slot` is `node`: a row's or row group's from where `slot`
+    /// was placed (`from`), moved by its [`displacement`]; a table that is
+    /// another box's from its anonymous table; anything else's from its own
+    /// frame's origin, `at`.
+    pub(crate) fn parts_origin(
+        &self,
+        arena: &NodeArena,
+        slot: u32,
+        node: NodeId,
+        from: (f32, f32),
+        at: (f32, f32),
+    ) -> (f32, f32) {
+        if self.tables.flat(slot) {
+            let (dx, dy) = displacement(arena, self, slot, Some(node));
+            (from.0 + dx, from.1 + dy)
+        } else if let Some(grid) = self.tables.anon(slot) {
+            let l = self.layout(grid);
+            (at.0 + l.location.x, at.1 + l.location.y)
+        } else {
+            at
+        }
+    }
 }
 
 /// The table `slot` is placed in: `slot` and each part between it and the

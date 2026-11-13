@@ -1,6 +1,7 @@
 # Windows Desk opens below its DPI-scaled minimum
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Windows Desk opens at its design size scaled by its monitor's DPI and both that size and its minimum are bounded by the monitor's work area, the window moved into it.
 **Systems:** apps/windows-desk
 **Severity:** P2
 **Author:** Grok 4.7

@@ -1097,6 +1097,24 @@ component App
         assert_eq!(n.props.bool(PropId::Disabled), Some(true), "{t}");
     }
     assert_eq!(tile("Quito").style.text_color, named("-exact-label"));
+    // A Windows contrast theme gives the label and every system hue one
+    // colour: a told tile is the theme's highlight pair, its mark included.
+    let mut preferences = r.viewport().preferences;
+    preferences.contrast = exact_runner::Contrast::Custom;
+    r.set_preferences(preferences).unwrap();
+    let k = r.kernel();
+    for t in ["Quito", "Bogota"] {
+        let n = k.node(at(k, t)).unwrap();
+        assert_eq!(n.style.background_color, Some(named("Highlight")), "{t}");
+        assert_eq!(n.style.text_color, named("HighlightText"), "{t}");
+        let mark = k.node(*n.children().last().unwrap()).unwrap();
+        assert_eq!(mark.style.text_color, named("HighlightText"), "{t}");
+    }
+    let lima = k.node(at(k, "Lima")).unwrap();
+    assert_eq!(
+        lima.style.background_color,
+        Some(named("-exact-tertiary-fill"))
+    );
 }
 
 /// A poll's options as a grouped list's rows (polls): each

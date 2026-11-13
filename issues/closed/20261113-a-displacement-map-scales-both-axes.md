@@ -1,6 +1,7 @@
 # A displacement map scales both axes by the object width
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Not a defect: Chrome, the drawing oracle, scales both axes by the box width (Blink's FEDisplacementMap::CreateImageFilter passes only ApplyHorizontalScale(scale_), under a FIXME), which is what the kernel does; a comment there now says so.
 **Systems:** kernel, host/svg-raster
 **Severity:** P2
 **Author:** Grok 4.7
