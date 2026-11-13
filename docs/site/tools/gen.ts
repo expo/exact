@@ -442,6 +442,9 @@ pages.forEach(page => {
     chatgptUrl: `https://chat.openai.com/?q=${prompt(markdownUrl)}`,
     codexUrl: `codex://new?prompt=${prompt(markdownUrl)}`,
     cursorUrl: `https://cursor.com/link/prompt?text=${prompt(markdownUrl)}`,
+    t3Url: `https://t3.chat/new?q=${prompt(markdownUrl)}`,
+    grokUrl: `https://grok.com/?q=${prompt(markdownUrl)}`,
+    metaUrl: `https://www.meta.ai/?q=${prompt(markdownUrl)}`,
     blocks,
     toc,
   };

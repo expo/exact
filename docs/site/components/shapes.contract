@@ -82,6 +82,9 @@ shape Page
   chatgptUrl: string
   codexUrl: string
   cursorUrl: string
+  t3Url: string
+  grokUrl: string
+  metaUrl: string
   blocks: Block[]
   toc: TocItem[]
 

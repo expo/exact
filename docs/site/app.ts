@@ -80,6 +80,9 @@ const missing: Page = {
   chatgptUrl: '',
   codexUrl: '',
   cursorUrl: '',
+  t3Url: '',
+  grokUrl: '',
+  metaUrl: '',
   blocks: [],
   toc: [],
 };
