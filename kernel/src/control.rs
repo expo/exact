@@ -432,6 +432,11 @@ pub struct PressFace {
     /// and one `image`, with nothing else (LLP 1069.011.000 D1). A native
     /// button can additionally carry `subtitle` without fitting a projection.
     pub fits: bool,
+    /// A tab's badge (LLP 1075.003 §9.9): the text of the one shown, filled
+    /// box beside a tab's face that holds only a text, which a tab bar shows
+    /// as its item's badge. None for every other button, and where a tab has
+    /// no such box or two.
+    pub badge: Option<String>,
 }
 
 /// Whether `node` is an `option`: a text node the `option` tag made.

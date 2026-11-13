@@ -1,4 +1,4 @@
-import { symbolSheet } from './glue-fixture.mjs';
+import { symbolSheet, glueDeclarations, glueCase, wasmSource } from './glue-fixture.mjs';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // The document parity check (LLP 1048.000 §4): Caltrain's page as the
 // projection renders it, parsed by Chrome with JavaScript off, against the
@@ -214,6 +214,100 @@ async function withDocument(location, drive, { wasmAfter = null, glueAfter = nul
 
 
 const settled = 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))';
+
+browserCheck('Markdown adoption keeps every document element and later source changes render', async () => {
+  const source = '**Read** [more](/before)\n\n- First';
+  const pieces = JSON.stringify([['Read', 1, 700, 0, ''], [' ', 1, 0, 0, ''],
+    ['more', 1, 0, 8, '/before'], ['\n\n', 1, 0, 0, ''], ['• ', 1, 0, 48, '', 40], ['First', 1, 0, 0, '', 40]]);
+  const changed = JSON.stringify([['Changed', 1, 700, 0, ''], [' link', 1, 0, 8, '/after']]);
+  const icon = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>');
+  const atoms = ['Quote', ''].map(label => {
+    const source = `[${label}](cite:1)`;
+    return JSON.stringify([[label, 1, 0, 64, '', 0,
+      ['citation', 'button', icon, '', 'cite:1', source, 0, source.length, '', '', '', 'Citation 1']]]);
+  });
+  const content = [
+    '<span style="font-weight:700">Read</span><span> </span><a href="/before">more</a>',
+    '<span><br></span><span><br></span>',
+    '<span style="display:block;padding-left:40px;text-indent:-40px">',
+    '<span style="opacity:0.62;display:inline-flex;justify-content:flex-end;width:40px;white-space:pre;text-indent:0">• </span>',
+    '<span>First</span></span>',
+  ].join('');
+  const html = `<!doctype html><div id="exact-root"><div data-view="1" markup="markdown">${content}</div></div>
+    <script type="module" src="/glue.js"></script>`;
+  const files = {
+    '/markdown.js': readFileSync(resolve(ROOT, 'host/web-js/markdown.js'), 'utf8'),
+    '/navigation.js': readFileSync(resolve(ROOT, 'host/web/navigation.js'), 'utf8'),
+    '/atoms.js': readFileSync(resolve(ROOT, 'host/web/atoms.js'), 'utf8'),
+    '/glue.js': `import { renderMarkup } from './navigation.js';
+      import { markdownText } from './markdown.js';
+      globalThis.exact = {};
+      const root = document.getElementById('exact-root'), el = root.firstElementChild;
+      const before = [...root.querySelectorAll('*')];
+      const host = { inputReady: true, page: { adopting: new Map([[1, el]]) } }, views = new Map();
+      const syncMedia = () => {}, syncMarkup = () => {}, noteFit = () => {}, attach = () => {}, listView = () => {};
+      const collectionOp = null;
+      ${glueDeclarations(wasmSource, ['applyProps', 'loadAfterPaint'])}
+      const create = op => { switch (op.op) { ${glueCase(wasmSource, 'create')} } return views.get(op.id); };
+      globalThis.createMarkdown = () => create({ op: 'create', id: 1, tag: 'div', css: '', props: { markupPieces: ${JSON.stringify(pieces)} }, handlers: [] });
+      globalThis.checkMarkdown = () => {
+        const after = [...root.querySelectorAll('*')];
+        return before.length === after.length && before.every((el, i) => el === after[i]);
+      };
+      globalThis.changeMarkdown = () => applyProps(el, { markupPieces: ${JSON.stringify(changed)} }, []);
+      globalThis.freshMarkdown = () => {
+        host.page.adopting = null;
+        const fresh = create({ op: 'create', id: 2, tag: 'div', css: '', props: { markupPieces: ${JSON.stringify(changed)} }, handlers: [] });
+        root.append(fresh); return fresh.textContent;
+      };
+      globalThis.adoptAtom = async (empty = false) => {
+        const placeholder = document.createElement('div');
+        if (!empty) placeholder.innerHTML = '<span data-exact-atom="citation">Quote</span>';
+        placeholder.setAttribute('data-atoms', '[{"name":"citation","link":"cite:"}]');
+        const presses = [];
+        placeholder.addEventListener('atompress', event => presses.push(event.detail));
+        host.page.adopting = new Map([[3, placeholder]]);
+        root.append(placeholder);
+        create({ op: 'create', id: 3, tag: 'div', css: '', props: { markupPieces: ${JSON.stringify(atoms)}[Number(empty)] }, handlers: [] });
+        const loading = document.querySelector('script[src$="/atoms.js"]');
+        if (loading && !exact.atoms) await new Promise((resolve, reject) => {
+          loading.addEventListener('load', resolve, { once: true });
+          loading.addEventListener('error', reject, { once: true });
+        });
+        const box = placeholder.querySelector('[role="button"]');
+        box?.click();
+        return { label: box?.textContent, icon: box?.querySelector('img')?.getAttribute('src'), name: box?.getAttribute('aria-label'), presses };
+      };
+      globalThis.jsMarkdown = () => {
+        let effect, value = ${JSON.stringify(source)};
+        globalThis.__exactMarkdownBuilt = [[value, '', '', ${JSON.stringify(pieces)}], ['changed', '', '', ${JSON.stringify(changed)}]];
+        markdownText(el, () => value, null, { effect: f => { effect = f; f(); }, inflight: { n: 0 }, adopting: () => true, renderMarkup });
+        return () => { value = 'changed'; effect(); };
+      };
+      globalThis.ready = true;`,
+  };
+  await withDocument('/', async tab => {
+    for (const runtime of ['wasm', 'js']) {
+      const live = await tab(true);
+      await live.until('globalThis.ready', 'the Markdown fixture');
+      await live(runtime === 'wasm' ? 'createMarkdown()' : 'globalThis.change = jsMarkdown()');
+      expect(await live('checkMarkdown()'), runtime).toBe(true);
+      await live(runtime === 'wasm' ? 'changeMarkdown()' : 'change()');
+      expect(await live(`(() => { const el = document.querySelector('[data-view="1"]'); return [el.textContent, el.querySelector('a')?.getAttribute('href'), el.querySelector('span')?.style.fontWeight]; })()`), runtime)
+        .toEqual(['Changed link', '/after', '700']);
+      if (runtime === 'wasm') {
+        expect(await live('freshMarkdown()')).toBe('Changed link');
+        for (const empty of [true, false, true]) {
+          const label = empty ? '' : 'Quote', source = `[${label}](cite:1)`;
+          expect(await live(`adoptAtom(${empty})`)).toEqual({
+            label, icon, name: 'Citation 1',
+            presses: [['citation', source, 'cite:1', 0, source.length, false, false, false, false]],
+          });
+        }
+      }
+    }
+  }, { html, files });
+}, 60000);
 
 check(`Caltrain's served document is the live host's DOM`, async () => {
   // The live page launches at its own URL, agent query included; the

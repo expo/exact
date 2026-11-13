@@ -28,6 +28,7 @@
 //! query work and I emitted exclusion intervals per band. No history of widths
 //! or frames is retained. Serialization is linear in source/geometry output.
 
+use exact_num::Shortest32;
 use exact_textflow::{FlowOptions, FlowShape, Fragment, Options, OverflowWrap, Prepared};
 use std::{collections::BTreeMap, fmt::Write as _, ops::Range};
 
@@ -392,12 +393,12 @@ impl TextFlow {
                 last.end = source.text.len();
             }
         }
-        let height = result.height;
+        let height = Shortest32(result.height);
         let complete = result.complete;
         let clamped = result.clamped && options.max_lines < MAX_BANDS;
         let mut out = format!(
             "{{\"height\":{height},\"line_height\":{},\"complete\":{complete},\"clamped\":{clamped},\"shapes\":[",
-            options.line_height
+            Shortest32(options.line_height)
         );
         for (i, shape) in shapes.iter().enumerate() {
             if i > 0 {
@@ -431,7 +432,7 @@ impl TextFlow {
             let (start, end) = (paint_range.start, paint_range.end);
             let hyphenated = f.hyphenated;
             let _ = write!(out, "{{\"start\":{},\"end\":{},\"utf16_start\":{},\"utf16_end\":{},\"paint_start\":{},\"paint_end\":{},\"x\":{},\"y\":{},\"width\":{},\"available\":{},\"line\":{},\"hyphenated\":{hyphenated}}}",
-                f.start, f.end, source.utf16[f.start], source.utf16[f.end], source.utf16[start], source.utf16[end], f.x, f.y, f.width, available, f.line);
+                f.start, f.end, source.utf16[f.start], source.utf16[f.end], source.utf16[start], source.utf16[end], Shortest32(f.x), Shortest32(f.y), Shortest32(f.width), Shortest32(available), f.line);
         }
         out.push_str("]}");
         Ok(out)

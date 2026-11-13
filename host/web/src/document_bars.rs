@@ -27,9 +27,10 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
             .handlers
             .get(&id)
             .is_some_and(|kinds| kinds.contains(&EventKind::Press));
-        // A button that shows or toggles a popover: `Invocation::opens_popover`
-        // restated over the source's names, since `Invocation::of` resolves a
-        // name through a kernel and a render's tree (`DocTree`) has none.
+        // A button that shows or toggles a popover, or shows a dialog
+        // modally: `Invocation::opens` restated over the source's names,
+        // since `Invocation::of` resolves a name through a kernel and a
+        // render's tree (`DocTree`) has none.
         let named = |prop| {
             let name = props.str(prop).filter(|name| !name.is_empty())?;
             self.src.facts(self.src.resolve(id, name)?)
@@ -42,11 +43,13 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
                 .str(prop)
                 .is_some_and(|w| words.iter().any(|v| w.eq_ignore_ascii_case(v)))
         };
-        let menu = button
+        let opens = button
             && match named(PropId::Commandfor) {
                 Some(commanded) => {
-                    commanded.props.get(PropId::Popover).is_some()
-                        && is(PropId::Command, &["show-popover", "toggle-popover"])
+                    (commanded.props.get(PropId::Popover).is_some()
+                        && is(PropId::Command, &["show-popover", "toggle-popover"]))
+                        || (commanded.props.str(PropId::SemanticTag) == Some("dialog")
+                            && is(PropId::Command, &["show-modal"]))
                 }
                 None => {
                     named(PropId::Popovertarget)
@@ -54,7 +57,7 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
                         && !is(PropId::Popovertargetaction, &["hide"])
                 }
             };
-        exact_kernel::bars::fact::of(&node, press, menu, None)
+        exact_kernel::bars::fact::of(&node, press, opens, None)
     }
     fn children(&self, id: ViewId) -> Vec<ViewId> {
         self.src.children(id).into_owned()

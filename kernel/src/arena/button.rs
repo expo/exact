@@ -238,7 +238,7 @@ impl NodeArena {
             fits: true,
             ..PressFace::default()
         };
-        let (mut texts, mut images) = (0, 0);
+        let (mut texts, mut images, mut badges) = (0, 0, Vec::new());
         for &child in self.children(slot) {
             match self.node_type(child) {
                 NodeType::Text => {
@@ -281,10 +281,19 @@ impl NodeArena {
                         face.leading = face.title.is_none() && face.subtitle.is_none();
                     }
                 }
+                _ if self.is_tab_badge(slot, child) => {
+                    if let Some(text) = self.badge_text(child) {
+                        badges.push(text);
+                    }
+                }
                 _ => face.fits = false,
             }
         }
         face.fits &= texts <= 1 && images <= 1;
+        // One badge box, or none: two are not a badge.
+        if let [only] = badges.as_mut_slice() {
+            face.badge = Some(std::mem::take(only));
+        }
         face.placement = match (self.style(slot).flex_direction, face.leading) {
             (crate::FlexDirection::Column | crate::FlexDirection::ColumnReverse, true) => {
                 ButtonImagePlacement::Top
@@ -296,6 +305,42 @@ impl NodeArena {
             (_, false) => ButtonImagePlacement::Trailing,
         };
         Some(face)
+    }
+
+    /// Whether `child` is the badge of tab `slot` (LLP 1075.003 §9.9), which
+    /// lowering admits beside a tab's face when the tab names its panel: a
+    /// box whose only child is a text. It is no part of the face.
+    pub(crate) fn is_tab_badge(&self, slot: u32, child: u32) -> bool {
+        self.props(slot).str(PropId::AccessibilityRole) == Some("tab")
+            && self
+                .props(slot)
+                .get(PropId::AccessibilityControls)
+                .is_some()
+            && self.node_type(child) == NodeType::View
+            && matches!(self.children(child), [only] if self.node_type(*only) == NodeType::Text)
+    }
+
+    /// A tab's badge box's text, when the box shows: neither it nor its text
+    /// is `display: none` or fully transparent, its fill is visible, and its
+    /// text is not empty, as the Apple hosts' scan of the views had it.
+    fn badge_text(&self, badge: u32) -> Option<String> {
+        let text = *self.children(badge).first()?;
+        let shown = |s: u32| {
+            let style = self.style(s);
+            style.display != crate::Display::None && style.opacity > 0.0
+        };
+        let fill = self.style(badge).background_color?;
+        if !shown(badge)
+            || !shown(text)
+            || (fill.resolve(false).a() == 0 && fill.resolve(true).a() == 0)
+        {
+            return None;
+        }
+        let mut runs = Vec::new();
+        self.text_runs(text, &mut runs);
+        let words: String = runs.iter().map(|r| &*r.text).collect();
+        let words = words.trim();
+        (!words.is_empty()).then(|| words.to_owned())
     }
 
     pub(crate) fn button_inputs(&self, slot: u32) -> ButtonInputs {

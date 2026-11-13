@@ -17,6 +17,7 @@ import { generatedInputFiles } from '../../game/inputs.mjs';
 // `target: 'js'`, so the dev loop, the agent and the smoke know which they got. `--out <dir>`
 // writes the JS target there instead of the app's target/web-dist, and ends by saying how a
 // static host serves it.
+// `--check` (internal) checks dependencies and toolchains; the JS compiler selects the plan's artifacts.
 // EXACT_WEB_NAMES=1 keeps the wasm's function names, for metrics' byte
 // attribution (LLP 1047 D9); EXACT_WEB_LINK=all links every capability, as
 // the dev loop does (LLP 1047 D7). Either target draws the neutral look
@@ -39,7 +40,7 @@ import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
-import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp } from '../../scripts/app.mjs';
+import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp, webToolchainEnv } from '../../scripts/app.mjs';
 import { buildEditor, buildFlow } from '../web-js/module.mjs';
 import { closeFilesystemReader } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
@@ -49,7 +50,131 @@ import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
 import { writeAppleAssociation } from './association.mjs';
+import { cargoInputPaths, compilerPaths } from '../../scripts/cargo-dep-info.mjs';
 
+const SDK_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const metadataCache = new Map();
+const digest = path => { try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return null; } };
+function webMetadata(workspace) {
+  const cached = metadataCache.get(workspace);
+  if (cached && cached.inputs.every(([path, bytes]) => digest(path) === bytes)) return cached.metadata;
+  const result = spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], {
+    cwd: workspace, env: developmentBuildEnv(), encoding: 'utf8', maxBuffer: 128 << 20,
+  });
+  if (result.error || result.status !== 0) throw new Error(`web build: cargo metadata in ${workspace}: ${result.stderr || result.error?.message}`);
+  const metadata = JSON.parse(result.stdout);
+  const paths = ['Cargo.toml', 'Cargo.lock', '.cargo/config.toml', '.cargo/config'].map(file => resolve(workspace, file));
+  paths.push(...metadata.packages.filter(pkg => !pkg.source).map(pkg => pkg.manifest_path));
+  metadataCache.set(workspace, { metadata, inputs: [...new Set(paths)].map(path => [path, digest(path)]) });
+  return metadata;
+}
+
+/** Source roots of the tools and artifacts this build consumes. A JS-only app needs no Cargo workspace (LLP 1153 D2.1). */
+export function webSourceRoots(app, js, render = 'rust') {
+  // Preparation writes a clean game's workspace before even the shared tools' Cargo query.
+  const prepared = app.manifest.game && app.prepare ? app.prepare() : null;
+  const roots = new Set([resolve(SDK_ROOT, 'scripts')]), files = new Set();
+  const workspaces = [];
+  const closure = (metadata, names) => {
+    const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
+    const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
+    const pending = names.map(name => {
+      const pkg = metadata.packages.find(pkg => pkg.name === name);
+      if (!pkg) throw new Error(`web build: Cargo has no ${name} package`);
+      return pkg.id;
+    }), seen = new Set();
+    const local = [];
+    while (pending.length) {
+      const id = pending.pop(); if (seen.has(id)) continue; seen.add(id);
+      const pkg = packages.get(id);
+      if (!pkg.source) local.push(pkg);
+      if (!pkg.source && !dirname(pkg.manifest_path).startsWith(resolve(app.dir, '.shells') + sep)) roots.add(dirname(pkg.manifest_path));
+      for (const dep of nodes.get(id)?.deps ?? []) if (dep.dep_kinds.some(kind => kind.kind !== 'dev')) pending.push(dep.pkg);
+    }
+    for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.cargo/config']) files.add(resolve(metadata.workspace_root, name));
+    workspaces.push({ metadata, packages: local });
+  };
+  closure(webMetadata(SDK_ROOT), ['exact-web-js', 'exact-web', 'exact-js-bake', 'exact-markdown-editor', 'exact-web-js-motion', 'exact-textflow']);
+  const names = [], build = resolve(app.dir, 'web/build.rs');
+  const authored = existsSync(build) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(build, 'utf8'));
+  if (app.crate) {
+    if (!js || authored) names.push(app.crate('web'));
+    if (app.manifest.rust?.module?.package) names.push(app.manifest.rust.module.package);
+    if (app.manifest.game || existsSync(resolve(app.dir, 'gpu/Cargo.toml'))) names.push(app.crate('gpu'));
+    names.push(...gpuModules(app.manifest).map(({ name }) => app.crate(`gpu-${name}`)));
+    const at = (!js || render === 'rust') && ['linux', 'web'].find(dir => existsSync(resolve(app.dir, dir, 'src/bin', `${app.name ?? app.crate('web').replace(/-web$/, '')}-render.rs`)));
+    if (at) names.push(app.crate(at));
+  }
+  if (names.length) {
+    closure(prepared ?? webMetadata(app.workspace), names);
+  }
+  // Package scans find new sources; Cargo's records also name includes and watches outside the package.
+  const targets = [...new Set([app.target, process.env.CARGO_TARGET_DIR, process.env.CARGO_BUILD_BUILD_DIR,
+    ...workspaces.flatMap(({ metadata }) => [metadata.target_directory, metadata.build_directory]), resolve(SDK_ROOT, 'target')].filter(Boolean).map(path => resolve(path)))];
+  const sourceBases = [app.dir, ...workspaces.map(({ metadata }) => metadata.workspace_root)];
+  const under = (dir, path) => path === dir || path.startsWith(dir + sep);
+  const generated = path => targets.some(target => under(target, path) && !sourceBases.some(base => base.length > target.length && under(base, path)))
+    || path.startsWith(resolve(app.dir, '.shells') + sep);
+  const add = (path, watch = false) => {
+    if (generated(path)) return;
+    const info = statSync(path, { throwIfNoEntry: false }), directory = info?.isDirectory();
+    if (directory || (watch && !info)) roots.add(path);
+    if (!directory) files.add(path);
+  };
+  const targetsOf = workspaces.flatMap(({ packages }) => packages.flatMap(pkg => pkg.targets ?? []));
+  const sources = new Set(targetsOf.map(target => resolve(target.src_path)));
+  // rustc names a target's dep-info after its crate (`<crate>-<hash>.d`, `lib<crate>.d`, `<crate>.d`), so the
+  // rest of a large target directory is never read.
+  const crates = new Set(targetsOf.map(target => target.name.replace(/-/g, '_')));
+  const ours = file => { const stem = file.slice(0, -2).replace(/-[0-9a-f]{16}$/, ''); return crates.has(stem) || (stem.startsWith('lib') && crates.has(stem.slice(3))); };
+  const scan = dir => {
+    for (const entry of existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []) {
+      const path = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!/^(\..*|incremental|node_modules|artifacts)$/.test(entry.name)) scan(path);
+      } else if (entry.name.endsWith('.d')) {
+        if (!ours(entry.name)) continue;
+        const text = readFileSync(path, 'utf8');
+        if (!text.includes(': ')) continue;
+        for (const { metadata } of workspaces) {
+          const paths = compilerPaths(text, metadata.workspace_root);
+          if (!sources.has(paths[0])) continue;
+          // Registry inputs belong to their locked packages, not this checkout's source receipt.
+          for (const input of paths) if (!/[/\\](registry|git)[/\\](src|checkouts)[/\\]/.test(input)) add(input);
+          break;
+        }
+      } else if ((entry.name === 'output' && basename(dirname(dir)) === 'build')
+        || (entry.name === 'stdout' && basename(dir) === 'run' && basename(dirname(dirname(dirname(dir)))) === 'build')) {
+        const name = entry.name === 'output' ? basename(dir).replace(/-[a-f0-9]+$/, '') : basename(dirname(dirname(dir)));
+        for (const { packages } of workspaces) {
+          const pkg = packages.find(pkg => pkg.name === name);
+          if (pkg) for (const input of cargoInputPaths(readFileSync(path, 'utf8'), dirname(pkg.manifest_path))) add(input, true);
+        }
+      } else if (entry.name.endsWith('.json') && basename(dir) === 'kept') {
+        const kept = JSON.parse(readFileSync(path, 'utf8'));
+        if (kept.entry && existsSync(resolve(kept.entry, 'inputs.json'))) {
+          const record = JSON.parse(readFileSync(resolve(kept.entry, 'inputs.json'), 'utf8'));
+          for (const [input] of record.files) add(resolve(SDK_ROOT, input), true);
+        }
+      }
+    }
+  };
+  for (const target of targets) scan(target);
+  return [...roots, ...[...files].map(file => ({ file }))];
+}
+
+function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt) {
+  const next = webSourceRoots(app, js, render);
+  inputRoots.splice(0, inputRoots.length, ...next);
+  for (const [path, value] of Object.entries(webInputDigests(app, js, next))) {
+    if (Object.hasOwn(inputs, path)) continue;
+    // An include first discovered by Cargo cannot certify bytes edited during compilation.
+    const info = statSync(resolve(SDK_ROOT, path), { throwIfNoEntry: false });
+    inputs[path] = info && info.ctimeMs >= inputsAt ? null : value;
+  }
+}
+
+async function main() {
 guardFlags('web-build', process.argv.slice(2));
 const target = ['--js', '--wasm'].find((flag) => process.argv.includes(flag));
 // `--bake` (internal, delivery's): the web crate's bake without its wasm —
@@ -58,7 +183,8 @@ const target = ['--js', '--wasm'].find((flag) => process.argv.includes(flag));
 // wasm build writes them, with no `app.wasm`, glue or leaf wasm (LLP 1071
 // §7, "Retiring the wasm target on the web", step c).
 const bakeOnly = process.argv.includes('--bake');
-process.argv = process.argv.filter((a) => a !== '--js' && a !== '--wasm' && a !== '--bake');
+const checkOnly = process.argv.includes('--check');
+process.argv = process.argv.filter((a) => !['--js', '--wasm', '--bake', '--check'].includes(a));
 // `--render <rust|js|none>`: the JS target's pages at build (host/web-js/build.mjs).
 const renderFlag = process.argv.indexOf('--render');
 const render = renderFlag < 0 ? [] : process.argv.splice(renderFlag, 2);
@@ -95,25 +221,39 @@ const [{ rolldown }, { minifySync }] = await Promise.all([import('rolldown'), im
 // is fine to be on wasm"; LLP 1071 §8). For an app the JS target is the web
 // build, and what it refuses is an error; `--wasm` is internal (below).
 const game = app.manifest.game !== undefined;
+const jsTarget = target !== '--wasm' && !game && !bakeOnly;
+const inputRoots = webSourceRoots(app, jsTarget, render[1] ?? 'rust');
+if (checkOnly) {
+  if (!jsTarget) {
+    webToolchainEnv(developmentBuildEnv());
+    if (!bakeOnly) webGpuArtifacts(app, null, { check: true });
+  }
+  else {
+    mkdirSync(app.target, { recursive: true });
+    const stage = mkdtempSync(resolve(app.target, 'web-check-'));
+    try {
+      const checked = spawnSync(process.execPath, [resolve(SDK_ROOT, 'host/web-js/build.mjs'), app.name, '--prerequisites', '--out', stage, ...render],
+        { stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir } });
+      if (checked.status !== 0) process.exitCode = checked.status ?? 1;
+    } finally { rmSync(stage, { recursive: true, force: true }); }
+    if (process.exitCode) return;
+  }
+  console.log(`${app.name}: web build prerequisites ready`);
+  return;
+}
 if (outDir && (target === '--wasm' || game || bakeOnly)) { console.error('web-build: --out writes the JS target, an app\'s web build; a game\'s wasm build is target/web-dist'); process.exit(2); }
 if (target !== '--wasm' && !game && !bakeOnly) {
   // An app outside apps/ reaches it through EXACT_APP_DIR, as here. It builds in a stage of its own beside the
   // output, which replaces the output only when complete (`replaceBuild`), so builds run at once never mix, and the
   // build replaced is kept by its generation while a page `serve` sent may still ask for its files.
   const dist = outRoot || webDist(app);
-  // The JS build runs Cargo in an authored workspace in two cases (LLP 1153 D2.1): a web crate whose build script is
-  // the author's, and pages rendered by the app's own render entry (`--render rust`, the default when it has one).
-  // Its lock is checked before either, as every other build's is.
-  const authoredScript = (path) => existsSync(path) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(path, 'utf8'));
-  const renderEntry = ['linux', 'web'].some((dir) => existsSync(resolve(app.dir, dir, 'src/bin', `${app.name}-render.rs`)));
-  if (!app.generated && (authoredScript(resolve(app.dir, 'web/build.rs')) || (renderEntry && !render.some((r) => r === 'js' || r === 'none')))) app.rust();
   mkdirSync(dirname(dist), { recursive: true });
   let stage = mkdtempSync(`${dist}.stage-`);
   process.on('exit', () => { if (stage) rmSync(stage, { recursive: true, force: true }); });
   // What this build reads, and when, as it starts: the next check (webChanges) compares every input
   // changed since then, so a source changed or gone while it compiles, or a build published over it
   // meanwhile, is a change, never taken as built. A site to host is no drive's, and its marker names no source.
-  const inputsAt = Date.now(), inputs = outDir ? null : webInputDigests(app, true);
+  const inputsAt = Date.now(), inputs = outDir ? null : webInputDigests(app, true, inputRoots);
   // A site to host is a release, as delivery builds one (`--production`): agent mode refused, the app's storage its id
   // alone, its install pages a release's.
   const release = outDir ? { flags: ['--production'], env: { EXACT_UPDATE_TRUST: 'production' } } : { flags: [], env: {} };
@@ -125,6 +265,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   // The compiler's warnings, as `contract build` says them, its file from here: the count names them (LLP 1116.004 D7).
   const compiler = compilerWarnings(js.stderr);
   if (js.status === 0) {
+    if (inputs) completeWebInputs(app, true, render[1] ?? 'rust', inputRoots, inputs, inputsAt);
     // What the JS target warned of, in its own words: the count it prints names nothing (workout F3, kanban F30).
     // The bundler's notes on the generated glue are not the app's to act on. The types app.ts imports, when
     // the build rewrote them, are one line (LLP 1116.001 D4.5).
@@ -137,7 +278,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // (`--out`), built again (to the same directory, as a release) when what it was built from changes.
     // `env`: each setting app.ts read, as inlined, and its source (LLP 1153 D4), for the drive's logs and `changedSettings`.
     writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
-      manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...(inputs ? { inputs, inputsAt } : {}), ...builtSettings(stage), ...(outDir ? { release: true } : {}) }) + '\n');
+      manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...(inputs ? { inputs, inputsAt, inputRoots } : {}), ...builtSettings(stage), ...(outDir ? { release: true } : {}) }) + '\n');
     // A site to host holds the site, not the build's intermediates (`.gen`, the app's captured sources among them;
     // the receipt's file cards name no dot path), but for what `serve` renders a `render=request` or `cached` route's
     // page with, when it has such a route: the server bundle (LLP 1153 D3.4) and the analyzed sheet a page selects
@@ -191,7 +332,7 @@ const keepNames = process.env.EXACT_WEB_NAMES === '1';
 const unsplit = keepNames || buildEnv.EXACT_WEB_LINK === 'all' ? 'a development or names build' : unsplitReason();
 if (keepNames || !unsplit) buildEnv.CARGO_PROFILE_WEB_STRIP = 'debuginfo';
 // Capture before the bake so edits made during compilation or packaging stay detectable.
-const inputsAt = Date.now(), inputs = webInputDigests(app, false);
+const inputsAt = Date.now(), inputs = webInputDigests(app, false, inputRoots);
 const generated = game ? generatedInputFiles(app.dir) : [];
 const warmInputs = !bakeOnly ? warmGameInputs(app, {...buildEnv, EXACT_GAME_PROOF_PROFILE:proofProfile}) : null;
 const buildReceipt = contractLast(() => buildBake(app, 'web', 'wasm32-unknown-unknown', {env:buildEnv, check:bakeOnly, gpuProfile}));
@@ -581,11 +722,12 @@ if (app.modules.tags.length || app.modules.web) {
 // Written last inside the private stage. Dev startup trusts a dist only when
 // this marker and the public plan card agree, so a partial/corrupt directory
 // can never be mistaken for a completed build of the requested app.
+completeWebInputs(app, false, render[1] ?? 'rust', inputRoots, inputs, inputsAt);
 writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({
   exactBuild: 1, app: { id: app.id, name: app.displayName }, manifestSha256: appManifestDigest(app),
   files: await publicFileCards(stage).finally(closeFilesystemReader),
   // Content digests of what this build read: a staleness check compares bytes, not times.
-  inputs, inputsAt,
+  inputs, inputsAt, inputRoots,
   // Each setting its module inlined (LLP 1153 D4), from the paired module's receipt, as a JS build's marker says them.
   ...builtSettings(stage),
 }) + '\n');
@@ -598,3 +740,6 @@ const textFlowWasm = readFileSync(resolve(dist, 'textflow.wasm'));
 const markdownEditor = readFileSync(resolve(dist, 'markup-editor.wasm'));
 console.log(`${relative(process.cwd(), dist) || "."}: app.wasm ${kib(wasm.length)} (${kib(gzipSync(wasm, { level: 9 }).length)} gzip; ${optNote}), index.html, glue.js, app.plan ${kib(planBytes.length)}, ${sealed.report}; documents: ${documentNote}${authNote}${passkeyNote}; GPU: ${gpuNote}; modules: ${moduleNote}; markup-editor.wasm ${kib(markdownEditor.length)} (${kib(gzipSync(markdownEditor, { level: 9 }).length)} gzip), on demand; textflow.wasm ${kib(textFlowWasm.length)} (${kib(gzipSync(textFlowWasm, { level: 9 }).length)} gzip), on demand`);
 if (process.argv.includes('--json')) reportBuilt({ path: dist, target: 'web', trust: buildEnv.EXACT_UPDATE_TRUST });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

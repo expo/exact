@@ -818,14 +818,17 @@ mod tests {
     use exact_plan::Stdlib;
 
     /// Every roster entry an `Opcode::Call` can name has its `x_` export in
-    /// rt.js (or roster.js and router.js, which it re-exports, or budget.js,
-    /// the checked string builders); `at`, `formatDate` and `formatNumber` compiled and then failed
+    /// rt.js (or a runtime file it re-exports: clock.js, pieces.js, roster.js
+    /// and router.js; or budget.js, the checked string builders); `at`,
+    /// `formatDate` and `formatNumber` compiled and then failed
     /// the bundle for want of one (an app's diary, 2026-10-04). `map` and
     /// `filter` are opcodes with a callback body, never a call.
     #[test]
     fn every_called_roster_entry_has_a_runtime_export() {
         let rt = [
             include_str!("../rt.js"),
+            include_str!("../clock.js"),
+            include_str!("../pieces.js"),
             include_str!("../roster.js"),
             include_str!("../router.js"),
             include_str!("../format.js"),

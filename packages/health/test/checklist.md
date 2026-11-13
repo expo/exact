@@ -56,10 +56,11 @@ Note each day's total as Health shows it.
 ## Android phone, API 31 or later
 
 The conformance fixture (`test/fixture`) carries the module on Android.
-`bun packages/health/test/android.mjs` builds it and leaves its APK at
-`host/android/app/build/healthfixture/outputs/apk/release/app-release.apk`;
-install that with `adb install`. On an Android 13 phone, install Health Connect
-from Google Play first. Add steps and a workout in a fitness app that
+`bun packages/health/test/android.mjs` builds its APK and deletes the fixture;
+keep the fixture's directory and install
+`target/android/app/outputs/apk/release/app-release.apk` from it with
+`adb install`. On an Android 13 phone, install Health Connect from Google Play
+first. Add steps and a workout in a fitness app that
 writes to Health Connect, or in Health Connect's own data screens, and
 note them.
 

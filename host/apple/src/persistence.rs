@@ -1,4 +1,5 @@
 //! Failed store writes remain owed until persisted or superseded.
+//! Report each pending name once, even when later commits retry it.
 use super::*;
 
 impl<D: DataSource> Host<D> {
@@ -28,6 +29,7 @@ impl<D: DataSource> Host<D> {
                 }
             }
             self.pending_store_stamps.remove(&write.name);
+            self.reported_store_failures.remove(&write.name);
             if write.durable {
                 self.pending_store_writes
                     .retain(|pending| pending.name != write.name);
@@ -62,9 +64,12 @@ impl<D: DataSource> Host<D> {
                 if let Some(stamp) = stamp {
                     self.pending_store_stamps.insert(write.name.clone(), stamp);
                 }
-                self.store_failure(format!("store {} failed: {error}", write.name));
+                if self.reported_store_failures.insert(write.name.clone()) {
+                    self.store_failure(format!("store {} failed: {error}", write.name));
+                }
                 self.pending_store_writes.push(write);
             } else {
+                self.reported_store_failures.remove(&write.name);
                 changed = true;
             }
         }

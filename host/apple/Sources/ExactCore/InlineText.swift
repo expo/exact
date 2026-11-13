@@ -42,6 +42,14 @@ package struct InlineText {
         value.text = props["text"] ?? ""
         if value.background != nil || style.backgroundRef != nil { value.backgroundBox = id } else { value.backgroundRadii = [] }
         value.href = props["href"] ?? ""
+        // The room its inline boxes take beside its text, as the kernel measured it ("start end").
+        if let edges = props["inlineEdges"]?.split(separator: " ").compactMap({ Float($0) }), edges.count == 2 {
+            value.inlineStart = CGFloat(edges[0]); value.inlineEnd = CGFloat(edges[1])
+        }
+        // Its padding box's reach past its text, which its background covers.
+        if let pad = props["inlinePad"]?.split(separator: " ").compactMap({ Float($0) }), pad.count == 2 {
+            value.backgroundBefore = CGFloat(pad[0]); value.backgroundAfter = CGFloat(pad[1])
+        }
         // An image in the text is its box, with no ink or paint of its own (LLP 1011.002).
         boxShown = props["inlineBoxHidden"] != "true"
         if let box = InlineBox(prop: props["inlineBox"]) {
@@ -65,6 +73,19 @@ package struct InlineText {
     /// A run with an `href`: the web's `<a>` in its paragraph.
     package var isLink: Bool { !(props["href"] ?? "").isEmpty }
 
+}
+
+/// A box with a background around a run's own (`Run.background`), which
+/// paints under it: its colour, node, `border-radius` and padding box's
+/// reach past its first and last characters, as the run's own fields.
+package struct OuterBackground: Hashable {
+    package var color: [Double]
+    package var box: UInt32
+    package var radii: [InlineRadius]
+    package var before: CGFloat, after: CGFloat
+    package init(color: [Double], box: UInt32, radii: [InlineRadius], before: CGFloat, after: CGFloat) {
+        self.color = color; self.box = box; self.radii = radii; self.before = before; self.after = after
+    }
 }
 
 /// One corner of an inline box's `border-radius`: px plus a percentage, or

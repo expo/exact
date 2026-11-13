@@ -1,6 +1,6 @@
 import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { faultMessage, takeFault } from '../web/faults.js';
-import { redirectFor, reachRefusal } from '../web/address-space.js';
+import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';
 export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 
 // Captured while the entry graph loads. App source injection never replaces
@@ -178,8 +178,10 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
     }
     try {
       // Its ceiling bounds the read inside `fetchWith` too, so an oversized body that never ends is refused, not awaited.
-      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
-        ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) });
+      // It goes out as the asking commit's origin (LLP 1133.036 D6): one it does not carry is not taken for the app's.
+      const init = { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
+        ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) };
+      const response = await fetchWith(admitted, req.url, init, null, redirectOf(req.url, init), within, req.origin ?? UNATTRIBUTED);
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {
       return { failed: error?.kind === 'Refused' ? 2 : 1, message: String(error?.message ?? error) };
@@ -247,6 +249,7 @@ export function createSecretFacade(store, admitted, keys) {
     async keepKey(name, pair) {
       if (overlaying.on) throw inOverlay('store.keepKey()');
       allowed(name);
+      if (mustLock(admitted, name)) throw unsupported(name);
       const handle = 'exact.key:' + crypto.randomUUID();
       store.set(name, handle);
       return keys().then(service => service.put(handle, pair));

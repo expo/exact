@@ -169,16 +169,29 @@ impl Lines {
     }
 }
 
+/// The room before clusters, by text index, and before inline boxes, by run.
+pub(super) type Leads<'a> = (&'a [(usize, f32)], &'a [(u32, f32)]);
+
 /// One Parley line's glyphs, appended in visual order with `shift` added
 /// to every x (`styles` is the layout's, whose brushes are run indices),
 /// and its inline boxes as the next line's (a box's id is its run index).
-/// Returns the line's summed cluster advance (justified where it is).
+/// `leads` is the room before clusters (by text index) and boxes (by run),
+/// in their advance and not their glyphs': each is drawn past it, on its
+/// start side. Returns the line's summed cluster advance (justified where
+/// it is).
 pub(super) fn extract(
     line: &parley::Line<'_, u32>,
     styles: &[parley::Style<u32>],
     shift: f32,
+    leads: Leads<'_>,
     out: &mut Lines,
 ) -> f32 {
+    let lead = |at: usize| {
+        leads
+            .0
+            .binary_search_by_key(&at, |l| l.0)
+            .map_or(0.0, |i| leads.0[i].1)
+    };
     let m = line.metrics();
     let mut pen = m.offset + m.inline_min_coord + shift;
     let mut content = 0.0f32;
@@ -187,9 +200,14 @@ pub(super) fn extract(
             parley::LineItem::Run(run) => run,
             parley::LineItem::InlineBox(b) => {
                 if b.kind == parley::InlineBoxKind::InFlow {
+                    let before = leads
+                        .1
+                        .iter()
+                        .find(|l| l.0 == b.id as u32)
+                        .map_or(0.0, |l| l.1);
                     out.boxes.push(LayoutBox {
                         line: out.lines.len() as u32,
-                        x: pen,
+                        x: pen + before,
                         run: b.id as u32,
                     });
                     pen += b.width;
@@ -218,21 +236,43 @@ pub(super) fn extract(
                     next = c.next_logical();
                 }
             }
+            // Room before the cluster is on its start side: the left under
+            // `ltr`, after its glyphs under `rtl`.
+            let room = if leads.0.is_empty() {
+                0.0
+            } else {
+                lead(cluster.text_range().start)
+            };
+            let rtl = level % 2 == 1;
+            if !rtl {
+                pen += room;
+            }
+            // A single glyph Parley keeps in its cluster takes the cluster's
+            // advance, room included: the room is not the glyph's.
+            let mut excess = if room == 0.0 {
+                0.0
+            } else {
+                cluster.glyphs().map(|g| g.advance).sum::<f32>() - (cluster.advance() - room)
+            };
             for glyph in cluster.glyphs() {
                 let style = styles.get(glyph.style_index()).map_or(0, |s| s.brush);
+                let w = glyph.advance - std::mem::take(&mut excess);
                 out.glyphs.push(LayoutGlyph {
                     start: range.start as u32,
                     end: range.end as u32,
                     x: pen + glyph.x,
                     y: glyph.y,
-                    w: glyph.advance,
+                    w,
                     font_size: size,
                     glyph_id: glyph.id,
                     metadata: style,
                     face,
                     level,
                 });
-                pen += glyph.advance;
+                pen += w;
+            }
+            if rtl {
+                pen += room;
             }
         }
     }

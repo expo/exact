@@ -49,6 +49,9 @@
 //   take a fixed body line height (scripts/agent-launch.mjs `parityScript`),
 //   since `line-height: normal` is each engine's own font metric; authored
 //   line heights still compare.
+//   Wheel steps first hover the target on both pages: Playwright positions its
+//   mouse to deliver a wheel, so these compare hover followed by wheel at the
+//   same viewport point, even if hovering changes the target's box.
 //   --linux adds a second reference beside the wasm page: the Rust runner
 //   headless on the Linux host (`agent.mjs linux`, the data app's release
 //   binary, built by --build), driven by the same steps on the same plan,
@@ -243,19 +246,33 @@ function diffJSONFields(a, b, path, out, other, reference) {
     for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) diffJSONFields(a[k], b[k], `${path}.${k}`, out, other, reference);
   } else out.push({ field: `state.${path}`, what: `state ${path}: ${reference} ${JSON.stringify(a)?.slice(0, 120)} ${other} ${JSON.stringify(b)?.slice(0, 120)}` });
 }
-function boxes(l, tree, relative) {
+async function comparisonLayout(session, relative = false) {
+  const layout = await session.layout();
+  if (!relative) return [layout, [0, 0]];
+  const { scroll, fixed } = await session.carrier.evaluate(`({
+    scroll: [scrollX, scrollY],
+    fixed: [...exact.views].filter(([, el]) => getComputedStyle(el).position === 'fixed').map(([id]) => id),
+  })`);
+  const ids = new Set(fixed);
+  return [{ ...layout, nodes: layout.nodes.map(n => ids.has(n.id) ? { ...n, viewportFixed: true } : n) }, scroll];
+}
+function boxes(l, tree, relative, documentScroll) {
   const raw = new Map(l.nodes.map(n => [n.id, n])), parent = new Map();
   const hidden = new Set((tree?.nodes ?? []).filter(n => n.hidden).map(n => n.id));
   for (const n of tree?.nodes ?? []) for (const child of n.children ?? []) parent.set(child, n.id);
   const m = new Map();
   for (const n of l.nodes) if (n.testId && !hidden.has(n.id) && !m.has(n.testId)) {
     const p = raw.get(parent.get(n.id));
-    m.set(n.testId, relative && p ? { ...n, x: n.x - p.x + (p.sx ?? 0), y: n.y - p.y + (p.sy ?? 0) } : n);
+    // A flowing root is relative to the document; a fixed root stays in the viewport.
+    const origin = p ?? (n.viewportFixed ? { x: 0, y: 0 } : { x: -documentScroll[0], y: -documentScroll[1] });
+    m.set(n.testId, relative ? {
+      ...n, x: n.x - origin.x + (origin.sx ?? 0), y: n.y - origin.y + (origin.sy ?? 0),
+    } : n);
   }
   return m;
 }
 function diffLayout(a, b, treeA, treeB, relative = false, reference = 'wasm', other = 'js', documentA = [0, 0], documentB = [0, 0]) {
-  const A = boxes(a, treeA, relative), B = boxes(b, treeB, relative), out = []; let maxDelta = 0;
+  const A = boxes(a, treeA, relative, documentA), B = boxes(b, treeB, relative, documentB), out = []; let maxDelta = 0;
   for (const [t, x] of A) {
     const y = B.get(t);
     if (!y) { out.push({ field: `layout.${t}.present`, what: `layout ${t}: on screen in ${reference}, not in ${other}` }); continue; }
@@ -476,8 +493,8 @@ async function drive(t, report, fail, dir, ws, js) {
       });
       driveAt = `${step} layout`;
       const [[lw, documentW], [lj, documentJ]] = await pair(
-        async () => [await W.layout(), crossBrowser ? await W.carrier.evaluate('[scrollX, scrollY]') : [0, 0]],
-        async () => [await J.layout(), crossBrowser ? await J.carrier.evaluate('[scrollX, scrollY]') : [0, 0]],
+        () => comparisonLayout(W, !!crossBrowser),
+        () => comparisonLayout(J, !!crossBrowser),
       );
       const o3 = diffLayout(lw, lj, tw, tj, !!crossBrowser, reference, other, documentW, documentJ); o3.forEach(x => differ(step, x.what, crossBrowser ? x.field : null)); st += o3.length;
       if (crossBrowser) report.targets[t.name].maxLayoutDelta = Math.max(report.targets[t.name].maxLayoutDelta ?? 0, o3.maxDelta);
@@ -577,7 +594,7 @@ async function drive(t, report, fail, dir, ws, js) {
     let diverged = false;
     if (existsSync(script)) for (const line of readFileSync(script, 'utf8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))) {
       let step;
-      try { step = parseStep(line); } catch (e) { fail(line, e.message); continue; }
+      try { step = parseStep(line, { hoverWheel: !!crossBrowser }); } catch (e) { fail(line, e.message); continue; }
       const { op, mustRefuse, run } = step;
       // Playwright cannot make trusted phased touches in Firefox/WebKit.
       // Skip before resolving a target or touching either page; the carrier's
@@ -847,7 +864,7 @@ function linuxFor(t) {
 }
 
 // ---------------------------------------------------------------- the run
-const report = { at: new Date().toISOString(), targets: {}, steps: [], failures: [], known: [] };
+const report = { at: new Date().toISOString(), targets: {}, steps: [], failures: [], known: [], wheelInput: crossBrowser ? 'hover then wheel on both pages' : 'wheel' };
 let engineReady = true;
 if (crossBrowser) {
   try { await probePlaywrightBrowser(crossBrowser); }
@@ -912,7 +929,7 @@ if (linuxRef && argv.includes('--build') && engineReady) {
 }
 const targets = apps.map(a => ({ name: a, app: a, wasm: resolve(wasmRoot, a) }));
 if (urls >= 0) targets.push({ name: `${argv[urls + 1]}-${options['--label']}`, app: argv[urls + 1], urls: [argv[urls + 2], argv[urls + 3]] });
-if (synthetic.length) {
+if (synthetic.length && engineReady) {
   // The compiler is built once, as `cargo run` builds it, and run directly
   // for each fixture: a `cargo run` per fixture repeats Cargo's freshness check.
   const compiler = spawnSync('cargo', ['build', '-q', '-p', 'contract', '--bin', 'contract'], { cwd: root, encoding: 'utf8' });
@@ -975,6 +992,7 @@ for (const t of targets) {
   const testCell = info.tests ? crossBrowser ? `${info.tests.chrome} / ${info.tests[crossBrowser]}` : `${info.tests.wasm} / ${info.tests.js}` : '—';
   lines.push(`| ${t.name} | ${info.jsBuild === false ? 'refused' : info.jsBuild ? 'ok' : '—'} | ${s.length} | ${s.filter(x => x.differences === 0).length} | ${(byTarget[t.name] ?? []).length}${report.marked?.[t.name] ? ` (+${report.marked[t.name].differences} marked)` : ''} | ${testCell} |${crossBrowser ? ` ${(info.maxLayoutDelta ?? 0).toFixed(3)} px |` : ''}${linuxRef ? ` ${lcell} |` : ''}`);
 }
+if (crossBrowser) lines.push('', 'Wheel input: hover then wheel on both pages.');
 lines.push('', '## Failures', '');
 for (const [t, fs] of Object.entries(byTarget)) { lines.push(`### ${t}`); for (const f of fs) lines.push(`- **${f.step}** — ${f.what}`); lines.push(''); }
 for (const reason of new Set(marked.map(([, m]) => m.reason))) {

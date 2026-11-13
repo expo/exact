@@ -269,6 +269,7 @@ pub(crate) fn reserve(
         let runs = [TextRun {
             text: shown,
             style,
+            edges: Default::default(),
             inline: None,
         }];
         let request = TextMeasureRequest {

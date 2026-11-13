@@ -74,17 +74,23 @@ thread_local! {
 /// `SQLITE_ERROR`, so a refusal recorded while preparing is the cause.
 fn sql_error(e: rusqlite::Error) -> HostError {
     use rusqlite::ErrorCode::{DatabaseBusy, DatabaseLocked};
+    // A failed prepare is `SqlInputError`, whose text appends the whole SQL
+    // and an offset; the message is SQLite's alone, and a batch's failure
+    // names its statement shortened.
+    let message = match &e {
+        rusqlite::Error::SqlInputError { msg, .. } => msg.clone(),
+        e => e.to_string(),
+    };
     match (REFUSED.take(), e.sqlite_error_code()) {
         (Some(why), _) => error(format!("not authorized: {why}")),
-        (None, Some(DatabaseBusy | DatabaseLocked)) => HostError::Failed(format!("{BUSY}{e}")),
+        (None, Some(DatabaseBusy | DatabaseLocked)) => {
+            HostError::Failed(format!("{BUSY}{message}"))
+        }
         // System SQLite may omit the function and fail before calling the authorizer.
-        (None, _)
-            if e.to_string()
-                .eq_ignore_ascii_case("no such function: load_extension") =>
-        {
+        (None, _) if message.eq_ignore_ascii_case("no such function: load_extension") => {
             error("not authorized: load_extension: extensions are not loaded")
         }
-        (None, _) => error(e),
+        (None, _) => error(message),
     }
 }
 
@@ -133,7 +139,7 @@ impl sqlite::Provider for SqliteProvider {
             )),
         })?;
         REFUSED.take();
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
@@ -233,11 +239,7 @@ fn validate(conn: &Connection, sql: &str) -> Result<StatementInfo, HostError> {
         .ok_or_else(|| error("expected one SQL statement"))?;
     let info = StatementInfo {
         parameter_count: statement.parameter_count(),
-        columns: statement
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+        columns: statement.column_names().map(|s| s.to_string()).collect(),
     };
     if batch.next().map_err(sql_error)?.is_some() {
         return Err(error("expected one SQL statement"));
@@ -448,11 +450,7 @@ impl sqlite::Connection for Session {
             if !statement.readonly() {
                 return Err(error("query requires a read-only statement"));
             }
-            let columns: Vec<String> = statement
-                .column_names()
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let columns: Vec<String> = statement.column_names().map(|s| s.to_string()).collect();
             let mut budget = columns.iter().map(String::len).sum::<usize>();
             let mut cursor = statement
                 .query(rusqlite::params_from_iter(parameters(params)?))

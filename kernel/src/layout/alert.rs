@@ -42,6 +42,7 @@ pub(super) fn measure(
         let run = TextRun {
             text: shown,
             style: crate::TextStyle::from_style(&title),
+            edges: Default::default(),
             inline: None,
         };
         let request = TextMeasureRequest {

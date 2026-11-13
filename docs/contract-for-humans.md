@@ -1573,8 +1573,9 @@ appropriate [motion fixture](../contract/corpus/spring.contract).
 In a `list virtualized=true` row, an animation waits until its row first
 shows in the list (`-exact-animation-trigger="view"`, the default), because the list
 builds rows before they scroll in; `-exact-animation-trigger="none"` starts it when
-the row is built, so the row arrives settled. The web build does not hold it
-yet.
+the row is built, so the row arrives settled. Revealing a row preserves an authored
+`animation-play-state="paused"`. A row that stays mounted plays only once;
+retiring and mounting it again starts a new play.
 
 `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines
 (`-exact-drag-timeline`, `animation-timeline`, `animation-range`, `timeline-scope`) are

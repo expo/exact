@@ -288,8 +288,28 @@ export function assertCapturedModule(stage, id) {
 const DECLARATION=/\.d\.[cm]?ts$/;
 // A string after `from`, `import`, `import(`, `require(`, `declare module` or
 // `<reference types=`, comments between included. Matching more than an
-// import costs at most a package's declarations, staged and unread.
+// import only stages unread declarations; peer requirements use syntax below.
 const SPECIFIER=/(?:\bfrom|\bimport|\brequire|\bmodule|\btypes\s*=)(?:\s|\(|\/\*[\s\S]*?\*\/|\/\/[^\n]*)*(['"])([^'"\r\n]+)\1/g;
+// A peer requirement must come from an import, including import types and
+// leading triple-slash references, rather than an example in prose or a string.
+function declarationImports(text, parse) {
+  parse ??= createRequire(import.meta.url)('rolldown/utils').parseSync;
+  const {program,comments}=parse('package.d.ts',text), imports=new Set();
+  const visit=node=>{
+    if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+    if (!node || typeof node!=='object') return;
+    if (/^(Import|ExportNamed|ExportAll)Declaration$|^(ImportExpression|TSImportType)$/.test(node.type) && typeof node.source?.value==='string') imports.add(node.source.value);
+    if (node.type==='TSExternalModuleReference' && typeof node.expression?.value==='string') imports.add(node.expression.value);
+    for (const key in node) visit(node[key]);
+  };
+  visit(program);
+  for (const comment of comments) {
+    if (comment.start>=(program.body[0]?.start ?? text.length)) break;
+    const types=/^\/\/\/\s*<reference\s(?:[^>]*?\s)?types\s*=\s*(['"])([^'"]*)\1/.exec(text.slice(comment.start,comment.end));
+    if (types) imports.add(types[2]);
+  }
+  return imports;
+}
 const PACKAGES='__exact_declarations.json';
 // A package's `/// <reference lib="esnext.disposable" />` to an ES library the
 // configuration leaves out is staged as a plain comment, so it loads nothing:
@@ -347,16 +367,17 @@ const physicalId=id=>{ if (!isAbsolute(id)) return id; try { return realpathSync
  * TypeScript names, and of the packages those declarations name: each found
  * from where its file was captured, as Node and TypeScript find it (the
  * nearest `node_modules` upward; a package's `@types` companion too), and
- * placed where the checker, walking up from the staged file, finds it. A
+ * placed where the checker, walking up from the staged file, finds it.
+ * A linked package's declared peers come from the app, beside their consumer. A
  * `node_modules` inside a captured root is mirrored at its place; one above
  * it is placed at the root (the app's at the stage's top, a mount's under its
  * name); a package's dependency sits beside it unless nested inside it.
  * Writes `__exact_declarations.json`: each staged package, where it is
  * installed and the directory that is, and every file read where it is
  * installed, so a producer can watch them. */
-export function stagePackages(stage) {
-  const roots=capturedOrigins(stage);
-  const staged=new Map(), files=new Map(), queue=[];
+export function stagePackages(stage, parse) {
+  const roots=capturedOrigins(stage), app=roots.at(-1);
+  const staged=new Map(), files=new Map(), queue=[], peers=[], peerRefusals=[];
   let total=0;
   // Over the cap, the error names the largest packages, each with the captured file whose imports reached it.
   const tooLarge=()=>{
@@ -380,18 +401,35 @@ export function stagePackages(stage) {
     }
   };
   // `source`: the captured file whose imports led here, as the app names it.
-  const need=(text,dir,root,owner,source)=>{
+  const need=(text,dir,root,owner,source,place)=>{
+    const declared=owner?.pkg?.json.peerDependencies ?? {};
+    const imports=Object.keys(declared).length ? declarationImports(text,parse) : null;
     for (const [, , spec] of text.matchAll(SPECIFIER)) {
       const name=packageName(spec);
       if (!name) continue;
+      if (Object.hasOwn(declared,name) && !imports.has(spec)) continue;
+      let peer;
+      try { peer=appPeer(app[1],owner?.pkg,name); }
+      catch (error) {
+        // Copying every declaration does not make it reachable. The checker
+        // enforces this requirement only if it reads the importing file.
+        peerRefusals.push([relative(stage,place),error.message]);
+        continue;
+      }
       for (const wanted of [name,'@types/'+name.replace(/^@/,'').replace('/','__')]) {
-        const found=find(wanted,dir,root,owner);
+        const found=peer ? find(wanted,app[1],app,null) : find(wanted,dir,root,owner);
         if (!found) continue;
+        if (peer) {
+          found.modules=owner.modules;
+          found.place=join(found.modules,wanted);
+          peers.push([dirname(place),wanted,found.real]);
+        }
         const known=staged.get(found.place)?.real;
         if (known && known!==found.real) throw new Error(`package declarations: two copies of ${wanted} (${known}, ${found.real}); install one`);
         if (known) continue;
         staged.set(found.place,Object.assign(found,{name:wanted,via:owner?.name,source,bytes:0}));
-        copy(found.real,found.place,{at:found.place,from:found.real,installed:found.installed,modules:found.modules,name:wanted,source,staged:found});
+        copy(found.real,found.place,{at:found.place,from:found.real,installed:found.installed,modules:found.modules,
+          name:wanted,source,staged:found,pkg:packageOf(join(found.real,'package.json'),found.installed)});
       }
     }
   };
@@ -408,7 +446,7 @@ export function stagePackages(stage) {
         if (total>64<<20) throw tooLarge();
         // Recorded where it is installed: a link retargeted is a change there.
         files.set(join(place,name),[join(owner.installed,relative(owner.from,path)),bytes]);
-        if (DECLARATION.test(name)) queue.push([bytes.toString('utf8'),dirname(realpathSync(path)),null,owner,owner.source]);
+        if (DECLARATION.test(name)) queue.push([bytes.toString('utf8'),dirname(realpathSync(path)),null,owner,owner.source,join(place,name)]);
       }
     }
   };
@@ -428,6 +466,16 @@ export function stagePackages(stage) {
   };
   sources(stage);
   while (queue.length) need(...queue.shift());
+  // A later ordinary dependency may have occupied a nearer slot. The checker
+  // must not silently read that copy for an app-owned peer.
+  for (const [from,name,real] of peers) {
+    for (let at=from; within(at,stage); at=dirname(at)) {
+      const found=staged.get(join(at,'node_modules',name));
+      if (!found) continue;
+      if (found.real!==real) throw new Error(`package declarations: two copies of ${name} (${real}, ${found.real}); install one`);
+      break;
+    }
+  }
   // The staged trees are exactly this capture: a package no longer named,
   // or no longer installed, goes.
   const prune=(dir)=>{
@@ -446,6 +494,7 @@ export function stagePackages(stage) {
   const record=JSON.stringify({
     packages:[...staged].map(([at,{installed,real}])=>[relative(stage,at),installed,real]).sort(),
     files:[...files.values()].map(([path])=>path).sort(),
+    peerRefusals:peerRefusals.sort(),
   });
   const recordPath=resolve(stage,PACKAGES);
   if (!existsSync(recordPath) || readFileSync(recordPath,'utf8')!==record) writeFileSync(recordPath,record);
@@ -453,8 +502,9 @@ export function stagePackages(stage) {
 
 // Package code (LLP 1027 D5, "Package code"). A package's JavaScript is
 // captured file by file as the bundle reaches it: each import is resolved
-// from where its importer really is (Node's lookup, a package's `exports`,
-// `main` and `browser` fields, as a browser bundle resolves them), and the
+// from where its importer really is, or from the app for a linked package's peer
+// (Node's lookup, a package's `exports`, `main` and `browser` fields, as a
+// browser bundle resolves them), and the
 // file it leads to is copied into the stage under `node_modules/.packages/
 // <name>@<version>/`, with every `package.json` between it and the package's
 // root (their `type` and `sideEffects`). The bundle loads only those copies.
@@ -476,14 +526,14 @@ const builtin=(spec)=>spec.startsWith('node:') || BUILTIN.has(spec) || BUILTIN.h
 const NAME=/^(?:@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i, VERSION=/^(?:[0-9a-z][\w.+-]*)?$/i;
 // The package a file belongs to: the nearest `package.json` that names one
 // (a nested `{"type":"module"}` names none).
-function packageOf(file) {
+function packageOf(file, installed) {
   for (let dir=dirname(file);;) {
     let json=null;
     try { json=JSON.parse(readFileSync(join(dir,'package.json'),'utf8')); } catch { /* none here, or not JSON */ }
     if (typeof json?.name==='string' && json.name) {
       const version=typeof json.version==='string' ? json.version : '';
       if (!NAME.test(json.name) || !VERSION.test(version)) throw new Error(`${join(dir,'package.json')}: not an npm package name and version (${JSON.stringify(json.name)}, ${JSON.stringify(version)})`);
-      return {root:dir,key:json.name+'@'+version,name:json.name,json,installed:new Set()};
+      return {root:dir,key:json.name+'@'+version,name:json.name,json,installed:new Set(installed ? [installed] : [])};
     }
     const up=dirname(dir);
     if (up===dir) return null;
@@ -501,6 +551,26 @@ function installedAt(name, dir) {
     at=up;
   }
 }
+// Linked consumers (a workspace or `link:` package: a link to a directory that
+// is not an entry of a `node_modules`) use the app's peers despite their
+// development install. Installed packages keep Node's ancestor lookup, including
+// those an isolated install (pnpm, Bun) links from its store, which places each
+// peer beside its consumer.
+const storeEntry=(root)=>{
+  const parent=dirname(root);
+  return basename(parent)==='node_modules' || basename(parent).startsWith('@') && basename(dirname(parent))==='node_modules';
+};
+function appPeer(app, pkg, name) {
+  if (!Object.hasOwn(pkg?.json.peerDependencies ?? {},name)) return null;
+  if (storeEntry(pkg.root) || ![...pkg.installed].some(path=>resolve(path)!==pkg.root)) return null;
+  const range=pkg.json.peerDependencies[name], installed=installedAt(name,app);
+  const who=`${pkg.key} requires peer ${name}@${range}`;
+  if (!installed || !existsSync(join(installed,'package.json'))) throw new Error(`${who}, which is not installed in the app; install a compatible version`);
+  const json=JSON.parse(readFileSync(join(installed,'package.json'),'utf8'));
+  if (typeof range!=='string' || typeof json.version!=='string' || !Bun.semver.satisfies(json.version,range))
+    throw new Error(`${who}, but the app has ${name}@${json.version ?? '(no version)'}; install a compatible version`);
+  return {installed};
+}
 const slash=(path)=>path.split(sep).join('/');
 const kindOf=(options)=>options?.kind==='require-call' ? 'require' : 'import';
 // Every bundle of the module resolves packages as a browser bundle does (the
@@ -516,13 +586,15 @@ export const bundleOptions={platform:'browser',transform:{define:{'process.env.N
 // back the answer current when the function was called and restores the one
 // before after the step. The runtime that runs the module owns
 // `__exact_async_context` (js/src/prelude.js, host/web-js/ts-data.js); a
-// realm without one runs the steps as the stock helper would.
+// realm without one runs the steps as the stock helper would. The web hook also supplies the source's Promise,
+// so reactions on an async helper's result retain their entropy owner.
 export const lowered={target:'es2016'};
 const ASYNC_HELPER=/@oxc-project\+runtime@[^/]*\/helpers\/esm\/asyncToGenerator\.js$/;
 export const asyncContextHelper=`export default function _asyncToGenerator(fn) {
   return function () {
     var self = this, args = arguments, context = globalThis.__exact_async_context, at = context ? context.current() : undefined;
-    return new Promise(function (resolve, reject) {
+    var P = context && context.Promise || Promise;
+    return new P(function (resolve, reject) {
       var gen = fn.apply(self, args);
       function step(key, arg) {
         // A live answer's step that a module turn settled runs in that answer's own turn (LLP 1146 D2)
@@ -597,7 +669,7 @@ export function capturedSources(stage, refusals=null) {
     }
   };
   const capture=(real,who,installed)=>{
-    const found=packageOf(real);
+    const found=packageOf(real,installed);
     if (!found) throw new Error('module outside captured app: '+real);
     const pkg=roots.get(found.key) ?? found;
     if (pkg.root!==found.root) throw new Error(`two copies of ${found.key} (${pkg.root}, ${found.root}); install one`);
@@ -640,9 +712,10 @@ export function capturedSources(stage, refusals=null) {
         const resolved=result && !result.external ? {...result,id:physicalId(result.id)} : result;
         if (resolved && !resolved.external && within(resolved.id,stage) && !staged(resolved.id)) { record(resolved.id); return resolved; }
       }
-      // Where the import leads from the importer's own place.
-      const [at,origin]=capturedOrigins(stage).find(([at])=>within(importer,at)) ?? [stage,stage];
-      const place=from ? from.real : resolve(origin,relative(at,importer));
+      // Linked consumers' peers belong to the app; other imports keep their own place.
+      const origins=capturedOrigins(stage), [at,origin]=origins.find(([at])=>within(importer,at)) ?? [stage,stage];
+      const app=origins.at(-1)[1], peer=name && appPeer(app,from?.package,name);
+      const place=peer ? join(app,'app.ts') : from ? from.real : resolve(origin,relative(at,importer));
       const real=await this.resolve(source, place, { ...options, skipSelf: true }).catch(() => null);
       const who=label(importer);
       if (!real || real.external) {
@@ -651,7 +724,7 @@ export function capturedSources(stage, refusals=null) {
       }
       // A `browser` field's `false`: Rolldown's empty module.
       if (real.id.startsWith('\0')) { record(null); return real; }
-      const id=capture(physicalId(real.id), who, name && installedAt(name, dirname(place)));
+      const id=capture(physicalId(real.id), who, peer?.installed ?? (name && installedAt(name, dirname(place))));
       record(id);
       return { ...real, id };
     },
@@ -980,7 +1053,7 @@ export function configure(stage, incremental=false, parse) {
     const before=readFileSync(declaration,'utf8'), after=snapbackMutationTypes(before);
     if(before!==after) writeFileSync(declaration,after);
   }
-  stagePackages(stage);
+  stagePackages(stage,parse);
 }
 
 // A native module's names in data code (LLP 1133.002 D13): an `import … from
@@ -1314,6 +1387,18 @@ function checkFiles(stage, libraries, files) {
   for (const path of files) {
     if (path && !allowed(realpathSync.native(path))) throw new Error('module outside captured app: ' + path);
   }
+  checkPeers(stage,files);
+}
+
+// Use the compiler's graph, including relative declaration imports and exports,
+// rather than requiring peers from every subpath the package happens to ship.
+function checkPeers(stage, files) {
+  const record=resolve(stage,PACKAGES);
+  if (!existsSync(record)) return;
+  const {peerRefusals=[]}=JSON.parse(readFileSync(record,'utf8'));
+  if (!peerRefusals.length) return;
+  const used=new Set(files.filter(isAbsolute).map(physicalId));
+  for (const [file,why] of peerRefusals) if (used.has(physicalId(resolve(stage,file)))) throw new Error(why);
 }
 
 /** Type-check a configured stage with the native compiler `tsc` (whose
@@ -1338,6 +1423,8 @@ export function check(stage, tsc, libraries) {
       // (A tsc that never returns is stopped at the bound: checkBound above.)
       if (error?.killed && error.signal === 'SIGKILL') return fail(new Error(`the TypeScript check did not finish in ${boundWords(checkBound())} (tsc stopped)`));
       if (error) {
+        try { checkPeers(stage,String(stdout??'').split(/\r?\n/)); }
+        catch (refusal) { return fail(refusal); }
         const diagnostics=String(stdout??'').split(/\r?\n/).filter(line=>! /^(?:\/|[A-Za-z]:[\\/]).*\.[cm]?[jt]sx?$/.test(line)).join('\n');
         const mutationFailure=/Type '(?:false|boolean)' is not assignable to type 'true'|SnapbackMutationSuccess/.test(diagnostics)
           && readFileSync(resolve(stage,'app.contract.d.ts'),'utf8').includes('type SnapbackMutationSuccess<');

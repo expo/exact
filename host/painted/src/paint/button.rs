@@ -1119,6 +1119,17 @@ impl Painter {
                 ts,
             );
         }
+        if let (Some(badge), Some(root)) = (&face.badge, rows.neutral_tab_root) {
+            // From the symbol's middle toward its trailing side, its top on
+            // the symbol's; a tab of a title alone has it after the title.
+            let at = if face.symbol.is_some() {
+                (sx + layout.symbol / 2.0, sy)
+            } else {
+                let end = layout.title.as_ref().map_or(0.0, |p| p.width);
+                (tx + (layout.text.0 + end) / 2.0, ty)
+            };
+            self.tab_badge(node.id, badge, at, root, rtl, &layout.title_style, ts);
+        }
         if check.is_some() {
             let icon = material_dp(metric::SEGMENTED_BUTTON_ICON) * scale;
             let cx = if rtl { start + cw - icon } else { start };
@@ -1137,6 +1148,63 @@ impl Painter {
 }
 
 /// A `controlSize`'s scale of the face's starting size.
+impl Painter {
+    /// A root tab's badge (LLP 1075.003 §9.9, `PressFace.badge`) as the
+    /// neutral look draws it, the web's sheet's `tabbar-badge-` rows: a pill
+    /// in the system red, its text white, starting its padding past `at`
+    /// toward the trailing side. `root`: the root font size its rem rows read.
+    #[allow(clippy::too_many_arguments)]
+    fn tab_badge(
+        &mut self,
+        node: exact_kernel::ViewId,
+        text: &str,
+        at: (f32, f32),
+        root: f32,
+        rtl: bool,
+        title: &StyleProps,
+        ts: Transform,
+    ) {
+        let length = |id| {
+            exact_kernel::style::metrics::length_in(
+                id,
+                exact_kernel::style::metrics::Column::Neutral,
+                root,
+                root,
+            )
+            .expect("neutral tab badge metric")
+        };
+        let (height, pad) = (
+            length(metric::TABBAR_BADGE_HEIGHT),
+            length(metric::TABBAR_BADGE_PADDING),
+        );
+        let mut style = title.clone();
+        style.font_size = length(metric::TABBAR_BADGE_FONT);
+        style.font_weight = 400;
+        style.white_space = WhiteSpace::Nowrap;
+        let p = self
+            .text
+            .borrow_mut()
+            .paragraph(&super::text_spec(&style, text), None);
+        let width = (p.width + 2.0 * pad).max(height);
+        let x = if rtl { at.0 - pad - width } else { at.0 + pad };
+        self.backend.fill(
+            &Shape::new((x, at.1, width, height), [height / 2.0; 4]),
+            look::role("-exact-system-red", self.dark),
+            ts,
+        );
+        let palette = [crate::text::RunPaint {
+            color: [255; 4],
+            source: node,
+        }];
+        let origin = (
+            x + (width - p.width) / 2.0,
+            at.1 + (height - p.height) / 2.0,
+        );
+        self.backend
+            .text(&mut self.text.borrow_mut(), &p, &palette, origin, ts);
+    }
+}
+
 fn control_scale(size: ControlSize) -> f32 {
     match size {
         ControlSize::Mini => 0.75,

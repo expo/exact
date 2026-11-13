@@ -38,6 +38,124 @@ fn registration() -> ContentRegionRegistration {
         pending: "pending",
     }
 }
+
+#[test]
+fn a_direct_region_boot_knows_the_launch_facts_before_settlement() {
+    region_launch_facts(false);
+}
+
+#[test]
+fn a_direct_native_region_boot_knows_the_launch_facts_before_settlement() {
+    region_launch_facts(true);
+}
+
+fn region_launch_facts(native: bool) {
+    use exact_runner::time::{Launch, Place, WallTime};
+    use std::cell::RefCell;
+
+    struct Observed(Rc<RefCell<Vec<Vec<Value>>>>);
+    impl DataSource for Observed {
+        fn query(&mut self, _: &str, args: &[Value]) -> Result<Value, DataError> {
+            self.0.borrow_mut().push(args.to_vec());
+            Ok(Value::str("observed"))
+        }
+    }
+    let mut plan = contract::compile(
+        r#"shape Time
+  epochAtZero: number
+  utcOffset: number
+  locale: string
+  formatLocale: string
+  timeZone: string
+  seed: number
+component App
+  state language = "en"
+  state seen = language
+  resource time = exactTime() as shape Time
+  state started = performanceNow()
+  resource observed = observe(time, seen, started) as shape string
+  view
+    column width="100%" height="100%"
+      view id="owner" width=300 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width="100%" height="100%"
+          text observed
+        text "Preparing" id="pending"
+"#,
+    )
+    .unwrap();
+    plan.locale = Some(exact_plan::SlotsId(0));
+    let format = exact_plan::StrId(plan.strings.len() as u32);
+    plan.strings.push("");
+    for language in ["en", "ar"] {
+        let name = exact_plan::StrId(plan.strings.len() as u32);
+        plan.strings.push(language);
+        plan.locales.push(exact_plan::LocalesRow {
+            name,
+            rtl: language == "ar",
+            format,
+            texts: Default::default(),
+        });
+    }
+    let plan = plan.encode();
+    let facts = Launch {
+        time: Some(WallTime {
+            epoch_at_zero: 1_790_000_000_000.,
+            utc_offset: 120.,
+        }),
+        place: Some(Place {
+            locale: "ar-EG".into(),
+            format_locale: "en-KR-u-hc-h23".into(),
+            time_zone: "Europe/Berlin".into(),
+            seed: 42.,
+        }),
+        clock: Some(250.),
+        ..Launch::NONE
+    };
+    let time = facts.time.unwrap();
+    let place = facts.place.as_ref().unwrap();
+    let expected = Value::Record(
+        vec![
+            Value::Number(time.epoch_at_zero),
+            Value::Number(time.utc_offset),
+            Value::str(&place.locale),
+            Value::str(&place.format_locale),
+            Value::str(&place.time_zone),
+            Value::Number(place.seed),
+        ]
+        .into(),
+    );
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let data = Observed(calls.clone());
+    let measurer = Box::new(MonospaceMeasurer::default());
+    let (host, first) = if native {
+        Host::boot_native_region(
+            &plan,
+            data,
+            measurer,
+            600.,
+            800.,
+            registration(),
+            exact_apple::content_region::NativeProjectionLimits::default(),
+            facts,
+        )
+    } else {
+        Host::boot_region(&plan, data, measurer, 600., 800., registration(), facts)
+    }
+    .unwrap();
+    assert_eq!(
+        *calls.borrow(),
+        vec![vec![
+            expected.clone(),
+            Value::str("ar"),
+            Value::Number(250.)
+        ]]
+    );
+    assert_eq!(host.runner().slot("seen"), Some(&Value::str("ar")));
+    assert_eq!(host.runner().now_ms(), 250.);
+    assert!(first.contains("\"error\":null"), "{first}");
+    assert!(host.pending_region_request().is_some());
+}
+
 type Fixture = (Host<Data>, String, Rc<Cell<usize>>);
 fn fixture(ids: ContentRegionRegistration) -> Result<Fixture, exact_apple::HostError> {
     fixture_in(ids, "")
@@ -75,6 +193,7 @@ component App
         600.,
         800.,
         ids,
+        exact_runner::time::Launch::NONE,
     )
     .map(|(host, batch)| (host, batch, count))
 }
@@ -297,6 +416,7 @@ fn selected_native_subtree_waits_for_b_while_outside_composer_commits() {
         800.,
         registration(),
         exact_apple::content_region::NativeProjectionLimits::default(),
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     let drops = Rc::new(Cell::new(0));
@@ -413,6 +533,7 @@ fn native_projection_budget_is_explicit_and_does_not_select_opaque_mode() {
         800.,
         registration(),
         limits,
+        exact_runner::time::Launch::NONE,
     );
     assert!(
         refused.is_err(),
@@ -454,6 +575,7 @@ fn native_collection_epochs_stay_with_selected_rows_until_complete() {
         800.,
         registration(),
         Default::default(),
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     let drops = Rc::new(Cell::new(0));
@@ -684,6 +806,7 @@ fn native_bulk_projection_matches_ordinary_through_origin_pending_and_width() {
         900.,
         registration(),
         Default::default(),
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     assert!(projection_complete(&mut native, &mut native_wire) > 0);
@@ -801,6 +924,7 @@ fn native_region_promotes_and_clears_the_fields_editor_rect() {
         300.,
         registration(),
         exact_apple::content_region::NativeProjectionLimits::default(),
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     let mut batches = vec![batch];
@@ -900,6 +1024,7 @@ fn a_popover_under_a_native_region_stays_in_it_and_publishes() {
         800.,
         registration(),
         exact_apple::content_region::NativeProjectionLimits::default(),
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     let drops = Rc::new(Cell::new(0));

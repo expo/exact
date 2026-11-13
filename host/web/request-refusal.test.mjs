@@ -103,17 +103,17 @@ test('wasm and JS request executors refuse outside origins and redirects, and ad
   const js = createRequestExecutor('test.app', set, response => response.arrayBuffer());
   try {
     for (const run of [wasm, js]) {
-      const refused = await run({ method: 'GET', url: `${destination.url}outside`, headers: [] });
+      const refused = await run({ method: 'GET', url: `${destination.url}outside`, headers: [], origin: 'app' });
       expect(refused.failed ?? refused.kind).toBe(2);
       expect(refused.message ?? text(refused)).toBe("outside the app's grants (net.fetch)");
-      const admitted = await run({ method: 'GET', url: `${origin.url}ok`, headers: [] });
+      const admitted = await run({ method: 'GET', url: `${origin.url}ok`, headers: [], origin: 'app' });
       expect(admitted.failed ?? admitted.kind ?? 0).toBe(0);
       expect(new TextDecoder().decode(admitted.body)).toBe('ok');
-      const redirected = await run({ method: 'GET', url: `${origin.url}redirect`, headers: [] });
+      const redirected = await run({ method: 'GET', url: `${origin.url}redirect`, headers: [], origin: 'app' });
       expect(redirected.failed ?? redirected.kind).toBe(2);
       // It names where the redirect led (podcast F5), as the native executor does.
       expect(redirected.message ?? text(redirected)).toBe(`outside the app's grants (net.fetch): redirected to ${destination.url.origin}`);
-      const grantedRedirect = await run({ method: 'GET', url: `${origin.url}granted-redirect`, headers: [] });
+      const grantedRedirect = await run({ method: 'GET', url: `${origin.url}granted-redirect`, headers: [], origin: 'app' });
       expect(grantedRedirect.failed ?? grantedRedirect.kind ?? 0).toBe(0);
       expect(new TextDecoder().decode(grantedRedirect.body)).toBe('granted');
     }
@@ -126,7 +126,7 @@ test('wasm and JS accept a POST redirected through an ungranted origin to a gran
   const origin = Bun.serve({ port: 0, fetch() { return new Response(null, { status: 307, headers: { location: `${hop.url}middle` } }); } });
   const set = normalized(`net.fetch ${origin.url.origin}\nnet.fetch ${final.url.origin}`), js = createRequestExecutor('test.app', set, response => response.arrayBuffer());
   try {
-    for (const run of [() => request({ method: 'POST', url: `${origin.url}start`, headers: [], body: btoa('payload') }, { grantSet: set, controllers: new Set(), moduleLoader: null }), () => js({ method: 'POST', url: `${origin.url}start`, headers: [], raw: 'payload' })]) {
+    for (const run of [() => request({ method: 'POST', url: `${origin.url}start`, headers: [], body: btoa('payload') }, { grantSet: set, controllers: new Set(), moduleLoader: null }), () => js({ method: 'POST', url: `${origin.url}start`, headers: [], raw: 'payload', origin: 'app' })]) {
       const result = await run(); expect([result.failed ?? result.kind ?? 0, new TextDecoder().decode(result.body)]).toEqual([0, 'accepted']);
     }
     expect([hops, finals]).toEqual([[['POST', 'payload'], ['POST', 'payload']], [['POST', 'payload'], ['POST', 'payload']]]);
@@ -147,7 +147,7 @@ test('the redirect mode reaches every web executor', async () => {
     expect(manual.status).not.toBe(200);
     const error = await wasm({ method: 'GET', url: `${origin.url}authorize`, headers: [], redirect: 'error' });
     expect(error.failed ?? error.kind).not.toBe(0);
-    const stream = await streamed({ method: 'GET', url: `${origin.url}authorize`, headers: [], redirect: 'manual' }, set, () => {}, new AbortController());
+    const stream = await streamed({ method: 'GET', url: `${origin.url}authorize`, headers: [], redirect: 'manual', origin: 'app' }, set, () => {}, new AbortController());
     expect(stream.status).not.toBe(200);
     const fetched = await fetchWith(set, `${origin.url}authorize`, { redirect: 'manual' });
     expect(fetched.status).not.toBe(200);
@@ -190,7 +190,7 @@ test('a response over its size limit is Refused on every web executor', async ()
     expect([within.kind, within.body.length]).toEqual([0, 4096]);
     const rust = createRequestExecutor('test.app', set, boundedHttpBody);
     for (const at of [url, `${origin.url}open`]) {
-      expect(await rust({ method: 'GET', url: at, headers: [], maxResponseBytes: 64 })).toEqual({ failed: 2, message: 'HTTP response exceeds limit' });
+      expect(await rust({ method: 'GET', url: at, headers: [], maxResponseBytes: 64, origin: 'app' })).toEqual({ failed: 2, message: 'HTTP response exceeds limit' });
       const refused = await fetchWith(set, at, { exactIndependentHttp: { maxResponseBytes: 64 } }).catch(e => e);
       expect([refused.name, refused.kind, refused.message]).toEqual(['FetchError', 'Refused', 'HTTP response exceeds limit']);
     }
@@ -215,7 +215,7 @@ test('a redirect rejected before the browser exposes a Response is the declared 
   ];
   try {
     for (const run of runs) {
-      const result = await run({ method: 'GET', url: origin.url.href, headers: [] });
+      const result = await run({ method: 'GET', url: origin.url.href, headers: [], origin: 'app' });
       expect(result.failed ?? result.kind).toBe(1);
       expect(result.message ?? text(result)).not.toContain("outside the app's grants");
     }

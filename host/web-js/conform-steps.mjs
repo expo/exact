@@ -1,8 +1,8 @@
-import { MalformedOperation, pointerArguments, pinchArguments, intoArguments, resizeArguments, tapWords, typeArguments } from '../../scripts/agent-keys.mjs';
+import { MalformedOperation, pointerArguments, pinchArguments, intoArguments, resizeArguments, tapArguments, tapWords, typeArguments } from '../../scripts/agent-keys.mjs';
 import { dragArguments } from '../../scripts/agent-drag.mjs';
 
 /** Consume the harness's words; reject malformed input before a browser can skip it. */
-export function parseStep(line) {
+export function parseStep(line, { hoverWheel = false } = {}) {
   const words = line.trim().split(/\s+/), mustRefuse = words[0] === 'refused';
   if (mustRefuse) words.shift();
   const op = words.shift(), calls = [];
@@ -34,7 +34,11 @@ export function parseStep(line) {
     }
     case 'clock': call('clock', word()); break;
     case 'back': call('tap', word(), { history: -1 }); break;
-    case 'wheel': { const target = word(), dy = Number(word()), dx = Number(optional(0)); call('tap', target, { wheel: [dx, dy] }); break; }
+    case 'wheel': {
+      const target = word(), dy = Number(word()), dx = Number(optional(0));
+      check(() => tapArguments({ wheel: [dx, dy] }));
+      call('tap', target, { wheel: [dx, dy], ...(hoverWheel ? { hover: true } : {}) }); break;
+    }
     case 'into': { const target = word(), key = word(), block = optional(undefined); call('tap', target, { into: { key, ...(block ? { block } : {}) } }); break; }
     case 'pinch': call('tap', word(), { pinch: Number(word()) }); break;
     case 'down': call('tap', word(), { down: true }); break;

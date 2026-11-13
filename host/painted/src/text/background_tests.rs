@@ -35,6 +35,8 @@ fn background(id: u32) -> Option<InlineBackground> {
         color: GRAY,
         id,
         radii: [const { Dimension::Points(3.0) }; 4],
+        reach: exact_kernel::InlineEdges::default(),
+        outer: Vec::new(),
     })
 }
 
@@ -459,4 +461,132 @@ fn flowed_background_clamp_keeps_consumed_space_before_cut() {
     let pieces = fills(&p, &[background(1), None]);
     assert_eq!(pieces.len(), 1);
     assert_eq!(corners(&pieces[0]), ALL);
+}
+
+/// A box's background covers its padding and border (CSS 2 §14.2), from
+/// its first glyph back by its start and from its last glyph's own end on
+/// by its end, never its margin, as Chrome paints
+/// `a <span style="padding:0 4px;margin-right:3px;background:#ddd">code</span> b`.
+#[test]
+fn a_background_covers_its_padding_and_not_its_margin() {
+    let mut e = engine();
+    let plain = e.paragraph(&spec(&["a ", "code", " b"]), None);
+    let bare = fills(&plain, &[None, background(1), None]);
+    let mut s = spec(&["a ", "code", " b"]);
+    s.runs[1].edges = exact_kernel::InlineEdges {
+        start: 4.0,
+        end: 7.0,
+    };
+    let reach = exact_kernel::InlineEdges {
+        start: 4.0,
+        end: 4.0,
+    };
+    let reaching = background(1).map(|b| InlineBackground { reach, ..b });
+    let padded = fills(&e.paragraph(&s, None), &[None, reaching, None]);
+    let (b, p) = (bare[0].rect, padded[0].rect);
+    assert!(
+        (p.0 - b.0).abs() < 0.05,
+        "it starts where the bare box did: {b:?} {p:?}"
+    );
+    assert!(
+        (p.2 - b.2 - 8.0).abs() < 0.05,
+        "4 each side, not the 3 of margin: {b:?} {p:?}"
+    );
+    assert_eq!(corners(&padded[0]), ALL, "its corners are the padded box's");
+    // A square box with a margin alone paints its text and not the margin.
+    let mut s = spec(&["a ", "code", " b"]);
+    s.runs[1].edges = exact_kernel::InlineEdges {
+        start: 3.0,
+        end: 3.0,
+    };
+    let square = background(1).map(|b| InlineBackground {
+        radii: [const { Dimension::Points(0.0) }; 4],
+        ..b
+    });
+    let margined = fills(&e.paragraph(&s, None), &[None, square, None]);
+    let m = margined[0].rect;
+    assert!((m.0 - b.0 - 3.0).abs() < 0.05, "{b:?} {m:?}");
+    assert!((m.2 - b.2).abs() < 0.05, "{b:?} {m:?}");
+}
+
+/// Boxes inside one another each paint their own background into their own
+/// padding, the inner over the outer (CSS 2 Appendix E), as Chrome 154
+/// paints `a <span style="padding:0 2px;background:red;border-radius:4px">p<span
+/// style="padding:0 4px;background:blue">x</span></span> b`: the outer from
+/// "p"'s unpadded start to 12 past "x"'s unpadded end, the inner from 2 past
+/// "x"'s unpadded start to 10 past its end.
+#[test]
+fn nested_boxes_each_paint_their_own_padding() {
+    let mut e = engine();
+    let bare = e.paragraph(&spec(&["a ", "p", "x", " b"]), None);
+    let at = |p: &Paragraph, byte: u32| {
+        p.layout_runs()
+            .flat_map(|r| {
+                r.glyphs
+                    .iter()
+                    .map(|g| (g.start, g.x, g.w))
+                    .collect::<Vec<_>>()
+            })
+            .find(|g| g.0 == byte)
+            .expect("its glyph")
+    };
+    let (p0, x0) = (at(&bare, 2), at(&bare, 3));
+    let mut s = spec(&["a ", "p", "x", " b"]);
+    s.runs[1].edges = exact_kernel::InlineEdges {
+        start: 2.0,
+        end: 0.0,
+    };
+    s.runs[2].edges = exact_kernel::InlineEdges {
+        start: 4.0,
+        end: 6.0,
+    };
+    let edges = |start, end| exact_kernel::InlineEdges { start, end };
+    let outer = InlineBackground {
+        color: GRAY,
+        reach: edges(2.0, 6.0),
+        ..background(8).unwrap()
+    };
+    let inner = InlineBackground {
+        color: [0, 0, 255, 255],
+        radii: [const { Dimension::Points(0.0) }; 4],
+        reach: edges(4.0, 4.0),
+        outer: vec![outer.clone()],
+        ..background(9).unwrap()
+    };
+    let shapes = e
+        .paragraph(&s, None)
+        .inline_backgrounds(&[None, Some(outer), Some(inner), None], &Env::default());
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    let (o, i) = (shapes[0].0.rect, shapes[1].0.rect);
+    assert_eq!(shapes[0].1, GRAY, "the outer box paints first");
+    assert!((o.0 - p0.1).abs() < 0.05, "{o:?} {p0:?}");
+    assert!(
+        (o.0 + o.2 - (x0.1 + x0.2 + 12.0)).abs() < 0.05,
+        "{o:?} {x0:?}"
+    );
+    assert_eq!(corners(&shapes[0].0), ALL);
+    assert!((i.0 - (x0.1 + 2.0)).abs() < 0.05, "{i:?} {x0:?}");
+    assert!(
+        (i.0 + i.2 - (x0.1 + x0.2 + 10.0)).abs() < 0.05,
+        "{i:?} {x0:?}"
+    );
+}
+
+/// An inline box's room separates the characters either side of it: "f"
+/// and a padded "i" are two glyphs with the room between them, not the "fi"
+/// ligature they shape as unpadded (above), widened by it.
+#[test]
+fn a_boxs_room_breaks_a_ligature_across_it() {
+    let mut e = engine();
+    let mut s = spec(&["f", "i"]);
+    s.runs[1].edges = exact_kernel::InlineEdges {
+        start: 3.0,
+        end: 0.0,
+    };
+    let p = e.paragraph(&s, None);
+    let line = p.layout_runs().next().unwrap();
+    let advancing: Vec<_> = line.glyphs.iter().filter(|g| g.w > 0.0).collect();
+    assert_eq!(advancing.len(), 2, "{:?}", line.glyphs);
+    let (f, i) = (advancing[0], advancing[1]);
+    assert!((i.x - (f.x + f.w) - 3.0).abs() < 0.05, "{f:?} {i:?}");
 }

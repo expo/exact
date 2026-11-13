@@ -3,8 +3,8 @@
 //! the providers' grants and FedCM's rules before any ticket, and answered
 //! through the one `credential` ticket, whose `args` name what
 //! `packages/sign-in/test/idp.mjs` signs over. The tests run on this Mac,
-//! whose cells are macOS's (D3): Google through the host's session, and
-//! Apple only with a profile, which `prefer` stands in for.
+//! with Google explicitly enabled by `prefer` to exercise ticket handling.
+//! Apple and combined requests are likewise enabled only by individual tests.
 
 #[cfg(target_os = "macos")]
 use exact_runner::HoldAnswer;
@@ -161,6 +161,13 @@ fn boot(name: &str) -> (App, Host, Data) {
         r,
         waiting: Vec::new(),
     };
+    #[cfg(target_os = "macos")]
+    let mut host = host;
+    #[cfg(target_os = "macos")]
+    host.prefer(
+        "sign-in.getIdentityCapabilities",
+        json!({ "providers": { "google": { "active": true } } }),
+    );
     (app, host, data)
 }
 
@@ -377,7 +384,7 @@ fn a_passkey_and_passive_apple_share_one_ticket() {
     );
     host.prefer(
         "sign-in.getIdentityCapabilities",
-        json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true } } }),
+        json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true }, "google": { "active": true } } }),
     );
     let both = json!({ "extension": "passkeys", "send": "get", "args": {
         "publicKey": { "challenge": "Z2V0", "rpId": "auth-fixture.exact.test" },
@@ -577,7 +584,7 @@ fn bound_sign_in_preserves_options_and_combined_requests_stay_with_passkeys() {
         "passkeys.getClientCapabilities",
         json!({ "available": true }),
     );
-    host.prefer("sign-in.getIdentityCapabilities", json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true } } }));
+    host.prefer("sign-in.getIdentityCapabilities", json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true }, "google": { "active": true } } }));
     let heard: Arc<Mutex<Vec<Json>>> = Default::default();
     let seen = heard.clone();
     host.r

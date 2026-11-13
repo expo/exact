@@ -18,6 +18,9 @@ android {
             "../../../packages/contacts/android", "../../../packages/contacts/test",
             "../../../packages/text-detection/android", "../../../packages/text-detection/test",
             "../../../packages/media-capture/android", "../../../packages/media-capture/test",
+            "../../../packages/local-auth/android", "../../../packages/local-auth/test",
+            "../../../packages/passkeys/android", "../../../packages/passkeys/test",
+            "../../../packages/recording/android", "../../../packages/recording/test",
         ))
     }
 }
@@ -32,4 +35,5 @@ dependencies {
     testImplementation("androidx.camera:camera-lifecycle:1.6.2")
     testImplementation("androidx.camera:camera-view:1.6.2")
     testImplementation("androidx.lifecycle:lifecycle-runtime:2.9.4")
+    testImplementation("androidx.credentials:credentials:1.6.0")
 }

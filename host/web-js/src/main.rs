@@ -495,7 +495,9 @@ fn main() -> ExitCode {
                 None => Ok(plan.clone()),
             };
             if let Err(e) = declared
-                .and_then(|declared| contract::typescript_exporting(&declared, exports.as_deref()))
+                .and_then(|declared| {
+                    contract::typescript_exporting(&declared, exports.as_deref(), &[])
+                })
                 .and_then(|d| {
                     std::fs::write(dir.join("app.contract.d.ts"), d).map_err(|e| e.to_string())
                 })

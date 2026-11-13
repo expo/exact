@@ -36,7 +36,7 @@ import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Refusal, refuse, loadSigner } from './deploy-signing.mjs';
 import { admitHead, channelOf, defaultRelease, publishStream } from './deploy.mjs';
-import { classifyArtifacts, cohortReceipt, readBuilds, resolveApp } from './app.mjs';
+import { bakedEntryAssets, bakeOutput, classifyArtifacts, cohortReceipt, readBuilds, resolveApp } from './app.mjs';
 import { buildRust, rustBundle, RustBaker } from './rust.mjs';
 import { blobPath, channelOrigin, openOrigin, sha256, streamPath, validateChannel } from './origin.mjs';
 import { filesystem, filesystemRead } from './filesystem.mjs';
@@ -133,13 +133,15 @@ function typescriptBundle(bundle, build, baked, cohort) {
     { name: 'typescript/app.hbc', bytes: baked.bytecode },
   ].map((a) => ({ ...a, sha256: sha256(a.bytes) }));
   const requires = { grantCeiling: inputs.grantCeiling, ...(runtime !== undefined ? { typescriptRuntime: runtime } : {}) };
-  const artifacts = build.graph.artifacts.map((a) => {
+  // A new stream's bake already lists a pair when its widgets or activities need one (bake/src/widgets.rs); this one replaces it.
+  const other = (a) => !a.name.startsWith('typescript/');
+  const artifacts = build.graph.artifacts.filter(other).map((a) => {
     if (a.name !== 'app.plan') return a;
     const { sources, ...rest } = a.requires;
     return { ...a, requires: { ...rest, ...requires } };
   });
   artifacts.push(...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires })));
-  return { bundle: { ...bundle, assets: [...bundle.assets, ...assets] }, build: { ...build, graph: { ...build.graph, artifacts } } };
+  return { bundle: { ...bundle, assets: [...bundle.assets.filter(other), ...assets] }, build: { ...build, graph: { ...build.graph, artifacts } } };
 }
 
 function planGraph(tool, app, plan, cohort, env) {
@@ -153,15 +155,19 @@ function planGraph(tool, app, plan, cohort, env) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-/** A new stream's assets: the bake's bundle rows, read from the app's files
- * and held to the digests the binary was built with. */
-function bakedAssets(app, build) {
-  return build.graph.artifacts.filter((a) => a.name !== 'app.plan').map((a) => {
+/** A new stream's assets: the bake's bundle rows, held to the digests the
+ * binary was built with. What the bake made (widget and activity plans, the
+ * module pair) is read from its output beside the build's receipt; the rest
+ * from the app's files. */
+function bakedAssets(app, build, env) {
+  const made = (name) => /^(plans|activities|typescript)\//.test(name);
+  const own = build.graph.artifacts.filter((a) => a.name !== 'app.plan' && !made(a.name)).map((a) => {
     const path = resolve(app.dir, a.name.startsWith('shaders/') ? `gpu/${a.name}` : a.name);
     const bytes = existsSync(path) ? readFileSync(path) : null;
     if (!bytes || sha256(bytes) !== a.sha256) refuse(`${a.name}: ${path} is not what the installed binary was built with; push to an existing stream, or rebuild the binary`);
     return { name: a.name, bytes, sha256: a.sha256 };
   });
+  return [...bakedEntryAssets(bakeOutput(app, env), build, made), ...own];
 }
 
 /** The head's assets other than its module pair: an `assets/` or `deck/`
@@ -231,7 +237,7 @@ export async function pusher(opts) {
     for (const { stream, head, cohort, platform, build: binary } of found) {
       const graph = planGraph(tools.graph, app, built.plan, cohort, env);
       const inputs = cohort.compat.inputs;
-      const assets = head ? await carriedAssets(origin, app, head) : bakedAssets(app, binary);
+      const assets = head ? await carriedAssets(origin, app, head) : bakedAssets(app, binary, env);
       let bundle = { plan: { bytes: built.plan, sha256: sha256(built.plan), formatVersion: inputs.formatVersion, kernelSchema: inputs.kernelSchema }, assets };
       let build = { version: 1, trust: 'production', compat: cohort.compat, binary: { sha256: cohort.binary },
         graph: { ...graph, artifacts: [graph.artifacts[0], ...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires: {} }))] } };

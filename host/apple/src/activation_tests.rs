@@ -809,7 +809,22 @@ impl crate::store::KeptStore for RefusedWrite {
 
 #[test]
 fn failed_persistence_is_reported_and_retried_without_another_value_change() {
-    let plan = contract::compile("component App\n  state count = 0 persist\n  action step\n    count = count + 1\n  action keep\n    count = count\n  view\n    text \"State\"\n").unwrap().encode();
+    let plan = contract::compile(
+        r#"component App
+  state count = 0 persist
+  state other = 0 persist
+  action step
+    count = count + 1
+  action step_other
+    other = other + 1
+  action keep
+    count = count
+  view
+    text "State"
+"#,
+    )
+    .unwrap()
+    .encode();
     let (mut host, _) = Host::boot(
         &plan,
         ChangingReader {
@@ -827,44 +842,74 @@ fn failed_persistence_is_reported_and_retried_without_another_value_change() {
         refusing: refusing.clone(),
         attempts: attempts.clone(),
     }));
-    let mut act = |name| {
+    let act = |host: &mut Host<ChangingReader>, name| {
         let receipt = host.runner.act(name, vec![]).unwrap();
         serde_json::from_str::<serde_json::Value>(
             &host.commit(&[Timed { at_ms: 0., receipt }], None),
         )
         .unwrap()
     };
-    let failed = act("step");
+    let reports = |host: &Host<ChangingReader>| {
+        ["count", "other"].map(|name| {
+            let prefix = format!("store exact.state.{name} failed:");
+            host.runner
+                .journal()
+                .filter(|line| line.contains(&prefix))
+                .count()
+        })
+    };
+    let failed = act(&mut host, "step");
     assert!(
         failed["error"].is_null(),
         "committed work is accepted: {failed}"
     );
+    for _ in 0..2 {
+        let retried = act(&mut host, "keep");
+        assert!(retried["error"].is_null(), "{retried}");
+    }
+    assert_eq!(attempts.lock().unwrap().len(), 3);
+    assert_eq!(reports(&host), [1, 0], "retries report a failure once");
+
+    act(&mut host, "step_other");
+    act(&mut host, "keep");
+    assert_eq!(reports(&host), [1, 1], "each name reports independently");
+
+    act(&mut host, "step");
+    act(&mut host, "keep");
+    assert_eq!(
+        reports(&host),
+        [2, 1],
+        "a replacement can report again without re-reporting other names"
+    );
+
     refusing.store(false, Ordering::SeqCst);
-    let retried = act("keep");
+    let retried = act(&mut host, "keep");
     assert!(retried["error"].is_null(), "{retried}");
-    assert_eq!(
-        attempts.lock().unwrap().len(),
-        2,
-        "an unchanged value still retries its failed write"
-    );
+    assert!(host.pending_store_writes.is_empty());
+    act(&mut host, "keep");
+    assert_eq!(attempts.lock().unwrap().len(), 13, "success clears retries");
+    assert_eq!(reports(&host), [2, 1]);
+
     refusing.store(true, Ordering::SeqCst);
-    act("step");
+    act(&mut host, "step");
+    act(&mut host, "keep");
+    assert_eq!(reports(&host), [3, 1], "a later failure reports again");
     refusing.store(false, Ordering::SeqCst);
-    act("step");
-    act("keep");
+    act(&mut host, "step");
+    act(&mut host, "keep");
     let attempts = attempts.lock().unwrap();
-    let values: Vec<serde_json::Value> = attempts
-        .iter()
-        .map(|w| serde_json::from_slice(w.value.as_ref().unwrap()).unwrap())
-        .collect();
-    assert_eq!(
-        values,
-        serde_json::json!([1, 1, 2, 3])
-            .as_array()
-            .unwrap()
-            .as_slice(),
-        "a newer value supersedes the pending write; success clears it"
-    );
+    for (name, expected) in [
+        ("count", vec![1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4]),
+        ("other", vec![1; 5]),
+    ] {
+        let values: Vec<i32> = attempts
+            .iter()
+            .filter(|w| w.name == format!("exact.state.{name}"))
+            .map(|w| serde_json::from_slice(w.value.as_ref().unwrap()).unwrap())
+            .collect();
+        assert_eq!(values, expected, "{name}: retries retain the latest value");
+    }
+    assert_eq!(reports(&host), [3, 1], "success adds no failure report");
 }
 
 #[test]

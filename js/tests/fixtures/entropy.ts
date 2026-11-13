@@ -1,7 +1,7 @@
 // LLP 1069.005: a source's Web Crypto, the same on every executor. Each
 // draw of randomness inside an answer counts as a device read; a draw
 // during module initialization refuses (D2, D3). A digest is pure and
-// allowed anywhere; every other `subtle` member refuses by name (D1).
+// allowed anywhere (D1).
 const draws: Record<string, () => unknown> = {
   uuid: () => crypto.randomUUID(),
   bytes: () => crypto.getRandomValues(new Uint8Array(4)).length,
@@ -12,6 +12,13 @@ for (const name of Object.keys(draws)) {
   try { atInit[name] = "ran: " + String(draws[name]()); }
   catch (e) { atInit[name] = String(e.message); }
 }
+
+Promise.resolve().then(() => {
+  for (const name of ["uuid", "bytes"]) {
+    try { atInit["late-" + name] = "ran: " + String(draws[name]()); }
+    catch (e) { atInit["late-" + name] = String(e.message); }
+  }
+});
 
 function errorName(call: () => unknown): string {
   try { call(); return "UNGUARDED"; }
@@ -25,6 +32,15 @@ async function rejection(call: () => Promise<unknown>): Promise<string> {
 
 const hex = (buffer: ArrayBuffer) =>
   Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, "0")).join("");
+
+function pair(): string {
+  return [draws.uuid, draws.bytes].map(draw => {
+    try { return String(draw()); } catch (e) { return e.message; }
+  }).join("\n");
+}
+async function helper(): Promise<void> { await Promise.resolve(); }
+let cached: Promise<number>;
+let kept = "";
 
 // The vectors: empty, `abc`, and 1 MiB of `i % 251`, under each SHA-2 size.
 function inputs(): Uint8Array[] {
@@ -63,6 +79,32 @@ function answer(source: string, args: any[]): unknown {
     case "atInit": return atInit[args[0]];
     case "uuid": return crypto.randomUUID();
     case "bytes": return Array.from(crypto.getRandomValues(new Uint8Array(args[0]))).join(",");
+    case "entropyTurn":
+      switch (args[0]) {
+        case "helper": return helper().then(pair);
+        case "json": return fetch("https://fixture.exact.test/value").then(response => response.json().then(pair));
+        case "yield": return scheduler.yield().then(pair);
+        case "microtask": return new Promise(resolve => queueMicrotask(() => resolve(pair())));
+        case "cached": cached ??= Promise.resolve(1); return cached.then(pair);
+        // A body the module made, by constructor and by `Response.json`.
+        case "response": return new Response("{}").json().then(pair);
+        case "responseJson": return Response.json({}).clone().text().then(pair);
+      }
+      throw new Error("unknown turn");
+    case "entropyKept": {
+      if (!args[0]) return "idle";
+      const reply = fetch("https://fixture.exact.test/value", { method: "POST" });
+      return args[1] ? (async () => { await reply; return kept = pair(); })() : reply.then(() => kept = pair());
+    }
+    case "entropyObserved": return kept;
+    case "bytesLater":
+      return fetch("https://fixture.exact.test/value").then(() => draws.bytes());
+    case "entropyStream": {
+      const pair = () => crypto.randomUUID() + "/" + draws.bytes();
+      return fetch("https://fixture.exact.test/events", {
+        exactStream: args[0] ? async () => { await Promise.resolve(); return pair(); } : pair,
+      });
+    }
     case "uuidLater":
       return fetch("https://fixture.exact.test/value").then(() => crypto.randomUUID());
     case "refusals": return [

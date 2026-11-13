@@ -231,6 +231,10 @@ impl<D: DataSource> Host<D> {
                 continue;
             }
             let active = node.props.str(PropId::Text).is_none();
+            // Each painted run's inline edges, in the order the kernel's runs
+            // are, which is the order this walk paints them in.
+            let edges: Vec<_> = node.text_runs().iter().map(|r| r.edges).collect();
+            let mut painted = 0;
             let mut stack: Vec<_> = node
                 .children()
                 .into_iter()
@@ -273,6 +277,15 @@ impl<D: DataSource> Host<D> {
                         ),
                     );
                 }
+                // How far its padding box stands out from its text: what its
+                // background covers beside its glyphs.
+                let reach = run.inline_background_reach();
+                if !reach.is_empty() {
+                    props.insert(
+                        "inlinePad",
+                        format!("{} {}", style::num(reach.start), style::num(reach.end)),
+                    );
+                }
                 // A run painting an inherited `color` that moves (LLP 1062 D5).
                 let mut shown = style::Shown::default();
                 shown.set(Property::Color, self.paint.runs.get(&id).copied());
@@ -289,6 +302,16 @@ impl<D: DataSource> Host<D> {
                     .filter_map(handler_name)
                     .collect();
                 let paints = active && (inline.is_some() || run.props.str(PropId::Text).is_some());
+                if paints {
+                    let e = edges.get(painted).copied().unwrap_or_default();
+                    painted += 1;
+                    if !e.is_empty() {
+                        props.insert(
+                            "inlineEdges",
+                            format!("{} {}", style::num(e.start), style::num(e.end)),
+                        );
+                    }
+                }
                 let own = self.run_opacity(run.key);
                 if own == 1.0 {
                     self.paint.opacities.remove(&id);

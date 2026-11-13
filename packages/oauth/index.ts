@@ -32,13 +32,13 @@ export interface OAuthSession {
 /** What `signIn()` and `signOut()` answer; `OAuthResult` in Contract. */
 export interface OAuthResult {
   ok: boolean;
-  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "network", "server", "config", "invalid_response", or the provider's OAuth error code. */
+  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "auth_session", "network", "server", "config", "invalid_response", or the provider's OAuth error code. */
   code: string;
   /** A sentence for the person; "" when ok. */
   error: string;
   /** Trying again later may succeed. */
   retryable: boolean;
-  /** The HTTP status, 400 or over, of the reply that failed; 0 otherwise: no reply came, or the package refused a 2xx or 3xx it could not use. */
+  /** The HTTP status, 400 or over, of the reply that failed, or 502 for a failed system auth session; 0 otherwise: no reply came, or the package refused a 2xx or 3xx it could not use. */
   status: number;
 }
 
@@ -113,13 +113,15 @@ export interface OAuthAuthorization {
   url: string;
   /** The authorization endpoint. */
   endpoint: string;
-  /** `response_type`, `client_id`, `redirect_uri`, `scope`, `state`, the PKCE challenge, `nonce` with `openid`, and `authorizationParams`. */
+  /** `response_type`, `client_id`, `redirect_uri`, `scope`, `state`, the PKCE challenge, `nonce` with `openid`, and `authorizationParams` with the sign-in’s `params` overrides. */
   params: Record<string, string>;
   /** The package's transport (`OAuthConfig.fetch`, else `fetch`), to send it with. */
   fetch: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 export interface OAuthSignIn {
+  /** Extra authorization parameters for this press, overriding authorizationParams. The package's own fields (response_type, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, nonce and max_age) are refused with TypeError. */
+  params?: Record<string, string>;
   /** For an app that signs the person in with its own screens (LLP 1146 D8): sends the authorization request as the provider documents, and answers the URL it redirected to. Throw an `OAuthError` to say why it could not. */
   authorize?: (request: OAuthAuthorization) => Promise<string>;
 }
@@ -157,7 +159,9 @@ export interface OAuthProvider {
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
   /** Forgets the session, then asks the provider to revoke it. */
   signOut(store: OAuthStore): Promise<OAuthResult>;
-  /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`. */
+  /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
+   *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or
+   *  `session_changed` when the person has signed in again since it was sent. */
   fetch(store: OAuthStore, url: string, init?: RequestInit): Promise<Response>;
   /** As `fetch`, then the parsed JSON body; any status that is not 2xx throws `OAuthError`. */
   json(store: OAuthStore, url: string, init?: RequestInit): Promise<unknown>;
@@ -203,6 +207,9 @@ interface Kept {
   subject?: string;
   /** The client the session was signed in for. */
   client?: string;
+  /** This sign-in's own random name, which its refreshes keep: a request sent
+   *  with its token is sent again only while it is the session kept. */
+  login?: string;
   tokenEndpoint?: string;
   revocationEndpoint?: string;
   ended?: string;
@@ -244,8 +251,12 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     throw new TypeError('oauth: give issuer (for discovery) or endpoints.authorization and endpoints.token');
   }
   if (!Array.isArray(config.apis)) throw new TypeError('oauth: apis lists the origins that receive the access token, such as ["https://api.example.com"]');
-  for (const url of [config.issuer, config.endpoints?.authorization, config.endpoints?.token, config.endpoints?.revocation, ...config.apis]) {
-    if (url) secure(url, 'oauth');
+  for (const [option, url] of [
+    ['issuer', config.issuer], ['endpoints.authorization', config.endpoints?.authorization],
+    ['endpoints.token', config.endpoints?.token], ['endpoints.revocation', config.endpoints?.revocation],
+    ...config.apis.map((url, i) => [`apis[${i}]`, url]),
+  ]) {
+    if (url) secure(url, `oauth: ${option}`);
   }
   // The callback is compared whole with where the provider sends the person, its query and fragment the reply's
   if (config.callback !== undefined && !sessionCallback(config.callback)) {
@@ -347,10 +358,11 @@ export function oauth(config: OAuthConfig): OAuthProvider {
 
   // The app's own sign-in sends the authorization request (D8): no browser
   // opens, so it may await. What it answers must be the callback.
-  const sentByApp = async (tx: Transaction | null, authorize: NonNullable<OAuthSignIn['authorize']>): Promise<[Transaction, string] | OAuthResult> => {
+  const sentByApp = async (tx: Transaction | null, authorize: NonNullable<OAuthSignIn['authorize']>, params: OAuthSignIn['params']): Promise<[Transaction, string] | OAuthResult> => {
     try {
       tx ??= await prepare();
       prepared = null;
+      tx = { ...tx, params: { ...tx.params, ...params } };
       const back = await authorize({ url: authorizationUrl(tx), endpoint: tx.meta.authorization, params: { ...tx.params }, fetch: transport(config) });
       if (typeof back === 'string' && isCallback(back, tx.callback)) return [tx, back];
       return result('invalid_response', 'Sign-in failed: the provider did not send the person back to the app.');
@@ -362,7 +374,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
   // The browser sends it. Prepared, `openAuthSession` comes before any
   // await; otherwise it is prepared first, which on the web may leave the
   // popup blocked (428).
-  const openedInBrowser = async (tx: Transaction | null): Promise<[Transaction, string] | OAuthResult> => {
+  const openedInBrowser = async (tx: Transaction | null, params: OAuthSignIn['params']): Promise<[Transaction, string] | OAuthResult> => {
     let opened: Promise<string>;
     let readied: Promise<void> = Promise.resolve();
     try {
@@ -371,6 +383,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
         tx = await prepare();
         prepared = null;
       }
+      tx = { ...tx, params: { ...tx.params, ...params } };
       opened = openAuthSession(authorizationUrl(tx), { callback: tx.callback, state: tx.state, ephemeral: config.ephemeral });
       // Ready the next press, which then opens at once (a blocked popup's retry).
       if (fallback) readied = prepare().then(() => undefined, () => undefined);
@@ -388,14 +401,18 @@ export function oauth(config: OAuthConfig): OAuthProvider {
         return result('popup_blocked', 'The sign-in window was blocked. Tap Sign In again.', true);
       }
       if (status === 403 || status === 501) return result('config', `Sign-in cannot open here: ${(e as Error).message}`);
+      if (status === 502) return result('auth_session', `Sign-in could not finish: ${(e as Error).message}`, false, status);
       return result('network', 'Sign-in could not finish. Try again.', true);
     }
   };
 
   const signIn = async (store: OAuthStore, options: OAuthSignIn = {}): Promise<OAuthResult> => {
+    const params = { ...options.params };
+    const reserved = Object.keys(params).filter(k => RESERVED.includes(k));
+    if (reserved.length) throw new TypeError(`oauth: signIn params may not set ${reserved.join(', ')}; the package sets them, or does not check what they ask for (max_age)`);
     const ready = prepared;
     prepared = null;
-    const reached = options.authorize ? await sentByApp(ready, options.authorize) : await openedInBrowser(ready);
+    const reached = options.authorize ? await sentByApp(ready, options.authorize, params) : await openedInBrowser(ready, params);
     if (!Array.isArray(reached)) return reached;
     const [tx, back] = reached;
     const why = checkCallback(back, tx, config);
@@ -437,6 +454,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
         // tokens are checked against that one's claims, its `nonce` included.
         if (!kept.refreshToken && held?.refreshToken && same) Object.assign(kept, { refreshToken: held.refreshToken, first: held.first });
       }
+      kept.login = random(16);
       store.set(config.key, JSON.stringify(kept));
       note(async () => ({ type: 'signed-in', token: await print(kept.refreshToken) }));
       return { ok: true, code: '', error: '', retryable: false, status: 0 };
@@ -462,8 +480,10 @@ export function oauth(config: OAuthConfig): OAuthProvider {
 
   const renew = async (store: OAuthStore, seen: Kept): Promise<Kept> => {
     const now = read(store);
-    // Another caller refreshed, or the person signed out or in, meanwhile.
+    // The person signed out or in meanwhile: `seen`'s request is not sent again as another sign-in's.
     if (!now?.accessToken) throw signedOutError(now);
+    if (now.login !== seen.login) throw sessionChangedError();
+    // Another caller refreshed meanwhile.
     if (now.refreshToken !== seen.refreshToken || now.accessToken !== seen.accessToken) return now;
     const sent = now.refreshToken;
     if (!sent) {
@@ -517,6 +537,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     const after = read(store);
     if (after?.refreshToken !== sent) {
       if (!after?.accessToken) throw signedOutError(after);
+      if (after.login !== seen.login) throw sessionChangedError();
       return after;
     }
     // An ID token the reply carries, an unchanged one too, is checked before
@@ -866,6 +887,7 @@ function keep(reply: TokenReply, before: Kept | null, meta: Metadata | null, con
     scopes,
     subject: before?.subject ?? '',
     client: before?.client,
+    login: before?.login,
     tokenEndpoint: before?.tokenEndpoint ?? meta?.token,
     revocationEndpoint: before?.revocationEndpoint ?? meta?.revocation,
   };
@@ -957,6 +979,11 @@ function describe(reply: TokenReply): string {
 
 function signedOutError(kept: Kept | null): OAuthError {
   return new OAuthError('signed_out', kept?.ended ?? 'Not signed in.', 0, false, true);
+}
+
+// A request's sign-in was replaced by another while it was out. The person is signed in, so not `signedOut`.
+function sessionChangedError(): OAuthError {
+  return new OAuthError('session_changed', 'The person signed in again while the request was out, so it was not sent again.');
 }
 
 // A fetch the grants refuse says which grant line to add.

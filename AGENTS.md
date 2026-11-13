@@ -104,6 +104,7 @@ section binds (`rules/RULES.md`, "Agents").
   origin/main) runs the first three with `--workspace`, which covers the sixth, plus the `async lane:` ignored tests,
   the web JS target's conformance run (`host/web-js/conform.mjs --strict`) and its
   Chrome-oracle Firefox/WebKit steps (`conform-firefox`, `conform-webkit`),
+  the module seam and notifications web drives,
   the separate game workspace's locked tests, the UIKit XCTests, touch smoke and
   the tvOS and watchOS compiles
   (`build.mjs --test --ios`; `build.mjs --tvos --no-install`, which builds and signs

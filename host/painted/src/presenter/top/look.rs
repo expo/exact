@@ -65,6 +65,20 @@ impl Role {
 /// A Material type style: size and line height in sp, weight, tracking in sp.
 #[derive(Clone, Copy)]
 pub(in crate::presenter) struct Type(pub f32, pub f32, pub u16, pub f32);
+impl Type {
+    fn emboldened(self, on: bool) -> Self {
+        Self(self.0, self.1, weight(self.2, on), self.3)
+    }
+}
+
+fn weight(regular: u16, bold_text: bool) -> u16 {
+    if bold_text {
+        exact_kernel::bolder(regular)
+    } else {
+        regular
+    }
+}
+
 const HEADLINE_SMALL: Type = Type(24.0, 32.0, 400, 0.0);
 const BODY_MEDIUM: Type = Type(14.0, 20.0, 400, 0.25);
 pub(in crate::presenter) const LABEL_LARGE: Type = Type(14.0, 20.0, 500, 0.1);
@@ -107,6 +121,8 @@ pub struct Inputs {
     pub contrast: Option<crate::presenter::ContrastPalette>,
     /// The person's font scale.
     pub font_scale: f32,
+    /// Bold Text applies to the surface's default system font.
+    pub bold_text: bool,
     /// The window it is shown over, points.
     pub window: (f32, f32),
 }
@@ -157,6 +173,7 @@ pub struct Layout {
     menu: Option<menu::Scroll>,
     /// Whose shapes its symbols take: WinUI's on the desktop, else Material's.
     symbols: SymbolSet,
+    symbol_weight: u16,
 }
 
 pub(in crate::presenter) fn paragraph(
@@ -182,8 +199,14 @@ pub(in crate::presenter) fn paragraph(
 }
 
 /// One line, cut with an ellipsis where it is wider than `max`.
-fn label(engine: &mut TextEngine, text: &str, scale: f32, max: f32) -> Rc<Paragraph> {
-    let line = paragraph(engine, text, LABEL_LARGE, scale, None);
+fn label(engine: &mut TextEngine, text: &str, inputs: &Inputs, max: f32) -> Rc<Paragraph> {
+    let line = paragraph(
+        engine,
+        text,
+        LABEL_LARGE.emboldened(inputs.bold_text),
+        inputs.font_scale,
+        None,
+    );
     line.ellipsized(max).unwrap_or(line)
 }
 
@@ -345,7 +368,14 @@ impl Layout {
                                 })
                         })
                         .map_or(*color, |p| p.highlighted_text);
-                    symbol(backend, role, *rect, color, self.symbols);
+                    symbol(
+                        backend,
+                        role,
+                        *rect,
+                        color,
+                        self.symbols,
+                        self.symbol_weight,
+                    );
                 }
             }
         }
@@ -358,13 +388,14 @@ impl Layout {
 }
 
 /// A symbol role's path in `rect`, in `set`'s shape, as the page draws one
-/// at a regular weight (`paint/svg.rs`): stroked, or filled.
+/// at `weight` (`paint/svg.rs`): stroked, or filled.
 pub(in crate::presenter) fn symbol(
     backend: &mut dyn Backend,
     role: &str,
     rect: Rect4,
     color: [u8; 4],
     set: SymbolSet,
+    weight: u16,
 ) {
     // A role, an icon token's form, or `sf/` a role's Apple name (LLP 1121 D10).
     let Some(path) = exact_kernel::symbol_path_in(role, set) else {
@@ -381,15 +412,7 @@ pub(in crate::presenter) fn symbol(
         color
     };
     for d in path.d.split(';') {
-        glyph_in(
-            backend,
-            d,
-            path.filled,
-            path.even_odd,
-            path.view_box,
-            rect,
-            paint,
-        );
+        glyph_in(backend, d, path, rect, paint, weight);
     }
     if group {
         backend.pop_opacity();
@@ -400,28 +423,28 @@ pub(in crate::presenter) fn symbol(
 fn glyph_in(
     backend: &mut dyn Backend,
     d: &str,
-    filled: bool,
-    even_odd: bool,
-    view_box: &str,
+    symbol: exact_kernel::SymbolPath<'_>,
     rect: Rect4,
     color: [u8; 4],
+    weight: u16,
 ) {
-    let [_, _, bw, _] = crate::paint::view_box(view_box);
+    let [_, _, bw, _] = crate::paint::view_box(symbol.view_box);
     let path = exact_kernel::svg::parse_d(d);
+    let weight = f32::from(weight).clamp(100., 900.);
     let paint = SvgPaint {
         path: &path,
-        fill: filled.then_some(Ink::Solid(color)),
-        even_odd,
-        stroke: (!filled).then_some(Ink::Solid(color)),
+        fill: symbol.filled.then_some(Ink::Solid(color)),
+        even_odd: symbol.even_odd,
+        stroke: (!symbol.filled).then_some(Ink::Solid(color)),
         order: [0, 1, 2],
-        width: (1.1 + 300.0 / 400.0) * bw / 24.0,
+        width: (1.1 + (weight - 100.0) / 400.0) * bw / 24.0,
         cap: 1,
         join: 1,
         miter: 4.0,
         dash: Vec::new(),
         phase: 0.0,
     };
-    let ts = crate::paint::fitted(view_box, rect);
+    let ts = crate::paint::fitted(symbol.view_box, rect);
     backend.svg_path(&paint, ts);
 }
 
@@ -451,7 +474,13 @@ fn alert(
         ),
     ] {
         let Some(text) = text else { continue };
-        let p = paragraph(engine, text, style, scale, Some(inner));
+        let p = paragraph(
+            engine,
+            text,
+            style.emboldened(inputs.bold_text),
+            scale,
+            Some(inner),
+        );
         let height = p.height;
         items.push(Item::Text(p, (DIALOG_PADDING, y), role.color(dark), pop));
         y += height + gap;
@@ -459,7 +488,7 @@ fn alert(
     // Each button's label and its box's size, then lines of them.
     let buttons: Vec<(Rc<Paragraph>, f32, f32)> = (rows.iter())
         .map(|row| {
-            let p = label(engine, &row.title, scale, inner - 2.0 * BUTTON_PADDING);
+            let p = label(engine, &row.title, inputs, inner - 2.0 * BUTTON_PADDING);
             let w = (p.width + 2.0 * BUTTON_PADDING).max(BUTTON_MIN.0);
             let h = (p.height + 20.0).max(BUTTON_MIN.1);
             (p, w.min(inner), h)
@@ -517,6 +546,7 @@ fn alert(
         windows: None,
         menu: None,
         symbols: SymbolSet::Material,
+        symbol_weight: 400,
     }
 }
 
@@ -576,9 +606,15 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
                     let p = paragraph(engine, &row.title, Type(14., 20., 400, 0.), scale, None);
                     p.ellipsized(room(indent(row))).unwrap_or(p)
                 }
-                Entry::Item(row) => label(engine, &row.title, scale, room(indent(row))),
+                Entry::Item(row) => label(engine, &row.title, inputs, room(indent(row))),
                 Entry::Header(title, _) => {
-                    let p = paragraph(engine, title, header, scale, None);
+                    let p = paragraph(
+                        engine,
+                        title,
+                        header.emboldened(inputs.bold_text && !desktop),
+                        scale,
+                        None,
+                    );
                     p.ellipsized(room(0.)).unwrap_or(p)
                 }
                 Entry::Separator => return None,
@@ -685,6 +721,7 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
         } else {
             SymbolSet::Material
         },
+        symbol_weight: weight(400, inputs.bold_text && !desktop),
     }
 }
 
@@ -725,4 +762,75 @@ pub fn place(
         .find(|y| *y >= margins.0 && y + h <= window.1 - margins.1)
         .unwrap_or(down[1]);
     (x.max(0.0), y.max(0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_surface_paragraphs_measure_with_one_bold_text_step() {
+        let row = Row {
+            node: 2,
+            title: "Action label".into(),
+            symbol: Some("calendar".into()),
+            destructive: false,
+            enabled: true,
+            cancel: true,
+            checked: false,
+            opens: None,
+        };
+        let alert = Plan::Alert {
+            title: Some("Headline".into()),
+            message: Some("Supporting text".into()),
+            rows: vec![row.clone()],
+            cancellable: true,
+            outside: false,
+        };
+        let menu = Plan::Menu(vec![Entry::Header("Section".into(), 1), Entry::Item(row)]);
+        let mut engine = TextEngine::new();
+        for bold_text in [false, true, false] {
+            let inputs = Inputs {
+                dark: false,
+                contrast: None,
+                font_scale: 1.,
+                bold_text,
+                window: (400., 800.),
+            };
+            for (plan, weights) in [
+                (
+                    &alert,
+                    if bold_text {
+                        vec![600, 600, 700]
+                    } else {
+                        vec![400, 400, 500]
+                    },
+                ),
+                (
+                    &menu,
+                    if bold_text {
+                        vec![700, 700]
+                    } else {
+                        vec![500, 500]
+                    },
+                ),
+            ] {
+                let layout = Layout::of(&mut engine, plan, 0, &inputs);
+                let measured: Vec<_> = layout
+                    .items
+                    .iter()
+                    .filter_map(|item| {
+                        let Item::Text(p, _, _, _) = item else {
+                            return None;
+                        };
+                        Some(p.runs()[0].weight)
+                    })
+                    .collect();
+                assert_eq!(measured, weights);
+                if matches!(plan, Plan::Menu(_)) {
+                    assert_eq!(layout.symbol_weight, if bold_text { 600 } else { 400 });
+                }
+            }
+        }
+    }
 }

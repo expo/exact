@@ -252,6 +252,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn iframe_sandbox_presence_survives_the_canvas_stream() {
+        use crate::presenter::{PainterChoice, Presenter};
+
+        for sandbox in [None, Some(""), Some("allow-scripts")] {
+            let attribute = sandbox.map_or(String::new(), |s| format!(" sandbox=\"{s}\""));
+            let source = format!(
+                "component App\n  view\n    iframe src=\"https://example.com/\" width=100 height=100{attribute}\n"
+            );
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&source),
+                (),
+                (200., 200.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut at = 0;
+            let mut frames = Vec::new();
+            while at < ops.len() {
+                if ops[at] == NATIVE && ops[at + 2] == 1 {
+                    let len = ops[at + 15] as usize;
+                    let bytes: Vec<_> = ops[at + 16..at + 16 + len.div_ceil(4)]
+                        .iter()
+                        .flat_map(|word| word.to_le_bytes())
+                        .take(len)
+                        .collect();
+                    frames.push(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap());
+                }
+                at = end(&ops, at).expect("valid Canvas stream");
+            }
+            assert_eq!(frames.len(), 1);
+            assert_eq!(frames[0]["src"], "https://example.com/");
+            assert_eq!(frames[0].get("sandbox"), Some(&serde_json::json!(sandbox)));
+        }
+    }
+
+    #[test]
     fn cached_route_headings_follow_focus_and_touch_mode() {
         use crate::presenter::{PainterChoice, PointerKind, Presenter};
 

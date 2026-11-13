@@ -170,10 +170,11 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
           continue;
         }
         if (kind === 'metadata') {
-          if (METADATA.get(c.name) !== c.value) refuse(`gives the meta-data ${JSON.stringify(c.name)} = ${JSON.stringify(c.value)}, which is not on the list`);
+          if (c == null || typeof c !== 'object' || Array.isArray(c) || typeof c.name !== 'string' || typeof c.value !== 'string') refuse('gives a meta-data without a string name and value');
+          if (!METADATA.has(c.name) || METADATA.get(c.name) !== c.value) refuse(`gives the meta-data ${JSON.stringify(c.name)} = ${JSON.stringify(c.value)}, which is not on the list`);
           if (names.has(c.name)) refuse(`declares ${c.name} twice`);
           names.add(c.name);
-          lines.push(`        <meta-data android:name="${c.name}" android:value="${c.value}" />`);
+          lines.push(`        <meta-data android:name="${escape(c.name)}" android:value="${escape(c.value)}" />`);
           continue;
         }
         component(kind, c);

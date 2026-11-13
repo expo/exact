@@ -96,3 +96,21 @@ fn middle_and_a_length_place_the_image_against_the_baseline() {
     );
     assert_eq!(height, plain);
 }
+
+/// A `text` inside a paragraph is an inline box too: its padding and margin
+/// take room in the line beside its text (#389), as a `<span>`'s do in
+/// Chrome. Linux, Android and Windows shape with this crate.
+#[test]
+fn a_runs_padding_takes_room_in_its_line() {
+    let verse = |edges: &str| {
+        let p = boot(&format!(
+            "      text font-size=16 testId=\"p\"\n        text \"1\"{edges}\n        text \"The LORD\"\n"
+        ));
+        frame(&p, "p").width
+    };
+    let (bare, padded) = (
+        verse(""),
+        verse(" padding-right=\"5px\" margin-left=\"2px\""),
+    );
+    assert!((padded - bare - 7.0).abs() <= 1.0, "{bare} {padded}");
+}

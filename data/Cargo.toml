@@ -13,7 +13,7 @@ same-file = "1.0.6"
 # Digests and OS entropy for sources (LLP 1069.005 D5).
 sha2 = "0.10"
 # ES256 for DPoP (LLP 1069.005 D1b): measured smaller than ring. JWK by hand.
-p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"

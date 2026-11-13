@@ -152,6 +152,26 @@ final class NavigationTabsIOSTests: XCTestCase {
         until("the restored native tab bar selects the first stack") { tabs.selectedIndex == 0 }
     }
 
+    /// Under a test's `size` the agent fits that viewport into the device's
+    /// window by scaling it (ExactViewIOS). A root tab the bar stands for has
+    /// no box of its own, and its tap is still the bar item's: it never
+    /// reads as outside the viewport (#390).
+    func testATabTheBarStandsForIsTappedUnderAScaledViewport() throws {
+        let session = try fixture("agent-root-tab-sized")
+        let p = session.presenter, tab = try node(session, "tab-second"), vp = p.viewport
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        XCTAssertTrue(p.navigation.tabBarStands(for: tab))
+        XCTAssertFalse(p.navigation.tabBarStands(for: try node(session, "open-plain")))
+        let frame = vp.frame
+        vp.transform = CGAffineTransform(scaleX: 1.0769, y: 1.0769)
+        vp.bounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        vp.center = CGPoint(x: frame.midX, y: frame.midY)
+        let reply = Agent(session: session).tap(["id": Int(tab.id)])
+        XCTAssertNil(reply["error"], "\(reply)")
+        XCTAssertEqual(reply["native"] as? String, "tab-bar-item")
+        until("the bar selects the second stack") { tabs.selectedIndex == 1 }
+    }
+
     func testAppearanceNoneKeepsRootTabsAuthoredAndTheirStacksRetained() throws {
         let session = try fixture("authored-tabs", wholeScreen: true)
         let p = session.presenter, navigation = p.navigation

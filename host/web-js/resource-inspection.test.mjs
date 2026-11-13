@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { perfDelta } from '../../scripts/agent-inspect.mjs';
+import { browserMissing } from '../../scripts/agent-playwright.mjs';
+import { need } from '../../scripts/coverage.mjs';
 
 function runtimeServer(development = false, names = [[], [], []], types = [[], [], []], map = null) {
   const bytes = JSON.stringify(map);
@@ -20,6 +22,35 @@ function runtimeServer(development = false, names = [[], [], []], types = [[], [
     if (path.endsWith('/rt.js') && development) { return new Response(readFileSync(file, 'utf8').replace('const DEVELOPMENT_STORE = null;', 'const DEVELOPMENT_STORE = "fixture";'), { headers: { 'content-type': 'text/javascript' } }); }
     return new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } });
   } });
+}
+
+for (const engine of ['chromium', 'firefox', 'webkit']) {
+  need(engine, await browserMissing(engine))(`the JS agent confirms canvas focus before browser keys (${engine})`, async () => {
+    const server = runtimeServer();
+    let session;
+    try {
+      session = await open({ host: 'web', browser: engine === 'chromium' ? 'chrome' : engine, url: server.url.href });
+      await session.carrier.evaluate(async () => {
+        globalThis.__exactRender = true;
+        const rt = await import('/host/web-js/rt.js'), { install } = await import('/host/web-js/agent.js');
+        rt.clock.agent = true;
+        rt.mount(() => {});
+        const canvas = document.createElement('canvas');
+        canvas.tabIndex = 0;
+        document.getElementById('exact-root').append(canvas);
+        globalThis.keys = [];
+        canvas.onkeydown = e => keys.push([e.key, e.isTrusted]);
+        Object.assign(exact, { clock: rt.clock, After: rt.After, views: new Map([[1, canvas]]),
+          viewId: el => el === canvas ? 1 : null, gpu: { wantsInput: id => id === 1 } });
+        install(exact);
+      });
+      expect((await session.carrier.input(1, 'key', { key: 'ArrowLeft' })).delivery).toBe('platform');
+      expect(await session.carrier.evaluate('keys')).toEqual([['ArrowLeft', true]]);
+      await session.carrier.evaluate(() => { const canvas = exact.views.get(1); canvas.blur(); canvas.inert = true; });
+      await expect(session.carrier.input(1, 'key', { key: 'ArrowRight' })).rejects.toThrow('view 1 could not take focus');
+      expect(await session.carrier.evaluate('keys')).toEqual([['ArrowLeft', true]]);
+    } finally { await session?.close(); server.stop(true); }
+  }, 30000);
 }
 
 test('agent diagnostics distinguish list members through reordering, removal and recovery', async () => {

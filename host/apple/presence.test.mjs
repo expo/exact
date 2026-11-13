@@ -111,3 +111,10 @@ test('a release keeps what the build signed under its profile, and nothing else 
     expect(profileEntitlements(bin, '')).toEqual({});
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the Mac sample host takes the app\'s id under its profile, and a second identity without one (#396)', async () => {
+  const { macHostIdentity } = await import('./presence.mjs');
+  const app = { id: 'com.example.notes' };
+  expect(macHostIdentity(app, { name: 'Notes Mac', appId: 'TEAM.com.example.notes' })).toEqual({ id: 'com.example.notes', name: 'Host (not Exact)' });
+  expect(macHostIdentity(app, null).id).toBe('com.example.notes.host');
+});

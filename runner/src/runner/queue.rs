@@ -8,7 +8,7 @@
 //! `next_due` is not: like `then_due` it is cleared before its commit, and
 //! armed only by the scan ([`Runner::arm_next`]) after a commit concludes.
 
-use super::modules::CallOrigin;
+use super::modules::{CallOrigin, Causes};
 use super::*;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -30,6 +30,8 @@ pub(super) struct Waiting {
     origin: CallOrigin,
     /// The invocation that commit was part of (LLP 1133.023 D7); 0 for none.
     id: u64,
+    /// That commit's causes (LLP 1133.035 D16 item 6).
+    causes: Causes,
 }
 
 /// The state a refused `next` saw. A standing commit that changes a slot,
@@ -141,12 +143,14 @@ impl<D: DataSource> Runner<D> {
             });
         }
         let (origin, id) = (self.call_origin(), self.invocation_id());
+        let causes = self.commit_causes();
         self.queues.waiting[m].push_back(Waiting {
             source: source.to_string(),
             args: args.to_vec(),
             write,
             origin,
             id,
+            causes,
         });
         self.pending_mut[m] = true;
         Ok(())
@@ -226,16 +230,20 @@ impl<D: DataSource> Runner<D> {
         let name = self.plan.str(self.plan.mutations[m].name).to_string();
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
-        let (origin, id) = self.queues.waiting[m]
+        let (origin, id, causes) = self.queues.waiting[m]
             .front()
-            .map_or((CallOrigin::App, 0), |w| (w.origin, w.id));
-        let next = self.as_invocation(origin, id, |r| r.next_inner(m, &name));
+            .map_or((CallOrigin::App, 0, Causes::default()), |w| {
+                (w.origin, w.id, w.causes)
+            });
+        let next = self.as_invocation_caused(origin, id, causes, |r| r.next_inner(m, &name));
         let (result, refusal) = match next {
             Ok(receipt) => (Ok(receipt), None),
             Err((e, why)) => (Err(e), Some(why)),
         };
         self.conclude(checkpoint, &result, was_poisoned);
-        self.arm_then(result.is_ok());
+        // Its `then`, and the commit a refused ask makes, are the queued
+        // send's: armed and made under its origin, invocation and causes.
+        self.as_invocation_caused(origin, id, causes, |r| r.arm_then(result.is_ok()));
         // The commit that tells the view `pending` ended is the host's to
         // apply, its refusal the host's to hear, as a failed reply's is (b6
         // review A4).
@@ -253,7 +261,9 @@ impl<D: DataSource> Runner<D> {
                 // view hears `pending` end, as after a failed reply; and
                 // the resources its write showed in drop it.
                 if (was && !self.pending_mut[m]) || shown {
-                    ended = Some(self.commit_again(Vec::new(), "a refused queued send"));
+                    ended = Some(self.as_invocation_caused(origin, id, causes, |r| {
+                        r.commit_again(Vec::new(), "a refused queued send")
+                    }));
                 }
             } else {
                 self.queues.stalled[m] = Some(Rc::new(Basis {

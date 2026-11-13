@@ -86,7 +86,11 @@ backslash traversal, alternate-stream and reserved-device forms are refused.
 
 Snapback4 consumers use release **0.4.33**: the CLI is pinned in `bun.lock`;
 Cargo pins the device and its client to the matching release source commit
-`3653cae823145170df3e720f5e321bd1b5b4d79d`. `snapback4/` is one client for an
+`3653cae823145170df3e720f5e321bd1b5b4d79d`. The root `package.json` overrides
+the undici 0.4.33 pins with 8.12.2, the version 0.4.43 pins, for the eight
+advisories on 8.11.2 (among them
+[GHSA-qrxm-fqhp-jwvm](https://github.com/nodejs/undici/security/advisories/GHSA-qrxm-fqhp-jwvm));
+a pin at 0.4.43 or later drops the override. `snapback4/` is one client for an
 app's Rust and TypeScript on every host ([its README](../snapback4/README.md)):
 the protocol in Rust without I/O, the native device, the web's wasm, and the
 TypeScript driver an app mounts with `typescript.sources`. The client is its
@@ -959,6 +963,11 @@ plan cannot reach (LLP 1036.000 §5–§10). `--bundle` prints the stable Mac bu
 `<target>/clients/<source-key>/<id>/macos/<Name>.app`; `scripts/exact.mjs`,
 `agent --app` and metrics use that same resolver. `--host` leaves both standalone
 and sample products; simulator and device bundles have separate destinations.
+On the Mac the sample host is a bundle beside the app's, `<Name> Host.app`, which
+`agent host` launches. Under the app's macOS profile it embeds that profile and takes
+the app's id and entitlements (iCloud, push, a keychain group), so its two sessions
+keep what the app's do; with none it is `<id>.host`. It registers no document type or
+link scheme, which stay the app's.
 Two apps can build together. A second Apple build of the same source/app fails
 with its owner's PID and lock path before baking; remove a stale lock only after
 verifying that owner is no longer running. Failed packaging retains the previous
@@ -1511,6 +1520,28 @@ Generated declarations are build artifacts, not files to commit. A development
 build writes them beside `app.ts` for an editor: the web build and the native
 development bake both do.
 
+For a mixed Rust/TypeScript app, annotate the map as `TypeScriptSources` and
+the dispatcher as `TypeScriptAnswer`, imported from the same declaration:
+
+```ts
+import type { TypeScriptSources, TypeScriptAnswer } from './app.contract.d.ts';
+const sources: TypeScriptSources = { greeting: () => 'Hello' };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) =>
+  sources[source](args, store, storage, native);
+```
+
+The app's `build_mixed_with` bake derives these types from its `rust_sources`
+argument; no ownership list goes in `app.json` or TypeScript. Every remaining
+provider is required. Run `bun exact.mjs contract build app.contract` to obtain
+the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
+Cargo bake, which writes the declaration before checking `app.ts`, even if
+the check fails. Native bakes use it too, and a development producer keeps
+the roster from the previous bake's `rustSources` receipt. Rebuild after
+changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
+describe every app-owned source, including Rust's.
+Standalone `contract types` has no composer and treats every app-owned source
+as TypeScript's; for a TypeScript-only app the two provider types are equivalent.
+
 Development builds also expose `resourceStatus`: opaque request and displayed-answer
 generations, the last successful generation, pending status, and `displayed`
 (`fallback`, `current`, `retained`). `argumentsEqual` compares full arguments using
@@ -1568,7 +1599,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
 | `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
-| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Each line the app's code logs also goes to the system's log, in every build: on Apple the unified log, subsystem the app's bundle identifier, category `console` (`console.debug` at debug level, `console.error` at error, the rest at the default level); on Linux and Windows standard error, as `console: …`. Anyone with the device can read it there |
+| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Each line the app's code logs also goes to the system's log: on Apple the unified log, subsystem the app's bundle identifier, category `console` (`console.debug` at debug level, `console.error` at error, the rest at the default level), and on Linux and Windows standard error, as `console: …`, in every build, where anyone with the device can read it; on Android logcat under the tag `exact-app` (`adb logcat -s exact-app`), in a development build only. Outside a drive the web writes it to the browser's console too |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
 under one domain (`https://*.example.com`), or a whole scheme, written as CSP
@@ -2785,11 +2816,14 @@ each voice ended is the same on every host and under the driver's clock
 | --- | --- |
 | web (both targets) | Web Audio: a one-shot `AudioBufferSourceNode` per voice at `start(when)` with its `playbackRate`, through a `StereoPannerNode` when its `pan` is not 0, aimed at the speaker through the context's output timestamp; a change is `setValueAtTime` then `linearRampToValueAtTime` on the voice's `gain`, `playbackRate` (k-rate: it moves once per 128-frame render quantum) and `pan`, a panner added when a change first gives a pan; the first sound after the page's first tap or key (one before it is dropped and journaled `sound blocked`) |
 | macOS, iOS, tvOS | one `AVAudioEngine` with a C mixer behind an `AVAudioSourceNode`, sample-accurate (a playback rate reads between frames by linear interpolation; a pan follows the `StereoPannerNode`'s equal-power algorithm; a change's ramp is read at every frame), in an arm loaded on demand (`libexact_sound.dylib`; `ExactSound.framework` in an `.ipa`) |
-| Linux, Windows, Android (the Linux host in its reader) | no Contract sound output: the runner keeps the voice record |
+| Android | AAudio with the shared C mixer in `libexact_sound.so`, loaded at the first play; scheduled by the stream's output timestamp, with gain, playback rate, pan, live changes and cancellation |
+| Linux, Windows | no Contract sound output: the runner keeps the voice record |
 
 Under the driver no scheduled sound plays on any host (`output: "agent"`). The
-runner initializes `state.sounds.output` to `"agent"`; Linux, Windows and Android
-leave it there even outside the driver. Outside the driver, macOS, iOS and tvOS
+runner initializes `state.sounds.output` to `"agent"`; Linux and Windows
+leave it there even outside the driver. Android's state reader is available
+only under the driver and retains `"agent"`; it does not expose AAudio's output
+state or latency. Outside the driver, macOS, iOS and tvOS
 replace it with an object whose `kind` is `"avaudioengine"` and whose `state` is `"closed"`,
 `"running"`, `"stopped"` or `"failed"`. Both web targets report an object with
 `kind: "web-audio"` and the audio context's `state` once the output loads; before
@@ -2833,6 +2867,25 @@ has no mixing playback type. This preserves other apps' audio but obeys the
 ring/silent switch in WebKit. The policy applies to `video`, `audio` and GPU audio
 without a `sound` declaration or an `AudioContext`. Without `audio_session`, the
 browser keeps `auto`. `data-audio-session` keeps the manifest's value.
+On Android, Contract effects use the host's single audio-focus owner.
+`"ambient"` uses sonification attributes, mixes without focus and skips effects
+while the ringer is silent or vibrating. `"playback"` uses media/music attributes
+and requests full focus; `"playback-mix"` uses the same attributes without focus
+or ducking. Device volume and Do Not Disturb still apply. All three stop output
+and discard pending effects when the activity leaves the foreground or the
+output becomes noisy (for example, headphones are unplugged). A transient focus
+loss also stops effects; new effects may play after focus returns. A permanent
+loss waits until the activity returns to the foreground.
+
+The Android arm decodes declared WAVs at first play. It uses
+[AAudio's speaker timestamp](https://developer.android.com/ndk/reference/group/audio#aaudiostream_gettimestamp)
+to place frames; startup waits up to 100 ms for that timestamp, then uses the
+stream's buffer size as a latency estimate if none is available. Late effects
+start from their attack. The idle stream closes after its last frames reach the
+speaker and releases its focus claim. A failed open or disconnected stream is
+reported; a play at least one second after the failure tries again. Background
+playback, MIDI output and timed sequence haptics on Android remain unavailable.
+
 The Mac has no session. A development run with `EXACT_SOUND_CHECK=1` taps the
 engine's main mixer and journals (and prints) how far each onset after a
 silence reached the speaker from its time.
@@ -3512,6 +3565,13 @@ types, and an `app.module.json` pairing receipt into a **new** directory; it
 never overwrites an existing generation. An installed package's code is captured
 file by file as the bundle reaches it; the receipt's `packages` names each
 `name@version` with a digest of what was taken (LLP 1027 D5, "Package code").
+A linked (workspace or `link:`) package's `peerDependencies` resolve from the
+app for both declarations and runtime code, including subpath exports. The app
+must have a version that satisfies the declared range, even when the linked
+package has its own install.
+A peer imported by a reachable declaration or runtime file is refused if missing
+or incompatible. Installed packages, including those an isolated install (pnpm,
+Bun) links from its store, keep Node's ancestor lookup.
 `EXACT_TSC` and `EXACT_ROLLDOWN` override producer tools. `hermesc` is always
 the compiler paired with the selected `hermes-lean-sys` bundle.
 A module's placement (LLP 1027.002) is the manifest's: `typescript.placement`
@@ -3520,7 +3580,8 @@ platform under `platforms.<platform>.placement`; `EXACT_TYPESCRIPT_PLACEMENT`
 and `EXACT_RUST_PLACEMENT` override a bake for a measurement. A change is a new
 compatibility id, never an update. `build_mixed_with` bakes a mixed app through
 its own composer, so a resource only Rust owns needs no TypeScript placeholder;
-the development producer keeps such a resource's last Cargo-baked value.
+the development producer keeps such a resource's last Cargo-baked value and
+the composer's ownership roster for the generated TypeScript provider types.
 
 Native module clients can supply a `Module` factory to `exact_apple::host!`
 (the sixth argument) and apply an `ExactGeneration` containing an `ExactModule`
@@ -3715,7 +3776,10 @@ Android; its words are the ones `app.json` gives `android`.
 No hatch runs before first pixel. A node's end runs while its view is still
 there, so take back there whatever the hatch added. On iOS a hatched node is a
 view of its own and its list row is not reused unless the hatch sets
-`element.reusable`; `logs` says what each word gives up.
+`element.reusable`; `logs` says what each word gives up. On the Mac a row that
+leaves a virtualized list's window can be rebound to the item the list needs
+next (LLP 1078): its hatched node hears `ended`, then `built` for the new item,
+as a new node would.
 
 **Into Contract only as a person could.** A handle acts on an authored node:
 `click()`, `focus()`, `blur()`, and `input(text)`, which replaces a text
@@ -3790,7 +3854,11 @@ checkout by name, and any other path only through that placeholder. The web buil
 `web/build.rs` passes to `contract::bake(plan, …)` into a module of its own, where build.rs's `use`s and
 locals are not: write it as a path from the data crate (`my_app_data::MyApp`), or that path's `::default()`
 or `::new()` with no arguments, with no comma after it (rustfmt adds one when it breaks the call across
-lines). A source built with arguments is exported by a crate of the app's own
+lines). For a mixed app, the build copies the third argument to
+`exact_js_bake::build_mixed_with`: a reference to the same data-crate value or constructor,
+with no constructor arguments. TypeScript answers the other sources. A declared
+`rust.module.package` supplies the module instead of a generated one.
+A source built with arguments is exported by a crate of the app's own
 instead, named in app.json's `rust.module.package` (Update Lab's `logic/`).
 
 A source that wraps another implements `exact_runner::DataSourceWrapper`.

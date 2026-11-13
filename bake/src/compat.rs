@@ -557,12 +557,12 @@ fn compatibility_with_trust(
     executors.sort();
     executors.dedup();
     let hermes = executors.iter().any(|e| e == "hermes");
-    let wasmtime = executors.iter().any(|e| e == "wasmtime");
+    let wasmi = executors.iter().any(|e| e == "wasmi");
     let mut kinds = vec!["plan", "assets"];
     if hermes {
         kinds.push("bytecode");
     }
-    if wasmtime {
+    if wasmi {
         kinds.push("wasm");
     }
     let list = |key: &str| -> Value {
@@ -737,7 +737,7 @@ fn abi_version() -> Result<u32, String> {
 
 /// The executors the app's composition links (LLP 1029 D2): the native
 /// crate always; an `app.ts` uses the browser on web, Hermes on native;
-/// wasmtime iff the native host crate names `Swappable`.
+/// wasmi iff the native host crate names `Swappable`.
 fn executors(app_dir: &Path, platform: &str) -> Vec<String> {
     let mut out = vec!["native".to_string()];
     if app_dir.join("app.ts").exists() {
@@ -757,7 +757,7 @@ fn executors(app_dir: &Path, platform: &str) -> Vec<String> {
         app_dir.join("apple/src/lib.rs")
     };
     if platform != "web" && std::fs::read_to_string(host).is_ok_and(|s| s.contains("Swappable")) {
-        out.push("wasmtime".into());
+        out.push("wasmi".into());
     }
     out.sort();
     out

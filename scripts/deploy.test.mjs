@@ -18,7 +18,7 @@ import { isAbsolute, join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureAssets, assetCards, copyStaticTreeIfPresent, webEnvelope, publicFileCards, listAssets, readStaticFile, readDevGeneration, retainDevGeneration } from '../host/web/serve.mjs';
 import { resolveApp, webGpuArtifacts, withAppFixture } from './app.mjs';
-import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, inspectHead, materializeSnapshot, readAssetIndex, streamIndex, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
+import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, holdBundles, inspectHead, materializeSnapshot, readAssetIndex, streamIndex, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, OriginUnavailable, sha256, webReleasePath, webRootPath } from './origin.mjs';
 // Minimal compiler receipts for origin protocol fixtures below; capability
 // behavior is tested independently with declared requirements.
@@ -1099,6 +1099,38 @@ test('a production web root serves every authenticated asset card, including act
     if (!await rejects(() => publishRoot({origin, row:{}, web}), error => error.message.includes('web envelope does not bind activities/card.schema.json'))) throw new Error('missing asset was published');
   } finally { rmSync(dir, {recursive:true,force:true}); }
 }, 300000);
+
+// A TypeScript app with a Live Activity: the Apple bake's generation lists the module pair, which the web bundle
+// carries as its own module, so the macOS stream's bundle adds the pair the bake made beside its receipt.
+test('a native stream of a TypeScript app with a Live Activity publishes the module pair its bake made', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-hold-bundles-'));
+  try {
+    const card = (name, body) => ({ name, bytes: Buffer.from(body), sha256: sha256(Buffer.from(body)) });
+    const plan = card('app.plan', 'plan'), activity = card('plans/departure.plan', 'activity');
+    const pair = [card('typescript/app.hbc', 'bytecode'), card('typescript/app.module.json', '{}')];
+    const graph = (cards) => ({ artifacts: cards.map(({ name, bytes, sha256 }) => ({ name, sha256, bytes: bytes.length, kind: 'bundle', requires: {} })) });
+    const builds = {
+      web: { compat: { target: 'wasm32-unknown-unknown', inputs: { platform: 'web' } }, graph: graph([plan, activity]) },
+      macos: { compat: { target: 'aarch64-apple-darwin', inputs: { platform: 'macos' } }, graph: graph([plan, activity, ...pair]) },
+    };
+    const entries = join(dir, 'macos-aarch64-apple-darwin.entries');
+    mkdirSync(join(entries, 'typescript'), { recursive: true });
+    for (const { name, bytes } of pair) writeFileSync(join(entries, name), bytes);
+    const fresh = () => ({ plan: { sha256: plan.sha256, bytes: plan.bytes }, assets: [activity] });
+    const bundle = fresh();
+    holdBundles(bundle, builds, dir);
+    expect(bundle.assets.map((a) => a.name)).toEqual(['plans/departure.plan']);
+    expect(Object.keys(bundle.platforms)).toEqual(['macos']);
+    expect(bundle.platforms.macos.assets.map((a) => [a.name, a.bytes.toString()]))
+      .toEqual([['plans/departure.plan', 'activity'], ['typescript/app.hbc', 'bytecode'], ['typescript/app.module.json', '{}']]);
+    // The pair is held to the graph's digests, and any other difference still refuses.
+    writeFileSync(join(entries, 'typescript/app.hbc'), 'edited');
+    expect(() => holdBundles(fresh(), builds, dir)).toThrow('typescript/app.hbc');
+    writeFileSync(join(entries, 'typescript/app.hbc'), 'bytecode');
+    builds.macos.graph.artifacts.push({ name: 'plans/other.plan', sha256: sha256(Buffer.from('x')), bytes: 1, kind: 'bundle', requires: {} });
+    expect(() => holdBundles(fresh(), builds, dir)).toThrow('macos bake graph differs from the packaged bundle');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('adding editing and removing only a sunset publishes a new signed sequence', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');

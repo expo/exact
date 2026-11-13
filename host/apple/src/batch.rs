@@ -770,6 +770,17 @@ impl Batch {
         }
     }
 
+    /// `{"op":"renew","id":…}` — the view now shows another list item (LLP
+    /// 1078): the presenter drops what it keeps for it beyond its props,
+    /// style and presented values (a press, a hover, a nested scroller's
+    /// offset, a picture of another source, its scene and animations), as a
+    /// new view has none of it. It comes before the batch's props and style
+    /// for the view. Its presented values stay the engine's: a renewed node
+    /// at rest keeps them, and one forgotten is presented whole, as new.
+    pub fn renew(&mut self, id: u32) {
+        self.ops.push(format!("{{\"op\":\"renew\",\"id\":{id}}}"));
+    }
+
     /// `{"op":"destroy","id":…}`.
     pub fn destroy(&mut self, id: u32) {
         self.ops.push(format!("{{\"op\":\"destroy\",\"id\":{id}}}"));

@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { checker } from '../../camera/test/fixture.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
 import { androidDevice, androidSdk } from '../../../scripts/agent-android.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 /** What a JPEG's EXIF says of the checks (orientation, GPS, date, camera, rights, maker note), or null with none. */
 function exif(path) {
@@ -45,7 +46,7 @@ const here = import.meta.dir, root = resolve(here, '../../..'), app = 'photos-fi
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const AGENT = n => sha(readFileSync(resolve(here, `../fixture/agent-${n}.jpg`)));
 const { check, failed } = checker();
-const built = resolve(root, 'host/android/app/build', app);
+const built = apkBuildDir(app);
 
 const build = spawnSync('bun', ['scripts/agent-android.mjs', 'build', app, '--apk'], { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
 check('android', 'the fixture builds as an APK', build.status === 0, (build.stdout + build.stderr).slice(-2000));

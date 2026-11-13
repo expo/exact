@@ -7,7 +7,7 @@
 // use); `openAuthSession` is auth.js.
 // The runtime's bindings load before the app's module and what it imports, so ts-fetch.js takes the page's own
 // functions before any app code runs.
-import { activeCall, answering, dropTimers, files as bodyFiles, SOCKET_AND_FETCH, useFetch } from './ts-fetch.js';
+import { activeCall, answering, dropTimers, files as bodyFiles, Promise as AnswerPromise, SOCKET_AND_FETCH, useFetch } from './ts-fetch.js';
 // The sources' `fetch`: ts-fetch.js's, or ts-fetch-refused.js's where no source holds a network grant (the build names it).
 import { fetch as sourceFetch } from '__FETCH_MODULE__';
 import * as source from '__APP_TS__';
@@ -23,7 +23,8 @@ useFetch(sourceFetch);
 const appId = source.appId;
 // Work an answer awaits that is no held fetch, counted on its answer (ts-fetch.js `answering.ordinary`, LLP 1016.000 D9).
 const ordinary = start => (answering.ordinary ?? (f => f()))(start);
-// What an answer's timers run on (ts-fetch.js `arm`).
+// What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
+// outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
 answering.page = { clock, journal, drive, time };
 __AUTH_IMPORT__
 // Values cross by the plan's types (`named` into the module's objects,
@@ -435,6 +436,7 @@ function renderStorage(owner) {
   return Object.freeze({ fs: Object.freeze({ directories: DIRECTORIES, ...fs, watch }), sqlite: Object.freeze({ open: refuse('storage.sqlite.open()') }), work: promise => Promise.resolve(promise) });
 }
 function storageOf(grants) {
+  const ordinary = start => answering.ordinary(start, true);
   const admitted = ['fs-read', 'fs-write', 'sqlite-open'].some(kind => hasGrant(grants, kind));
   let fs, sqlite;
   const key = () => import('./storage-environment.js').then(({ storageKey, agentStorageRefusal }) => {
@@ -466,44 +468,8 @@ function storageOf(grants) {
   const denied = (op, document = false) => inMapper(op.split(/[. ]/)[1]) ?? (document ? Promise.resolve() : key()).then(() => {
     throw Object.assign(new Error(`denied: ${op}`), { kind: 'Unavailable', code: 'denied' });
   });
-  const databases = () => sqlite ??= key().then(k => import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)));
-  // A database's and a statement's methods refuse as storage's do, in the queue.
-  const wrap = (o, convert, path) => Object.freeze(Object.fromEntries(Object.entries(convert).map(([m, then]) =>
-    [m, (...args) => queued(`${m} ${path}`, () => o[m](...args)).then(then ? v => then(v, path) : undefined)])));
-  const statement = (s, path) => wrap(s, { execute: null, query: null, close: null }, path);
-  // Each entry's sql and params read once; options as a record with no
-  // prototype, so `__proto__` stays a key the validation refuses.
-  const batchNow = c => Array.isArray(c) ? c.map(e => {
-    if (!e || typeof e !== 'object') return e;
-    const { sql, params } = e;
-    return { sql, params: Array.isArray(params) ? params.map(v => v instanceof Uint8Array ? new Uint8Array(v) : v) : params };
-  }) : c;
-  const optionsNow = o => {
-    if (o === null || typeof o !== 'object') return o;
-    const f = o.foreignKeys, r = Object.create(null);
-    for (const k of Object.keys(o)) if (k !== 'foreignKeys') Object.defineProperty(r, k, { value: true, enumerable: true });
-    if (f !== undefined) r.foreignKeys = f;
-    return r;
-  };
-  const database = (d, path, call) => {
-    const handle = { path, call, told: false };
-    openDatabases.add(handle);
-    const wrapped = wrap(d, { execute: null, query: null, prepare: statement, transaction: null, close: null }, path);
-    // A transaction's batch and options as they are at the call, not when the
-    // queue reaches it (js/src/storage.js `batchNow`, `optionsNow`).
-    const db = { ...wrapped, transaction: (commands, options) => {
-      let args;
-      try { args = [batchNow(commands), optionsNow(options)]; }
-      catch (e) { return Promise.reject(Object.assign(new Error(String(e?.message ?? e)), { kind: 'Unavailable', code: 'failed' })); }
-      return wrapped.transaction(...args);
-    } };
-    // A close counts once issued; one refused or failed leaves the database open, and tracked.
-    return Object.freeze({ ...db, close: (...args) => {
-      openDatabases.delete(handle);
-      // A failed close still rejects for the caller, so one left unhandled is still reported.
-      return db.close(...args).catch((e) => { openDatabases.add(handle); throw e; });
-    } });
-  };
+  // The page's SQLite worker, and the module's handles over it (ts-sqlite.js), loaded at the first open.
+  const databases = () => sqlite ??= key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')]));
   // `compressImage` (LLP 1069.002 A1) and `transformImage` (LLP 1133.019 D14): their options are checked before either
   // is queued (`imageOptions`); app files only.
   const image = (method, from, to, options, limits) => {
@@ -542,7 +508,7 @@ function storageOf(grants) {
           : isDocument(captured) ? documents().then(f => f[m](...captured)) : files().then(f => f[m](...captured), orEmpty(m, captured[0]));
         return (admitted ? queued(`${m}${typeof args[0] === 'string' ? ` ${args[0]}` : ''}`, run) : denied(`fs.${m}`, isDocument(captured) && !copiesIn(m, captured))).catch(refused);
       })])) }),
-    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(d => d.open(path))).then(d => database(d, path, call)) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
+    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
     work: promise => Promise.resolve(promise),
   });
 }
@@ -580,10 +546,11 @@ export function install(data, mixed = false, modules = null) {
   // that answer's, and one in a stream's mapper call is still refused. The
   // synchronous turn alone stays `call.turn`.
   globalThis.__exact_async_context = Object.freeze({
-    current: () => ({ call: answering.call, watching, asking, mapperCall: answering.mapperCall }),
+    Promise: AnswerPromise,
+    current: () => [answering.call, watching, asking, answering.mapperCall, answering.promiseCall],
     swap(to) {
-      const before = { call: answering.call, watching, asking, mapperCall: answering.mapperCall };
-      answering.call = to?.call ?? null; watching = to?.watching ?? null; asking = to?.asking ?? ''; answering.mapperCall = to?.mapperCall ?? null;
+      const before = this.current();
+      [answering.call, watching, asking, answering.mapperCall, answering.promiseCall] = to;
       return before;
     },
   });

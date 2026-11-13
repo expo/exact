@@ -30,6 +30,7 @@
         android:icon="${appIcon}" android:roundIcon="${appIcon}" android:banner="${appBanner}"
         android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/exact_backup" android:dataExtractionRules="@xml/exact_data_extraction">
+        <meta-data android:name="dev.exact.audioSession" android:value="${audioSession}" />
         <profileable android:shell="true" />
         <meta-data android:name="dev.exact.development" android:value="${exactDevelopment}" />
         <!-- The changes the host takes in place (LLP 1115.001 D15.1), so that none of them makes the activity again:

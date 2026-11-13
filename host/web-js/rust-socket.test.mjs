@@ -160,7 +160,8 @@ test("a Rust source's socket on the JS target subscribes on open, sends from a m
       const a = data.answer(name, [], store, name, false);
       expect(a.req).toMatchObject({ socket: true, stream: true, url: `${url}/${name}` });
       const ctl = Object.assign(new AbortController(), { resource: true, owner, ticket: ++tickets, streamName: name, active: () => true });
-      data.fetch(a.req, m => {
+      // (rt.js sends it as the asking commit's origin, resources.js)
+      data.fetch({ ...a.req, origin: 'app' }, m => {
         try { const p = data.parse(name, [], { streamed: [m] }, store); shown[name] = p.v; for (const go of p.effects ?? []) go(); }
         catch (e) { shown[name] = `failed: ${e.message}`; }
       }, ctl).then(o => { shown[name] = data.parse(name, [], o, store).v; });

@@ -18,8 +18,15 @@ import java.nio.ByteBuffer
 /** The sampling frequencies an ADTS header indexes. */
 private val RATES = intArrayOf(96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
 
-/** The parts begun and not yet made MP4s, by absolute path: what [recoverParts] finds after a process died. */
+/** The parts begun and not yet made MP4s, by absolute path, each with the [PROCESS] that writes it: what [recoverParts]
+ * finds after a process died. */
 private fun ledger(app: Context) = app.getSharedPreferences("exact.recording.parts", Context.MODE_PRIVATE)
+
+/** This process, among those that wrote the ledger: a part it owns may still be written, and is never recovered. */
+private val PROCESS = java.util.UUID.randomUUID().toString()
+
+/** Held while a writer claims a path and while recovery reads and converts one, so neither sees the other half done. */
+private val LEDGER = Any()
 
 /** The ADTS stream of one take ([Encoder]'s writer under the line). On the recorder's thread. */
 internal class PartWriter(app: Context, val file: File) {
@@ -31,9 +38,11 @@ internal class PartWriter(app: Context, val file: File) {
 
     init {
         file.parentFile?.mkdirs()
-        part.delete()
-        ledger.edit().putBoolean(file.path, true).commit()
-        out = FileOutputStream(part)
+        synchronized(LEDGER) {
+            part.delete()
+            ledger.edit().putString(file.path, PROCESS).commit()
+            out = FileOutputStream(part)
+        }
     }
 
     /** The encoder's `csd-0`, from its output format. */
@@ -67,6 +76,9 @@ internal class PartWriter(app: Context, val file: File) {
         mux(part, file)
         ledger.edit().remove(file.path).commit()
     }
+
+    /** The take failed before [finish]: the part stays in the ledger for a later process to recover. */
+    fun close() = out.close()
 }
 
 /** Make [part]'s ADTS frames the MP4 [file], through `<file>.mp4.tmp`; a part with no whole frame makes none. */
@@ -114,10 +126,13 @@ internal fun mux(part: File, file: File): Boolean {
     return true
 }
 
-/** Each part a process that died left, made an MP4 (D5), [log] naming each: `recovered <path>`. */
+/** Each part a process that died left, made an MP4 (D5), [log] naming each: `recovered <path>`. A part this process
+ * writes is a take under way, perhaps begun before recovery ran, and is left alone. */
 internal fun recoverParts(app: Context, log: (String) -> Unit) {
     val ledger = ledger(app)
-    for (path in ledger.all.keys.toList()) {
+    for (path in ledger.all.keys.toList()) synchronized(LEDGER) {
+        val owners = ledger.all
+        if (path !in owners || owners[path] == PROCESS) return@synchronized
         val file = File(path)
         val part = File("$path.part")
         try {

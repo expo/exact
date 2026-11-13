@@ -166,3 +166,153 @@ fn a_text_with_a_look_keeps_its_box() {
         assert_eq!(batch.contains("{\"op\":\"looks\""), !folds, "{batch}");
     }
 }
+
+/// The page's look rules of view `id` in `batch`, if it sent them.
+fn looks_of(batch: &str, id: u32) -> Option<&str> {
+    let at = batch.find(&format!("{{\"op\":\"looks\",\"id\":{id},"))?;
+    let end = batch[at + 1..]
+        .find("{\"op\":")
+        .map_or(batch.len(), |n| at + 1 + n);
+    Some(&batch[at..end])
+}
+
+/// LLP 1121 D7, D8: a look's and a press's colour reach a mode or
+/// `color-scheme` boundary below their node, which writes the colour around
+/// it again and would stop them, as on the JS target. Each is resolved in the
+/// boundary's tuple, the nearest last (so it holds over one further out), up
+/// to the nearest view that sets its colour; a boundary that sets its own
+/// colour takes none, and one whose scheme is bound and unset is still one.
+/// The boundary names the view whose colour it writes again
+/// (`data-exact-from`), when it writes one again. Its rules follow a live
+/// token, the window's modes and its own colour, and a boundary mounted later
+/// takes them.
+#[test]
+fn a_looks_and_a_press_colour_reach_a_boundary_in_the_boundarys_tuple() {
+    let view = "component App\n  state shown = false\n  state scheme = \"unset\"\n  state colour = \"unset\"\n  action show\n    shown = true\n    scheme = \"dark\"\n    colour = \"#123456\"\n  view\n    column\n      column testId=\"outer\"\n        :hover\n          color = \"lo\"\n        link href=\"/a\" testId=\"link\" color=\"nav\" press=show\n          :hover\n            color = \"hi\"\n          :active\n            color = \"hi\"\n          column color-scheme=\"dark\" testId=\"dark\"\n            text \"d\"\n          column color-scheme=\"dark\" testId=\"own\" color=\"#0000ff\"\n            text \"o\"\n          column color-scheme=scheme testId=\"bound\" color=colour\n            text \"b\"\n          column testId=\"card\" press=show\n            :hover\n              color = \"lo\"\n            :active\n              color = \"#123123\"\n            column -exact-mode=\"ink=plain\" testId=\"pinned\"\n              text \"p\"\n          if shown\n            column color-scheme=\"dark\" testId=\"later\"\n              text \"l\"\n      link href=\"/b\" color=\"#666666\"\n        :hover\n          color = \"hi\"\n        column color-scheme=\"dark\" testId=\"literal\"\n          text \"x\"\n";
+    let dir = std::env::temp_dir().join(format!("exact-web-looks-below-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("app.contract"), view).unwrap();
+    let plan = |hi: &str| {
+        let design = format!("tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  nav = light-dark(#666666, #ffffff)\n  hi = {hi}\n    when ink=plain: #00aa00\n  lo = #0000cc\n    when ink=plain: #00cccc\n");
+        std::fs::write(dir.join("app.tamber"), design).unwrap();
+        contract::compile_path(&dir.join("app.contract")).unwrap_or_else(|e| panic!("{e:?}"))
+    };
+    let (a, b) = (plan("#cc0000"), plan("#dd0000"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (mut host, boot) = Host::boot(&a.encode(), NoData, Default::default(), "/").unwrap();
+    let id = |host: &Host<NoData>, test_id: &str| {
+        let kernel = host.runner().kernel();
+        kernel
+            .node_by_key(kernel.find_by_test_id(test_id)[0])
+            .unwrap()
+            .id
+    };
+    let [outer, link, card, dark, bound, pinned, literal] = [
+        "outer", "link", "card", "dark", "bound", "pinned", "literal",
+    ]
+    .map(|t| id(&host, t));
+    let on = |view: u32, colour: &str| {
+        format!("[data-view=\\\"{view}\\\"]{{color:{colour}!important;}}")
+    };
+    let hovering = |holder: u32| format!("[data-view=\\\"{holder}\\\"]:hover");
+    let pressed =
+        |holder: u32, colour: &str| format!("--exact-press-color-below-{holder}:{colour};");
+    let from = |view: u32, holder: u32| {
+        format!("{{\"op\":\"props\",\"id\":{view},\"set\":{{\"data-exact-from\":\"{holder}\"}}")
+    };
+    let rules = |batch: &str, view: u32| {
+        looks_of(batch, view)
+            .unwrap_or_else(|| panic!("{view} takes the looks above: {batch}"))
+            .to_string()
+    };
+
+    // In the boundary's tuple: the scheme boundary's `hi` is the window's, the pin's is `ink=plain`'s.
+    let dark_rules = rules(&boot, dark);
+    assert!(
+        dark_rules.contains(&hovering(link)) && dark_rules.contains(&on(dark, "rgba(204,0,0,1)")),
+        "{dark_rules}"
+    );
+    assert!(
+        dark_rules.contains(&pressed(link, "rgba(204,0,0,1)")),
+        "{dark_rules}"
+    );
+    assert!(
+        !dark_rules.contains(&hovering(outer)),
+        "the link sets its colour, so the look above it stops there: {dark_rules}"
+    );
+    let pinned_rules = rules(&boot, pinned);
+    let (far, near) = (
+        pinned_rules.find(&on(pinned, "rgba(0,170,0,1)")),
+        pinned_rules.find(&on(pinned, "rgba(0,204,204,1)")),
+    );
+    assert!(
+        far.zip(near).is_some_and(|(f, n)| f < n),
+        "the nearest look last, each in ink=plain: {pinned_rules}"
+    );
+    assert!(pinned_rules.contains(&hovering(card)), "{pinned_rules}");
+    assert!(
+        pinned_rules.contains(&pressed(card, "initial")),
+        "a literal press colour is the pressed view's own: {pinned_rules}"
+    );
+    assert!(
+        pinned_rules.contains(&pressed(link, "rgba(0,170,0,1)")),
+        "the press in ink=plain: {pinned_rules}"
+    );
+    // Bound and unset, it still writes the colour around it again.
+    assert!(
+        rules(&boot, bound).contains(&on(bound, "rgba(204,0,0,1)")),
+        "{boot}"
+    );
+    for view in [dark, pinned, bound] {
+        assert!(
+            boot.contains(&from(view, link)),
+            "{view} writes the link's colour again: {boot}"
+        );
+    }
+    // Under a literal colour it writes none again: no `data-exact-from`, but the look's token in its tuple.
+    assert!(
+        rules(&boot, literal).contains(&on(literal, "rgba(204,0,0,1)")),
+        "{boot}"
+    );
+    assert!(
+        !boot.contains(&format!("{{\"op\":\"props\",\"id\":{literal},")),
+        "{boot}"
+    );
+    assert!(
+        looks_of(&boot, id(&host, "own")).is_none(),
+        "its own colour stands: {boot}"
+    );
+
+    // A look above moves (a live token), and nothing of the boundary's own: its rule follows.
+    let live = design::batch(&design::shape(&a), &design::tokens(&a), &design::tokens(&b)).unwrap();
+    let out = host.apply_live(&live.json());
+    assert!(
+        rules(&out, dark).contains(&on(dark, "rgba(221,0,0,1)")),
+        "{out}"
+    );
+    // The window's modes move: `hi` is `ink=plain`'s.
+    let out = host.set_modes(&[("ink", "plain")]);
+    assert!(
+        rules(&out, dark).contains(&on(dark, "rgba(0,170,0,1)")),
+        "{out}"
+    );
+
+    // The bound boundary sets its own colour: its rules and `data-exact-from` go. A boundary mounted later takes them.
+    let shown = host.dispatch_at(link, exact_runner::Event::Press, 20.0);
+    assert!(
+        shown.contains(&format!("{{\"op\":\"looks\",\"id\":{bound},\"css\":\"\"}}")),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!(
+            "{{\"op\":\"props\",\"id\":{bound},\"set\":{{}},\"clear\":[\"data-exact-from\"]}}"
+        )),
+        "{shown}"
+    );
+    let later = id(&host, "later");
+    assert!(
+        rules(&shown, later).contains(&on(later, "rgba(0,170,0,1)")),
+        "{shown}"
+    );
+}

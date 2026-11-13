@@ -460,6 +460,10 @@ component NativeFixture
                     if e.name == "plain"
                       button popovertarget="plain-about" aria-label="About" testId="about-plain" padding=6 background-color="#e5e7eb"
                         image "symbol:info" width=20 height=20
+                    // A bar item that shows an alert by its command alone, pressing nothing (#387).
+                    if e.name == "plain"
+                      button commandfor="plain-clear" command="show-modal" aria-label="Clear" testId="clear-plain" padding=6 background-color="#e5e7eb"
+                        image "symbol:delete" width=20 height=20
                     button id="compose" press=compose aria-label="Compose" testId=`compose-${e.name}` padding=6 background-color="#e5e7eb"
                       image "symbol:compose" width=20 height=20
                     // A readout after the buttons: an item nothing presses,
@@ -472,6 +476,13 @@ component NativeFixture
                 if e.name == "plain"
                   column id="plain-about" popover="auto" testId="plain-about" padding=12 width=220
                     text "A route with no Back control of its own." font-size=13
+                if e.name == "plain"
+                  dialog id="plain-clear" role="alertdialog" aria-label="Clear the count?" padding=16
+                    text "The count goes back to zero."
+                    button press=unbump destructive=true commandfor="plain-clear" command="close" testId="plain-clear-clear"
+                      text "Clear"
+                    button commandfor="plain-clear" command="close" testId="plain-clear-cancel"
+                      text "Cancel"
                 if e.name == "home"
                   column id="bar-menu" popover="auto" position="absolute" role="menu" aria-label="Actions" width=200 padding=8 background-color="#ffffff"
                     button appearance="none" press=bump popovertarget="bar-menu" popovertargetaction="hide" role="menuitem" testId="bar-menu-bump" height=44 text-align="start"

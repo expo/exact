@@ -94,6 +94,23 @@ class ActivityStartsTest {
         assertTrue(results.isEmpty())
     }
 
+    /** A call let go while its start waits withdraws it: the resume starts nothing and neither answer comes. Once
+     * made, a start is past withdrawing. */
+    @Test fun aWaitingStartWithdrawnIsNeverMade() {
+        val activity = shown(Activity::class.java)
+        Extensions.paused()
+        val withdraw = start()
+        assertTrue(withdraw())
+        assertFalse(withdraw())
+        Extensions.resumed()
+        assertNull(shadowOf(activity).peekNextStartedActivityForResult())
+        assertTrue(failures.isEmpty())
+        assertTrue(results.isEmpty())
+
+        assertFalse(start()())
+        assertEquals(MediaStore.ACTION_IMAGE_CAPTURE, shadowOf(activity).nextStartedActivityForResult.intent.action)
+    }
+
     /** A configuration change between the pause and the resume keeps the start for the activity made again. */
     @Test fun aWaitingStartOutlivesAConfigurationChange() {
         shown(Activity::class.java)

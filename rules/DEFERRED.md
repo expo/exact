@@ -968,7 +968,7 @@ reading. Nothing that isn't HTML is added by it.
   app-owned audio thread. Take: none offered; waived by that instruction.
   Still out: on-demand decoding, web pictures of an element, QR in exact2,
   SysEx, Bluetooth MIDI pairing, MIDI 2.0, Continue and Song Position out,
-  clock thru (sending clock while following one), Ableton Link, swing, Linux, Windows and Android output, synthesis (LLP 1125
+  clock thru (sending clock while following one), Ableton Link, swing, Linux and Windows output, synthesis (LLP 1125
   §8).
 - **Expanded (LLP 1096 D14; expo/exact#347, assigned for Charlie in the
   2026-11-12 issue session):** changing what plays, by Web Audio's names:
@@ -980,6 +980,16 @@ reading. Nothing that isn't HTML is added by it.
   fades. Take: none offered; waived by that assignment. Still out: loops, a
   change at a future time (`at=`), curves other than a straight line, and a
   handle to one voice (a group names it).
+- **Expanded (Charlie, 2026-11-12, #356; LLP 1096/1125):** Android
+  Contract sound output through an on-demand AAudio arm sharing Apple's mixer,
+  with scheduled gain, rate, pan and cancellation, and the host's
+  existing audio-focus owner. Consumer: Cameron Chisholm's React Native port,
+  whose short cues need to play on Android as on iOS. Take: none named; Charlie's
+  ruling to build Android output waives it. This lifts Android sound output
+  from LLP 1125's deferred set. Built and tested on the JVM and by cross-compile;
+  hearing it on an Android device remains unqualified under this waiver, so
+  the change lands as `Part of #356`. Linux and Windows output, Android MIDI output,
+  timed haptics and background sound playback stay out.
 - **Expanded (LLP 1098; admitted by the orchestrator under Charlie's
   2026-10-04 delegation, "make decisions without me"):** the media session,
   by the Media Session API's names, on HTML's media element:

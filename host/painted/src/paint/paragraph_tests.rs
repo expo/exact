@@ -950,8 +950,10 @@ fn inline_border_radius_cuts_the_background_corners() {
     assert!(has_color(&rounded, [255, 0, 0, 255]));
 }
 
+/// A box inside another with a background paints its own over it, each
+/// keeping its corners (CSS 2 Appendix E), as Chrome paints them.
 #[test]
-fn nested_visible_inline_backgrounds_keep_both_boxes_square() {
+fn nested_inline_backgrounds_each_keep_their_own_box() {
     let p = fixture(
         "      text testId=\"paragraph\"\n        text background-color=\"#ff0000\" border-radius=6 testId=\"outer\"\n          text \"before\"\n          text\n            text \"inner\" background-color=\"#0000ff\" border-radius=9\n          text \"after\"\n        text background-color=\"#00ff00\" border-radius=3\n          text \"independent\" background-color=\"transparent\"\n",
     );
@@ -966,9 +968,14 @@ fn nested_visible_inline_backgrounds_keep_both_boxes_square() {
     assert_ne!(values[0].id, values[1].id);
     assert_eq!(values[0].color, [255, 0, 0, 255]);
     assert_eq!(values[1].color, [0, 0, 255, 255]);
-    for value in &values[..3] {
-        assert_eq!(value.radii, [const { Dimension::Points(0.0) }; 4]);
-    }
+    assert_eq!(values[0].radii, [const { Dimension::Points(6.0) }; 4]);
+    assert_eq!(values[1].radii, [const { Dimension::Points(9.0) }; 4]);
+    assert_eq!(
+        values[1].outer.iter().map(|o| o.id).collect::<Vec<_>>(),
+        [values[0].id],
+        "the outer box paints under the inner"
+    );
+    assert!(values[0].outer.is_empty());
     assert_eq!(
         values[3].radii,
         [const { Dimension::Points(3.0) }; 4],
@@ -994,6 +1001,28 @@ fn nested_visible_inline_backgrounds_keep_both_boxes_square() {
     }
 }
 
+/// A run's background reaches over its padding and border, not its margin
+/// (CSS 2 §14.2), from the kernel's `inline_background_reach`.
+#[test]
+fn an_inline_background_reaches_over_its_padding_and_not_its_margin() {
+    let p = fixture(
+        "      text testId=\"paragraph\"\n        text \"a \"\n        text \"code\" background-color=\"#dddddd\" padding-left=4 padding-right=4 margin-right=3\n        text \" b\"\n",
+    );
+    let kernel = p.host().kernel();
+    let node = kernel
+        .node_by_key(kernel.find_by_test_id("paragraph")[0])
+        .unwrap();
+    let backgrounds = text_backgrounds(kernel, &node, false, None);
+    let code = backgrounds[1].as_ref().expect("its background");
+    assert_eq!(
+        code.reach,
+        exact_kernel::InlineEdges {
+            start: 4.0,
+            end: 4.0
+        }
+    );
+}
+
 #[test]
 fn a_clipping_text_keeps_its_own_glyphs_inside_its_padding_box() {
     // CSS Overflow 3 §3: `overflow: hidden` clips the box's own inline
@@ -1008,4 +1037,42 @@ fn a_clipping_text_keeps_its_own_glyphs_inside_its_padding_box() {
     };
     assert!(ink(20..70) > 0, "the text paints inside its box");
     assert_eq!(ink(70..300), 0, "no glyph past the box's right edge");
+}
+
+/// Where a box's room is drawn: its sides are its paragraph's start and end,
+/// so in a left-to-right paragraph an `rtl` box's `padding-right` is the gap
+/// after its text, as in Chrome, not one before it.
+#[test]
+fn a_boxs_padding_is_on_its_side_in_its_paragraph() {
+    let xs = |box_style: &str| {
+        let p = fixture(&format!(
+            "      text testId=\"paragraph\" font-size=16\n        text \"12\"{box_style}\n        text \"The\"\n"
+        ));
+        let kernel = p.host().kernel();
+        let node = kernel
+            .node_by_key(kernel.find_by_test_id("paragraph")[0])
+            .unwrap();
+        let mut spec = text_spec(&node.computed_style(StyleMask::INHERITED), "");
+        spec.runs = node
+            .text_runs()
+            .iter()
+            .map(crate::text::Run::from_kernel)
+            .collect();
+        let paragraph = p.text().borrow_mut().paragraph(&spec, None);
+        paragraph
+            .layout_runs()
+            .flat_map(|r| r.glyphs.iter().map(|g| (g.start, g.x)).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+    let at = |glyphs: &[(u32, f32)], byte: u32| glyphs.iter().find(|g| g.0 == byte).unwrap().1;
+    let bare = xs("");
+    let padded = xs(" direction=\"rtl\" padding-right=5");
+    assert!(
+        (at(&padded, 0) - at(&bare, 0)).abs() < 0.05,
+        "no gap before it"
+    );
+    assert!(
+        (at(&padded, 2) - at(&bare, 2) - 5.0).abs() < 0.05,
+        "{bare:?} {padded:?}"
+    );
 }

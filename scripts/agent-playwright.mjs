@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentPage, backLayer, builtSettingLines, chromium, launchFacts, listenOn, netOptions, refuseStale, staleError, warnStale, webChanges, withEpoch, withFaults } from './agent-launch.mjs';
 import { deliverClipboard, pasteChord } from './agent-keys.mjs';
-import { pageAim, pageOutside } from './agent-aim.mjs';
+import { pageAim, pagePoint, pageOutside } from './agent-aim.mjs';
 import { builtAppMatches, jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs'; import { bootedGeneration, leaseGeneration } from '../host/web/generations.mjs';
 import { resolveApp, webBuildCommand, webDist as defaultWebDist } from './app.mjs';
 
@@ -331,7 +331,8 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
       keyArguments(opts);
       const isWorld = await page.evaluate(id => globalThis.exact.gpu?.wantsInput(id) ?? false, id);
       if (isWorld) { const r = await ask({ op: 'focus', id, world: true }); if (r.error || !r.ok) throw new Error(r.error ?? `view ${id} could not take focus`); }
-      else await directFocus(id, requireFocus);
+      else if (requireFocus) await directFocus(id, true);
+      else await focus(id, false);
       const keys = chordKeys(opts.key), reply = phase => ({ typed: id, key: opts.key, ...(phase != null ? { phase } : {}), delivery: 'platform' });
       const up = async () => { for (const key of [...keys].reverse()) await page.keyboard.up(key); };
       const release = async () => { await up(); heldKeys.delete(opts.key); await frame(); return reply('up'); };
@@ -345,9 +346,11 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
       } catch (error) { if (opts.phase === 'down') error.release = release; throw error; }
       return { ...reply(opts.phase), ...(opts.phase === 'down' ? { release } : {}) };
     };
+    let mouseAt = null;
+    const moveMouse = async (x, y) => { await page.mouse.move(x, y); mouseAt = [x, y]; };
     const pointer = playwrightPointer({
       name,
-      move: (x, y) => page.mouse.move(x, y),
+      move: moveMouse,
       down: () => page.mouse.down(),
       up: () => page.mouse.up(),
       wait: (ms) => page.waitForTimeout(ms),
@@ -358,6 +361,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
       /** A fresh document on this page: its origin's storage emptied, or `keep`ing it (a test's `reload`, mail F19). */
       async reset({ keep = false, failFetch, epoch } = {}) {
         await pointer.release();
+        mouseAt = null;
         for (const keys of heldKeys.values()) for (const key of [...keys].reverse()) await page.keyboard.up(key).catch(() => {});
         heldKeys.clear();
         await page.evaluate(async (keep) => { sessionStorage.clear(); if (keep) return; localStorage.clear(); await Promise.all((await indexedDB.databases?.() ?? []).map(x => x.name && new Promise(ok => { const r = indexedDB.deleteDatabase(x.name); r.onsuccess = r.onerror = r.onblocked = ok; }))); }, keep);
@@ -395,17 +399,19 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         // @ref LLP 1098 D10 — the handler the browser would call, through the media glue's `act`, as the
         // Chrome carrier delivers it: no box is needed (an `audio` without controls has none).
         if (kind === 'mediasession') { const r = await page.evaluate(([id, action, seconds]) => globalThis.exact?.mediaSession?.act(id, action, seconds) ?? { error: 'mediasession: this page publishes no media session (no media glue)' }, [id, opts.mediaSession, opts.seconds ?? null]); MalformedOperation.reply(r); if (r.error) throw new Error(r.error); await frame(); return r; }
+        if (kind === 'key' && (opts.phase != null || await page.evaluate(id => globalThis.exact.gpu?.wantsInput(id) || globalThis.exact.views.get(id)?.matches('button, a[href], [role="button"], [role="link"]') || false, id))) return browserKey(id, opts, true);
         const box = id == null ? null : (await ask({ op: 'layout' })).nodes.find(n => n.id === id);
         if (id != null && (!box || (box.w === 0 && box.h === 0))) throw new Error(`view ${id} has no box on screen`);
-        const point = ['contextmenu', 'press', 'clicks'].includes(kind) ? opts.at : null;
-        let x = box ? box.x + (point?.[0] ?? box.w / 2) : undefined, y = box ? box.y + (point?.[1] ?? box.h / 2) : undefined;
+        const point = ['contextmenu', 'press', 'clicks', 'wheel'].includes(kind) ? opts.at : null;
+        const line = box && !point && (['press', 'contextmenu', 'dblclick', 'auxclick', 'clicks', 'hover'].includes(kind) || kind === 'wheel' && opts.hover)
+          ? await page.evaluate(pagePoint, { id }) : null;
+        let x = line ? line[0] : box ? box.x + (point?.[0] ?? box.w / 2) : undefined, y = line ? line[1] : box ? box.y + (point?.[1] ?? box.h / 2) : undefined;
         if (kind === 'press' || kind === 'key' || kind === 'type') {
           const request = kind === 'press' ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y }
             : { op: 'type', id, selector: opts.selector, ...(kind === 'key' ? { key: opts.key } : { text: opts.text }) };
           const guest = await ask(request);
           if (guest.guest === true || guest.handled === true) { if (guest.error) throw new Error(guest.error); await frame(); return { ...guest, at: [x, y] }; }
         }
-        if (kind === 'key' && (opts.phase != null || await page.evaluate(id => globalThis.exact.gpu?.wantsInput(id) || globalThis.exact.views.get(id)?.matches('button, a[href], [role="button"], [role="link"]') || false, id))) return browserKey(id, opts, true);
         if (id != null && ['press', 'contextmenu', 'dblclick'].includes(kind)) {
           let why = await page.evaluate(({ id, x, y }) => { const view = globalThis.exact.views.get(id), el = globalThis.exact.backButton?.(view) ?? view, hit = (el?.getRootNode() ?? document).elementFromPoint(x, y); return !el ? null : !hit ? 'outside' : el === hit || el.contains(hit) || hit.contains(el) ? null : `${hit.dataset?.view ? `node #${hit.dataset.view}` : hit.tagName.toLowerCase()} covers its middle`; }, { id, x, y });
           if (why === 'outside') why = await page.evaluate(pageOutside, { id });
@@ -418,7 +424,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
           if (aim?.error) throw new Error(aim.error);
           if (aim?.at) { [x, y] = aim.at; avoided = aim.avoided; }
         }
-        let deliveredAt = [x, y];
+        let hovered;
         if (['down', 'move', 'hold', 'up', 'cancel'].includes(kind)) {
           const reply = await pointer(kind, { ...opts, id }, { x, y });
           if (kind !== 'hold') await frame();
@@ -451,9 +457,19 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
           // A point outside the viewport reaches no element in either engine (no wheel event); Chrome's
           // compositor still scrolls the page by it, Firefox's nothing: the page is scrolled as Chrome's is.
           const outside = name === 'firefox' && await page.evaluate(([x, y]) => x < 0 || y < 0 || x >= innerWidth || y >= innerHeight, [x, y]);
-          if (outside) await page.evaluate(([dx, dy]) => { removeEventListener('wheel', globalThis.__exactAgentTakeWheel); scrollBy(dx, dy); }, opts.wheel);
-          else await withHeldKeys(page.keyboard, opts.modifiers, async () => { await page.mouse.move(x, y); await page.mouse.wheel(opts.wheel[0], opts.wheel[1]); });
-          deliveredAt = [x, y];
+          if (outside) {
+            // A requested hover still moves the pointer there first, as Chrome's carrier does, leaving what it was over.
+            if (opts.hover) { await moveMouse(x, y); hovered = [x, y]; await frame(); }
+            await page.evaluate(([dx, dy]) => { removeEventListener('wheel', globalThis.__exactAgentTakeWheel); scrollBy(dx, dy); }, opts.wheel);
+          }
+          else await withHeldKeys(page.keyboard, opts.modifiers, async () => {
+            // Keep the delivery point when hovering changes the target's box.
+            if (opts.hover || mouseAt?.[0] !== x || mouseAt?.[1] !== y) {
+              await moveMouse(x, y); hovered = [x, y];
+              if (opts.hover) await frame();
+            }
+            await page.mouse.wheel(opts.wheel[0], opts.wheel[1]);
+          });
           let same = 0, previous = '';
           for (let i = 0; i < 30 && same < 2; i++) {
             await page.evaluate(() => new Promise(requestAnimationFrame));
@@ -461,7 +477,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
             same = current === previous ? same + 1 : 0; previous = current;
           }
         }
-        else if (kind === 'hover') await page.mouse.move(x, y);
+        else if (kind === 'hover') await moveMouse(x, y);
         else if (kind === 'contextmenu') await page.mouse.click(x, y, { button: 'right' });
         else if (kind === 'dblclick') await page.mouse.dblclick(x, y);
         // `clicks <n> at x y`, the mouse form a part's tap uses (agent-inspect.mjs `partTap`), as Chrome's carrier has it.
@@ -488,14 +504,23 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
           });
         }
         else if (kind === 'pinch') throw new Error(`${name} pinch unsupported: Playwright cannot produce trusted phased touches; synthetic dispatchEvent input is not equal input`);
+        if (['contextmenu', 'dblclick', 'clicks', 'press'].includes(kind)) mouseAt = [x, y];
         await frame();
-        return { at: kind === 'wheel' ? deliveredAt : [x, y], ...(avoided ? { avoided } : {}) };
+        return { at: [x, y], ...(hovered ? { hovered } : {}), ...(avoided ? { avoided } : {}) };
       },
       async screenshot(path, window = false, film = false) {
-        if (!film) await ask({ op: 'picture' }); // a transition under way is shown where it ends, unless filmed (LLP 1116.003 D8)
+        // A picture holds transitions at their end; a film follows the clock (LLP 1116.003 D8).
+        // The wasm target has no `picture`.
+        const readPicture = () => ask({ op: film ? 'tags' : 'picture' })
+          .then(r => r.error === 'unknown op: picture' && !film ? ask({ op: 'tags' }) : r);
+        const tags = await readPicture();
+        if (tags.error) throw new Error(tags.error);
         await frame();
         const pending = await page.evaluate(async () => { const on = i => { const b = i.getBoundingClientRect(); return b.bottom > 0 && b.right > 0 && b.top < innerHeight && b.left < innerWidth; }; const left = () => [...document.images].filter(i => !i.complete && on(i)); const end = performance.now() + 3000; while (left().length && performance.now() < end) await new Promise(r => setTimeout(r, 25)); await globalThis.exact.imageFrames?.(); return left().length; });
-        await frame(); await page.screenshot({ path, type: 'png' });
+        await frame();
+        const settled = await readPicture();
+        if (settled.error) throw new Error(settled.error);
+        await page.screenshot({ path, type: 'png' });
         const viewport = page.viewportSize();
         return { screenshot: path, w: viewport.width, h: viewport.height, ...(pending ? { imagesPending: pending } : {}) };
       },

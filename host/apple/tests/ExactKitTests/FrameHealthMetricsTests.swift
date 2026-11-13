@@ -165,6 +165,123 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual(health.pendingFrames(at: 2).pending, 0, "nothing is left waiting")
     }
 
+    func testRecordingDefersLeaseCleanupAndReaderPublication() {
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        _ = health.setAgentCapture("start")
+        let now = CACurrentMediaTime()
+        health.agentCaptureUntil = now - 1
+        let capture = health.captureID
+        var publications = 0
+        health.changed = { publications += 1 }
+        health.record(arrival: now, target: now + 0.008, period: 0.008, finished: now + 0.001)
+        XCTAssertEqual(health.captureID, capture, "the hook leaves observer teardown to the frame pass")
+        XCTAssertNotEqual(health.agentCaptureUntil, 0)
+        waitForMainQueue()
+        XCTAssertEqual(publications, 0, "the hook cannot schedule publication work")
+        XCTAssertTrue(health.publicationDirty)
+        health.expireCapture(at: now + 0.001)
+        health.maintain(at: now + 0.001)
+        XCTAssertEqual(health.captureID, 0, "the frame pass expires the lease without a timer")
+        XCTAssertEqual(health.agentCaptureUntil, 0)
+        waitFor("the frame pass's publication") { publications == 1 }
+        XCTAssertFalse(health.publicationDirty)
+        health.maintain(at: now + 1)
+        waitForMainQueue()
+        XCTAssertEqual(publications, 1, "an idle pass publishes nothing")
+
+        health.changed = nil
+        _ = health.setAgentCapture("start")
+        health.agentCaptureUntil = now - 1
+        health.expireCapture(at: now + 2)
+        health.record(arrival: now + 2, target: now + 2.008, period: 0.008, finished: now + 2.001)
+        health.maintain(at: now + 2.001)
+        XCTAssertEqual(health.captureID, 0, "lease cleanup needs no reader")
+    }
+
+    func testTheFinalLandingDefersPublicationPastTheHook() {
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        var publications = 0
+        var worked: UInt64 = 0
+        health.changed = { publications += 1; worked = health.snapshot().worked }
+        let now = CACurrentMediaTime()
+        health.sending(FrameHealth.tick, start: now, deadline: now + 0.008)
+        health.record(arrival: now, target: now + 0.008, period: 0.008, finished: now + 0.001, sent: FrameHealth.tick)
+        health.maintain(at: now + 0.001)
+        waitFor("the initial frame publication") { publications == 1 }
+        health.stop()
+        waitFor("the source's stop publication") { publications == 2 }
+        health.landed(FrameHealth.tick, at: now + 0.02)
+        waitForMainQueue()
+        XCTAssertEqual(publications, 2, "the final landing leaves scheduling to the landing pass")
+        XCTAssertTrue(health.publicationDirty)
+        health.maintain(at: now + 0.02)
+        waitFor("the final landing's publication past the throttle") { publications == 3 }
+        XCTAssertEqual(worked, 1)
+        XCTAssertFalse(health.publicationDirty)
+    }
+
+    func testASessionPassKeepsAnEarlierNativeCallbackWithinItsLease() {
+        let owner = FrameHealth(enabled: true)
+        let native = FrameHealth(enabled: true, source: "native-scroll-ui-update")
+        owner.nativeHealth = native
+        defer { owner.destroy() }
+        _ = owner.setAgentCapture("start")
+        let began = CACurrentMediaTime()
+        owner.agentCaptureUntil = began + 0.004
+        native.agentCaptureUntil = began + 0.004
+        let capture = native.captureID
+
+        // The native update starts before the display-link pass and commits after it.
+        owner.expireCapture(at: began + 0.005)
+        XCTAssertEqual(owner.captureID, 0)
+        XCTAssertEqual(native.captureID, capture, "the session cannot expire an unfinished native callback")
+        native.expireCapture(at: began)
+        native.record(arrival: began, target: began + 0.008, period: 0, finished: began + 0.01)
+        XCTAssertEqual(native.historyStatus().callbacks, 1)
+        XCTAssertEqual(native.historyStatus().retained, 1, "the in-lease callback keeps its late-work evidence")
+
+        native.expireCapture(at: began + 0.016)
+        native.record(arrival: began + 0.016, target: began + 0.024, period: 0, finished: began + 0.025)
+        XCTAssertEqual(native.captureID, 0, "the next native pass expires its own lease without a timer")
+        XCTAssertEqual(native.historyStatus().callbacks, 1)
+        XCTAssertEqual(native.historyStatus().retained, 1)
+    }
+
+    func testFramePassesCoalesceReadersAndServiceTheNativeSourcesLease() {
+        let owner = FrameHealth(enabled: true), peer = FrameHealth(enabled: true)
+        let native = FrameHealth(enabled: true, source: "native-scroll-ui-update")
+        owner.nativeHealth = native
+        native.publicationOwner = owner
+        defer { owner.destroy(); peer.destroy() }
+        var ownerReads = 0, peerReads = 0
+        owner.changed = { ownerReads += 1 }
+        peer.changed = { peerReads += 1 }
+        _ = owner.setAgentCapture("start")
+        let now = CACurrentMediaTime()
+        owner.agentCaptureUntil = now - 1
+        native.agentCaptureUntil = now - 1
+        owner.expireCapture(at: now)
+        native.expireCapture(at: now)
+        native.record(arrival: now, target: now + 0.008, period: 0, finished: now + 0.001)
+        peer.record(arrival: now, target: now + 0.008, period: 0.008, finished: now + 0.001)
+        native.maintain(at: now + 0.001)
+        XCTAssertEqual(owner.captureID, 0)
+        XCTAssertEqual(native.captureID, 0)
+        XCTAssertEqual(native.historyStatus().callbacks, 0, "the pass expires detail capture before recording")
+        waitFor("both readers in one publication") { ownerReads == 1 && peerReads == 1 }
+
+        native.record(arrival: now + 0.01, target: now + 0.018, period: 0, finished: now + 0.011)
+        peer.record(arrival: now + 0.01, target: now + 0.018, period: 0.008, finished: now + 0.011)
+        native.maintain(at: now + 0.011)
+        peer.maintain(at: now + 0.011)
+        waitForMainQueue()
+        XCTAssertEqual([ownerReads, peerReads], [1, 1], "ordinary updates share the half-second throttle")
+        peer.maintain(at: now + 0.6)
+        waitFor("the next publication interval") { ownerReads == 2 && peerReads == 2 }
+    }
+
     func testTheChartsTakeEachFrameAsAMovingAverageAndExactFrameTimes() {
         let chart = FrameHealthChart(in: CALayer())
         chart.start()

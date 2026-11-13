@@ -1173,6 +1173,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   left button. iOS refuses `mouse`; macOS and Linux drag with the mouse anyway
   ([authored tests](contract-grammar.md#authored-tests)). (Stocks diary: the chart
   readout unmounted, about 10 minutes, 2026-10-04.)
+  A finger on a box with its own pointer handlers also needs
+  `touch-action="none"` when that box should own the drag: otherwise the browser
+  may scroll and send `pointercancel`, ending its moves. The web drag reply names
+  observed cancellation and scrolling, with the named node’s `touch-action` and
+  the effective intersection through its ancestors at contact start. Changing
+  `touch-action` during a contact does not change the browser's decision for it.
+  `drag … mouse` exercises the mouse path.
 
 - **A `pan` hears nothing from a finger on the web.** A drag with
   `tap <id> drag dx dy` (or a real touch) moves nothing and logs nothing. Cause:

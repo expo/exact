@@ -29,8 +29,7 @@ the whole app and server to copy from.
    const { handle, ...posted } = credential;          // post `posted`, never the handle
    ```
 
-   Google's `configURL` is `https://accounts.google.com/gsi/fedcm.json`;
-   on Apple it also takes `apple: { clientId: <iOS client> }`. Show
+   Google's `configURL` is `https://accounts.google.com/gsi/fedcm.json`. Show
    nothing for `NetworkError`, `NotAllowedError` or `AbortError`.
 
 4. **Verify on the server:** the signature against the provider's keys,
@@ -52,6 +51,8 @@ audience and nonce; `packages/sign-in/test/idp.mjs` signs what a provider
 would, and `tap @t cancel` dismisses it.
 
 Apple-only native requests are implemented; Google on Apple and combined
-Apple/passkey requests are not. The `auth.apple` grant derives the signing
+Apple/passkey requests are not; their capabilities read false. For Google
+on Apple, use [`@exact/oauth`](oauth.md) through the system browser.
+The `auth.apple` grant derives the signing
 entitlement when the profile allows it. See [native sign-in](../contract-for-agents.md#native-sign-in-exactsign-in)
 for signing, nonce handling, result fields and current limits.

@@ -23,6 +23,9 @@ minSdk the app's manifest's `host.android.minimumOS` gives: 31 (Android 12) with
 and 11", below). targetSdk 36, compileSdk 37.2, AGP 9.4.1, Kotlin 2.4.10, `arm64-v8a` only. Views, with no Compose,
 AppCompat or Material library.
 
+An `iframe` with `sandbox`, including `sandbox=""`, is refused before a WebView is created or navigated. The log
+names `iframe <id>: sandbox is unsupported on Android`. Adding `sandbox` destroys the frame's existing WebView.
+
 ## Where it came from
 
 The benchmark lane wrote it outside this repository. These are the files of
@@ -174,8 +177,11 @@ reading each, in each of four sessions, never more than 1 MB apart.
 
 `x_log_journal=1` at launch (exact2's `EXACT_LOG_JOURNAL`, `host/painted/src/canvas/journal.rs`) writes the app's
 journal to logcat as the host comes to hold each line, with the milliseconds since boot began: that is how the times
-above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Without it nothing is read or
-written.
+above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Like every launch extra, only a
+development build reads it.
+
+A development build always writes the data module's `console` lines to logcat under the tag `exact-app` (`adb logcat
+-s exact-app`); a release build does not.
 
 The published v5 Hermes bundle has ICU Unicode support but no `Intl` (LLP 1107 §4.1).
 An Intl-enabled bundle with receipt-bound English ICU data enables Ibex's
@@ -526,10 +532,17 @@ capability has a call of its own.
 | 13 | the session's orientation lock (LLP 1133.029 D6) | 0 for none; or 1, the orientations its types allow as bits (portrait-primary 1, portrait-secondary 2, landscape-primary 4, landscape-secondary 8), whether a holder says `natural`, whether one says `current`, a count, and for each holder its node and its word as a string | sets the activity's `requestedOrientation` (`Orientation.told`): the manifest's mapping for the set, `locked` for `current`, the manifest's value for none; on a display 600 dp wide or wider only `current` | none by id: `Native.orientationApplied` reports what was asked, for `state.orientationlock.applied` |
 | 14 | whether a canvas receives pad input (LLP 1133.022 D4) | one word: 1 or 0 | observes controller buttons and joystick motion, consuming them only while 1; Android's fallback keys always pass through for navigation | none |
 | 15 | a GPU surface's haptic message (LLP 1009 D10) | the canvas's view id (a surface id is its module's, and two modules count from 1), then a string: the message's JSON as `exact_gpu::haptics` writes it (a texture's `intensity` and `sharpness`, its stop, or a pattern); exact2 sends a stop when the surface goes | `SurfaceHaptics`, on the vibrator ("Haptics", below); nothing while the activity is paused | none |
+| 16 | Contract sound operations | a JSON string: asset `files`, `reset`, monotonic `submitted` seconds and `ops` (play 1, end 2, change 4), each with a voice id and `at` in monotonic seconds; play has a sound index, gain, rate and pan, change has optional gain, rate and pan and a ramp in seconds | `SoundOutput` opens `libexact_sound.so` at the first play; AAudio runs the shared mixer against its speaker timestamp; the existing focus owner applies `audio_session` | none; under the driver, `state.sounds.output` remains `"agent"` |
 
 Kinds 5, 6, 7, 8, 13 and 14 are statements of the app's state, told when it changes and anew to a reader made again; exact2
 reads them as the queue is taken (`Presenter::tell_shell`), Back, the wake lock and the orientation lock only after a
 commit or (Back) when a surface opens or closes, and none of them during a scroll's own frames.
+
+For sound diagnostics in a debuggable APK, capture `adb logcat -v monotonic -s exact:D AAudio:D AudioTrack:D`
+alongside emulator PCM and `dumpsys audio` / `dumpsys media.audio_flinger`. The `sound` lines give foreground
+and focus changes, stream opens and closes, submitted cue times and the discard cutoff. While open, once per
+second they give pending and native queued operations, live voices, drops, late starts, timestamp availability,
+latency and underruns. These diagnostics are disabled in non-debuggable apps.
 
 **Haptics.** Android names occasions, not strengths. Under its constants are a texture tick, a tick, a click, a
 heavy click and a double click, and Exact's names choose by those: `selection` is `SEGMENT_TICK` (Android 14;
@@ -642,6 +655,12 @@ while the activity shows but is paused, as it is when a permission dialog's answ
 start waits for the resume; the app stopping first ends it. `failed` names why nothing started: `InvalidStateError`
 (no activity showing), `AbortError` (the app stopped first), `NotFoundError` (no app handles the intent),
 `NotAllowedError` (a `SecurityException`) or `UnknownError`. Without `failed`, such a start answers `RESULT_CANCELED`.
+It returns a function that withdraws a start still waiting for the resume, answering neither, which a call let go
+(`cancel(request)`) uses so that no sheet opens for it.
+`visible` says whether the activity shows, resumed or paused under a dialog: Android lets such an app start an
+activity, as Credential Manager starts its sheet. `whenResumed(failed, go)` runs `go` with the activity once it is
+resumed, waiting as a start does, for a prompt the platform keeps only over the app's own top activity
+(`BiometricPrompt`); `failed` has `InvalidStateError` or `AbortError`, and the function it returns withdraws the wait.
 `invoke(handle, handler, args, reply)` runs an app handler on the host's owner thread and delivers its answer on the
 main thread. The activity binds the roster's names as it
 is made (`Native.bindExtensions`). Outside the agent the host binds them as in production; under it, those a drive
@@ -1145,6 +1164,7 @@ that opens a search view, or a search action in the bar; neither is built.
 | Symbol and label | a 24 dp symbol 16 dp from the top, its label under it (label-medium, 12/16 sp), 16 dp from the bottom | the same |
 | Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol | the same |
 | Colours | the selected destination's symbol `onSecondaryContainer` and its label `secondary`; the others `onSurfaceVariant`, at 38 % when disabled | the same (`NavigationBarItemDefaults.colors`) |
+| Badge | a tab's badge box (LLP 1075.003 §9.9): its text, label-small in `onError` on an `error` pill at least 16 dp square, 4 dp either side of the text, its start 12 dp before the symbol's end and 14 dp into it; not run on a device | `Badge` with content in a `BadgedBox` (`BadgeTokens`, `Badge.kt`, read at the pinned version) |
 
 "Here" in both tables is what was seen on a Pixel 10 Pro XL (Android 16, 2.4375 pixels a dp), from `state.bars`
 and its screenshots: the top bar's view is 317 pixels tall (a 66.05 dp status bar and 64 dp), the navigation bar's

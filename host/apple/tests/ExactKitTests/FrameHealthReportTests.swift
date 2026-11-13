@@ -4,6 +4,8 @@ import XCTest
 import CExact
 #if os(macOS)
 import AppKit
+#else
+import UIKit
 #endif
 @testable import ExactCore
 @testable import ExactKit
@@ -170,6 +172,54 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(event.work.began_us, event.work.landed_us)
         XCTAssertEqual(event.work.finished_us, 0)
         XCTAssertGreaterThan(event.work.finished_us, event.work.target_us)
+    }
+
+    func testAnExpiredLeaseDoesNotReachAFramesOwnerWork() throws {
+        let session = ExactApp.shared.makeSession(label: "expired-frame-capture")
+        defer { session.destroy() }
+        session.clock = nil
+        XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
+        let health = session.frameHealth
+        _ = health.setAgentCapture("start")
+        health.agentCaptureUntil = CACurrentMediaTime() - 1
+        var captures: [UInt64] = []
+        session.onApplyForTests = { _ in captures.append(health.captureID) }
+        session.onLandForTests = { _, batch in
+            if let timing = batch.frameWorkTiming { captures.append(timing.capture) }
+        }
+        #if os(macOS)
+        let link = session.presenter.viewport.displayLink(target: session.frames, selector: #selector(Frames.tick(_:)))
+        #else
+        let link = CADisplayLink(target: session.frames, selector: #selector(Frames.tick(_:)))
+        #endif
+        defer { link.invalidate() }
+        session.frames.motion = true
+        session.frames.tick(link)
+        session.drainFill()
+        session.frames.motion = false
+        session.frames.run(false)
+        XCTAssertFalse(captures.isEmpty, "the frame did owner work")
+        XCTAssertTrue(captures.allSatisfy { $0 == 0 }, "the lease expires before the frame sends or applies owner work: \(captures)")
+        XCTAssertEqual(health.captureID, 0)
+        XCTAssertEqual(health.agentCaptureUntil, 0)
+    }
+
+    func testAnApplyAfterTheLeaseDeadlineAddsNoCaptureEvidence() throws {
+        let session = ExactApp.shared.makeSession(label: "expired-apply-capture")
+        defer { session.destroy() }
+        session.clock = nil
+        XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
+        let health = session.frameHealth
+        _ = health.setAgentCapture("start")
+        let now = CACurrentMediaTime()
+        health.agentCaptureUntil = now - 1
+        var batch = wireBatch([])
+        batch.frameWorkTiming = FrameWorkTiming(capture: health.captureID, frame: (now - 0.01 - ExactEnv.t0) * 1000,
+            queued: now - 0.02, began: now - 0.019, finished: now - 0.018, landed: now - 0.001)
+        session.apply(batch)
+        XCTAssertEqual(health.historyStatus().apply_deadlines, 0, "an expired capture retains no post-deadline apply")
+        XCTAssertEqual(health.historyStatus().retained, 0)
+        XCTAssertEqual(health.captureID, 0)
     }
 
     func testFrameCaptureAgentRequestDoesNotEnableTheLegacySampler() throws {

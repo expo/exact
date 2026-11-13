@@ -304,10 +304,13 @@ pub fn tag(name: &str) -> Option<Tag> {
         },
         // @ref LLP 1069.001 D1, D2 — HTML's `select`: the platform's pop-up
         // control, its options its children. ARIA's role for a one-line
-        // select is `combobox`.
+        // select is `combobox`. @ref LLP 1115.000 D10.4 — no wider than what
+        // holds it: the web sizes a select to its longest option, which can
+        // outgrow a phone, where a pop-up button never runs past its
+        // container. Implied, so an authored `max-width` replaces it.
         "select" => Tag {
             node_type: NodeType::Control,
-            fixed_styles: &[],
+            fixed_styles: crate::controls::CONTAINED,
             fixed_props: &[
                 (PropId::Type, "select"),
                 (PropId::AccessibilityRole, "combobox"),

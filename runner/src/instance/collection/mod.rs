@@ -123,13 +123,6 @@ pub fn set_bootstrap_extent(px: f64) {
     }
 }
 
-/// Candidates from one accepted geometry report. The second edge may run only
-/// after a pure no-op first action. State changes defer it until settlement.
-pub(crate) struct CollectionEdges {
-    pub first: EventKind,
-    pub end_after_noop: bool,
-}
-
 #[derive(Debug)]
 struct Mounted {
     position: usize,
@@ -157,6 +150,7 @@ pub(crate) struct Collection {
     /// later, on a report, is in.
     pub(crate) around: super::theme::Around,
     preview: Option<reorder::Preview>,
+    pending_drops: Vec<reorder::PendingDrop>,
     /// The gap a grouped session opens here as its target (LLP 1094 D4).
     incoming: Option<reorder_group::Incoming>,
     /// The dragged row's identity while a ghost stands for it (D6).
@@ -229,6 +223,8 @@ pub(crate) struct Collection {
     /// The last report said the host animates a smooth correction
     /// ([`CollectionFill::animating`]).
     animating: bool,
+    /// The actual port, when reports plan a destination instead.
+    view_offset: Option<f64>,
     /// A request ended or began while the host animated, which stops the
     /// animation where the port is: until a report says where, nothing
     /// anchors and a request waits.
@@ -478,6 +474,7 @@ impl Collection {
                 ..u.theme.clone()
             },
             preview: None,
+            pending_drops: Vec::new(),
             incoming: None,
             hidden: None,
             instant: false,
@@ -547,6 +544,7 @@ impl Collection {
             target: None,
             scrolling: false,
             animating: false,
+            view_offset: None,
             port_unknown: false,
             request: 0,
             into_view_status: None,
@@ -597,7 +595,11 @@ impl Collection {
         }
         self.instant = instant;
         let anchor = if changed { self.anchor()? } else { None };
-        let drop_anchor = if changed { self.drop_anchor()? } else { None };
+        let drop_anchor = if changed {
+            self.drop_anchor(u.env.now_ms)?
+        } else {
+            None
+        };
         // Items that changed in place: the same keys in the same order, and
         // no input of the rows' bodies or keys changed (a live tick's prices).
         let mut in_place: Option<Vec<usize>> = None;
@@ -1313,6 +1315,7 @@ impl Collection {
         }
         let waited = self.request_waits();
         self.animating = fill.animating;
+        self.view_offset = fill.view_offset;
         // A report gives where the port is, unless the host animates.
         self.port_unknown &= fill.animating;
         // @ref LLP 1010 §6.9 — the padding the host laid out, taken in now

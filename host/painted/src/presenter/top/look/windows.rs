@@ -262,6 +262,7 @@ pub(super) fn alert(
         windows: Some(content),
         menu: None,
         symbols: exact_kernel::SymbolSet::Fluent,
+        symbol_weight: 400,
     }
 }
 
@@ -354,6 +355,7 @@ mod tests {
         let engine = TextEngine::shared();
         for dark in [false, true] {
             let inputs = Inputs {
+                bold_text: false,
                 contrast: None,
                 dark,
                 font_scale: 1.,
@@ -428,6 +430,7 @@ mod tests {
             for font_scale in [1., 1.5, 2.] {
                 for width in [240., 400., 1100.] {
                     let inputs = Inputs {
+                        bold_text: false,
                         contrast: None,
                         dark,
                         font_scale,
@@ -484,6 +487,7 @@ mod tests {
         };
         for dark in [false, true] {
             let inputs = Inputs {
+                bold_text: false,
                 contrast: Some(palette),
                 dark,
                 font_scale: 1.,
@@ -533,6 +537,7 @@ mod tests {
     fn windows_alerts_size_to_content_and_put_one_button_at_the_trailing_edge() {
         let engine = TextEngine::shared();
         let inputs = Inputs {
+            bold_text: false,
             contrast: None,
             dark: false,
             font_scale: 1.,

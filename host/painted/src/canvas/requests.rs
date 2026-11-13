@@ -19,6 +19,23 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// the journal is written out when asked for (`canvas/journal.rs`).
     pub fn requests(&mut self) -> Option<Vec<i32>> {
         self.echo_journal();
+        if self.p.host.sound.ready() {
+            let files = self
+                .p
+                .host
+                .runner()
+                .plan()
+                .sounds
+                .iter()
+                .map(|s| self.p.host.runner().plan().str(s.src).to_owned())
+                .collect();
+            let body = self
+                .p
+                .host
+                .sound
+                .batch(files, self.origin_ns, super::monotonic_ns());
+            self.p.request(crate::presenter::Request::Sound(body));
+        }
         crate::canvas::jni::jni_extensions::stamp(self.p.host().runner().now_ms());
         self.p.surfaces.publish_names();
         if let Some(names) = crate::canvas::jni::jni_extensions::take_bound() {

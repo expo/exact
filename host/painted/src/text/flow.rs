@@ -78,7 +78,7 @@ impl FlowSource {
         drop(catalog);
         let mut ink = Lines::default();
         for line in layout.lines() {
-            super::lines::extract(&line, layout.styles(), 0.0, &mut ink);
+            super::lines::extract(&line, layout.styles(), 0.0, (&[], &[]), &mut ink);
         }
         // Source-backed symbols receive their ranges when placed in the flow.
         // Truncation tokens keep an empty range.
@@ -194,12 +194,27 @@ impl FlowSource {
             clusters.sort_by_key(|c| c.range.start);
         }
 
+        // The room before a run's first cluster (`Run::edges`): its glyphs
+        // are drawn past it, and it is the cluster's width.
+        let leads: Vec<(usize, f32)> = source
+            .spec
+            .runs
+            .iter()
+            .zip(std::iter::once(0).chain(run_ends.iter().copied()))
+            .filter(|(r, _)| r.edges.start != 0.0 && r.inline.is_none())
+            .map(|(r, at)| (at, r.edges.start))
+            .collect();
         let mut prefix = Vec::with_capacity(clusters.len() + 1);
         prefix.push(0.0_f64);
         for c in &mut clusters {
             let left = c.glyphs.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
+            let lead = leads
+                .iter()
+                .find(|l| l.0 == c.range.start)
+                .map_or(0.0, |l| l.1);
+            c.width += lead;
             for g in &mut c.glyphs {
-                g.x -= left;
+                g.x -= left - lead;
             }
             prefix.push(prefix.last().unwrap() + c.width as f64);
         }

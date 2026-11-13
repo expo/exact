@@ -30,18 +30,21 @@ class PadsTest {
             reports += Report(index, connected, values.toList())
             times += at
         }
-        @Implementation fun hidden(hidden: Boolean) {}
+        @Implementation fun hidden(hidden: Boolean) { hiddens += hidden }
         @Implementation fun drainStore(ms: Long) = true
         data class Report(val index: Int, val connected: Boolean, val values: List<Float>)
         companion object {
             val reports = ArrayList<Report>()
             val times = ArrayList<Long>()
+            /** The page's visibility as each activity's start and stop told the host. */
+            val hiddens = ArrayList<Boolean>()
         }
     }
 
     @Before fun connect() {
         Host.reports.clear()
         Host.times.clear()
+        Host.hiddens.clear()
         val context = RuntimeEnvironment.getApplication()
         val manager = context.getSystemService(Context.INPUT_SERVICE) as InputManager
         val device = ShadowInputDevice.makeInputDeviceNamed("Controller")
@@ -215,7 +218,7 @@ class PadsTest {
         assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
     }
 
-    @Test fun aReplacedActivityCannotReleaseTheActiveReadersPads() {
+    @Test fun aReplacedActivitysStopLeavesTheActiveReadersPadsAndPage() {
         val replaced = activity()
         val reader = activity()
         Exact.reader = WeakReference(reader)
@@ -226,7 +229,10 @@ class PadsTest {
         ReflectionHelpers.callInstanceMethod<Unit>(replaced, "onStop")
         assertEquals(count, Host.reports.size)
         assertEquals(held, Pads.values(0)!!.toList())
+        assertEquals("the replaced activity's stop leaves its successor's page shown", emptyList<Boolean>(), Host.hiddens)
         reader.onWindowFocusChanged(false)
         assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
+        ReflectionHelpers.callInstanceMethod<Unit>(reader, "onStop")
+        assertEquals("the reader's own stop hides the page once", listOf(true), Host.hiddens)
     }
 }

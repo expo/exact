@@ -15,11 +15,9 @@ fn a_native_buttons_cleared_display_matches_the_wasm_face() {
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
     let start = js.find("v=>v===\"none\"?\"none\":\"grid\"").unwrap();
     let arguments = js[start..].split("));").next().unwrap();
-    let mapped = include_str!("../../rt.js")
-        .lines()
-        .find_map(|line| line.strip_prefix("export const mapped = "))
-        .unwrap()
-        .trim_end_matches(';');
+    let tree = include_str!("../../tree.js");
+    let at = tree.find("export const mapped = ").unwrap() + "export const mapped = ".len();
+    let mapped = &tree[at..at + tree[at..].find(";\n").unwrap()];
     let actual = run(
         &format!("v=>({mapped})(v,{arguments})"),
         &["", " \t", "flex", "none"],

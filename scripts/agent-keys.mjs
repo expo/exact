@@ -213,6 +213,15 @@ export function heldForClick(call, kind, opts, act) {
   return clicks ? withChordModifiers(call, String(opts.modifiers).split('+').filter(Boolean), act) : act();
 }
 
+/** An explicit hover and its wheel share one viewport point even if hover changes the layout. */
+export async function cdpWheel(call, frame, { x, y, modifiers, wheel, hover }) {
+  if (hover) {
+    await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, modifiers });
+    await frame();
+  }
+  await call('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: wheel[0], deltaY: wheel[1], modifiers });
+}
+
 /** The chord a real paste sends: ⌘V on macOS, Ctrl+V elsewhere. */
 export function pasteChord() {
   return process.platform === 'darwin' ? 'Meta+v' : 'Control+v';
@@ -533,24 +542,23 @@ export function tapArguments(opts) {
   const button = ['mouse', 'contextmenu', 'auxclick', 'dblclick', 'clicks'].filter((k) => opts[k] !== undefined && opts[k] !== false);
   if (button.length > 1) throw new MalformedOperation(`tap: one of mouse, dblclick, contextmenu, auxclick and clicks at a time, not ${button.join(' and ')}`);
   if (opts.clicks !== undefined && ![1, 2, 3].includes(opts.clicks)) throw new MalformedOperation('tap … clicks: 1, 2 or 3');
-  if (opts.at !== undefined && (opts.hover || opts.history !== undefined || opts.drop || opts.dragenter || opts.dragleave || opts.into)) throw new MalformedOperation('at is a point on a press, a click (mouse, dblclick, contextmenu, auxclick, clicks), a wheel, a contact, a pinch or a drag');
+  if (opts.at !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.drop || opts.dragenter || opts.dragleave || opts.into)) throw new MalformedOperation('at is a point on a press, a click (mouse, dblclick, contextmenu, auxclick, clicks), a wheel, a contact, a pinch or a drag');
   if (opts.at !== undefined && (!Array.isArray(opts.at) || opts.at.length !== 2 || !opts.at.every(Number.isFinite))) throw new MalformedOperation('tap at needs two finite numbers');
   const modifiers = opts.modifiers ?? opts.drag?.modifiers;
   if (modifiers !== undefined && !String(modifiers).split('+').filter(Boolean).every(k => ['Shift', 'Control', 'Alt', 'Meta'].includes(k))) throw new MalformedOperation(`tap … modifiers: ${modifiers} is not Shift, Control, Alt and Meta joined by +`);
-  if (modifiers !== undefined && (opts.hover || opts.history !== undefined || opts.into || opts.drop || opts.pinch !== undefined)) throw new MalformedOperation('modifiers are held through a press, a click, a wheel, a contact or a drag');
+  if (modifiers !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.into || opts.drop || opts.pinch !== undefined)) throw new MalformedOperation('modifiers are held through a press, a click, a wheel, a contact or a drag');
   return button;
 }
 
-/** What of a `tap` this carrier cannot deliver as a hand's (#107), or null. AppKit and Chrome carry every form;
- * elsewhere a middle click, a run of clicks, a wheel or a double click at a point, and modifiers held through a
- * button other than a plain press's or through a contact answer `unsupported`, never another input. */
+/** A `tap` form this carrier cannot deliver as a hand's (#107), or null.
+ * Unsupported forms are refused before any input reaches the platform. */
 export function pointerGap(host, browser, opts) {
   if (['macos', 'mac', 'host'].includes(host) || (host === 'web' && (browser ?? 'chrome') === 'chrome')) return null;
   const held = opts.modifiers ?? opts.drag?.modifiers;
   const gaps = [
     opts.auxclick && 'a middle-button click (auxclick)',
     opts.clicks !== undefined && host !== 'web' && `clicks ${opts.clicks}`, // the Playwright carrier clicks at a point (agent-playwright.mjs)
-    opts.wheel && opts.at !== undefined && 'a wheel at a point',
+    opts.wheel && opts.at !== undefined && host !== 'web' && 'a wheel at a point',
     opts.dblclick && opts.at !== undefined && !['ios', 'host-ios'].includes(host) && 'a double click at a point', // iOS: the double tap that selects a word there
     host === 'web' && opts.mouse && 'a mouse click', // the Playwright carrier has none
     held && (opts.contextmenu || opts.dblclick || opts.mouse || opts.down || opts.drag || opts.phase) && 'modifiers held through a context menu, a double click, a mouse click, a contact or a drag',

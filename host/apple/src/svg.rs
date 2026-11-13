@@ -220,6 +220,19 @@ impl SvgState {
         }
     }
 
+    /// A view renewed for another list item (LLP 1078): the presenter drops
+    /// its scene and its box's animations, so an `svg`'s scene is owed whole
+    /// and a box's animations are sent as a new view's are.
+    pub(crate) fn renewed(&mut self, id: ViewId) {
+        self.played.remove(&id);
+        self.box_sent.remove(&id);
+        self.box_size.remove(&id);
+        if let Some((scene, _)) = self.sent.get_mut(&id) {
+            scene.clear();
+            self.dirty.insert(id);
+        }
+    }
+
     /// Owes every scene sent again, as the presenter may not have it.
     pub(crate) fn resend(&mut self) {
         for (id, (scene, _)) in &mut self.sent {

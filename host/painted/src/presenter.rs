@@ -388,9 +388,14 @@ fn r2(x: f32) -> f64 {
     (x as f64 * 100.0).round() / 100.0
 }
 /// The app's `console` lines, on standard error in every build (LLP 1027.009
-/// D1): the sink of each runner the presenter shows.
+/// D1): the sink of each runner the presenter shows. Android's are its
+/// journal echo's to write (`canvas/journal.rs`): standard error there is
+/// logcat too, and would show each line a second time.
 fn console_line(_: exact_runner::Console, line: &str) {
+    #[cfg(not(target_os = "android"))]
     eprintln!("console: {line}");
+    #[cfg(target_os = "android")]
+    let _ = line;
 }
 impl<D: DataSource> Presenter<D> {
     /// Boot from entry zero or one selected generation. The selected asset

@@ -306,6 +306,7 @@ final class FrameHealthIOSTests: XCTestCase {
         for i in 0..<120 {
             let t = 10 + Double(i) / 120
             health.record(arrival: t, target: t + 1 / 120, period: 1 / 120, finished: t + 0.001)
+            health.maintain(at: t + 0.001)
             if i == 0 { drain(until: 1) }
             if i == 60 { drain(until: 2) }
         }
@@ -410,6 +411,7 @@ final class FrameHealthIOSTests: XCTestCase {
             let time = CACurrentMediaTime()
             health.record(arrival: time, target: time + 1 / 120, period: 1 / 120, finished: time + 0.001)
             scroll.record(arrival: time, target: time + 0.01, period: 0, finished: time + 0.001)
+            health.maintain(at: time + 0.001)
         }
         RunLoop.main.add(ticks, forMode: .tracking)
         defer { ticks.invalidate() }

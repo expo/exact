@@ -17,10 +17,10 @@
  * for any host), so in it only a path into one app or package counts; and a module that another unit imports is
  * loaded, not driven: its imports count, and of its names only those its top level reads. `GLOBAL` lists the files
  * every suite reads, and `suites` lists by hand the roots of the XCTests, touch smoke, Apple compiles and
- * conformance, from the scripts that run them. Code other than a test names a directory of tests to run the tests
- * there, and the suite that runs them has that directory among its roots, so in such code the name does not count; a
- * file there that it names (a fixture, a script) does. An XCTest suite selected by its own Swift files alone runs only
- * the classes they reach (`xctestClasses`).
+ * conformance and module drives, from the scripts that run them. Code other than a test names a directory of tests
+ * to run the tests there, and the suite that runs them has that directory among its roots, so in such code the name
+ * does not count; a file there that it names (a fixture, a script) does. An XCTest suite selected by its own Swift
+ * files alone runs only the classes they reach (`xctestClasses`).
  *
  * It reads the source, so a read that nothing names (a walk of the whole repository) escapes it; the async lane runs
  * every step in full at least daily (`scripts/async.mjs`), and `--audit` runs a suite with the units outside its
@@ -121,6 +121,7 @@ export function xctestClasses(root, host, because) {
  *   `compile`  the tvOS or watchOS build (`host`), installed on nothing
  *   `conform`  the web JS target against the wasm runner and the Linux host, for one app (`app`)
  *   `parity`   a gallery (`app`) painted by the Linux host against Chrome's picture of it, `smoke.mjs <smoke> --hosts linux`
+ *   `drive`    a standalone module drive (`file`, `args`), including its fixture build and browser launch
  */
 export function suites(repo) {
   const out = [];
@@ -160,6 +161,12 @@ export function suites(repo) {
     if (!dir) continue;
     out.push({ id: `parity:${smoke}`, kind: 'parity', smoke, app, roots: ['js:scripts/smoke.mjs', `js:scripts/${smoke}parity.mjs`, 'dir:scripts/fixtures', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-painted', 'pkg:contract'] });
   }
+  // Each drive builds an app outside the checkout; its generated CLI calls back into the SDK's build and agent.
+  const moduleWeb = ['platform:web', 'pkg:contract', 'pkg:exact-web-js', 'js:scripts/exact.mjs', 'js:scripts/agent.mjs'];
+  out.push({ id: 'drive:module-seams', kind: 'drive', file: 'contract/cli/tests/bell/seams.mjs', args: [],
+    roots: [...moduleWeb, 'js:contract/cli/tests/bell/seams.mjs', 'dir:contract/cli/tests/bell'] });
+  out.push({ id: 'drive:notifications-web', kind: 'drive', file: 'packages/notifications/test/drive.mjs', args: ['web'],
+    roots: [...moduleWeb, 'js:packages/notifications/test/drive.mjs', 'dir:packages/notifications'] });
   return out;
 }
 
@@ -815,6 +822,7 @@ export function commands(selected) {
     else if (s.kind === 'touch') out.push(['bun', 'scripts/smoke-touch.mjs', '--build']);
     else if (s.kind === 'compile') out.push(['bun', 'host/apple/build.mjs', `--${s.host}`, '--no-install']);
     else if (s.kind === 'parity') out.push(['sh', '-c', parityLeg(s.smoke)]);
+    else if (s.kind === 'drive') out.push(['bun', s.file, ...s.args]);
   }
   const conform = selected.filter(s => s.suite.kind === 'conform').map(s => s.suite.app);
   if (conform.length) out.push(['bun', 'host/web-js/conform.mjs', ...conform, '--synthetic', '--build', '--linux']);
@@ -945,7 +953,7 @@ if (import.meta.main) {
     process.exit(0);
   }
   const counts = kind => `${selected.filter(s => s.suite.kind === kind).length} of ${catalogue.filter(s => s.kind === kind).length}`;
-  console.log(`${changed.length} changed files select ${selected.length} of ${catalogue.length} suites: Cargo packages ${counts('cargo')}, Bun files ${counts('bun')}, app tests ${counts('app')}, Apple ${['xctest', 'touch', 'compile'].map(counts).join(' + ')}, conformance ${counts('conform')}, parity ${counts('parity')}`);
+  console.log(`${changed.length} changed files select ${selected.length} of ${catalogue.length} suites: Cargo packages ${counts('cargo')}, Bun files ${counts('bun')}, app tests ${counts('app')}, Apple ${['xctest', 'touch', 'compile'].map(counts).join(' + ')}, conformance ${counts('conform')}, parity ${counts('parity')}, module drives ${counts('drive')}`);
   const run = commands(selected);
   for (const c of run) console.log(`  ${c.map(quote).join(' ')}`);
   if (!argv.includes('--run')) process.exit(0);

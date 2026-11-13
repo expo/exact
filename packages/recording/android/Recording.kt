@@ -299,10 +299,12 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
             announce()
             val duration = recorded
             writer.post {
-                val unwritten = if (!context.agent) null else try {
+                val toned = if (!context.agent) null else try {
                     file.parentFile?.mkdirs(); dev.exact.canvas.Files.write(file, tone(spans)); null
                 } catch (e: java.io.IOException) { "the file was not written: $e" }
-                encoder?.finish()
+                // A failure here still answers the stop and lets the track and the thread go.
+                val encoded = try { encoder?.finish(); null } catch (e: Exception) { "the file was not written: $e" }
+                val unwritten = toned ?: encoded
                 main.post {
                     leave?.invoke(); leave = null
                     val out = if (unwritten != null) {
@@ -429,12 +431,19 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
                 return
             }
             val codec = codec ?: return
-            val index = codec.dequeueInputBuffer(10_000)
-            if (index >= 0) codec.queueInputBuffer(index, 0, 0, frames * 1_000_000 / rate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            drain(true)
-            codec.stop(); codec.release()
-            if (trackIndex >= 0) muxer?.stop()
-            muxer?.release()
+            try {
+                val index = codec.dequeueInputBuffer(10_000)
+                if (index >= 0) codec.queueInputBuffer(index, 0, 0, frames * 1_000_000 / rate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                drain(true)
+                codec.stop()
+                if (trackIndex >= 0) muxer?.stop()
+            } catch (e: Exception) {
+                part?.close()
+                throw e
+            } finally {
+                codec.release()
+                muxer?.release()
+            }
             part?.finish()
         }
     }

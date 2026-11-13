@@ -78,7 +78,7 @@ test('live tool deadlines refresh time and arm a wake without unrelated commits;
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-call-clock-')), old = globalThis.exact;
   cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
   // Keep the production dispatcher: its callback result decides whether an advance continues.
-  const runtime = readFileSync(resolve(ROOT, 'host/web-js/rt.js'), 'utf8');
+  const runtime = readFileSync(resolve(ROOT, 'host/web-js/clock.js'), 'utf8');
   const advance = runtime.slice(runtime.indexOf('export function advance('), runtime.indexOf('let driving ='));
   expect(advance).toContain('function fire(');
   writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};

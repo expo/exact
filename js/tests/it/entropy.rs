@@ -7,7 +7,7 @@
 use exact_js::Module;
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use exact_runner::{Answer, DataSource, Outcome, Response, Runner, Store};
+use exact_runner::{Answer, DataSource, Dispatch, Event, Outcome, Response, Runner, Store};
 
 const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/entropy.hbc"));
 const APP: &str = "test.entropy";
@@ -22,12 +22,17 @@ component App
   resource plain = plain() as shape string
   resource abc = abcDigest() as shape string
   mutation result as shape string
+  mutation count as shape number
   action atInit
     send result = atInit(form)
   action bytes
     send result = bytes(4)
   action later
     send result = uuidLater()
+  action laterBytes
+    send count = bytesLater()
+  action turn
+    send result = entropyTurn("helper")
   action refusals
     send result = refusals()
   action describe
@@ -77,13 +82,19 @@ fn is_v4(id: &str) -> bool {
 #[test]
 fn a_draw_is_a_counted_read_and_refuses_during_initialization() {
     let mut module = module();
-    for form in ["uuid", "bytes"] {
+    for form in ["uuid", "bytes", "late-uuid", "late-bytes"] {
         let message = module.query("atInit", &[Value::str(form)]).unwrap();
+        // Hermes first drains a module's queued reactions after its first query has ended initialization.
+        let phase = if form.starts_with("late-") {
+            "outside an answer"
+        } else {
+            "during module initialization"
+        };
         assert!(
             message
                 .as_str()
                 .unwrap()
-                .contains("unavailable during module initialization; call it inside an answer"),
+                .contains(&format!("unavailable {phase}; call it inside an answer")),
             "{form}: {message:?}"
         );
     }
@@ -128,6 +139,142 @@ fn a_draw_is_a_counted_read_and_refuses_during_initialization() {
     let later = text(module.parse(&mut store, "uuidLater", &[], reply).unwrap());
     assert!(is_v4(&later));
     assert_eq!(store.entropy_draws(), 4);
+    let answer = module.answer(&mut store, "bytesLater", &[]).unwrap();
+    assert!(matches!(answer, Answer::Later(_)));
+    let reply = Outcome::Response(Response {
+        status: 200,
+        headers: vec![],
+        body: vec![],
+    });
+    assert!(matches!(
+        module.parse(&mut store, "bytesLater", &[], reply).unwrap(),
+        Answer::Now(Value::Number(4.0))
+    ));
+}
+
+#[test]
+fn pending_answer_continuations_may_draw_entropy() {
+    let mut module = module();
+    // Drain the load-time reaction before starting the pending call under test.
+    module.query("plain", &[]).unwrap();
+    let mut store = Store::new(GRANTS, vec![]);
+    for form in [
+        "helper",
+        "json",
+        "yield",
+        "microtask",
+        "cached",
+        "cached",
+        "response",
+        "responseJson",
+    ] {
+        let args = [Value::str(form)];
+        let mut answer = module.answer(&mut store, "entropyTurn", &args).unwrap();
+        if let Answer::Later(request) = answer {
+            let outcome = if form == "yield" {
+                let token = request.continuation.unwrap();
+                assert!(matches!(module.dispatch(token, &store), Dispatch::Again));
+                Dispatch::again_outcome()
+            } else {
+                assert_eq!(form, "json");
+                Outcome::Response(Response {
+                    status: 200,
+                    headers: vec![],
+                    body: b"{}".to_vec(),
+                })
+            };
+            answer = module
+                .parse(&mut store, "entropyTurn", &args, outcome)
+                .unwrap();
+        }
+        let value = text(answer);
+        let (uuid, count) = value.split_once('\n').unwrap();
+        assert!(is_v4(uuid), "{form}: {value}");
+        assert_eq!(count, "4", "{form}");
+    }
+    assert_eq!(store.entropy_draws(), 16);
+}
+
+#[test]
+fn a_let_go_fetch_restores_only_its_async_continuation() {
+    for asynchronous in [false, true] {
+        let mut module = module();
+        module.query("plain", &[]).unwrap();
+        let src = format!(
+            "component App\n  state active = true\n  resource value = entropyKept(active, {asynchronous}) as shape string\n  resource observed = entropyObserved() as shape string\n  action stop\n    active = false\n  view\n    button press=stop testId=\"stop\"\n      text value\n"
+        );
+        let plan = contract::compile(&src).unwrap();
+        module.bind(&plan);
+        let mut runner = Runner::boot(
+            plan,
+            module,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let request = runner.take_requests().pop().unwrap();
+        let stop = runner.kernel().find_by_test_id("stop")[0];
+        let stop = runner.kernel().node_by_key(stop).unwrap().id;
+        runner.dispatch(stop, Event::Press).unwrap();
+        runner
+            .fulfill(
+                request.ticket,
+                Outcome::Response(Response {
+                    status: 200,
+                    headers: vec![],
+                    body: vec![],
+                }),
+            )
+            .unwrap();
+        let value = runner.data().query("entropyObserved", &[]).unwrap();
+        let (uuid, count) = value.as_str().unwrap().split_once('\n').unwrap();
+        if asynchronous {
+            assert!(is_v4(uuid), "{uuid}");
+            assert_eq!(count, "4");
+        } else {
+            assert_eq!(
+                uuid,
+                "crypto.randomUUID() is unavailable outside an answer; call it inside an answer"
+            );
+            assert_eq!(count, "crypto.getRandomValues() is unavailable outside an answer; call it inside an answer");
+        }
+        assert_eq!(
+            runner.store().entropy_draws(),
+            if asynchronous { 2 } else { 0 }
+        );
+    }
+}
+
+#[test]
+fn synchronous_and_asynchronous_mappers_may_draw_entropy() {
+    for asynchronous in [false, true] {
+        let src = format!(
+            "component App\n  resource id = entropyStream({asynchronous}) as shape string\n  view\n    text id\n"
+        );
+        let mut module = module();
+        let plan = contract::compile(&src).unwrap();
+        module.bind(&plan);
+        let mut runner = Runner::boot(
+            plan,
+            module,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let request = runner.take_requests().pop().unwrap();
+        runner
+            .fulfill(
+                request.ticket,
+                Outcome::Message(exact_runner::Message::default()),
+            )
+            .unwrap();
+        let answer = runner.resource("id").unwrap().as_str().unwrap();
+        let (uuid, bytes) = answer.split_once('/').unwrap();
+        assert!(is_v4(uuid), "{answer}");
+        assert_eq!(bytes, "4");
+    }
 }
 
 #[test]

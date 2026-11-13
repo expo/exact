@@ -116,20 +116,28 @@ extension NodeView {
         guard isParagraph else { return }
         let label = props["accessibilityLabel"] ?? visibleParagraphText
         #if os(macOS)
-        setAccessibilityElement(true)
         // A live-region or dialog role is a group holding these words (`updateRoleAccessibility`).
-        guard groupSubrole == nil else { return }
+        guard groupSubrole == nil else { setAccessibilityElement(true); lastAccessibilityWrite.text = nil; return }
+        // Each AppKit setter asks the view for its attribute names, and a
+        // list's scroll rewrites every paragraph it rebinds or makes: what
+        // is written again only differs. `updateRoleAccessibility` and a
+        // label of the props' forget what was written when they write over it.
+        let level = headingLevel
+        let written = TextAccessibilityWrite(heading: level, value: level == nil ? spokenValue ?? label : nil, label: label)
+        guard lastAccessibilityWrite.text != written else { return }
+        setAccessibilityElement(true)
         if accessibilitySubrole() != nil { setAccessibilitySubrole(nil) }
-        if let level = headingLevel {
+        if let level {
             // The heading role WebKit exposes (AppKit's constant from macOS
             // 26), its level the value, as a `<h1>`–`<h6>` has on the web.
             setAccessibilityRole(NSAccessibility.Role(rawValue: "AXHeading"))
             setAccessibilityValue(level)
         } else {
             setAccessibilityRole(.staticText)
-            setAccessibilityValue(spokenValue ?? label)
+            setAccessibilityValue(written.value)
         }
         setAccessibilityLabel(label)
+        lastAccessibilityWrite.text = written
         #else
         // UIKit does not visit a container's children when it is itself an
         // accessibility element. Expose the paragraph plus its link targets.
@@ -218,6 +226,14 @@ extension NodeView {
 }
 
 #if os(macOS)
+/// What `updateTextAccessibility` last wrote of a paragraph: its heading
+/// level (a static text without one), its value and its label.
+struct TextAccessibilityWrite: Equatable {
+    var heading: Int?
+    var value: String?
+    var label: String
+}
+
 /// Words a group-role paragraph holds: a static text of its runs `runs`
 /// between two links, or its whole text when it has no runs.
 private final class ParagraphWords: NSAccessibilityElement, AgentOwned {
