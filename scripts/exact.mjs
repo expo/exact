@@ -741,8 +741,8 @@ export function refreshTypes(dir, binary = resolve(ROOT, 'target/debug', process
   if (!quiet) console.error(`app.contract.d.ts: ${before === null ? 'written' : 'regenerated, since a source\'s signature changed'} (the types app.ts imports)`);
   return true;
 }
-/** `exact new`: check the machine first, since a missing Cargo fails the
- * scaffold itself; then write the app and say what its builds will still need. */
+/** `exact new`: check the machine first, since a game's or a Snapback app's scaffold needs Cargo (an app's does
+ * not); then write it and say what its builds will still need. */
 function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, snapback = null, title, id} = {}) {
   if (update) {
     console.log(createApp(path, {update, without, with: platforms}));
