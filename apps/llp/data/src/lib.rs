@@ -84,12 +84,13 @@ impl Llp {
             .unwrap_or_default()
     }
 
-    /// The document a path names: itself when it is a file, the corpus's
-    /// lowest-numbered document when it is a directory — which is how
-    /// `llpview llp/` lands on the root explainer and not on nothing.
+    /// The document a path names: the corpus's lowest-numbered document when
+    /// it is a directory — which is how `llpview llp/` lands on the root
+    /// explainer and not on nothing — and otherwise itself, so a missing
+    /// file fails to open rather than opening another.
     fn document_of(&self, asked: &str) -> Option<PathBuf> {
         let path = PathBuf::from(asked);
-        if path.is_file() {
+        if !path.is_dir() {
             return Some(path);
         }
         let entries = self.entries(&Self::root_of(asked));

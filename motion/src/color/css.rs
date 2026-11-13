@@ -11,6 +11,8 @@
 //! their own serialisation, as Chrome's getters return it. Parsing and
 //! arithmetic are `exact-color`'s (LLP 1100).
 
+use crate::property::Value;
+
 /// A colour: sRGB channels 0–255 and alpha 0–1, non-premultiplied.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgba {
@@ -130,15 +132,37 @@ static WIDE: std::sync::OnceLock<fn(exact_color::Wide) -> Option<Parsed>> =
 /// by use; the web core's budget).
 pub fn link_wide() {
     let _ = WIDE.set(wide);
+    let _ = WIDE_VALUE.set(wide_value);
 }
 
-/// A wide colour clipped to sRGB, with its own serialisation; only the
-/// forms Chrome's canvas takes.
+/// The wide forms as motion values, once linked ([`link_wide`]).
+static WIDE_VALUE: std::sync::OnceLock<fn(exact_color::Wide) -> Option<Value>> =
+    std::sync::OnceLock::new();
+
+/// A wide colour as a motion value, once the wide forms are linked.
+pub(crate) fn motion_value(w: exact_color::Wide) -> Option<Value> {
+    WIDE_VALUE.get().and_then(|f| f(w))
+}
+
+/// The forms Chrome's canvas takes.
+fn admitted(w: &exact_color::Wide) -> bool {
+    !w.space.is_hdr() && w.space != exact_color::Space::DisplayP3Linear
+}
+
+/// A wide colour clipped to sRGB, with its own serialisation.
 fn wide(w: exact_color::Wide) -> Option<Parsed> {
-    if w.space.is_hdr() || w.space == exact_color::Space::DisplayP3Linear {
-        return None;
-    }
-    Some(Parsed::Wide(rgba(w.srgb8()), w.css()))
+    admitted(&w).then(|| Parsed::Wide(rgba(w.srgb8()), w.css()))
+}
+
+/// A wide colour in premultiplied Oklab, unclipped: a modern colour
+/// interpolates there (CSS Color 4 §12.1; LLP 1100 D2).
+fn wide_value(w: exact_color::Wide) -> Option<Value> {
+    // `oklab()` as written, so the keyframe rule reads back exactly.
+    let [l, a, b] = match w.space {
+        exact_color::Space::Oklab => w.c,
+        _ => exact_color::linear_to_oklab(w.linear_srgb()),
+    };
+    admitted(&w).then(|| Value::oklab(l, a, b, w.alpha))
 }
 
 #[cfg(test)]

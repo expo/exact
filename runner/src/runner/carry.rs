@@ -19,6 +19,10 @@ pub struct Carried {
     pub panels: crate::instance::tabs::CarriedPanels,
     /// Resource name → (source name, arguments, value).
     pub resources: Vec<(String, String, Vec<Value>, Value)>,
+    /// The resources whose answer came from a stream still open: a
+    /// replacement that takes the answer shows it and asks again, opening
+    /// the stream anew, since the old one ends with the runner that had it.
+    pub streams: Vec<String>,
     /// (Resource name, source name) pairs whose answer depends on the store.
     pub store_readers: Vec<(String, String)>,
     /// Of `store_readers`, those asked in the run that carried them, and
@@ -82,6 +86,15 @@ impl<D: super::DataSource> super::Runner<D> {
                             s.value.get(&self.plan).clone(),
                         )
                     })
+                })
+                .collect(),
+            streams: (self.pending.iter())
+                .filter(|p| !p.in_flight())
+                .filter_map(|p| match p.target {
+                    super::Target::Resource(i) if i < self.declared_resources().len() => {
+                        Some(self.target_name(p.target))
+                    }
+                    _ => None,
                 })
                 .collect(),
             store_readers: self
@@ -414,5 +427,108 @@ mod tests {
                 .iter()
                 .any(|(name, value)| name == "token" && value == b"stored answer"));
         }
+    }
+
+    /// `events()` streams; each message is its answer, and the stream's end
+    /// answers "ended".
+    #[derive(Default)]
+    struct Events {
+        asks: usize,
+    }
+    impl DataSource for Events {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            self.asks += 1;
+            Ok(Answer::stream(crate::Request::get(
+                "https://example.test/events",
+            )))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: crate::Outcome,
+        ) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::str(match &outcome {
+                crate::Outcome::Message(m) => &m.data,
+                _ => "ended",
+            })))
+        }
+    }
+
+    fn message(data: &str) -> crate::Outcome {
+        crate::Outcome::Message(crate::Message {
+            data: data.into(),
+            ..crate::Message::default()
+        })
+    }
+
+    fn reload(carried: &Carried) -> Runner<Events> {
+        Runner::boot_carrying(
+            plan("events", false),
+            Events::default(),
+            Kernel::with_monospace(),
+            carried,
+            Default::default(),
+            "/",
+        )
+        .unwrap()
+    }
+
+    /// A stream open at a reload is opened anew, its last answer shown
+    /// meanwhile; one still awaiting its first message is asked again as any
+    /// request in flight is; one that ended is not.
+    #[test]
+    fn a_reload_opens_a_carried_stream_again() {
+        let boot = || {
+            Runner::boot(
+                plan("events", false),
+                Events::default(),
+                Kernel::with_monospace(),
+                Default::default(),
+                "/",
+            )
+            .unwrap()
+        };
+        let mut open = boot();
+        let ticket = open.take_requests().remove(0).ticket;
+        open.fulfill(ticket, message("first")).unwrap();
+        let carried = open.carry();
+        assert_eq!(carried.streams, ["answer"]);
+        let mut reloaded = reload(&carried);
+        assert_eq!(reloaded.resource("answer"), Some(&Value::str("first")));
+        let asked = reloaded.take_requests();
+        assert_eq!(asked.len(), 1, "the stream is opened again");
+        assert!(asked[0].request.stream);
+        assert_eq!(reloaded.data().asks, 1);
+        reloaded
+            .fulfill(asked[0].ticket, message("second"))
+            .unwrap();
+        assert_eq!(reloaded.resource("answer"), Some(&Value::str("second")));
+        assert_eq!(reloaded.carry().streams, ["answer"]);
+
+        let mut waiting = boot();
+        assert_eq!(waiting.take_requests().len(), 1);
+        let carried = waiting.carry();
+        assert!(carried.streams.is_empty() && carried.resources.is_empty());
+        assert_eq!(reload(&carried).take_requests().len(), 1);
+
+        let mut ended = boot();
+        let ticket = ended.take_requests().remove(0).ticket;
+        ended.fulfill(ticket, message("first")).unwrap();
+        let end = crate::Outcome::Failed {
+            kind: crate::FailureKind::Network,
+            message: "the event stream ended".into(),
+        };
+        ended.fulfill(ticket, end).unwrap();
+        let carried = ended.carry();
+        assert!(carried.streams.is_empty());
+        let mut reloaded = reload(&carried);
+        assert_eq!(reloaded.resource("answer"), Some(&Value::str("ended")));
+        assert!(reloaded.take_requests().is_empty());
+        assert_eq!(reloaded.data().asks, 0);
     }
 }

@@ -25,6 +25,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { closeSync, createWriteStream, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
 import { compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
@@ -94,7 +95,7 @@ export function rebuildCommand(app, verb) {
 
 /** `verb` run by an `exact new` app's own `exact.mjs`, in its directory; null for an app in this checkout. */
 export function ownVerb(app, verb) {
-  const own = app.dir && !resolve(app.dir).startsWith(`${ROOT}/`) && existsSync(resolve(app.dir, 'exact.mjs'));
+  const own = app.dir && !within(ROOT, resolve(app.dir)) && existsSync(resolve(app.dir, 'exact.mjs'));
   const quoted = (path) => `'${String(path).replaceAll("'", "'\\''")}'`;
   // A target the environment names resolves against the directory the drive ran in, not the app's: pinned whole
   const target = process.env.CARGO_TARGET_DIR && app.target ? `CARGO_TARGET_DIR=${quoted(app.target)} ` : '';
@@ -197,7 +198,7 @@ const graphOf = app => moduleGraph(app.dir, app.manifest);
 export function planSource(path, app, graph = graphOf(app)) {
   const at = resolve(ROOT, path), rel = relative(app.dir, at);
   if (!rel || rel.startsWith('..') || isAbsolute(rel) || NATIVE_TREE.test(rel) || rel === DECLARATIONS) return false;
-  for (let dir = dirname(at); dir.startsWith(`${app.dir}/`); dir = dirname(dir)) if (existsSync(resolve(dir, 'Cargo.toml'))) return false;
+  for (let dir = dirname(at); dir !== app.dir && within(app.dir, dir); dir = dirname(dir)) if (existsSync(resolve(dir, 'Cargo.toml'))) return false;
   if (/\.contract$/.test(rel)) return true;
   if (!/\.(tsx?|json)$/.test(rel) || CONFIG_JSON.test(rel)) return false;
   return graph ? graph.has(at) : /\.tsx?$/.test(rel);
@@ -212,7 +213,7 @@ export function planSources(app, graph = graphOf(app)) {
   const own = newerThan(-Infinity, [app.dir], path => hosts(path) || skip(path))
     .filter(path => planSource(path, app, graph));
   const mounts = Object.values(app.manifest?.typescript?.sources ?? {}).map(path => resolve(app.dir, String(path)));
-  const mounted = graph ? [...graph].filter(path => !path.startsWith(`${app.dir}/`)) : newerThan(-Infinity, mounts).filter(path => /\.tsx?$/.test(path));
+  const mounted = graph ? [...graph].filter(path => !within(app.dir, path)) : newerThan(-Infinity, mounts).filter(path => /\.tsx?$/.test(path));
   return Object.fromEntries([...own, ...mounted].sort().map(path => [path, digestOf(resolve(ROOT, path))]));
 }
 

@@ -399,7 +399,10 @@ fn one_shots_answer_from_the_script_and_the_drive() {
     let r = body(&next(&core, &woke));
     assert_eq!(
         (r["stdout"].as_str(), r["code"].as_i64()),
-        (Some("1.2.0\n"), Some(0))
+        (
+            Some(exact_runner::agent::base64(b"1.2.0\n").as_str()),
+            Some(0)
+        )
     );
     core.run(
         request(2, r#"{"kind":"execPath","program":"path:t3"}"#, false),

@@ -23,6 +23,7 @@ mod alert_parts;
 pub mod anatomy;
 mod atoms;
 mod box_transform;
+mod bundled;
 mod buttons;
 mod cells;
 mod class;
@@ -535,6 +536,11 @@ fn lower_body(
     // The design server's build: what it reads is known (`retention_only`).
     if theme::retained::stops_at_retention() {
         return Err(Vec::new());
+    }
+    // A literal file outside `assets/` would build and not ship
+    // (expo/exact-build#4); only an app's compile knows its folders.
+    if asset_root.is_some() {
+        l.errors.extend(bundled::outside(&root.view));
     }
     l.declare_decorations(file)?;
     l.declare_atoms(file)?;

@@ -103,7 +103,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   if (unreached) throw new FetchError('Refused', `NotAllowedError: ${unreached}`);
   redirect = redirectFor(origin, redirect);
   try {
-    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal']);
+    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'exactPreload', 'exactPrefetch', 'redirect', 'signal']);
     // A forced ask reloads unless the request stores nothing; Fetch allows only-if-cached same-origin (LLP 1162 D4).
     const cache = init.cache ?? input?.cache, sent = forced && cache !== 'no-store' ? 'reload' : cache;
     const mode = init.mode ?? (sent === 'only-if-cached' && 'same-origin');
@@ -167,7 +167,7 @@ export function fetchHostAsset(input, init = {}) {
 
 export function createRequestExecutor(appId, sourceSet, readBody = response => response.arrayBuffer()) {
   let storage = null;
-  return async req => {
+  return async (req, signal) => {
     const admitted = scopedGrantSet(sourceSet, req.scope);
     const why = grantError(admitted);
     if (why) return { failed: 2, message: why };
@@ -180,7 +180,7 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
       // Its ceiling bounds the read inside `fetchWith` too, so an oversized body that never ends is refused, not awaited.
       // It goes out as the asking commit's origin (LLP 1133.036 D6): one it does not carry is not taken for the app's.
       const init = { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
-        ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) };
+        signal, ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) };
       const response = await fetchWith(admitted, req.url, init, null, redirectOf(req.url, init), within, req.origin ?? UNATTRIBUTED);
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {
@@ -212,6 +212,14 @@ const mustLock = (set, name) => (set?.entries ?? []).some(([, source, grant]) =>
   const words = source.split(/\s+/);
   return grant?.[0] === 'secret-keep' && words[1] === String(name) && words.length > 2 && words[3] !== 'optional';
 });
+// Each backing store's names with a `keepKey` writing its pair, to the newest call's handle. By store, not facade:
+// every answer has a facade of its own over the one store.
+const keepingByStore = new WeakMap();
+const keeping = store => {
+  let names = keepingByStore.get(store);
+  if (!names) keepingByStore.set(store, names = new Map());
+  return names;
+};
 const unsupported = name => Object.assign(new Error(`NotSupportedError: ${name} is kept locked, and the web keeps no locked secret`), { name: 'NotSupportedError', code: 'NotSupportedError' });
 export function createSecretFacade(store, admitted, keys) {
   const refused = name => {
@@ -244,15 +252,25 @@ export function createSecretFacade(store, admitted, keys) {
     unlock(name) { try { return Promise.resolve(seen.get(name)); } catch (e) { return Promise.reject(e); } },
     protect(name) { return overlaying.on ? Promise.reject(inOverlay('store.protect()')) : Promise.reject(unsupported(name)); },
     unprotect() { return overlaying.on ? Promise.reject(inOverlay('store.unprotect()')) : Promise.resolve(); },
-    set(name, value) { effect('store.set()'); allowed(name); if (mustLock(admitted, name)) throw unsupported(name); store.set(name, String(value)); },
-    forget(name) { effect('store.forget()'); allowed(name); store.set(name, null); },
+    set(name, value) { effect('store.set()'); allowed(name); if (mustLock(admitted, name)) throw unsupported(name); store.set(name, String(value)); keeping(store).delete(String(name)); },
+    forget(name) { effect('store.forget()'); allowed(name); store.set(name, null); keeping(store).delete(String(name)); },
+    // The name holds the new handle only once the key service has the pair, so a refused write leaves the key it
+    // held; a later keepKey, set or forget of the name while the pair is written supersedes it.
     async keepKey(name, pair) {
       if (overlaying.on) throw inOverlay('store.keepKey()');
       allowed(name);
       if (mustLock(admitted, name)) throw unsupported(name);
-      const handle = 'exact.key:' + crypto.randomUUID();
+      const handle = 'exact.key:' + crypto.randomUUID(), latest = keeping(store), key = String(name);
+      latest.set(key, handle);
+      try {
+        await keys().then(service => service.put(handle, pair));
+      } catch (e) {
+        if (latest.get(key) === handle) latest.delete(key);
+        throw e;
+      }
+      if (latest.get(key) !== handle) return;
+      latest.delete(key);
       store.set(name, handle);
-      return keys().then(service => service.put(handle, pair));
     },
     key(name) { if (overlaying.on) return Promise.reject(inOverlay('store.key()')); const handle = seen.get(name); return handle == null ? Promise.resolve(null) : keys().then(service => service.get(handle) ?? null); },
   };

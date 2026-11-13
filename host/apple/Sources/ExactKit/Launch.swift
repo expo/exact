@@ -250,12 +250,20 @@ public final class ExactLaunch: NSObject {
         resolvePresent()
     }
 
-    /// A GPU canvas's frame went to the compositor (`gpu_on_presented`): the
-    /// first after the first tree's commit marks `world`, so the report reads
-    /// `present → world → interactive` for an app whose first screen is a canvas.
+    private var firstWorldPresentation: Double?
+
+    /// Keep the first gpu_on_presented notice until the tree presents, so the
+    /// present → world → interactive marks cannot date the world before first pixel.
     public func worldPresented() {
-        guard marks[.commit] != nil, marks[.world] == nil else { return }
-        marks[.world] = CACurrentMediaTime()
+        guard launchSession != nil, firstWorldPresentation == nil else { return }
+        firstWorldPresentation = CACurrentMediaTime()
+        resolveWorldPresentation()
+    }
+
+    private func resolveWorldPresentation() {
+        guard marks[.world] == nil, let at = firstWorldPresentation,
+              let present = marks[.present] else { return }
+        marks[.world] = max(at, present)
     }
 
     @objc private func tick(_ link: CADisplayLink) { frame(Vsync(link)) }
@@ -274,6 +282,7 @@ public final class ExactLaunch: NSObject {
     private func resolvePresent() {
         guard let commit = marks[.commit], marks[.present] == nil, let present = vsync?.next(after: commit) else { return }
         marks[.present] = present
+        resolveWorldPresentation()
         loadServices(.afterFirstPixel)
         if ttiOutcome != nil || suppressed != nil || ExactEnv.agentMode { loadServices(.afterStartup) }
         scheduleEvaluate()

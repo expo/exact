@@ -1,15 +1,160 @@
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
-// The web Rust adapter against a stand-in for its wasm module (LLP 1146 §2.3).
+// Store readers at Rust-module startup and across the adapter's calls (LLP 1027 D4, LLP 1146 §2.3).
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { webCompiler } from './module.mjs';
 import { createGrantSet, createRequestExecutor } from './admission.js';
+import { appDigest, suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 const ROOT = resolve(import.meta.dir, '../..');
+
+test('a store reader shows its declared placeholder until its Rust source is ready when launch secrets were present', async () => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } });
+    if (path.endsWith('/names.js')) return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
+    const local = resolve(ROOT, '.' + path);
+    const file = existsSync(local) ? local : resolve(ROOT, 'host/web', basename(path));
+    return new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } });
+  } });
+  const browser = await suiteBrowser();
+  try {
+    for (const mode of ['secret', 'empty', 'ungranted', 'removed', 'added', 'ready']) {
+      const page = await browser.newPage();
+      try {
+        await page.goto(server.url.href + '?agent');
+        const before = await page.evaluate(async mode => {
+          const rt = await import('/host/web-js/rt.js');
+          const secret = ['secret', 'removed', 'ready'].includes(mode);
+          if (secret) localStorage.setItem(rt.Kept('secret') + 'token', 'private');
+          if (mode === 'ungranted') localStorage.setItem(rt.Kept('secret') + 'other', 'private');
+          localStorage.setItem(rt.Kept('state') + 'state', 'state');
+          localStorage.setItem('exact.kept.old', 'old answer');
+          const { install, reader } = await import('/host/web-js/store-reader.js');
+          install(['token']);
+          const checkpoint = document.createElement('script');
+          checkpoint.type = 'application/vnd.exact.checkpoint';
+          checkpoint.textContent = JSON.stringify({ answers: [
+            ['kept', 'rust', [], 'kept answer'], ['invalid', 'rust', [], 42],
+          ], readers: [0, 1], open: [0] });
+          document.head.append(checkpoint);
+          const values = {}, read = () => Object.fromEntries(Object.entries(values).map(([k, v]) => [k, {
+            value: v(), pending: v.p(), reader: v.r.store,
+          }]));
+          const fresh = () => ({ v: 'fresh answer', store: true });
+          if (mode === 'ready') rt.data.answer = fresh;
+          rt.mount(root => {
+            if (mode === 'removed') rt.Store.set('token', null);
+            if (mode === 'added') rt.Store.set('token', 'late secret');
+            const preview = rt.res('preview', 'preview', () => [], 'preview', [], 's', undefined, true);
+            for (const name of ['literal', 'source', 'bare', 'ordinary', 'kept', 'invalid', 'unavailable']) {
+              const res = name === 'ordinary' ? rt.res : reader(rt.res, name !== 'bare');
+              values[name] = res(name, 'rust', () => [], 'baked empty store', name === 'ordinary' ? [] : undefined,
+                's', name === 'source' ? () => preview() : name === 'unavailable' ? () => undefined : 'waiting');
+              const node = root.appendChild(document.createElement('p'));
+              node.id = name;
+              rt.effect(() => { node.textContent = values[name](); });
+            }
+          });
+          window.fixture = { rt, fresh, read };
+          return read();
+        }, mode);
+        const unseen = ['secret', 'removed'].includes(mode);
+        for (const name of ['literal', 'source', 'bare', 'ordinary', 'kept', 'invalid', 'unavailable']) {
+          const placeholder = unseen && ['literal', 'source', 'invalid'].includes(name);
+          const value = mode === 'ready' ? 'fresh answer' : name === 'kept' ? 'kept answer'
+            : placeholder ? name === 'source' ? 'preview' : 'waiting' : 'baked empty store';
+          expect(before[name].value, `${mode}/${name}`).toBe(value);
+          expect(await page.locator('#' + name).textContent()).toBe(value);
+          if (placeholder) expect(before[name].pending).toBe(true);
+          expect(before[name].reader).toBe(mode === 'ready' || name !== 'ordinary');
+        }
+        const after = await page.evaluate(() => {
+          fixture.rt.data.answer = fixture.fresh;
+          for (const ready of fixture.rt.data.q.splice(0)) ready();
+          return fixture.read();
+        });
+        for (const [name, state] of Object.entries(after)) {
+          expect(state).toEqual({ value: 'fresh answer', pending: false, reader: true });
+          expect(await page.locator('#' + name).textContent()).toBe('fresh answer');
+        }
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); server.stop(true); }
+});
+
+test('a built store reader replaces its placeholder when the delayed Rust module loads', async () => {
+  const { patchLines } = await import('../../scripts/app.mjs');
+  const dir = mkdtempSync(resolve(ROOT, 'target/rust-reader-startup-')), dist = resolve(dir, 'dist');
+  const write = (path, content) => writeFileSync(resolve(dir, path), content);
+  let browser, server, release;
+  try {
+    for (const path of ['data/src', 'bake/src', 'web']) mkdirSync(resolve(dir, path), { recursive: true });
+    write('app.json', JSON.stringify({ name: 'Reader', app: { id: 'test.reader', name: 'Reader' }, host: { web: {} } }));
+    write('app.contract', 'component App\n  resource session = session() as shape string else preview()\n  view\n    text session testId="session"\n');
+    write('web/build.rs', 'fn main() { contract::bake(plan, startup_data::Reader); }');
+    write('Cargo.toml', `[workspace]\nmembers = ["data", "bake"]\nresolver = "2"\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
+    cpSync(resolve(ROOT, 'Cargo.lock'), resolve(dir, 'Cargo.lock'));
+    write('data/Cargo.toml', `[package]\nname = "startup-data"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nexact-runner = { path = "${ROOT}/runner" }\n`);
+    write('data/src/lib.rs', `use exact_runner::{Answer, DataError, DataSource, Store, Value};
+pub struct Reader;
+impl DataSource for Reader {
+    fn app_id(&self) -> &str { "test.reader" }
+    fn grants(&self) -> &str { "secret.keep token" }
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+    fn answer(&mut self, store: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Now(Value::str(match source {
+            "session" => store.get("token").unwrap_or("signed out"),
+            "preview" => "waiting",
+            _ => return Err(DataError::UnknownSource(source.into())),
+        })))
+    }
+}
+`);
+    write('bake/Cargo.toml', `[package]\nname = "startup-bake"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nstartup-data = { path = "../data" }\ncontract = { path = "${ROOT}/contract/cli" }\n`);
+    write('bake/src/main.rs', `fn main() {
+    let plan = contract::compile(&std::fs::read_to_string("app.contract").unwrap()).unwrap();
+    let plan = contract::bake(plan, startup_data::Reader).unwrap();
+    assert!(plan.resources.iter().any(|r| r.reader));
+    std::fs::write("app.plan", plan.encode()).unwrap();
+}
+`);
+    const baked = spawnSync('cargo', ['run', '--offline', '--manifest-path', resolve(dir, 'Cargo.toml'), '-p', 'startup-bake'], {
+      cwd: dir, env: { ...process.env, CARGO_TARGET_DIR: resolve(ROOT, 'target') }, encoding: 'utf8', timeout: 120_000,
+    });
+    expect(baked.status, baked.stdout + baked.stderr).toBe(0);
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'rust-reader-startup', '--plan', resolve(dir, 'app.plan'), '--out', dist, '--render', 'none'], {
+      cwd: ROOT, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8', timeout: 180_000,
+    });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const gate = Promise.withResolvers();
+    release = gate.resolve;
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/rust/wasm/app.module.wasm') await gate.promise;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage(), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(key => localStorage.setItem(key, 'signed in'), `exact.secret.@${appDigest(dir)}/token`);
+    const requested = page.waitForRequest(request => new URL(request.url()).pathname === '/rust/wasm/app.module.wasm');
+    await page.goto(server.url.href + '?agent');
+    await requested;
+    expect(await page.getByTestId('session').textContent()).toBe('waiting');
+    expect(await page.evaluate(() => exact.resources.find(r => r.name === 'session').pending())).toBe(true);
+    release();
+    await page.waitForFunction(() => document.querySelector('[data-testid="session"]')?.textContent === 'signed in');
+    expect(await page.evaluate(() => exact.resources.find(r => r.name === 'session').pending())).toBe(false);
+    expect(errors).toEqual([]);
+  } finally { release?.(); await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 360_000);
 
 // `spec` as the web's grant set, by the grammar's own normalizer (`exact-web-js normalize-grants`), the compiler the
 // lane built.
@@ -52,12 +197,12 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const rustGrantSet=createGrantSet(${JSON.stringify(set)}),tsGrantSet=createGrantSet(${JSON.stringify(normalized(''))});\n`);
   writeFileSync(resolve(dir, 'rt-link.js'), 'export const rt = {};\n');
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
-  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, abi = 8;
+  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, method = 'GET', abi = 9;
   const scopes = [];
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(8); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(9); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
     memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
@@ -79,7 +224,9 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
           w.u8(2); w.u8(read ? 1 : 0); w.u32(writes ? 1 : 0);
           if (writes) { w.string('k'); w.u8(1); w.string('private'); }
           w.u32(0); w.u8(0); w.string('');
-          if (socket) { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(1); w.u8(0); w.string(''); w.string('GET'); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
+          if (prefetch) w.u8(14);
+          if (preload !== undefined) { w.u8(13); w.string(preload); }
+          if (socket) { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(1); w.u8(0); w.string(''); w.string(method); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
         });
       }
       else throw new Error(`unexpected logic call ${code}`);
@@ -92,14 +239,38 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   try {
     const module = await import(`${pathToFileURL(resolve(dir, 'rust-data.js')).href}?readers=${Date.now()}`);
     const kept = [], data = { q: [] }, store = { map: new Map(), set(...write) { kept.push(write); } }, failed = { failed: 3, message: 'refused' };
-    abi = 7;
-    await expect(module.install(data, { reader: '' }, async () => new ArrayBuffer(0))).rejects.toThrow('Rust module ABI 7 is not 8');
     abi = 8;
+    await expect(module.install(data, { reader: '' }, async () => new ArrayBuffer(0))).rejects.toThrow('Rust module ABI 8 is not 9');
+    abi = 9;
     await module.install(data, { reader: '' }, async () => new ArrayBuffer(0));
     for (const mode of ['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached']) {
       cache = mode;
       expect(data.answer('reader', [], store).req.cache).toBe(mode);
     }
+    for (const mode of [undefined, 'force-cache']) {
+      preload = 'feed-2'; cache = mode;
+      const req = data.answer('reader', [], store).req;
+      expect([req.url, req.cache, req.preload]).toEqual(['https://api.example/me', mode, undefined]);
+    }
+    prefetch = true;
+    for (const mode of [undefined, 'force-cache']) {
+      for (const name of [undefined, 'feed-2']) {
+        preload = name; cache = mode;
+        const req = data.answer('reader', [], store).req;
+        expect([req.url, req.cache, req.prefetch]).toEqual(['https://api.example/me', mode, true]);
+      }
+    }
+    prefetch = false;
+    // A read is one the commit that lets its ticket go aborts (request-send.js); a write runs to its end.
+    preload = undefined; cache = undefined;
+    for (const [verb, cancel] of [['GET', true], ['head', true], ['POST', false], ['DELETE', false]]) {
+      method = verb;
+      expect(data.answer('reader', [], store).req.cancel).toBe(cancel);
+    }
+    method = 'GET';
+    preload = 'Bad';
+    expect(() => data.answer('reader', [], store)).toThrow('invalid preload HTTP result');
+    preload = undefined;
     cache = undefined;
     [read, fails] = [true, false];
     expect(data.answer('reader', [], store).store).toBe(true);
@@ -112,7 +283,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     expect(data.threwRead()).toBe(true);
     // A Rust source's two-way socket (LLP 1016.003) is a stream that says so (rust-socket.test.mjs).
     [read, fails, socket] = [false, false, true];
-    expect(data.answer('reader', [], store).req).toMatchObject({ stream: true, socket: true, url: 'wss://api.example/book' });
+    expect(data.answer('reader', [], store).req).toMatchObject({ stream: true, socket: true, cancel: false, url: 'wss://api.example/book' });
     cache = 'reload';
     expect(() => data.answer('reader', [], store)).toThrow('invalid cached HTTP result');
     cache = undefined; socket = false;
@@ -154,6 +325,56 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   }
 });
 
+
+// A Rust long poll's reply that is no event (LLP 1016.000 D8): the reader counts it, and rust-data.js lands nothing of it.
+test("a Rust long poll's reply that is no event reaches no message", async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-poll-'));
+  for (const name of ['rust-data.js', 'admission.js']) {
+    const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
+    writeFileSync(resolve(dir, name), source);
+  }
+  for (const name of ['grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
+  writeFileSync(resolve(dir, 'http-body.js'), `export const boundedHttpBody = r => r.arrayBuffer(), longPollRefusal = () => null;
+export function streamed(req, _grants, message) {
+  const m = (event, data) => ({ event, id: '', data, coalesced: 0 });
+  message(m('exact:reply', '{"seq":1}'));
+  message(m('', 'event'));
+  return Promise.resolve({ kind: 2, body: new TextEncoder().encode('ended') });
+}\n`);
+  writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const rustGrantSet=createGrantSet(${JSON.stringify(normalized(''))}),tsGrantSet=rustGrantSet;\n`);
+  writeFileSync(resolve(dir, 'rt-link.js'), 'export const rt = {};\n');
+  const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
+  let output = new Uint8Array();
+  const exports = {
+    memory, exact_logic_abi: () => 9, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    exact_logic_output: () => out, exact_logic_output_len: () => output.length,
+    exact_logic_call(_session, pointer) {
+      const code = new Uint8Array(memory.buffer)[pointer + 4], bytes = [];
+      const u32 = v => bytes.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255), string = v => { const e = new TextEncoder().encode(v); u32(e.length); bytes.push(...e); };
+      u32(9);
+      if (code === 0) { bytes.push(0); string('test.rust'); string(''); } else bytes.push(0, 0, 3);
+      output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+      return 0;
+    },
+  };
+  const instantiate = WebAssembly.instantiate;
+  WebAssembly.instantiate = async () => ({ instance: { exports } });
+  try {
+    const module = await import(pathToFileURL(resolve(dir, 'rust-data.js')).href);
+    const data = { q: [] };
+    await module.install(data, {}, async () => new ArrayBuffer(0));
+    const heard = {};
+    for (const longPoll of [undefined, { cursor: 'since', from: 'seq', sameCursorEvent: false }]) {
+      const messages = [];
+      await data.fetch({ method: 'GET', url: 'https://api.example/poll', stream: true, longPoll }, m => messages.push(m.event), new AbortController());
+      heard[longPoll ? 'longPoll' : 'stream'] = messages;
+    }
+    expect(heard).toEqual({ stream: ['exact:reply', ''], longPoll: [''] });
+  } finally {
+    WebAssembly.instantiate = instantiate;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('a forced Rust resource keeps forcing parser-created requests and tickets after a stream message', async () => {
   const { stageHostGlue, bundleHostModule, localImports } = await import('./glue.mjs');
@@ -211,4 +432,21 @@ test('a forced Rust resource keeps forcing parser-created requests and tickets a
       expect(JSON.parse(result)).toEqual([{ url: '/first', forced: true }, { url: '/next', forced: true }]);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('web dispatch refuses a Rust prefetch on a send and sends a resource prefetch normally', async () => {
+  const { sendRequest } = await import('./request-send.js');
+  for (const resource of [false, true]) {
+    const out = [], inflight = { n: 0 }, requests = [];
+    let land;
+    const landed = new Promise(resolve => { land = resolve; });
+    const ticket = { id: 1, req: { method: 'GET', url: 'https://api.example/me', prefetch: true }, r: resource ? {} : undefined, held: () => true };
+    const data = { fetch: async req => { requests.push(req); return { status: 200, headers: [], body: new Uint8Array() }; } };
+    sendRequest(ticket, land, out, data, inflight, () => {});
+    out[0]();
+    const outcome = await landed;
+    expect(requests.length).toBe(resource ? 1 : 0);
+    expect(resource ? outcome.status : outcome.failed).toBe(resource ? 200 : 2);
+    expect(inflight.n).toBe(0);
+  }
 });

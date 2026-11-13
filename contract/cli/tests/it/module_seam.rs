@@ -714,3 +714,61 @@ fn an_agent_word_is_preferred_by_its_type() {
     pump(&mut r, &mut parked);
     assert_eq!(sent(&calls, "listen"), 1, "refused while denied");
 }
+
+const GATED: Fixture = Fixture {
+    app: r#"use level, Reading from "@fixture/sensor"
+
+component App
+  state a = true
+  state b = true
+  resource first = level(track="a", interval=50) when a as shape Reading else empty()
+  resource second = level(track="b", interval=50) when b as shape Reading else empty()
+  action showA(on: bool)
+    a = on
+  action showB(on: bool)
+    b = on
+  view
+    column
+      text first.id
+      text second.id
+"#,
+    ..SENSOR
+};
+
+/// LLP 1161.002 D2, LLP 1133.009 D10 item 12: a reader whose gate closed is
+/// idle and reads nothing. Its argument group is released while another
+/// reader stays, the whole name with the last one, and opening the gate
+/// asks again.
+#[test]
+fn a_reader_whose_gate_closed_releases_its_live_source() {
+    let (_app, mut r, calls) = boot_with("gated", &GATED, GATED.grants);
+    r.bind_extensions(&["sensor"], &[]);
+    let mut parked = Vec::new();
+    pump(&mut r, &mut parked);
+    let group = |track: &str| json!({ "track": track, "interval": 50.0 });
+    let asked =
+        |track: &str| json!({ "extension": "sensor", "source": "level", "args": group(track) });
+    let released =
+        |track: &str| json!({ "extension": "sensor", "release": "level", "args": group(track) });
+    let whole = json!({ "extension": "sensor", "release": "level" });
+    let count = |want: &Json| calls.lock().unwrap().iter().filter(|c| *c == want).count();
+    assert_eq!((count(&asked("a")), count(&asked("b"))), (1, 1));
+
+    let (on, off) = (
+        exact_runner::Value::Bool(true),
+        exact_runner::Value::Bool(false),
+    );
+    r.act("showA", vec![off.clone()]).unwrap();
+    pump(&mut r, &mut parked);
+    assert_eq!(count(&released("a")), 1, "{:?}", calls.lock().unwrap());
+    assert_eq!((count(&released("b")), count(&whole)), (0, 0));
+
+    r.act("showA", vec![on]).unwrap();
+    pump(&mut r, &mut parked);
+    assert_eq!(count(&asked("a")), 2, "opening the gate asks again");
+
+    r.act("showA", vec![off.clone()]).unwrap();
+    r.act("showB", vec![off]).unwrap();
+    pump(&mut r, &mut parked);
+    assert_eq!(count(&whole), 1, "{:?}", calls.lock().unwrap());
+}

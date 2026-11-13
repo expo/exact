@@ -6,6 +6,7 @@
 // scroll or view timeline to the browser (motion-glue.js `followTimelines`). A browser with no scroll-driven animations
 // (Firefox's) shows each consumer's own values. Build exact-web-js once before running this test (docs/testing.md).
 import { afterAll, test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -27,7 +28,7 @@ async function open(source, engine, ready) {
   const dir = mkdtempSync(resolve(target, 'scroll-timelines-'));
   const style = withLook(readFileSync(resolve(root, 'host/web/index.html'), 'utf8')).match(/<style>([\s\S]*?)<\/style>/)[1];
   writeFileSync(resolve(dir, 'app.contract'), source);
-  const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+  const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
   expect(compiled.status, compiled.stderr).toBe(0);
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
     const path = new URL(request.url).pathname.slice(1);

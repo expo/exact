@@ -286,8 +286,9 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
             value?.opt("data")?.let { out.put("data", it.toString()) }
             s.result = out
             context.log("payments: ${s.id}: $result")
-            // Past the budget the request is abandoned: no later authorization calls the app (D6).
-            if (value == null) s.letGo = true
+            // Past the budget the request ends for the app (D6): the send answers the failure now, though Google's
+            // sheet stays up, and the request is abandoned, so no later authorization calls the app.
+            if (value == null) { s.letGo = true; s.reply(out) }
             complete(if (result == "success") JSONObject().put("transactionState", "SUCCESS").toString()
                 else failed("The payment didn’t go through.", "PAYMENT_AUTHORIZATION", "PAYMENT_DATA_INVALID"))
         }

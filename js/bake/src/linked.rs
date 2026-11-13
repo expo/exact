@@ -33,6 +33,10 @@ pub const APP: ::exact_apple::baked::Linked = ::exact_apple::baked::Linked::App;
 pub const GRANTS: ::exact_apple::baked::Linked = ::exact_apple::baked::Linked::Grants;
 "#;
 
+/// The app id the entry names an unnamed data source by
+/// (`contract::rust_entry_naming`), from the same compat.json.
+pub(crate) const LINKED_APP: &str = "::exact_apple::baked::identity().app";
+
 /// The module's Canvas 2D roster from the same compat.json; it is
 /// `AsRef<[(&str, usize)]>`, as `with_canvas_surfaces` takes it.
 pub(crate) const LINKED_SURFACES: &str = r#"#[allow(dead_code)]

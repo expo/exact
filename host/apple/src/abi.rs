@@ -328,6 +328,10 @@ impl<D: DataSource> Bridge<D> {
                     Self::run_dispatch(h, x, parked, r, dispatch);
                 }
             }
+            // A request the runner let go (newer arguments, a refresh, a
+            // target answered now) is never released; one it keeps for its
+            // effects is.
+            parked.retain(|_, r| h.runner().holds(r.ticket));
             // An abort made in this batch's turns is answered at the next pump: wake it.
             if h.runner_mut().collected_aborts() {
                 x.notify();
@@ -406,6 +410,9 @@ impl<D: DataSource> Bridge<D> {
     /// the monospace reference measurer when none is given) under a
     /// viewport; the output is the first batch.
     pub fn boot(&mut self, plan: &[u8], data: D, hooks: Hooks, width: f32, height: f32) -> u32 {
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
+        }
         self.boot_bytes(PlanBytes::Copied(plan), data, hooks, width, height)
     }
 
@@ -448,6 +455,9 @@ impl<D: DataSource> Bridge<D> {
         };
         let selected = (delivery.selected_plan)();
         if let Some((entry, bytes)) = selected {
+            if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+                preloads.select_update();
+            }
             // Selection already verified the stored bytes. Count this attempt
             // even when decoding or booting that verified plan refuses it.
             (delivery.boot_started)();
@@ -574,6 +584,9 @@ impl<D: DataSource> Bridge<D> {
     ) -> u32 {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
+        }
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
         }
         self.discard_plan();
         if !let_go && self.host.as_ref().is_some_and(|h| h.runner().has_pending()) {
@@ -702,6 +715,10 @@ impl<D: DataSource> Bridge<D> {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
         }
+        // A candidate can change the request a binary preload's name denotes (LLP 1162.000 D2).
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
+        }
         self.prepared = None;
         data.set_document_owner(self.document_owner);
         let plan = self.input[..len.min(self.input.len())].to_vec();
@@ -724,6 +741,11 @@ impl<D: DataSource> Bridge<D> {
         // A reload carries the running store (`Carried::store`). A fresh
         // session takes the granted platform snapshot before its first query,
         // just like boot_fresh; neither path releases effects until commit.
+        let launch_store = self.links.io.and_then(|io| (io.preloads)()).map(|launch| {
+            launch.watch_store(|| {
+                carried.is_some() && self.host.as_ref().is_some_and(Host::launch_store_pending)
+            })
+        });
         let crate::store::Endowed {
             bindings,
             snapshot,
@@ -774,6 +796,7 @@ impl<D: DataSource> Bridge<D> {
             )
         }) {
             Ok((mut host, batch)) => {
+                host.launch_store = launch_store;
                 if let Some(why) = unbound {
                     host.log(&format!("{why}; every request is refused"));
                 }

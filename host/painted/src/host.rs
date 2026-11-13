@@ -1380,6 +1380,7 @@ impl<D: DataSource> Host<D> {
                 .apply(self.runner.kernel(), &mut sync);
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
+            self.retire_svg_geometry(&sync.retired);
             self.lower_eligibility(&sync);
             self.sync_paint(&t.receipt);
             if let Err(error) = self.sync_height_owner() {

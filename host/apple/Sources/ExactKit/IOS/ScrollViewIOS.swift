@@ -461,6 +461,10 @@ extension NodeView {
 
 
     func applyPendingScroll() {
+        // Hold a saved position, and a position written meanwhile, until the port has a size. A pane UIKit shows again,
+        // or one UIKit hid when its arrangement ends, stays covered whole, laid out as `display: none`, until the covers
+        // that follow are delivered, and a write before then would clamp to the top.
+        if hiddenScroll != nil, let sv = scrollView, sv.bounds.isEmpty, hasScrollLayoutBox { return }
         defer { pendingScrollTop = nil; pendingScrollLeft = nil }
         guard let sv = scrollView else { return }
         // An authored position takes over from a smooth correction.
@@ -476,12 +480,12 @@ extension NodeView {
             }
             return
         }
-        // Restore a saved position once the port has a size to hold it, or with an authored position, which replaces it.
-        // A pane its arrangement hid stays covered whole, laid out as `display: none`, until the covers that follow the
-        // arrangement's retirement are delivered, and a write before then would clamp to the top.
-        if let saved = hiddenScroll, !sv.bounds.isEmpty || pendingScrollTop != nil || pendingScrollLeft != nil {
+        if let saved = hiddenScroll {
             hiddenScroll = nil
             writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false, titleSlack: false)
+            // Keep the restored position over one carried from another scroll view (a replaced backend, the title's
+            // new scroller), which is that view's, not the reader's
+            if extras?.pendingScrollTransfer == true { return }
         }
         guard pendingScrollTop != nil || pendingScrollLeft != nil else { return }
         // `scroll-behavior: smooth` (CSS) animates a prop write, never a

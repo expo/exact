@@ -31,6 +31,9 @@ macro_rules! configured {
             fn app_id(&self) -> &str {
                 $crate::exact_runner::DataSource::app_id(&self.0)
             }
+            fn launch(&self) -> Option<$crate::exact_runner::request::Launch> {
+                $crate::exact_runner::DataSource::launch(&self.0)
+            }
             fn preloads(&self) -> &[$crate::exact_runner::request::Preload] {
                 $crate::exact_runner::DataSource::preloads(&self.0)
             }

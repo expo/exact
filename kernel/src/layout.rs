@@ -26,7 +26,7 @@ mod hoist;
 mod inline_images;
 #[cfg(test)]
 mod memo_tests;
-mod order;
+pub(crate) mod order;
 mod publication;
 mod rebuild;
 pub mod size_cache;

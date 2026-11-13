@@ -280,9 +280,15 @@ impl OpenCode {
     }
 }
 
+/// `line` without the fence's indentation, as the Markdown parser removes
+/// it: up to `indent` spaces and tabs, never other leading whitespace.
 fn strip_indent(line: &str, indent: usize) -> &str {
-    let cut = line.len() - line.trim_start().len();
-    &line[cut.min(indent)..]
+    let cut = line
+        .bytes()
+        .take(indent)
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count();
+    &line[cut..]
 }
 
 /// Physical rows as the Markdown parser sees them and whether they ended.
@@ -550,6 +556,8 @@ mod tests {
             "\r\n  ~~~~js extra words\r\n    const x = `é`; /* a\r\n    b */ return 2;\r\n  ~~~\r\n  ~~~~\r\nNext\r\n",
             "```unknown\nplain\t字\n\n\nlast",
             "   ```python\n   # note\n x = None\n   ```\n\n- finished\n",
+            " ```text\n\u{2003}em\n x\n\u{a0}nbsp\n ```\n",
+            "  ```\n\u{2003}\u{2003}em\n \u{a0}nbsp\n  ```\nAfter.\n",
         ];
         let mut patch_count = 0;
         for text in docs {

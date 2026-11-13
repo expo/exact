@@ -151,6 +151,36 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_links_keep_their_own_destinations() {
+        let links = |md: &str| -> Vec<(String, String)> {
+            blocks(md)[0]
+                .runs
+                .iter()
+                .map(|r| (r.text.clone(), r.href.clone()))
+                .collect()
+        };
+        let pair = |text: &str, href: &str| (text.to_string(), href.to_string());
+        assert_eq!(
+            links("[first](https://first.example/)[second](https://second.example/)"),
+            [
+                pair("first", "https://first.example/"),
+                pair("second", "https://second.example/")
+            ]
+        );
+        assert_eq!(
+            links("**[first](https://first.example/)[second](https://second.example/)**"),
+            [
+                pair("first", "https://first.example/"),
+                pair("second", "https://second.example/")
+            ]
+        );
+        assert_eq!(
+            links("[one](https://same.example/)[two](https://same.example/)"),
+            [pair("onetwo", "https://same.example/")]
+        );
+    }
+
+    #[test]
     fn an_unterminated_fence_is_code_so_far() {
         let b = blocks("Here:\n\n```py\ndef f():\n    return 1");
         assert_eq!(b.len(), 2);

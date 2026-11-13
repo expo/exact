@@ -1,6 +1,13 @@
 // Location and pattern matching shared by the JS router and web servers.
 const HEX = "0123456789ABCDEF", utf8 = new TextEncoder();
 export const enc = (s, esc) => { let o = ""; for (const b of utf8.encode(s)) o += esc(b) ? "%" + HEX[b >> 4] + HEX[b & 15] : String.fromCharCode(b); return o; };
+/** A built page's filesystem path keeps separators, percent signs and filename-reserved bytes escaped. */
+export function filePathOf(path) {
+  const escape = c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0');
+  return path.split('/').map(s => decodeURIComponent(s)
+    .replace(/[%/\\:*?"<>|\x00-\x1f]/g, escape)
+    .replace(/[. ]+$/, s => [...s].map(escape).join(''))).join('/');
+}
 export const dec = (s, plus) => { const out = []; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c === 37 && /^[0-9a-f]{2}$/i.test(s.substr(i + 1, 2))) { out.push(parseInt(s.substr(i + 1, 2), 16)); i += 2; } else if (plus && c === 43) out.push(32); else out.push(...utf8.encode(s[i])); } return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(out)); };
 const clean = s => s.replace(/^[\0- ]+|[\0- ]+$/g, "").replace(/[\t\n\r]/g, "");
 /** `canonical` (route/src/location.rs): path and query, dot segments resolved, escaped. */

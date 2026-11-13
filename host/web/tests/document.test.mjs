@@ -1,4 +1,5 @@
 import { symbolSheet, glueDeclarations, glueCase, wasmSource } from './glue-fixture.mjs';
+import { EXE } from '../../../scripts/paths.mjs';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // The document parity check (LLP 1048.000 §4): Caltrain's page as the
 // projection renders it, parsed by Chrome with JavaScript off, against the
@@ -1104,7 +1105,7 @@ async function withFocusContract(target, webDist, contract, drive) {
   try {
     const source = resolve(dir, 'app.contract'), plan = resolve(dir, 'app.plan');
     writeFileSync(source, contract);
-    const compiler = resolve(app.target, 'debug/contract');
+    const compiler = resolve(app.target, `debug/contract${EXE}`);
     const built = spawnSync(compiler, ['build', source, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
     if (built.error) throw built.error;
     if (built.status !== 0) throw new Error(built.stderr);

@@ -17,6 +17,17 @@ export function parseStep(line, { hoverWheel = false } = {}) {
     if (method === 'tap' && args[1]?.into) check(() => intoArguments(args[1].into));
     calls.push([method, args]);
   };
+  if (op === 'expect') {
+    const path = word();
+    if (!/^(?:slots|background)\.[A-Za-z0-9_.]+$/.test(path) || word() !== '==') invalid('expect <slots|background>.<path> == <JSON>');
+    let expected;
+    try { expected = JSON.parse(line.trim().match(/^expect\s+\S+\s+==\s+(.+)$/)?.[1]); } catch { invalid('expected a JSON value'); }
+    if (mustRefuse) invalid('an expectation cannot be marked refused');
+    return { op, mustRefuse, async run(session) {
+      const value = path.split('.').reduce((s, k) => s?.[k], await session.state());
+      if (JSON.stringify(value) !== JSON.stringify(expected)) throw new Error(`${path}: ${JSON.stringify(value)}, expected ${JSON.stringify(expected)}`);
+    } };
+  }
   switch (op) {
     case 'resize': {
       const size = word();
@@ -33,6 +44,8 @@ export function parseStep(line, { hoverWheel = false } = {}) {
       break;
     }
     case 'clock': call('clock', word()); break;
+    // The app restarts on the store it had, as an authored test's `reload` does (scripts/agent-test.mjs).
+    case 'reload': if (mustRefuse) invalid('a reload cannot be marked refused'); call('reload'); break;
     case 'back': call('tap', word(), { history: -1 }); break;
     case 'wheel': {
       const target = word(), dy = Number(word()), dx = Number(optional(0));

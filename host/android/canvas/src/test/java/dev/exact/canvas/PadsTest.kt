@@ -235,4 +235,20 @@ class PadsTest {
         ReflectionHelpers.callInstanceMethod<Unit>(reader, "onStop")
         assertEquals("the reader's own stop hides the page once", listOf(true), Host.hiddens)
     }
+
+    /** Back to an earlier activity: its start after a stop takes the host before it makes its reader, so the one that
+     * finished stops and is destroyed telling the host nothing, and leaves the callbacks the earlier one installs. */
+    @Test fun anEarlierActivityStartedAgainTakesTheHostFromTheOneThatFinished() {
+        val earlier = activity()
+        val finishing = activity()
+        Exact.reader = WeakReference(finishing)
+        ReflectionHelpers.callInstanceMethod<Unit>(earlier, "take")
+        val installed = {}
+        Exact.answered = installed
+        ReflectionHelpers.callInstanceMethod<Unit>(finishing, "onStop")
+        ReflectionHelpers.callInstanceMethod<Unit>(finishing, "release")
+        assertSame(earlier, Exact.reader?.get())
+        assertSame("the finished activity's destroy leaves the reader's callbacks", installed, Exact.answered)
+        assertEquals("the finished activity's stop leaves the page shown", emptyList<Boolean>(), Host.hiddens)
+    }
 }

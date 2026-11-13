@@ -329,7 +329,7 @@ package final class AtomElement: NSAccessibilityElement, AgentOwned {
     weak var field: TextArea?
     let range: NSRange
     var atom: MarkupAtom
-    var agentViewId: UInt32? { field?.owner?.id }
+    package var agentViewId: UInt32? { field?.owner?.id }
     init(field: TextArea, range: NSRange, atom: MarkupAtom) {
         (self.field, self.range, self.atom) = (field, range, atom)
         super.init()

@@ -104,7 +104,9 @@ required tool, device or simulator is unavailable, report that target as unteste
 |macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
 |Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
 
-There is no `verify macos` or `verify linux`. Inspect the launched native app for
+A bare `bun exact.mjs verify`, `test` or `agent` runs on a target `app.json` names:
+the web when it names the web or nothing, else the first that runs on this machine (iOS,
+Windows or Android; for `test` and `agent`, macOS and Linux too). There is no `verify macos` or `verify linux`. Inspect the launched native app for
 features that headless checks cannot exercise, such as hardware capture or native
 panels, and say what remains untested. Read the whole verification report:
 counted findings can accompany exit zero. Fix app findings for at most three

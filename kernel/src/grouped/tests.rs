@@ -219,3 +219,66 @@ fn custom_radio_rows_keep_their_selection_target_and_checked_state() {
         }
     }
 }
+
+#[test]
+fn a_standard_rows_switch_is_its_toggle_only_in_a_grouped_list() {
+    for list_style in [Some("inset-grouped"), None] {
+        let mut k = Kernel::with_monospace();
+        let mut ops = vec![];
+        for (id, node_type) in [
+            (1, NodeType::View),
+            (2, NodeType::View),
+            (3, NodeType::View),
+            (4, NodeType::View),
+            (5, NodeType::Text),
+            (6, NodeType::Control),
+            (7, NodeType::View),
+            (8, NodeType::View),
+            (9, NodeType::Control),
+        ] {
+            ops.push(Op::CreateView { id, node_type });
+        }
+        if let Some(value) = list_style {
+            ops.push(Op::SetProp {
+                id: 1,
+                prop: PropId::ListStyle,
+                value: value.into(),
+            });
+        }
+        let prop = |id, prop, value: &str| Op::SetProp {
+            id,
+            prop,
+            value: value.into(),
+        };
+        let children = |id, children: &[ViewId]| Op::SetChildren {
+            id,
+            children: children.to_vec(),
+        };
+        ops.extend([
+            prop(5, PropId::Text, "Dark mode"),
+            prop(6, PropId::Type, "checkbox"),
+            prop(9, PropId::Type, "checkbox"),
+            prop(7, PropId::SemanticTag, "header"),
+            // A section of a header holding a row with a checkbox, then its
+            // group of one row: a text and a checkbox.
+            children(1, &[2]),
+            children(2, &[7, 3]),
+            children(3, &[4]),
+            children(4, &[5, 6]),
+            children(7, &[8]),
+            children(8, &[9]),
+            style(4, &[(StyleId::Display, "flex")], false),
+            Op::AttachRoot { id: 1 },
+        ]);
+        k.apply(0, 1, &ops).unwrap();
+        let grouped = list_style.is_some();
+        assert_eq!(k.grouped_toggle(4), grouped.then_some(6), "{list_style:?}");
+        for other in [1, 2, 3, 5, 6, 8] {
+            assert_eq!(
+                k.grouped_toggle(other),
+                None,
+                "{other} is no row of a section's group"
+            );
+        }
+    }
+}

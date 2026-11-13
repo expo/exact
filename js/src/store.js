@@ -28,11 +28,13 @@
         if (env.overlaying()) throw inOverlay("store.set()");
         var e = secretWrite(name, String(value)) ? undefined : presence.door(3, String(name), String(value));
         if (e !== undefined) throw new Error(e);
+        env.keys.supersede(name);
       },
       forget: function (name) {
         if (env.overlaying()) throw inOverlay("store.forget()");
         var e = secretWrite(name, null) ? undefined : host(4, String(name), "");
         if (e !== undefined) throw new Error(e);
+        env.keys.supersede(name);
       },
       has: presence.has,
       locked: presence.locked,

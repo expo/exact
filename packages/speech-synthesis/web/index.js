@@ -57,17 +57,20 @@ export function implementation({ changed, agent, now, log, audioSession, foregro
   }
 
   // ------------------------------------------------------------ the queue
-  /** `u` begins at session time `at`: the browser is given it, or the agent's clock starts it. */
-  function begin(u, at) {
+  /** `u` begins at session time `at`: the browser is given it, or the agent's clock starts it. `later`, after
+   * one ended, gives it to the browser on a later turn: Chrome drops an utterance spoken in the turn of a
+   * `cancel()` or of its `error` event, and never ends it. */
+  function begin(u, at, later) {
     current = u.id; u.state = 'speaking'; u.began = at; u.paused = null;
     boundary = NO_BOUNDARY;
     if (agent && fail) { u.failure = fail; fail = null; }
-    if (synth) synth.speak(u.browser);
+    if (synth && later) setTimeout(() => { if (current === u.id) synth.speak(u.browser); });
+    else if (synth) synth.speak(u.browser);
     reclaim();
   }
   /** The next queued utterance begins, unless the queue is paused or one speaks. */
-  function proceed(at = now()) {
-    if (!current && queue.length && !reasons.size) begin(utterances.get(queue.shift()), at);
+  function proceed(at = now(), later = false) {
+    if (!current && queue.length && !reasons.size) begin(utterances.get(queue.shift()), at, later);
     if (!current && !queue.length) boundary = NO_BOUNDARY;
     reclaim();
   }
@@ -77,7 +80,7 @@ export function implementation({ changed, agent, now, log, audioSession, foregro
     u.state = 'ended'; u.outcome = outcome; u.error = error;
     if (outcome === 'error') say(`${u.id}: ${error}`);
     queue = queue.filter(id => id !== u.id);
-    if (current === u.id) { current = null; proceed(at); }
+    if (current === u.id) { current = null; proceed(at, true); }
     reclaim();
   }
 

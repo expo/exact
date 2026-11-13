@@ -368,12 +368,13 @@ final class ContentOwnersIOSTests: XCTestCase {
         XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "nil gives the edge back at once")
         pass()
         panesUnderTheBar()
-        XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "and the pass keeps it")
+        XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "the pass keeps the top edge on the pane `navigationScroll` names")
         XCTAssertTrue(route.contentScrollView(for: .bottom) === primary)
         XCTAssertTrue(p.navigation.contentScrollView(of: route) === secondary)
         XCTAssertTrue(p.scrollsToTopTarget() === secondary, "nil gives scroll-to-top back to the authored scroller")
         XCTAssertTrue([primary, secondary].allSatisfy { $0.contentInsetAdjustmentBehavior == .automatic })
-        // `.all` selects the top and bottom edges together, and nil gives both back
+        // `.all` with the pane that holds the bottom edge selects the top edge too, and nil gives both back
+        // (`NativeListNavigationIOSTests` checks that `.all` holds the bottom edge)
         route.setContentScrollView(primary, for: .all)
         XCTAssertTrue(primary.scrollsToTop)
         XCTAssertFalse(secondary.scrollsToTop)
@@ -490,7 +491,15 @@ final class ContentOwnersIOSTests: XCTestCase {
         }
         controller.setViewController(holders[1], for: .secondary)
         controller.view.layoutIfNeeded()
-        p.arrangements.sync()
+        // UIKit gives the pane room before Exact tells it its allocation, then the kernel lays it out 0×0 until its covers follow
+        for told in [false, true] {
+            if told { p.arrangements.sync() }
+            XCTAssertTrue(!holders[1].view.bounds.isEmpty && second.bounds.isEmpty, "the shown pane has room and no layout yet")
+            for top in [true, false] {
+                XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: top).map(\.id), [first.id],
+                               "a pane UIKit shows again owns no edge until it is laid out, and its sibling keeps its own")
+            }
+        }
         until("the shown peer restores its inset and position") {
             self.window?.layoutIfNeeded()
             return p.navigation.covers[second.id] != .whole && scrolls[1].contentInsetAdjustmentBehavior == .automatic

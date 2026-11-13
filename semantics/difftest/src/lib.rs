@@ -395,6 +395,15 @@ fn compare(rust: Vec<String>, lean: Vec<String>) -> Verdict {
     };
     let first = rust.iter().zip(&lean).position(|(a, b)| a != b);
     if let Some(at) = first.or((rust.len() != lean.len()).then(|| rust.len().min(lean.len()))) {
+        // A module's answer that moved is the runner's state, however it
+        // moved: a poll's or a re-ask's commit is one the trace leaves out
+        // too, so this comes before the omitted-commit guard. A missing reply
+        // before the step it moved in still diverges.
+        if let Some((from, why)) = module_moved_by(&rust_raw, at) {
+            if missing.is_none_or(|missing| from <= missing) {
+                return Verdict::Unsupported(why);
+            }
+        }
         if missing.is_none_or(|missing| at < missing) && !omitted_at(&rust_raw, at) {
             if let Some(why) = unsupported(at).or_else(|| bound(at)).or_else(|| unset(at)) {
                 return Verdict::Unsupported(why);
@@ -440,6 +449,24 @@ pub fn omitted_at(lines: &[String], at: usize) -> bool {
         }
     }
     false
+}
+
+/// The first [`observe::MODULE_MOVED`] note in the steps up to and including
+/// the one holding compared line `at`, with the compared line its step starts
+/// at: from there on, a module's answer is the runner's state, which the
+/// semantics, holding the boot answer, leaves out.
+fn module_moved_by(lines: &[String], at: usize) -> Option<(usize, String)> {
+    let mut end = 0;
+    for step in chunks(lines) {
+        if let Some(note) = step.iter().find(|l| l.starts_with(observe::MODULE_MOVED)) {
+            return Some((end, note.clone()));
+        }
+        end += step.iter().filter(|l| !l.starts_with('#')).count();
+        if at < end {
+            return None;
+        }
+    }
+    None
 }
 
 /// The runner's observation split into steps: entry 0 is boot, entry `k`
@@ -858,6 +885,50 @@ mod tests {
         assert!(matches!(
             compare(rust, lean),
             Verdict::Diverge { at: 4, .. }
+        ));
+    }
+
+    /// A module's answer that moved off its boot fact by the step where the
+    /// two first differ is the runner's state, outside the semantics; one
+    /// that moves only after a difference does not hide it.
+    #[test]
+    fn a_moved_module_answer_is_outside_only_from_its_step() {
+        let moved = format!(
+            "{}: resource status no longer holds its boot answer",
+            observe::MODULE_MOVED
+        );
+        let rust = |note_at: usize| {
+            let mut v = lines(&[
+                "== boot",
+                "outcome ok",
+                "resource status \"prompt\"",
+                "== tap \"allow\"",
+                "outcome ok",
+                "resource status \"granted\"",
+                "== tap \"go\"",
+                "outcome ok",
+                "resource status \"granted\"",
+            ]);
+            v.insert(note_at, moved.clone());
+            v
+        };
+        let lean = lines(&[
+            "== boot",
+            "outcome ok",
+            "resource status \"prompt\"",
+            "== tap \"allow\"",
+            "outcome ok",
+            "resource status \"prompt\"",
+            "== tap \"go\"",
+            "outcome ok",
+            "resource status \"prompt\"",
+        ]);
+        assert!(
+            matches!(compare(rust(5), lean.clone()), Verdict::Unsupported(why) if why == moved)
+        );
+        assert!(matches!(
+            compare(rust(8), lean),
+            Verdict::Diverge { at: 5, .. }
         ));
     }
 }

@@ -249,6 +249,40 @@ fn an_else_row_is_settled_and_its_owner_is_a_bake() {
     );
 }
 
+#[test]
+fn store_readers_are_built_through_their_module_and_no_other_plan_imports_it() {
+    let plan = contract::compile(
+        "component App\n  resource full = full() as shape number else preview()\n  resource bare = full() as shape number\n  view\n    text `${full}/${bare}`\n",
+    )
+    .unwrap();
+    let mut plan = contract::bake(plan, Answers).unwrap();
+    let import = "import{reader as $reader}from\"./store-reader.js\";";
+    for development in [false, true] {
+        let js = crate::emit::emit(&plan, false, development).unwrap().js;
+        assert!(!js.contains(import) && !js.contains("$reader("), "{js}");
+    }
+    for i in 0..plan.resources.len() {
+        if matches!(plan.str(plan.resources[i].name), "full" | "bare") {
+            plan.resources[i].reader = true;
+        }
+    }
+    for development in [false, true] {
+        let js = crate::emit::emit(&plan, false, development).unwrap().js;
+        assert!(js.contains(import), "{js}");
+        let res = if development { "$devRes" } else { "res" };
+        for row in js.split("const r_").skip(1) {
+            let row = row.split(';').next().unwrap();
+            if row.contains("\"full\",\"full\"") {
+                assert!(row.contains(&format!("=$reader({res},1)(")), "{row}");
+            } else if row.contains("\"bare\"") {
+                assert!(row.contains(&format!("=$reader({res},0)(")), "{row}");
+            } else {
+                assert!(!row.contains("$reader("), "{row}");
+            }
+        }
+    }
+}
+
 /// The runner answers its own sources: the program marks their resources, so
 /// the overlay never lays a write over one (overlay.js).
 #[test]

@@ -33,7 +33,7 @@ function standIn(url) {
   const reply = fill => {
     const bytes = [], u8 = v => bytes.push(v), u16 = v => bytes.push(v & 255, v >>> 8 & 255), u32 = v => bytes.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255);
     const string = v => { const e = new TextEncoder().encode(v); u32(e.length); bytes.push(...e); };
-    u32(8); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(9); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   // A call (`call_request`) as a Rust source receives it.
   const decode = at => {
@@ -57,7 +57,7 @@ function standIn(url) {
     return { code, source, outcome, kind, own, open };
   };
   const exports = {
-    memory, exact_logic_abi: () => 8, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 9, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];

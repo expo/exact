@@ -85,6 +85,24 @@ test('what a shared cache must not keep is fetched every time', async () => {
   }
 });
 
+test('an answer kept for an anonymous request is given to one with credentials only if marked shareable', async () => {
+  const o = origin({
+    'http://api.test/anon': { 'cache-control': 'max-age=60' },
+    'http://api.test/public': { 'cache-control': 'public, max-age=60' },
+    'http://api.test/shared': { 'cache-control': 's-maxage=60' },
+    'http://api.test/must': { 'cache-control': 'max-age=60, must-revalidate' },
+  });
+  const auth = { headers: { authorization: 'Bearer t' } };
+  const anon = (await o.get('http://api.test/anon')).body;
+  expect((await o.get('http://api.test/anon', auth)).body).not.toBe(anon);
+  // The answer to the request with credentials did not replace the anonymous one.
+  expect((await o.get('http://api.test/anon')).body).toBe(anon);
+  for (const path of ['public', 'shared', 'must']) {
+    const url = `http://api.test/${path}`, first = (await o.get(url)).body;
+    expect([path, (await o.get(url, auth)).body]).toEqual([path, first]);
+  }
+});
+
 test('Vary keys the answer on the request headers it names', async () => {
   const o = origin({ 'http://api.test/v': { 'cache-control': 'max-age=60', vary: 'Accept-Language' } });
   const fr = { headers: { 'accept-language': 'fr' } }, de = { headers: { 'accept-language': 'de' } };

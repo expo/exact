@@ -54,13 +54,13 @@ final class Adapter: ExactSessionDelegate {
             default: window?.overrideUserInterfaceStyle = .unspecified
             }
         // The app's page in Settings (LLP 1133.002 D11); under the agent, journaled only.
-        // `change` at the second argument's id hears whether it opened (OpenURL.swift `answerOpenURL`).
+        // `change` at the second argument's id hears whether it opened (OpenURL.swift `openURLAnswer`).
         case "openURL" where args.first as? String == UIApplication.openSettingsURLString:
-            let answer = { (opened: Bool) in session.answerOpenURL(args, opened: opened) }
+            let answer = session.openURLAnswer(args)
             session.log("openURL app-settings: opens the app's page in Settings\(agentMode ? " (not under the agent)" : "")")
             if agentMode { answer(true) } else if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url, options: [:], completionHandler: answer) }
         case "openURL":
-            let answer = { (opened: Bool) in session.answerOpenURL(args, opened: opened) }
+            let answer = session.openURLAnswer(args)
             // A scheme the app declares (OpenURL.swift), else the web's, mail's and the phone's.
             if let value = args.first as? String, let url = URL(string: value),
                session.openDeclaredScheme(url, open: { url, done in UIApplication.shared.open(url, options: [:], completionHandler: done) }, answer: answer) { return }

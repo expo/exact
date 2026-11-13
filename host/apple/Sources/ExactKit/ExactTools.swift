@@ -5,11 +5,12 @@
 // calls `ExactTools.call` directly. Either way the call is handed to the
 // session's runner, which runs it as an invocation of origin `tool`
 // (runner/src/runner/modules/calls.rs), and the door polls it by id until it
-// ends. The module posts `exact.tools.cancel` with the same dictionary when
-// the system cancels the intent's task: the call's `Cancellation`, which the
-// dictionary carries, refuses it at the door before the runner has it and
-// tells the runner at once after, which drops a call still waiting and lets
-// one that runs finish.
+// ends or a reload replaces that runner. The module posts
+// `exact.tools.cancel` with the same dictionary when the system cancels the
+// intent's task: the call's `Cancellation`, which the dictionary carries,
+// refuses it at the door before the runner has it and tells the runner at
+// once after, which drops a call still waiting and lets one that runs
+// finish.
 //
 // A call that launched the app with no scene boots the session with none,
 // as a wake does (LLP 1133.017 D7): `boot`, which the app's host sets.
@@ -112,15 +113,26 @@ public enum ExactTools {
             guard let id = answer["call"] as? Int else {
                 return refuse("unavailable", answer["error"] as? String ?? "The app refused the call.")
             }
-            follow(id, agent: { session.agent($0) }, cancellation: cancellation, reply: reply)
+            follow(id, agent: runner(session), cancellation: cancellation, reply: reply)
         }
         hand()
     }
 
+    /// `session`'s agent while the runner that runs now does; nil after a
+    /// reload or the session's end. A call's id is its runner's, and a
+    /// reload's runner numbers its calls from the start again, so asking
+    /// the next one would read another call's outcome.
+    static func runner(_ session: ExactSession) -> (String) -> String? {
+        let issued = GenerationStamp(session)
+        return { issued.session?.agent($0) }
+    }
+
     /// Poll call `id`, which the runner holds, through `agent` until it ends,
     /// and answer its envelope. From now on `cancellation` tells the runner
-    /// the moment the caller cancels, not at the next poll. Main thread.
-    static func follow(_ id: Int, agent: @escaping (String) -> String, cancellation: Cancellation,
+    /// the moment the caller cancels, not at the next poll. `agent` answers
+    /// nil once that runner is gone (a reload, a plan replacement, the
+    /// session's end): the call ends `interrupted` (LLP 1111 D4). Main thread.
+    static func follow(_ id: Int, agent: @escaping (String) -> String?, cancellation: Cancellation,
                        reply: @escaping ([String: Any]) -> Void) {
         let handed = Date()
         cancellation.tell = { _ = agent(text(["op": "cancel", "id": id])) }
@@ -129,7 +141,10 @@ public enum ExactTools {
             reply(envelope)
         }
         func poll() {
-            let polled = json(agent(text(["op": "called", "id": id])))
+            guard let polled = agent(text(["op": "called", "id": id])).map(json) else {
+                return answer(["outcome": "interrupted", "certainty": "uncertain", "reason": "",
+                               "message": "The app was reloaded while it ran: it may or may not have taken effect. Read before calling again."])
+            }
             if polled["outcome"] != nil { return answer(polled) }
             if polled["error"] != nil || Date().timeIntervalSince(handed) > endBound {
                 return answer(["outcome": "timeout", "certainty": "uncertain", "reason": "",

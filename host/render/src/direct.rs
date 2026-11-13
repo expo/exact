@@ -101,6 +101,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
                 sent: bytes.len(),
                 keyframes,
                 scroll,
+                controls: document.controls,
             });
         };
         settle_at(
@@ -120,6 +121,11 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
         Err(why) => {
             crate::log(format_args!("render {location}: with a kernel ({why})"));
             retire(page, data);
+            // The kernel's render is another runner's: no view of it is a
+            // boot control's, and the swap drops every queued event.
+            if let Some(boot) = &mut boot {
+                boot.controls.clear();
+            }
             let rendered = crate::render_with_at(
                 plan,
                 data,
@@ -182,6 +188,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
         keyframes,
         scroll_document: scroll,
         hero_image,
+        controls: Vec::new(),
     };
     let head = ahead
         .page_head(plan, site, location)
@@ -240,7 +247,8 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
         &checkpoint,
         checkpoints,
     );
-    hand(close_after_boot(close.clone(), boot.is_some()).as_bytes());
+    let to = boot.as_ref().map(|boot| boot.to(&document.controls));
+    hand(close_after_boot(close.clone(), to).as_bytes());
     let settled = page.settled;
     retire(page, data);
     if over {
@@ -270,6 +278,8 @@ pub(crate) struct Boot {
     pub sent: usize,
     keyframes: String,
     scroll: bool,
+    /// [`Document::controls`] of the boot document.
+    controls: Vec<exact_kernel::ViewId>,
 }
 
 impl Boot {
@@ -290,14 +300,29 @@ impl Boot {
         ));
         more
     }
+
+    /// Each boot control's place among the settled page's `controls`, `-`
+    /// where its view is gone: the swap's `data-to`. A view is one instance
+    /// of the runner's tree, so the same view is the same logical control.
+    pub(crate) fn to(&self, settled: &[exact_kernel::ViewId]) -> String {
+        let at: std::collections::HashMap<_, _> =
+            settled.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+        let places: Vec<String> = self
+            .controls
+            .iter()
+            .map(|id| at.get(id).map_or_else(|| "-".into(), |i| i.to_string()))
+            .collect();
+        places.join(" ")
+    }
 }
 
-pub(crate) fn close_after_boot(mut close: String, boot: bool) -> String {
-    if boot {
+/// `to`: [`Boot::to`], when a boot document went first.
+pub(crate) fn close_after_boot(mut close: String, to: Option<String>) -> String {
+    if let Some(to) = to {
         // Before the checkpoint lets the runtime adopt the settled root.
         close.insert_str(
             "</div>".len(),
-            &format!("<script>{}</script>", boot_swap_js()),
+            &format!("<script data-to=\"{to}\">{}</script>", boot_swap_js()),
         );
     }
     close
@@ -309,18 +334,27 @@ const SHELL_HIDDEN: &str = "<style>#exact-root[data-boot]{display:none}</style>"
 
 /// The inline script that removes a boot document before the runtime adopts
 /// the settled page: each press or edit the capture script queued on a boot
-/// element moves to the settled element at the same place (an edit with the
-/// control's value), and focus follows. The server's CSP admits it by hash.
+/// control moves to the same control in the settled page (an edit with the
+/// control's value), and focus follows. Its `data-to` ([`Boot::to`]) names,
+/// for the n-th `[data-exact-on]` element of the boot root, the place of the
+/// same view among the settled root's; one whose view is gone, or which
+/// hears other events now, takes its queued events with it. An element
+/// inside a control is the one at the same place inside it. The server's
+/// CSP admits the script by hash.
 pub fn boot_swap_js() -> &'static str {
     concat!(
         "(()=>{let d=document,b=d.querySelector(\"#exact-root[data-boot]\"),",
         "s=d.querySelector(\"#exact-root:not([data-boot])\"),",
-        "m=e=>{let p=[];while(e&&e!=b){p.unshift([...e.parentNode.children].indexOf(e));e=e.parentElement}",
-        "if(!e)return null;let t=s;for(let n of p)t=t?.children[n];return t},",
-        "f=m(d.activeElement);",
-        "for(let i of self.exact?.q??[]){let t=m(i.target);",
-        "if(t){if(i.type!=\"click\"){t.value=i.target.value;t.checked=i.target.checked}i.target=t}}",
-        "b.remove();f?.focus()})()"
+        "C=r=>[...r.querySelectorAll(\"[data-exact-on]\")],B=C(b),S=C(s),",
+        "T=(d.currentScript?.dataset.to??\"\").split(\" \"),",
+        "m=e=>{let c=e?.closest?.(\"[data-exact-on]\"),t=S[T[B.indexOf(c)]],p=[];",
+        "if(!t||t.dataset.exactOn!=c.dataset.exactOn)return null;",
+        "for(;e!=c;e=e.parentElement)p.unshift([...e.parentNode.children].indexOf(e));",
+        "for(let n of p)t=t?.children[n];return t},",
+        "f=m(d.activeElement),q=self.exact?.q??[],k=[];",
+        "for(let i of q){if(!b.contains(i.target)){k.push(i);continue}let t=m(i.target);",
+        "if(t){if(i.type!=\"click\"){t.value=i.target.value;t.checked=i.target.checked}i.target=t;k.push(i)}}",
+        "q.splice(0,q.length,...k);b.remove();f?.focus()})()"
     )
 }
 
@@ -431,7 +465,8 @@ component Cards
         .expect("a streamed page");
         let cached = streamed.body;
         assert!(release.is_none(), "the boot document released the answer");
-        let swap = format!("</div><script>{}</script>", boot_swap_js());
+        // The kernel's views are not the boot document's: its swap moves nothing.
+        let swap = format!("</div><script data-to=\"\">{}</script>", boot_swap_js());
         let mut rest = sent.as_str();
         for part in [
             "<title>Cards</title>",
@@ -455,6 +490,78 @@ component Cards
         assert!(!cached.contains(boot_swap_js()));
         assert!(!cached.contains("Loading cards"));
         assert!(cached.contains(">first<") && cached.contains(">second<"));
+    }
+
+    /// A boot control's queued events go to its own view in the settled
+    /// page, or nowhere: a loading branch's button the answer replaced is not
+    /// the button now at its place.
+    #[test]
+    fn a_boot_control_moves_only_to_its_own_view() {
+        let source = r#"
+routes nav
+  home "/" render=cached paint=boot
+  notfound render=build
+component Cards
+  state n = 0
+  resource cards = cards() as shape string[]
+  action bump
+    n = n + 1
+  view
+    column
+      if cards.length == 0
+        button "Cancel" press=bump
+      if cards.length > 0
+        button "Delete" press=bump
+      button "Keep" press=bump
+"#;
+        let plan = contract::compile(source).unwrap();
+        let (release, hold) = mpsc::channel();
+        let hold = Arc::new(Mutex::new(Some(hold)));
+        let mut release = Some(release);
+        let mut sent = String::new();
+        render_js(
+            &plan,
+            &|| Cards(hold.clone()),
+            Default::default(),
+            "/",
+            &Site::default(),
+            Duration::from_secs(30),
+            &Default::default(),
+            SHELL,
+            &Js::of(SHELL).unwrap(),
+            |_| false,
+            usize::MAX,
+            None,
+            &mut |bytes| {
+                sent.push_str(std::str::from_utf8(bytes).unwrap());
+                if sent.contains("data-boot=\"\">") {
+                    if let Some(release) = release.take() {
+                        release.send(()).unwrap();
+                    }
+                }
+            },
+        )
+        .unwrap()
+        .expect("a streamed page");
+        let boot = sent.split_once(SHELL_HIDDEN).expect("a boot document").0;
+        assert!(
+            boot.contains(">Cancel<") && !boot.contains(">Delete<"),
+            "{boot}"
+        );
+        // Cancel's view is gone; Keep is the settled page's second control.
+        let swap = format!("<script data-to=\"- 1\">{}</script>", boot_swap_js());
+        assert!(sent.contains(&swap), "{sent}");
+        let result = crate::compare::location(
+            &plan,
+            &|| Cards(Arc::new(Mutex::new(None))),
+            Default::default(),
+            "/",
+            &Site::default(),
+            Duration::from_secs(30),
+            Some(SHELL),
+            &Default::default(),
+        );
+        assert!(result.contains("\"same\":true"), "{result}");
     }
 
     #[test]

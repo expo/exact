@@ -1,4 +1,5 @@
 import { expect, afterAll } from 'bun:test';
+import { EXE } from '../../../scripts/paths.mjs';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'));
 const wasm = resolve(process.env.EXACT_WEB_DIST ?? resolve(root, 'host/web/dist'), 'app.wasm');
-const compiler = resolve(target, 'debug/contract');
+const compiler = resolve(target, `debug/contract${EXE}`);
 const check = need('fixture', !existsSync(wasm) || !existsSync(compiler)
   ? 'build Caltrain with --wasm and cargo build -p contract --bin contract' : null);
 let scratch, plan;

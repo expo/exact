@@ -20,8 +20,9 @@ struct ShareInbox {
 
     /// The app's inbox, when it declares `share_target` and is entitled to
     /// the group (`ExactShareGroup` is written only then). Under the agent,
-    /// `EXACT_AGENT_SHARE_INBOX` names another directory, for a drive whose
-    /// build has no group (an ad-hoc Mac build).
+    /// `EXACT_AGENT_SHARE_INBOX` names another directory: a drive's own,
+    /// apart from the shares a person left (and, on an ad-hoc Mac build,
+    /// where there is no group).
     static var main: ShareInbox? {
         guard let json = Bundle.main.object(forInfoDictionaryKey: "ExactShareTarget") as? String,
               let target = try? JSONSerialization.jsonObject(with: Data(json.utf8)) else { return nil }

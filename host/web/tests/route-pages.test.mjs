@@ -1,4 +1,5 @@
 import { test, expect } from 'bun:test';
+import { EXE } from '../../../scripts/paths.mjs';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -87,13 +88,13 @@ for (const runtime of ['wasm', 'js']) test(`${runtime}: rendered route titles, m
   let session, suite, server;
   try {
     writeFileSync(source, SOURCE);
-    run([resolve(target, 'debug/contract'), 'build', source, '-o', plan]);
+    run([resolve(target, `debug/contract${EXE}`), 'build', source, '-o', plan]);
     const dist = runtime === 'wasm' ? wasmDist : resolve(dir, 'dist');
     if (runtime === 'js') run([process.execPath, 'host/web-js/build.mjs', 'caltrain', '--contract', source, '--out', dist, '--render', 'js']);
     suite = await suiteBrowser();
     const staticPage = await suite.newPage({ javaScriptEnabled: false });
     for (const [path, title] of [['/', 'Home'], ['/item', 'Item & <Detail>'], ['/explicit', 'Authored'], ['/empty', ''], ['/bare', 'Caltrain'], ['/formatted', 'Inbox & Archive']]) {
-      const html = runtime === 'wasm' ? JSON.parse(run([resolve(target, 'debug/caltrain-render'), '--plan', plan, '--name', 'Caltrain',
+      const html = runtime === 'wasm' ? JSON.parse(run([resolve(target, `debug/caltrain-render${EXE}`), '--plan', plan, '--name', 'Caltrain',
         '--shell', resolve(ROOT, 'host/web/index.html'), path]).trim().split('\n').at(-1)).page
         : readFileSync(resolve(dist, path.slice(1), 'index.html'), 'utf8');
       await staticPage.setContent(html);
@@ -106,7 +107,7 @@ for (const runtime of ['wasm', 'js']) test(`${runtime}: rendered route titles, m
     else {
       // No wasm is built for this plan: the rendered page and the host's own scripts, with a glue.js that only installs
       // the menu rule, as the wasm host's glue does after its first paint.
-      const html = JSON.parse(run([resolve(target, 'debug/caltrain-render'), '--plan', plan, '--name', 'Caltrain',
+      const html = JSON.parse(run([resolve(target, `debug/caltrain-render${EXE}`), '--plan', plan, '--name', 'Caltrain',
         '--shell', resolve(ROOT, 'host/web/index.html'), '/']).trim().split('\n').at(-1)).page;
       const glue = 'import "./menu-rows.js"; globalThis.exact.menuRows(); globalThis.exact.glued = true;';
       server = createServer((request, response) => {

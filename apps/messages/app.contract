@@ -57,13 +57,17 @@ component Messages
   state flightDelta = 0
   state flightScale = 1
   state flightThread = ""
-  state seenChange = 0
+  state seenCreated = 0
   mutation changed as shape Change refreshes data
   mutation heartbeat as shape Change refreshes data
+  // `command("new")` alone answers here, so only a thread it made is opened.
+  mutation created as shape Change refreshes data
   derive thread = top(nav).params.thread
-  derive revision = generation + (match changed { case some(c) => c.revision, case none => 0 }) + (match heartbeat { case some(c) => c.revision, case none => 0 })
+  derive revision = generation + (match changed { case some(c) => c.revision, case none => 0 }) + (match heartbeat { case some(c) => c.revision, case none => 0 }) + (match created { case some(c) => c.revision, case none => 0 })
   derive changeId = match changed { case some(c) => c.id, case none => "" }
   derive changeRevision = match changed { case some(c) => c.revision, case none => 0 }
+  derive createdId = match created { case some(c) => c.id, case none => "" }
+  derive createdRevision = match created { case some(c) => c.revision, case none => 0 }
   derive textValue = draftThread == thread ? draft : data.draft
   derive travel = pull > 0 ? 66 * (1 - 1 / (1 + pull / 66)) : 0
   resource viewport = exactViewport() as shape Viewport
@@ -191,7 +195,10 @@ component Messages
   action searchModels(value: string)
     modelQuery = value
   action model(id: string)
-    send changed = command(newConversation ? "new" : "model", thread, id, wallTime.epochAtZero + performanceNow())
+    if newConversation
+      send created = command("new", thread, id, wallTime.epochAtZero + performanceNow())
+    else
+      send changed = command("model", thread, id, wallTime.epochAtZero + performanceNow())
     choosing = false
   action swipe(id: string)
     swiped = swiped == id ? "" : id
@@ -220,13 +227,12 @@ component Messages
     let startedAt = startFlight ? stamp : flightAt
     if flightBody != "" and stamp - startedAt < 6000
       time = stamp
-    if changeRevision != seenChange
-      seenChange = changeRevision
-      if newConversation and changeId != ""
-        nav = open(nav, path("thread", changeId))
+    if createdRevision != seenCreated
+      seenCreated = createdRevision
+      if createdId != ""
+        nav = open(nav, path("thread", createdId))
         draft = ""
-        draftThread = changeId
-        newConversation = false
+        draftThread = createdId
     if startFlight
       flightId = changeId
       flightX = frame(`bubble-${changeId}`).x

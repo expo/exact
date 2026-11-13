@@ -327,7 +327,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** A file being written: AAC in MP4, Opus in Ogg or WebM, or 16-bit PCM WAV. On the recorder's thread. With
      * [parts], AAC in MP4 goes to an ADTS part first (Parts.kt). */
-    private class Encoder(val file: File, form: Form, capture: Int, bitRate: Double, parts: Context?) {
+    internal class Encoder(val file: File, form: Form, capture: Int, bitRate: Double, parts: Context?) {
         /** Opus takes 8, 12, 16, 24 or 48 kHz; the capture's other rates are resampled to 48 kHz. */
         private val resample = form.codec == MediaFormat.MIMETYPE_AUDIO_OPUS && capture !in OPUS_RATES
         val rate = if (resample) 48000 else capture
@@ -400,7 +400,9 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
             return out.copyOf(n)
         }
 
-        private fun drain(end: Boolean) {
+        /** Writes what the codec has encoded; [end], everything up to the end of its stream, which past [deadline]
+         * ([System.nanoTime]) is an error. */
+        private fun drain(end: Boolean, deadline: Long = 0) {
             val codec = codec ?: return
             while (true) {
                 val index = codec.dequeueOutputBuffer(info, if (end) 10_000 else 0)
@@ -419,7 +421,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
                         codec.releaseOutputBuffer(index, false)
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
                     }
-                    else -> if (!end) return
+                    else -> if (!end) return else if (System.nanoTime() > deadline) throw IllegalStateException("the encoder did not end its stream")
                 }
             }
         }
@@ -431,10 +433,17 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
                 return
             }
             val codec = codec ?: return
+            // A stop answers within a bound: a codec that takes no end of stream, or never ends its output, fails it.
+            val deadline = System.nanoTime() + ENDING
             try {
-                val index = codec.dequeueInputBuffer(10_000)
-                if (index >= 0) codec.queueInputBuffer(index, 0, 0, frames * 1_000_000 / rate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                drain(true)
+                // Every input buffer can be full: one frees only as the codec's output is drained.
+                while (true) {
+                    val index = codec.dequeueInputBuffer(10_000)
+                    if (index >= 0) { codec.queueInputBuffer(index, 0, 0, frames * 1_000_000 / rate, MediaCodec.BUFFER_FLAG_END_OF_STREAM); break }
+                    if (System.nanoTime() > deadline) throw IllegalStateException("the encoder took no end of stream")
+                    drain(false)
+                }
+                drain(true, deadline)
                 codec.stop()
                 if (trackIndex >= 0) muxer?.stop()
             } catch (e: Exception) {
@@ -442,7 +451,8 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
                 throw e
             } finally {
                 codec.release()
-                muxer?.release()
+                // A muxer that was not stopped stops as it is released, which can fail too: the first failure is the answer.
+                try { muxer?.release() } catch (e: IllegalStateException) {}
             }
             part?.finish()
         }
@@ -506,9 +516,11 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
 private val TYPES = listOf("audio/mp4", "audio/wav") + if (android.os.Build.VERSION.SDK_INT >= 29) listOf("audio/ogg", "audio/webm") else emptyList()
 private val OPUS_RATES = setOf(8000, 12000, 16000, 24000, 48000)
+/** How long a stop waits for the encoder to take the end of its stream and drain to it, in nanoseconds. */
+private const val ENDING = 5_000_000_000L
 
 /** A take's container and codec: the type's (D2), or the platform's words (D4). Null for what this API cannot write. */
-private data class Form(val container: Int, val codec: String, val profile: Int?) {
+internal data class Form(val container: Int, val codec: String, val profile: Int?) {
     companion object {
         val WAV = Form(-1, "audio/raw", null)
         private val AAC = MediaCodecInfo.CodecProfileLevel.AACObjectLC

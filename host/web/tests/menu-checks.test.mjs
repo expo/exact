@@ -59,22 +59,22 @@ component App
               button role="menuitemradio" aria-checked=true white-space="nowrap" testId="long"
                 text "A title far wider than the menu that holds it, which ends in an ellipsis"
               button role="menuitemradio" aria-checked=true display="flex" align-items="center" gap=8 height=44 testId="raster"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Maps"
               button role="menuitemradio" aria-checked=false display="flex" align-items="center" gap=8 height=44 padding=4 border-bottom-width=2 border-bottom-style="solid" border-bottom-color="#ff9999" testId="raster-off"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Waze"
               button role="menuitemradio" aria-checked=true display="flex" align-items="center" gap=8 height=44 padding-left=(stacked ? 12 : 4) border-bottom-width=2 border-bottom-style="solid" border-bottom-color="#ff9999" testId="raster-bound"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Google"
               button role="menuitemradio" aria-checked=true direction="rtl" display="flex" align-items="center" gap=8 height=44 padding-left=4 padding-right=12 testId="raster-rtl"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Apple"
           // A row in a button is no native one, so this menu is apart: its one raster row is all it checks.
           button appearance="none" padding-left=32 testId="holder"
             column id="menu2" popover="auto" role="menu"
               button role="menuitemradio" aria-checked=true display="flex" align-items="center" gap=8 height=44 testId="nested"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Maps"
 `;
 const ROWS = ['title', 'off', 'box', 'leading', 'trailing', 'turning', 'wide', 'long', 'raster', 'raster-off', 'raster-bound', 'raster-rtl'];

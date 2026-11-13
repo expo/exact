@@ -655,3 +655,30 @@ fn streams_polls_and_uploads_keep_unsaid_and_explicit_default_distinct() {
         }
     }
 }
+
+#[test]
+fn prefetch_is_ignored_for_web_reads_and_refused_for_sends_and_other_work() {
+    let mut read = request(1, Request::get("https://example.test").prefetch(), false);
+    read.class = exact_runner::RequestClass::Read;
+    let batch: serde_json::Value = serde_json::from_str(&one(|b| b.request(&read))).unwrap();
+    assert_eq!(batch["ops"][0]["op"], "request");
+    assert!(batch["ops"][0].get("prefetch").is_none());
+    for invalid in [
+        request(2, Request::get("https://example.test").prefetch(), false),
+        request(3, Request::continuation(7).prefetch(), false),
+        request(
+            4,
+            Request::get("https://example.test")
+                .body_to("app:/data/a")
+                .prefetch(),
+            false,
+        ),
+    ] {
+        let batch: serde_json::Value = serde_json::from_str(&one(|b| b.request(&invalid))).unwrap();
+        assert_eq!(batch["ops"][0]["op"], "refuse");
+        assert_eq!(
+            batch["ops"][0]["message"],
+            "exactPrefetch requires a plain HTTP read"
+        );
+    }
+}

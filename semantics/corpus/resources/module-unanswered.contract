@@ -1,0 +1,16 @@
+// A native module's read with no answer at boot: `watchPosition` waits on
+// its permission, still `prompt`, so the read shows its placeholder and
+// `pending` reads true. A placeholder is no answer, so it is no host fact:
+// the semantics leaves the read out, and the case is outside it rather than
+// a divergence (as is a read admission refuses, which `failed` reads).
+use watchPosition, GeolocationPosition from "@exact/geolocation"
+
+component App
+  resource position = watchPosition() as shape GeolocationPosition else empty()
+  view
+    column
+      text `${position.coords.latitude}` testId="latitude"
+      text `${pending(position)}` testId="pending"
+
+test "an unanswered read is no fact"
+  expect text "pending" == "true"

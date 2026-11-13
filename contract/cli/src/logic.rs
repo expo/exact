@@ -3,11 +3,30 @@
 
 /// Generate `AppData` and `app_data()` for a host's source type and constructor.
 /// `inputs` are the actual target bake's compatibility inputs.
+/// A data source that names no app id takes the manifest's (`inputs["app"]`),
+/// so a native host gives it the app's storage roots (`Swappable::named`).
 pub fn rust_entry(
     data: &str,
     constructor: &str,
     mode: &str,
     inputs: &serde_json::Value,
+) -> Result<String, String> {
+    let app = inputs["app"].as_str().map(|app| format!("{app:?}"));
+    rust_entry_naming(data, constructor, mode, inputs, app.as_deref())
+}
+
+/// `rust_entry`, where `app` is the Rust expression (a `&str`) that names a
+/// data source naming no app id, or `None` to leave it unnamed. A linked
+/// Apple bake passes the id the link carries in the executable
+/// (`exact_apple::baked::identity`), so the compiled entry is the same for
+/// apps that differ only in identity, and an app repacked onto another's
+/// executable is named by its own compat.json, not the other's code.
+pub fn rust_entry_naming(
+    data: &str,
+    constructor: &str,
+    mode: &str,
+    inputs: &serde_json::Value,
+    app: Option<&str>,
 ) -> Result<String, String> {
     let constructor = native_storage_constructor(constructor, inputs)?;
     let constructor = constructor.as_str();
@@ -25,12 +44,7 @@ pub fn rust_entry(
         }
         _ => String::new(),
     };
-    // A data source that names no app id takes the manifest's, so a native
-    // host gives it the app's storage roots (`Swappable::named`).
-    let named = inputs["app"]
-        .as_str()
-        .map(|app| format!(".named({app:?})"))
-        .unwrap_or_default();
+    let named = app.map(|app| format!(".named({app})")).unwrap_or_default();
     let mut supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
         let receipt: serde_json::Value = serde_json::from_slice(
             &std::fs::read(std::path::Path::new(&directory).join("app.module.json"))
@@ -413,6 +427,16 @@ mod tests {
             let entry = super::rust_entry("Data", "data()", mode, &inputs).unwrap();
             let named = format!("Swappable::{mode}(data()).named(\"com.example.notes\")");
             assert!(entry.contains(&named), "{entry}");
+            let linked =
+                super::rust_entry_naming("Data", "data()", mode, &inputs, Some("linked_app()"))
+                    .unwrap();
+            assert!(
+                linked.contains(&format!("Swappable::{mode}(data()).named(linked_app())")),
+                "{linked}"
+            );
+            assert!(!linked.contains("com.example.notes"), "{linked}");
+            let unnamed = super::rust_entry_naming("Data", "data()", mode, &inputs, None).unwrap();
+            assert!(!unnamed.contains(".named("), "{unnamed}");
         }
     }
 

@@ -8,7 +8,7 @@ use exact_runner::{Answer, Outcome, Request};
 use serde_json::{json, Value as Json};
 
 /// The ceiling of a one-shot answer's JSON: twice `maxBuffer` in base64
-/// beside its other fields.
+/// beside its other fields. Output crosses as base64 in either encoding.
 fn ceiling(max_buffer: usize) -> u32 {
     (2 * (4 * max_buffer.div_ceil(3)) + 65_536).min(64 << 20) as u32
 }
@@ -26,7 +26,7 @@ pub struct ExecFile {
     pub timeout: Option<u32>,
     /// The most bytes of stdout or stderr kept (default 1 MiB).
     pub max_buffer: Option<usize>,
-    /// Decode output as UTF-8 (otherwise base64 in the reply).
+    /// Decode output as UTF-8, an invalid sequence replaced (otherwise its bytes).
     pub utf8: bool,
 }
 
@@ -122,11 +122,12 @@ fn body(outcome: &Outcome) -> Result<Json, String> {
 pub fn exec_reply(outcome: &Outcome, utf8: bool) -> Result<ExecResult, String> {
     let j = body(outcome)?;
     let bytes = |key: &str| -> Vec<u8> {
-        let text = j[key].as_str().unwrap_or("");
+        let bytes =
+            exact_runner::agent::unbase64(j[key].as_str().unwrap_or("")).unwrap_or_default();
         if utf8 {
-            text.as_bytes().to_vec()
+            String::from_utf8_lossy(&bytes).into_owned().into_bytes()
         } else {
-            exact_runner::agent::unbase64(text).unwrap_or_default()
+            bytes
         }
     };
     Ok(ExecResult {
@@ -180,10 +181,13 @@ mod tests {
         let reply = Outcome::Response(exact_runner::Response {
             status: 200,
             headers: vec![],
-            body: br#"{"stdout":"1.2.0\n","stderr":"","code":0,"signal":null,"timedOut":false,"overflow":null}"#.to_vec(),
+            // "1.2.0\n" and an invalid byte, which UTF-8 decoding replaces
+            body: br#"{"stdout":"MS4yLjAK","stderr":"/w==","code":0,"signal":null,"timedOut":false,"overflow":null}"#.to_vec(),
         });
         let result = exec_reply(&reply, true).unwrap();
         assert!(result.ok() && result.stdout == b"1.2.0\n");
+        assert_eq!(result.stderr, "\u{fffd}".as_bytes());
+        assert_eq!(exec_reply(&reply, false).unwrap().stderr, [0xff]);
         let failed = Outcome::Failed {
             kind: exact_runner::FailureKind::NotFound,
             message: "no".into(),

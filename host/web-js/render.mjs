@@ -10,17 +10,20 @@
 //   bun host/web-js/render.mjs <dist> <location>…                  print pages
 //   bun host/web-js/render.mjs <dist> --serve [--port 8830]        a page per request
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { resolve, dirname, extname } from 'node:path';
+import { within } from '../../scripts/paths.mjs';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
 import { createDocument } from './dom.js';
 import { cachingFetch, FRESH } from './http-cache.mjs';
-import { canonical, matchPattern } from './route-pattern.js';
+import { canonical, filePathOf, matchPattern } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
-import { writeCrawlerFiles } from '../web/crawl.mjs';
+import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
 
 const DEADLINE = 3000;
+// A path through a file (`/app.js/x`) is no file too: stat throws ENOTDIR there, which `throwIfNoEntry` keeps.
+const isFile = path => { try { return statSync(path).isFile(); } catch { return false; } };
 // Promise reactions and async functions run outside the host's callback wrapper. Their promise's realm owns the
 // rejection; an Error's realm also identifies a callback chained from a host promise, such as a response body read.
 const rejectionOwners = new WeakMap();
@@ -340,6 +343,17 @@ export function renderer(dist, { closed = false } = {}) {
   }
   const render = async (location, deadline = DEADLINE) => (await begin(location)).finish(deadline);
   render.begin = begin;
+  render.pages = async ({ name, pattern, source, args }, deadline = DEADLINE) => {
+    let made, timer;
+    try {
+      made = realm();
+      const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("it didn't answer before the deadline")), deadline); });
+      const locations = await Promise.race([made.ctx.__pages(pattern, source, args, deadline), expired]);
+      return locations.map(location => ({ location, notfound: false }));
+    } catch (error) {
+      throw new Error(`route \`${name}\`'s pages (${source}): ${error?.message ?? error}`);
+    } finally { clearTimeout(timer); made?.dispose(); }
+  };
   render.markdown = async () => {
     const { ctx } = realm();
     await ctx.__start();
@@ -467,8 +481,8 @@ if (import.meta.main) {
     const routes = existsSync(resolve(dist, 'routes.json')) ? JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes : [];
     Bun.serve({ port, hostname: '127.0.0.1', async fetch(req) {
       const url = new URL(req.url);
-      const file = resolve(dist, '.' + decodeURIComponent(url.pathname));
-      if (file.startsWith(dist + '/') && !file.includes('/.gen/') && existsSync(file) && extname(file)) {
+      const file = /%2f|%5c/i.test(url.pathname) ? null : resolve(dist, '.' + decodeURIComponent(url.pathname));
+      if (file && file !== dist && within(dist, file) && !/[\\/]\.gen[\\/]/.test(file) && isFile(file) && extname(file)) {
         const type = TYPES[extname(file)] ?? 'application/octet-stream';
         // A dist file compressed once, at quality 11.
         if (/\bbr\b/.test(req.headers.get('accept-encoding') ?? '') && /html|javascript|css|json|wasm|svg/.test(type)) {
@@ -481,23 +495,29 @@ if (import.meta.main) {
       // `serve` gives them (LLP 1153.001 D1); the rest are rendered here.
       const answers = deferredPath(url.pathname);
       if (answers) { const checkpoint = deferredAnswers(answers); return new Response(checkpoint ?? 'These answers are no longer kept; the page builds itself afresh.\n', { status: checkpoint ? 200 : 404, headers: checkpoint ? { 'content-type': 'application/json', 'cache-control': 'private, max-age=3600, immutable' } : { 'content-type': 'text/plain', 'cache-control': 'no-store' } }); }
-      const at = matchPattern(routes, canonical(url.pathname)), built = resolve(file, 'index.html');
+      const at = matchPattern(routes, canonical(url.pathname)), built = resolve(dist, '.' + filePathOf(url.pathname), 'index.html');
       const html = { 'content-type': 'text/html', 'cache-control': 'no-cache' };
-      if (at >= 0 && routes[at].render === 'build' && built.startsWith(dist + '/') && existsSync(built)) return new Response(Bun.file(built), { headers: html });
+      if (at >= 0 && routes[at].render === 'build' && within(dist, built) && existsSync(built)) return new Response(Bun.file(built), { headers: html });
       if (at >= 0 && routes[at].render === 'client') return new Response(Bun.file(resolve(dist, 'shell.html')), { headers: html });
       const { status, headers, body } = await page(url.pathname + url.search, name => req.headers.get(name));
       return new Response(body, { status, headers });
     } });
     console.log(`serving ${dist} with pages rendered by the JavaScript runtime on ${port}`);
   } else if (args.includes('--build')) {
-    const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), docs = [];
+    const listed = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), pages = [], docs = [];
+    render.ahead = false;
+    for (const route of listed) {
+      const locations = route.source ? await render.pages(route) : [route];
+      for (const page of locations) pages.push(page);
+    }
     const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
+    const files = buildPageFiles(dist, pages, routes);
     let origin = null;
-    for (const p of pages) {
+    for (const [i, p] of pages.entries()) {
       const page = await render(p.location);
       docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
       origin ??= page.origin;
-      const file = p.notfound ? '404.html' : `${p.location.replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
+      const file = files[i];
       mkdirSync(dirname(resolve(dist, file)), { recursive: true });
       writeFileSync(resolve(dist, file), page.html);
       console.log(`${p.location} → ${file} (${page.html.length} B${page.settled ? '' : ', at the deadline'})`);

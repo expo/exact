@@ -1135,3 +1135,76 @@ fn a_shared_secret_lease_on_a_name_the_grants_do_not_keep_is_denied() {
     assert_eq!(other.read(), Err("denied: secret.keep".into()));
     assert_eq!(other.write(Some("x")), Err("denied: secret.keep".into()));
 }
+
+#[test]
+fn a_refresh_keeps_a_failed_write_the_disk_has_not_superseded() {
+    /// A disk that refuses writes to `exact.state.count` while `refusing`.
+    struct Disk {
+        values: Arc<Mutex<std::collections::BTreeMap<String, Vec<u8>>>>,
+        refusing: Arc<AtomicBool>,
+    }
+    impl crate::store::KeptStore for Disk {
+        fn snapshot(&self, _: Vec<(String, Vec<u8>)>) -> crate::store::StoreRead {
+            crate::store::StoreRead {
+                values: self.values.lock().unwrap().clone().into_iter().collect(),
+                omitted: vec![],
+                complete: true,
+            }
+        }
+        fn write(&self, write: &exact_runner::StoreWrite) -> Result<(), String> {
+            if write.name == "exact.state.count" && self.refusing.load(Ordering::SeqCst) {
+                return Err("injected storage full".into());
+            }
+            let mut values = self.values.lock().unwrap();
+            match &write.value {
+                Some(value) => values.insert(write.name.clone(), value.clone()),
+                None => values.remove(&write.name),
+            };
+            Ok(())
+        }
+        fn kept_failures(&self) -> Vec<String> {
+            vec![]
+        }
+    }
+    let plan = contract::compile("component App\n  state count = 0 persist\n  state other = 0 persist\n  action step\n    count = count + 1\n  action step_other\n    other = other + 1\n  action keep\n    count = count\n  view\n    text `${count}`\n").unwrap().encode();
+    let values = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
+    let refusing = Arc::new(AtomicBool::new(true));
+    let (mut host, _) = Host::boot(
+        &plan,
+        ChangingReader {
+            asks: Arc::new(AtomicUsize::new(0)),
+        },
+        Box::new(MonospaceMeasurer::default()),
+        300.,
+        200.,
+    )
+    .unwrap();
+    host.activate_data();
+    host.runner.take_store_writes();
+    host.secrets = Some(Box::new(Disk {
+        values: values.clone(),
+        refusing: refusing.clone(),
+    }));
+    for name in ["step", "step_other"] {
+        let receipt = host.runner.act(name, vec![]).unwrap();
+        host.commit(&[Timed { at_ms: 0., receipt }], None);
+    }
+    assert_eq!(values.lock().unwrap()["exact.state.other"], b"1");
+    assert!(!values.lock().unwrap().contains_key("exact.state.count"));
+
+    // Committing `other` moves the counter; the refresh reads a disk on
+    // which `count` is still what it was when its write failed.
+    host.refresh_store();
+    assert_eq!(host.runner.slot("count"), Some(&Value::Number(1.)));
+    assert_eq!(
+        host.pending_store_writes.len(),
+        1,
+        "the write is still owed"
+    );
+
+    refusing.store(false, Ordering::SeqCst);
+    let receipt = host.runner.act("keep", vec![]).unwrap();
+    host.commit(&[Timed { at_ms: 0., receipt }], None);
+    assert_eq!(values.lock().unwrap()["exact.state.count"], b"1");
+    assert!(host.pending_store_writes.is_empty());
+}

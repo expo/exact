@@ -37,13 +37,14 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { createConnection } from 'node:net';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
+import { within } from './paths.mjs';
 import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, gpuModules, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
 import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
 import { androidImplementations, packageConfig } from '../js/bake/src/typescript.mjs';
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
-import { configMetaData, fragmentPermissions, manifestFragment, withMetaData } from './android-manifest.mjs';
+import { configMetaData, fragmentPermissions, manifestFragment, withMetaData, withAuthCallbacks } from './android-manifest.mjs';
 import { androidShareActivity } from './share-target.mjs';
 import { pickIcon, placeRgba, readPng, resize } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
@@ -261,7 +262,7 @@ const READER = resolve(import.meta.dir, '../host/android');
  * host/android/app/build/<name>; an app outside it builds under its own target directory. No two apps share any of it,
  * so builds of two apps at once neither mix outputs nor wait on one project's locks. */
 export function apkDirs(app) {
-  const own = !app.dir.startsWith(resolve(READER, '../..') + '/'), root = resolve(app.target, 'android');
+  const own = !within(resolve(READER, '../..'), app.dir), root = resolve(app.target, 'android');
   return own ? { app: resolve(root, 'app'), canvas: resolve(root, 'canvas'), cache: resolve(root, 'gradle'), kotlin: resolve(root, 'kotlin') }
     : { app: resolve(READER, 'app/build', app.name), canvas: resolve(READER, 'canvas/build', app.name), cache: resolve(READER, '.gradle/apps', app.name), kotlin: resolve(READER, '.kotlin/apps', app.name) };
 }
@@ -1128,10 +1129,11 @@ export function coldGradleHome(env = process.env) {
 function extensionArgs(app, out, config, bound) {
   const generated = resolve(apkDirs(app).app, 'extensions');
   rmSync(generated, { recursive: true, force: true });
-  let permissions = [], services = {}, features = [];
+  let permissions = [], services = {}, features = [], callbacks = [];
   try {
     const reach = JSON.parse(readFileSync(resolve(out, 'compat.json'), 'utf8')).reach;
     permissions = reach?.android ?? [];
+    callbacks = reach?.auth?.callbacks ?? [];
     // The reader's foreground services the lines declare, with their purposes' text (LLP 1133.033 D2).
     services = reach?.androidServices ?? {};
     // Hardware the lines use where it is present, never required (LLP 1133.037 D17: USB host mode).
@@ -1161,7 +1163,7 @@ function extensionArgs(app, out, config, bound) {
     if (typeof value?.env === 'string' && !process.env[value.env] && config.has(name.split('/').at(-1))) console.warn(`${app.name}: ${value.env} is unset, so ${name}'s ${key} is absent from this development build (a release build refuses it)`);
   }
   // The share target's filters on the app's activity (LLP 1133.024 D5), inside the same `<application>`.
-  const fragment = withMetaData(manifestFragment(bound, { privacyPolicy: app.manifest?.privacy_policy ?? null }), [...configMetaData(config), ...(androidShareActivity(app.manifest?.share_target) ?? [])]), fragmentFile = resolve(apkDirs(app).app, 'manifest-fragment.xml');
+  const fragment = withAuthCallbacks(withMetaData(manifestFragment(bound, { privacyPolicy: app.manifest?.privacy_policy ?? null }), [...configMetaData(config), ...(androidShareActivity(app.manifest?.share_target) ?? [])]), callbacks), fragmentFile = resolve(apkDirs(app).app, 'manifest-fragment.xml');
   rmSync(fragmentFile, { force: true });
   if (fragment) { mkdirSync(dirname(fragmentFile), { recursive: true }); writeFileSync(fragmentFile, fragment); }
   return [...(bound.length ? [`-PextensionDirs=${[...bound.flatMap((b) => b.dirs), generated].join(',')}`] : []), ...(permissions.length ? [`-Ppermissions=${permissions.join(',')}`] : []),

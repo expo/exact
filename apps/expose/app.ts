@@ -95,6 +95,9 @@ const threads = new Map<string, Message[]>([
 ]);
 let revision = 0;
 const streaming = new Map<string, boolean>();
+// Each answering thread's request, which Clear aborts; a turn is the thread's
+// while its controller is the one kept here.
+const answering = new Map<string, AbortController>();
 const errors = new Map<string, string>();
 const read = new Set<string>();
 
@@ -154,6 +157,7 @@ function turn(done: boolean, error = ''): Turn {
 }
 function finish(thread: string, error = ''): Turn {
   streaming.set(thread, false);
+  answering.delete(thread);
   if (error) errors.set(thread, error);
   const rows = threads.get(thread) ?? [];
   const last = rows[rows.length - 1];
@@ -207,13 +211,17 @@ function ask(thread: string, text: string, article: string, epochMs: number, sto
     max_tokens: 700,
     messages: [{ role: 'system', content: SYSTEM(MODELS.find((m) => m.id === model)?.name ?? model) }, ...history],
   };
+  const controller = new AbortController();
+  answering.set(thread, controller);
+  // A turn Clear ended leaves the thread to whatever comes after it.
+  const end = (error = ''): Turn => (answering.get(thread) === controller ? finish(thread, error) : turn(true));
   // One event's `data:` payload.
   const consume = (data: string): Turn | null => {
     if (!data) return null;
-    if (data === '[DONE]') return finish(thread);
+    if (data === '[DONE]') return end();
     try {
       const parsed = JSON.parse(data) as { choices?: { delta?: { content?: string } }[]; error?: { message?: string } };
-      if (parsed.error?.message) return finish(thread, parsed.error.message);
+      if (parsed.error?.message) return end(parsed.error.message);
       const delta = parsed.choices?.[0]?.delta?.content;
       if (typeof delta === 'string' && delta) {
         reply.body += delta;
@@ -224,18 +232,21 @@ function ask(thread: string, text: string, article: string, epochMs: number, sto
     }
     return null;
   };
+  // Every way out ends the turn: the request failing, or its body or stream
+  // failing after the headers, lands in `catch`.
   return fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', 'HTTP-Referer': 'https://expose.dev', 'X-Title': 'Expose' },
     body: JSON.stringify(request),
+    signal: controller.signal,
   }).then(async (response) => {
-    if (!streaming.get(thread)) return turn(true);
-    if (!response.ok) return finish(thread, `Expose couldn’t reach the model (${response.status}).`);
+    if (answering.get(thread) !== controller) return turn(true);
+    if (!response.ok) return end(`Expose couldn’t reach the model (${response.status}).`);
     if (native) {
       const parsed = (await response.json()) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
       const content = parsed.choices?.[0]?.message?.content;
-      if (typeof content === 'string') reply.body = content.trim();
-      return finish(thread, parsed.error?.message ?? '');
+      if (typeof content === 'string' && answering.get(thread) === controller) reply.body = content.trim();
+      return end(parsed.error?.message ?? '');
     }
     const reader = response.body?.getReader();
     let buffer = '';
@@ -250,7 +261,7 @@ function ask(thread: string, text: string, article: string, epochMs: number, sto
       }
       return null;
     };
-    if (!reader) return lines(await response.text(), true) ?? finish(thread);
+    if (!reader) return lines(await response.text(), true) ?? end();
     const decoder = new TextDecoder();
     for (;;) {
       const { done, value } = await reader.read();
@@ -258,11 +269,14 @@ function ask(thread: string, text: string, article: string, epochMs: number, sto
       const ended = lines(decoder.decode(value, { stream: true }), false);
       if (ended) return ended;
     }
-    return lines(decoder.decode(), true) ?? finish(thread);
-  }, (error: unknown) => finish(thread, `Expose couldn’t reach the model. ${error instanceof Error ? error.message : String(error)}`));
+    return lines(decoder.decode(), true) ?? end();
+  }).catch((error: unknown) => end(`Expose couldn’t reach the model. ${error instanceof Error ? error.message : String(error)}`));
 }
+// Clear while Expose answers ends that turn: its request is aborted.
 function clearThread(thread: string): Turn {
-  if (thread === 'expose' && !streaming.get('expose')) {
+  if (thread === 'expose') {
+    answering.get(thread)?.abort();
+    if (streaming.get(thread)) finish(thread);
     const rows = threads.get('expose')!;
     rows.splice(1);
     errors.delete('expose');

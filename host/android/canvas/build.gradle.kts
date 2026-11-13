@@ -14,12 +14,14 @@ android {
             "../../../packages/alarms/android", "../../../packages/alarms/test",
             "../../../packages/background/android", "../../../packages/background/test",
             "../../../packages/calendar/android", "../../../packages/calendar/test",
+            "../../../packages/calls/android", "../../../packages/calls/test",
             "../../../packages/camera/android", "../../../packages/camera/test",
             "../../../packages/contacts/android", "../../../packages/contacts/test",
             "../../../packages/text-detection/android", "../../../packages/text-detection/test",
             "../../../packages/media-capture/android", "../../../packages/media-capture/test",
             "../../../packages/local-auth/android", "../../../packages/local-auth/test",
             "../../../packages/passkeys/android", "../../../packages/passkeys/test",
+            "../../../packages/payments/android", "../../../packages/payments/test",
             "../../../packages/recording/android", "../../../packages/recording/test",
         ))
     }
@@ -36,4 +38,7 @@ dependencies {
     testImplementation("androidx.camera:camera-view:1.6.2")
     testImplementation("androidx.lifecycle:lifecycle-runtime:2.9.4")
     testImplementation("androidx.credentials:credentials:1.6.0")
+    testImplementation("com.google.android.gms:play-services-wallet:20.0.0")
+    testImplementation("androidx.core:core-telecom:1.0.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 }

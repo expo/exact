@@ -3,9 +3,9 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, dirname, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, resolve, sep } from 'node:path';
 import { resolveApp, buildBake, bakeTarget } from './app.mjs';
 import { contractCompiler, snapshotOf, materializeSnapshot, disposeSnapshot } from './deploy.mjs';
 import { pinned } from './test-workspace.mjs';
@@ -45,7 +45,7 @@ async function fixture(body) {
   try {
     // These fixtures assert the workspaces' default target paths.
     delete process.env.CARGO_TARGET_DIR;
-    for (const path of ['scripts/app.mjs','scripts/app-icons.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/file-dependencies.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/shader-libraries.mjs','host/apple/svg-filter.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','host/apple/link.mjs','game/app/shells.mjs','game/inputs.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs']) {
+    for (const path of ['scripts/app.mjs','scripts/app-icons.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/file-dependencies.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/shader-libraries.mjs','host/apple/svg-filter.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','host/apple/link.mjs','host/apple/privacy.mjs','game/app/shells.mjs','game/inputs.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs','scripts/deploy-signing.mjs']) {
       write(path, readFileSync(resolve(import.meta.dir,'..',path)));
     }
     // The rustc wrapper the scripts' cargo calls run on a Mac (`withHostDeployment`), found beside the copied scripts.
@@ -103,6 +103,11 @@ test('the Hermes installer owns its workspace in ordinary and nested checkouts',
       assert.deepEqual(metadata.packages.map(p => p.manifest_path), [manifest]);
       assert.deepEqual(metadata.workspace_members, [metadata.packages[0].id]);
     }
+    // Its own workspace takes none of the root's profiles, so it optimizes its dependencies itself, as the root's dev
+    // profile does: setup's `--check` hashes each bundle with sha2, nine seconds a target unoptimized.
+    const own = Bun.TOML.parse(readFileSync(resolve(root, installer, 'Cargo.toml'), 'utf8'));
+    const rootProfile = Bun.TOML.parse(readFileSync(resolve(root, 'Cargo.toml'), 'utf8')).profile.dev.package['*'];
+    assert.deepEqual(own.profile?.dev?.package?.['*'], rootProfile);
   } finally { rmSync(outer, {recursive:true, force:true}); }
 }, 60_000);
 
@@ -984,5 +989,24 @@ test('a node_modules that differs from bun.lock is named by package', async () =
       writeFileSync(resolve(dir, 'node_modules', name, 'package.json'), JSON.stringify({ name, version }));
     }
     assert.deepEqual(lockMismatches(dir), ['left 1.0.0, bun.lock 1.2.3', 'gone missing, bun.lock 2.0.0']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// `rustup-init --default-toolchain none`, and a command started in an app's directory, which pins nothing.
+test('the host target is the pinned toolchain\'s when rustup has no default', () => {
+  const root = resolve(import.meta.dir, '..');
+  const sysroot = spawnSync('rustc', ['--print', 'sysroot'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+  if (basename(dirname(sysroot)) !== 'toolchains') return; // not rustup's
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-no-default-')));
+  try {
+    mkdirSync(resolve(dir, 'rustup/toolchains'), { recursive: true });
+    symlinkSync(sysroot, resolve(dir, 'rustup/toolchains', basename(sysroot)));
+    const env = { ...process.env, RUSTUP_HOME: resolve(dir, 'rustup'), RUSTUP_AUTO_INSTALL: '0' };
+    delete env.RUSTUP_TOOLCHAIN;
+    assert.notEqual(spawnSync('rustc', ['-vV'], { cwd: dir, env }).status, 0, 'rustup has no default here');
+    const code = `console.log((await import(${JSON.stringify(resolve(root, 'scripts/app.mjs'))})).bakeTarget('linux'))`;
+    const run = spawnSync(process.execPath, ['-e', code], { cwd: dir, env, encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), bakeTarget('linux'));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

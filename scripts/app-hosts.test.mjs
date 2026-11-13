@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { hostOf } from './app-cli.mjs';
+import { hostOf, shippedHost } from './app-cli.mjs';
 import { main } from './agent.mjs';
 
 // The host before `test`'s files and `agent`'s ops is optional: a word is taken as the host only when it names one, so
@@ -17,6 +17,100 @@ test('the first word is the host only when it names one', () => {
     expect([hostOf(verb, rest), rest]).toEqual([host, left]);
   }
 });
+
+// A test, agent or verify that names no host runs on one the app ships (#402): app.json's `host`, `deploy.store` and
+// `deploy.binaries`, as the build and deploy read them. The web is an app's only when it names the web or names nothing.
+test("a drive that names no host runs on one the app's manifest names", () => {
+  const native = { host: { ios: {}, macos: {} }, deploy: { store: { ios: '0', macos: '0' } } };
+  for (const [manifest, os, verify, drive = verify] of [
+    [{}, 'darwin', 'web'],
+    [{ host: {}, deploy: {} }, 'linux', 'web'],
+    [{ host: { web: {} }, deploy: { store: { web: '0' } } }, 'darwin', 'web'],
+    [{ host: { ios: {}, macos: {}, web: {} } }, 'darwin', 'web'],
+    [{ host: { ios: {}, linux: {} }, deploy: { store: { web: '0' } } }, 'darwin', 'web'],
+    [native, 'darwin', 'ios'],
+    [{ host: { android: {} } }, 'darwin', 'android'],
+    [{ host: { ios: {}, android: {} } }, 'linux', 'android'],
+    [{ host: { ios: {}, windows: {} } }, 'win32', 'windows'],
+    [{ host: { ios: {}, windows: {} } }, 'darwin', 'ios'],
+    // test and agent drive the Mac and the headless Linux host too, which verify has no leg for.
+    [{ host: { macos: {} } }, 'darwin', null, 'macos'],
+    [{ host: { macos: {}, linux: {} } }, 'linux', null, 'linux'],
+    [{ host: { linux: {}, android: {} } }, 'darwin', 'android', 'linux'],
+    // On Windows the driver has no Linux host binary to open, so a drive takes Android.
+    [{ host: { linux: {}, android: {} } }, 'win32', 'android'],
+    [{ host: { linux: {} } }, 'win32', null],
+    [native, 'win32', null],
+    [{ host: { tvos: {} } }, 'darwin', null],
+  ]) {
+    for (const [verb, host] of [['verify', verify], ['test', drive], ['agent', drive]]) {
+      expect([verb, JSON.stringify(manifest), os, shippedHost(verb, manifest, os).host]).toEqual([verb, JSON.stringify(manifest), os, host]);
+      const rest = ['--strict'];
+      expect(hostOf(verb, rest, manifest, os)).toBe(host);
+      expect(rest).toEqual(['--strict']);
+    }
+  }
+  // A host named on the command line is the run's, whatever the manifest says; another verb's is the web's.
+  for (const verb of ['verify', 'test', 'agent']) expect(hostOf(verb, ['web'], native, 'darwin')).toBe('web');
+  expect(hostOf('test', ['app.test.contract'], native, 'darwin')).toBe('ios');
+  expect(hostOf('build', [], native, 'darwin')).toBe('web');
+  // With none it drives here, the line says why, and what follows for the verb.
+  for (const [verb, manifest, os, why] of [['verify', native, 'win32', /names ios, macos and not the web.*ios: its simulator needs macOS; macos: verify has no leg for it.*so only the semantics check runs$/],
+    ['verify', { host: { macos: {} } }, 'darwin', /names macos and not the web/], ['verify', { host: { windows: {} } }, 'linux', /windows: it runs on Windows/],
+    ['test', native, 'win32', /ios: its simulator needs macOS; macos: it needs macOS\), so test runs nowhere unless named \(`test web` runs it on the web anyway\)$/],
+    ['agent', { host: { tvos: {} } }, 'darwin', /tvos: agent has no host for it/],
+    ['test', { host: { linux: {} } }, 'win32', /linux: its headless host is driven on macOS and Linux/]]) {
+    const chosen = shippedHost(verb, manifest, os);
+    expect(chosen.host).toBeNull();
+    expect(chosen.why).toMatch(why);
+    expect(hostOf(verb, [], manifest, os)).toBeNull();
+  }
+});
+
+// End to end: a test or agent with no host the app ships here refuses before it builds anything, and says why.
+test('a drive with no host the app ships here refuses and says why', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-drive-host-')), dir = resolve(root, 'tv-only');
+  try {
+    createApp(dir);
+    const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, host: { tvos: {} }, deploy: {} }, null, 2));
+    for (const verb of ['test', 'agent']) {
+      const r = spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), verb, ...(verb === 'agent' ? ['tree'] : [])], { cwd: dir, encoding: 'utf8', timeout: 60_000, env: { ...process.env, EXACT_FEEDBACK: '0' } });
+      expect([verb, r.status]).toEqual([verb, 2]);
+      expect(r.stderr).toMatch(new RegExp(`^${verb}: app\\.json names tvos and not the web, .*\\(\`${verb} web\` runs it on the web anyway\\)$`, 'm'));
+      expect(existsSync(resolve(dir, 'dist'))).toBe(false);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 120_000);
+
+// End to end: an app that ships only the Mac app runs the semantics check alone, and builds and drives no web.
+test('verify of an app that ships no host verify drives builds nothing and says so', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-verify-host-')), dir = resolve(root, 'mac-only');
+  mkdirSync(dir);
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Mac Only', app: { id: 'com.example.maconly', name: 'Mac Only' }, host: { macos: {} }, deploy: { store: { macos: '0' } } }));
+  const preload = resolve(root, 'stub.mjs'), scripts = import.meta.dir, at = (p) => JSON.stringify(resolve(scripts, p));
+  // The semantics check answers at once; a build or a drive would be recorded as a failure.
+  writeFileSync(preload, `
+    import { mock } from 'bun:test';
+    mock.module(${at('verify-semantics.mjs')}, () => ({ contractVerify: () => ({ stop() {}, done: Promise.resolve({ exit: 0, output: '', errors: '' }) }), semanticsSummary: () => ['contract verify: stubbed'] }));
+    mock.module(${at('agent.mjs')}, () => ({ open: async () => { throw new Error('drove a host'); } }));
+  `);
+  try {
+    const run = (...args) => spawnSync(process.execPath, ['--preload', preload, resolve(scripts, 'verify.mjs'), '--app', 'mac-only', ...args],
+      { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8', timeout: 30_000 });
+    const json = run('--json');
+    expect(json.status).toBe(0);
+    const out = JSON.parse(json.stdout.trim().split('\n').at(-1));
+    expect([out.host, out.exit, out.built]).toEqual([null, 0, undefined]);
+    expect(out.skipped).toMatch(/names macos and not the web/);
+    const said = run();
+    expect(said.status).toBe(0);
+    expect(said.stderr).not.toMatch(/verify web/);
+    expect(said.stdout).toMatch(/^verify: app\.json names macos and not the web, .*so only the semantics check runs; contract verify: stubbed$/m);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
 
 // The driver carries a drive only on a host it knows; any other word fell to the web and was recorded as that host's.
 test('the driver refuses a host it does not carry', async () => {
@@ -208,3 +302,23 @@ test('a CI setup check names only the requested build toolchain and fails when i
   assert.match(result.stdout, /Android NDK: missing/);
   assert.doesNotMatch(result.stdout, /Chrome|web nightly|wasm-bindgen|Xcode/);
 });
+
+// Homebrew's `rust` puts a cargo that refuses `+<pin>` ahead of rustup's; a platform named before, no setup row reads it.
+test.skipIf(process.platform === 'win32')("a native build that fails under a cargo that is not rustup's names the directory to put first", async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const { namePlatform } = await import('./app-shells.mjs');
+  const pin = Bun.TOML.parse(readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8')).toolchain.channel;
+  const scratch = mkdtempSync(resolve(tmpdir(), 'exact-brew-cargo-'));
+  try {
+    const app = resolve(scratch, 'brewed'), brew = resolve(scratch, 'brew'), proxy = resolve(scratch, 'home/bin');
+    createApp(app);
+    namePlatform(app, 'linux');
+    const tool = (bin, name, body) => { mkdirSync(bin, { recursive: true }); writeFileSync(resolve(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 }); };
+    tool(brew, 'cargo', `echo "error: no such command: \\\`+${pin}\\\`" >&2; exit 101`);
+    for (const name of ['cargo', 'rustup']) tool(proxy, name, 'exit 0');
+    const env = { ...process.env, EXACT_APP_DIR: '', EXACT_FEEDBACK: '0', CARGO_HOME: resolve(scratch, 'home'), PATH: [brew, proxy, process.env.PATH].join(delimiter) };
+    const built = spawnSync(process.execPath, [resolve(app, 'exact.mjs'), 'linux'], { cwd: app, env, encoding: 'utf8' });
+    assert.notEqual(built.status, 0);
+    assert.ok(built.stderr.includes(`exact: ${brew}/cargo is not rustup's cargo and refuses +${pin}: put ${proxy} before ${brew} on PATH`), built.stderr);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}, 120000);

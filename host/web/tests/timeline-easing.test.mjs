@@ -1,7 +1,7 @@
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // A drag timeline's release on the web (LLP 1057.003 D3): a consumer plays a
 // copy of its keyframes with the `linear()` easing `timelineEasing` gives
-// for the spring's frames. The first tests evaluate that easing against the
+// for the release's samples. The first tests evaluate that easing against the
 // directed progress written out by hand; the browser test holds it, between
 // frames too, to Chrome seeking the paused animation to the timeline's
 // progress, as the glue does while a drag is held: delays, iterations,
@@ -13,7 +13,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { open } from '../../../scripts/agent.mjs';
-import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
+import { cdpBrowser, chromium, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { timelineEasing } from '../motion-glue.js';
 import { need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
@@ -120,7 +120,248 @@ test('an endless animation holds its start; a fill that leaves it out of effect 
   expect(timelineEasing(none, [0.5, -0.1, 0])).toBeNull(); // before the start, out of effect
   expect(timelineEasing(none, [0.5, 1, 0.9])).toBeNull(); // at the end, out of effect
   expect(worst(none, [0.5, 0.1, 0.9], (t) => t / 1000)).toBeLessThan(1e-9); // never leaves it
+  // Samples whose peak between the ends may be off by the tolerance: a peak
+  // that close to the end may leave the effect; the exact ends may not.
+  expect(timelineEasing(none, [0.5, 0.99999, 0.9], 2e-5)).toBeNull();
+  expect(timelineEasing(none, [0.5, 0.99999, 0.9])).not.toBeNull();
+  expect(timelineEasing(none, [0, 0.5, 0.9], 2e-5)).not.toBeNull();
 });
+
+check('CSS-eased translate releases follow on the compositor and on the agent clock', async () => {
+  const fixture = `<style>
+    @keyframes fade { from { opacity: 0.1 } to { opacity: 0.9 } }
+    @keyframes pulse { 0% { opacity: 0.1 } 40% { opacity: 0.9; animation-timing-function: ease-in } 100% { opacity: 0.3 } }
+    @keyframes stepped { 0% { opacity: 0.1 } 25% { opacity: 0.3; animation-timing-function: steps(2,end) } 75% { opacity: 0.7 } 100% { opacity: 0.9 } }
+  </style><div id="exact-root"><div id="source"><div id="consumer"></div></div><div id="reference"></div></div>
+  <script type="module">
+    import { motionController, translation } from './motion-glue.js';
+    import { animationClock } from './navigation.js';
+    const source = document.getElementById('source'), consumer = document.getElementById('consumer'), reference = document.getElementById('reference');
+    const nativeFrame = requestAnimationFrame.bind(window);
+    let frames = 0, time = null;
+    window.requestAnimationFrame = fn => { frames++; return nativeFrame(fn); };
+    const motion = motionController({views:new Map([[1,source],[2,consumer]]),now:()=>time ?? performance.now(),generation:()=>1,
+      inert:()=>false,applyBatch() {},request:r=>r.op==='begin'?{token:'1',value:[r.x,r.y]}:{accepted:true}});
+    const clock = animationClock(()=>time,()=>null,()=>motion.followTimelines());
+    const copies = () => consumer.getAnimations().filter(a=>a.animationName===undefined);
+    const read = () => {
+      const [a,b] = consumer.style.getPropertyValue('--exact-animation-range').trim().split(' ').map(Number);
+      const p = (translation(source,getComputedStyle(source).translate)[0]-a)/(b-a);
+      for (const animation of reference.getAnimations()) {
+        const {endTime, delay} = animation.effect.getComputedTiming();
+        animation.currentTime = Number.isFinite(endTime) ? p*endTime : Math.max(0,delay);
+      }
+      return Math.abs(Number(getComputedStyle(consumer).opacity)-Number(getComputedStyle(reference).opacity));
+    };
+    const prepare = (animation, style = '') => {
+      source.style.cssText='--exact-drag-timeline:--drag x;translate:0px 0px;width:100px;height:100px';
+      consumer.style.cssText='--exact-animation-timeline:--drag;--exact-animation-range:0 100;animation:'+animation+';animation-play-state:paused;'+style;
+      reference.style.cssText='animation:'+animation+';animation-play-state:paused;'+style;
+      motion.followTimelines();
+    };
+    const sampleRelease = driver => new Promise(ok=>{
+      let worst=0, intermediate=0;
+      const sample=()=>{
+        worst=Math.max(worst,read());intermediate++;
+        if(driver.playState==='finished')ok({worst,intermediate});else next();
+      };
+      // Fallback seeking can run later in the same animation-frame batch.
+      const next=()=>nativeFrame(()=>setTimeout(sample,0));
+      next();
+    });
+    window.release = async (easing, delay, animation, agent = false, range = '0 100', at = null, {effectEasing = null, to = 100, style = ''} = {}) => {
+      prepare(animation, style);
+      if (effectEasing) for (const el of [consumer,reference]) el.getAnimations()[0].effect.updateTiming({easing:effectEasing});
+      consumer.style.setProperty('--exact-animation-range',range);
+      source.style.transition='translate 400ms '+easing+' '+delay+'ms';
+      getComputedStyle(source).translate;
+      const ran = new Promise(ok=>source.addEventListener('transitionrun',ok,{once:true}));
+      source.style.translate=to+'px 0px';
+      const driver = source.getAnimations().find(a=>a.transitionProperty==='translate');
+      if (agent) { time=0; clock.register(time); clock.seek(time); }
+      if (!agent) await ran;
+      await new Promise(nativeFrame);
+      const count = copies().length, start = driver.startTime, followerStart = copies()[0]?.startTime;
+      let worst=0, intermediate=0;
+      const opacities=[];
+      if (agent) {
+        for (const t of at ?? Array.from({length:102},(_,i)=>i*(400+Math.max(0,delay))/101)) {
+          time=t; clock.register(time); clock.seek(time);
+          worst=Math.max(worst,read());
+          opacities.push(Number(getComputedStyle(consumer).opacity));
+        }
+        // Chromium's CSS transition end can round above its reported currentTime.
+        time=clock.settle()+1; clock.seek(time);
+      } else {
+        ({worst,intermediate}=await sampleRelease(driver));
+      }
+      if (!agent) await driver.finished;
+      await Promise.resolve();
+      return {count,frames,worst,intermediate,start,followerStart,opacities,remaining:copies().length};
+    };
+    window.interrupt = async mode => {
+      prepare('fade 1s linear both');
+      source.style.transition='translate 400ms ease-out 80ms';
+      getComputedStyle(source).translate;
+      const ran=new Promise(ok=>source.addEventListener('transitionrun',ok,{once:true}));
+      source.style.translate='100px 0px';
+      const first=source.getAnimations().find(a=>a.transitionProperty==='translate');
+      await ran; await new Promise(nativeFrame);
+      const old=copies()[0];
+      first.currentTime=180; old.currentTime=180;
+      const before=translation(source,getComputedStyle(source).translate)[0];
+      let caught=null, error=read();
+      if(mode==='grab') {
+        const hold=motion.begin(1,'translate');
+        caught=translation(source,getComputedStyle(source).translate)[0];
+        error=Math.max(error,read());
+        motion.end(hold,[0,0],true);
+      } else if(mode==='cancel') first.cancel();
+      else source.style.translate='0px 0px';
+      motion.followTimelines();
+      await Promise.resolve();
+      const next=source.getAnimations().find(a=>a.transitionProperty==='translate');
+      const count=copies().length;
+      if(mode!=='cancel') {
+        const samples=await sampleRelease(next);error=Math.max(error,samples.worst);
+        await next.finished;
+      } else error=Math.max(error,read());
+      await Promise.resolve();
+      return {before,caught,error,count,frames,oldState:old.playState,remaining:copies().length};
+    };
+    window.ready = true;
+  </script>`;
+  const server = Bun.serve({hostname:'127.0.0.1',port:0,fetch(req) {
+    const path = new URL(req.url).pathname;
+    return path==='/' ? new Response(fixture,{headers:{'content-type':'text/html'}})
+      : new Response(readFileSync(resolve(WEB,path.slice(1))),{headers:{'content-type':'text/javascript'}});
+  }});
+  const browser = await suiteBrowser();
+  try {
+    for (const [easing, delay, animation, agent] of [
+      ['ease-out', 0, 'fade 1s linear both', false],
+      ['cubic-bezier(0.2, -0.4, 0.7, 1.3)', 80, 'pulse 200ms linear 100ms 2 alternate both', false],
+      ['linear', -80, 'fade 1s ease-in reverse both', false],
+      ['ease-in-out', 80, 'pulse 200ms linear 100ms 2 alternate both', true],
+      ['steps(4, jump-start)', 0, 'fade 1s linear both', false],
+      ['linear(0, 0.2 50%, 0.8 50%, 1)', 0, 'fade 1s linear both', false],
+      ['cubic-bezier(0, 0, 0, 1)', 0, 'fade 1s linear both', false],
+    ]) {
+      const page = await browser.newPage();
+      try {
+        await page.goto(`http://127.0.0.1:${server.port}/`);
+        await page.waitForFunction(()=>window.ready);
+        const result = await page.evaluate(args=>release(...args),[easing,delay,animation,agent]);
+        const fallback = /^(steps|linear)\(/.test(easing)||easing==='cubic-bezier(0, 0, 0, 1)';
+        expect(result.count, `${easing}: release followers ${JSON.stringify(result)}`).toBe(fallback?0:1);
+        expect(result.worst, `${easing}: consumer progress throughout the release`).toBeLessThan(1e-4);
+        if (!fallback) expect(result.frames, `${easing}: no timeline frame loop`).toBe(0);
+        else expect(result.frames, 'unsupported easing retains frame seeking').toBeGreaterThan(0);
+        if (!agent) {
+          expect(result.intermediate).toBeGreaterThan(2);
+          if (!fallback) expect(result.followerStart).toBe(result.start);
+        }
+        expect(result.remaining, `${easing}: finished followers retire ${JSON.stringify(result)}`).toBe(0);
+      } finally { await page.context().close(); }
+    }
+    // A small source interpolation error must not move a consumer's iteration
+    // wrap. These times straddle the browser's crossing of 5px.
+    for (const direction of ['normal', 'reverse', 'alternate', 'alternate-reverse']) for (const agent of [true, false]) {
+      const page=await browser.newPage();
+      try {
+        await page.goto(`http://127.0.0.1:${server.port}/`);
+        await page.waitForFunction(()=>window.ready);
+        const result=await page.evaluate(args=>release(...args),[
+          'cubic-bezier(.333333333333,0,.666666666667,0)', 0, `fade 1s linear 2 ${direction} both`,
+          agent, '0 10', [147.36, 147.361164, 147.362],
+        ]);
+        const wraps=direction==='normal'||direction==='reverse';
+        expect(result.worst, `${direction}: consumer matches the browser around the iteration boundary`).toBeLessThan(1e-4);
+        expect(result.count, `${direction}: wrapping consumers retain seeking`).toBe(wraps?0:1);
+        if (agent) {
+          expect(result.opacities[0]).toBeCloseTo(direction.endsWith('reverse')?0.1:0.9,4);
+          expect(result.opacities[2]).toBeCloseTo(direction==='normal'||direction==='alternate-reverse'?0.1:0.9,4);
+        } else if (wraps) expect(result.frames).toBeGreaterThan(0);
+        else expect(result.frames).toBe(0);
+        expect(result.remaining).toBe(0);
+      } finally { await page.context().close(); }
+    }
+    // The same source error can cross a consumer's easing jump, including a
+    // jump on an individual keyframe or the effect's overall timing.
+    for (const [animation, effectEasing, before, after] of [
+      ['fade 1s steps(2,end) both', null, 0.1, 0.5],
+      ['stepped 1s linear both', null, 0.3, 0.5],
+      ['fade 1s linear(0, 0 50%, 1 50%, 1) both', null, 0.1, 0.9],
+      ['fade 1s linear both', 'steps(2,end)', 0.1, 0.5],
+    ]) for (const agent of [true, false]) {
+      const page=await browser.newPage();
+      try {
+        await page.goto(`http://127.0.0.1:${server.port}/`);
+        await page.waitForFunction(()=>window.ready);
+        const result=await page.evaluate(args=>release(...args),[
+          'cubic-bezier(.333333333333,0,.666666666667,0)', 0, animation,
+          agent, '0 10', [147.36, 147.361164, 147.362], {effectEasing},
+        ]);
+        expect(result.worst, `${animation} / ${effectEasing}: consumer matches the browser around the easing jump`).toBeLessThan(1e-4);
+        expect(result.count, 'discontinuous consumer easing retains seeking').toBe(0);
+        if (agent) {
+          expect(result.opacities).toEqual([before,before,after]);
+        } else expect(result.frames).toBeGreaterThan(0);
+        expect(result.remaining).toBe(0);
+      } finally { await page.context().close(); }
+    }
+    // Followers sort above every CSS animation, so one standing in for an
+    // animation listed before a sought or endless one would override it.
+    for (const [animation, followed, opacity] of [
+      ['fade 1s linear both, fade 1s steps(2,end) both', 0, 0.1],
+      ['fade 1s steps(2,end) both, fade 1s linear both', 1, 0.3],
+      ['fade 1s linear both, fade 1s linear infinite both', 0, 0.1],
+    ]) {
+      const page=await browser.newPage();
+      try {
+        await page.goto(`http://127.0.0.1:${server.port}/`);
+        await page.waitForFunction(()=>window.ready);
+        const result=await page.evaluate(args=>release(...args),['linear', 0, animation, true, '0 100', [40, 100, 160, 300]]);
+        expect(result.worst, `${animation}: the consumer's animation stack keeps its order`).toBeLessThan(1e-4);
+        expect(result.opacities[1]).toBeCloseTo(opacity,4);
+        expect(result.count, `${animation}: only a suffix of the stack is followed`).toBe(followed);
+        expect(result.remaining).toBe(0);
+      } finally { await page.context().close(); }
+    }
+    // An overshooting curve's peak lies between samples. The browser's peak
+    // passes the end of this consumer's range, which leaves `fill: none` out
+    // of effect, while the samples' peak falls just short of it.
+    for (const agent of [true, false]) {
+      const page=await browser.newPage();
+      try {
+        await page.goto(`http://127.0.0.1:${server.port}/`);
+        await page.waitForFunction(()=>window.ready);
+        const result=await page.evaluate(args=>release(...args),[
+          'cubic-bezier(.333333333333,2,.666666666667,2)', 0, 'fade 1s linear', agent, '0 170.65598',
+          [234.2, 234.314575, 234.43], {to: 103, style: 'opacity:0.55'},
+        ]);
+        expect(result.worst, 'the consumer leaves its effect where the source passes the range').toBeLessThan(1e-4);
+        expect(result.count, 'a fill boundary within the sampling error retains seeking').toBe(0);
+        if (agent) expect(result.opacities[1]).toBeCloseTo(0.55,4);
+        expect(result.remaining).toBe(0);
+      } finally { await page.context().close(); }
+    }
+    for (const mode of ['reverse', 'grab', 'cancel']) {
+      const page=await browser.newPage();
+      try {
+        await page.goto(`http://127.0.0.1:${server.port}/`);
+        await page.waitForFunction(()=>window.ready);
+        const result=await page.evaluate(mode=>interrupt(mode),mode);
+        expect(result.oldState, `${mode}: the old follower is cancelled`).toBe('idle');
+        expect(result.count, `${mode}: only a new release has a follower`).toBe(mode==='cancel'?0:1);
+        expect(result.error, `${mode}: consumers follow through interruption`).toBeLessThan(1e-4);
+        expect(result.frames, `${mode}: no timeline frame loop`).toBe(0);
+        expect(result.remaining, `${mode}: finished followers retire`).toBe(0);
+        if(mode==='grab')expect(result.caught, 'a re-grab keeps the presented translate').toBeCloseTo(result.before,4);
+      } finally { await page.context().close(); }
+    }
+  } finally { await browser.close(); server.stop(true); }
+}, 60000);
 
 check('in Chrome, followers match timeline progress and stop when a consumer resolves elsewhere', async () => {
   const page = `<style>

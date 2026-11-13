@@ -6,7 +6,7 @@
 // Usage: bun host/web/serve.mjs [<dir> | --origin <dir>] [--port <n>] [--loopback|--lan]
 import { createServer } from 'node:http';
 import { createServer as createSocketServer } from 'node:net';
-import { brotliCompress, brotliCompressSync, constants as zlib, gzip, gzipSync } from 'node:zlib';
+import { brotliCompressSync, constants as zlib, gzipSync } from 'node:zlib';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -19,10 +19,11 @@ import { canonicalBytes, readAssetIndex } from '../../scripts/deploy-signing.mjs
 import { copyShaders, developmentURLScheme, resolveApp, webDist, webHostFiles } from '../../scripts/app.mjs';
 import { settingChanges } from '../../js/bake/src/__exact_env.mjs';
 import { acceptsHTML, appDocumentPath, prefersMarkdown, webRequestURL, parseWebRoot, sha256, webReleasePath, webRootPath } from '../../scripts/origin.mjs';
-import { canonical, matchPattern } from '../web-js/route-pattern.js';
+import { canonical, filePathOf, matchPattern } from '../web-js/route-pattern.js';
 import { guardFlags } from '../../scripts/help.mjs';
 
 import { INSTALL_FILES, INSTALL_PUBLIC, INSTALL_ROOT, installRoute, installNetworkPage } from '../../scripts/install-page.mjs';
+import { COMPRESSIBLE, acceptedEncodings, bodyDigest, compressionCache, matchesETag } from './compression.mjs';
 import { generationOf, generationPath, keepGeneration, reapGenerations, servedFile, withGenerationBase } from './generations.mjs';
 
 const PUBLIC_FILES = new Set([
@@ -836,9 +837,10 @@ export function buildTreeFileAsync(dist, pathname, accept = '', { miss = false }
 function* treeFile(dist, pathname, accept, miss) {
   let path;
   try { path = installRoute(decodeURIComponent(pathname)); } catch { return null; }
-  // No dot path, but the auth callback page's (LLP 1069.006 D4: `/.exact/auth/…`), the install pages and their
-  // data (LLP 1030.003 D6a), and the deep-link association file (`PUBLIC_FILES`).
-  if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || (!PUBLIC_FILES.has(path) && path.replace(/^\/\.exact\/auth\//, '/').split('/').some((part) => part.startsWith('.')))) return null;
+  // Hidden paths serve only a declared build page, the auth callback (LLP 1069.006 D4: `/.exact/auth/…`), the
+  // install pages and their data (LLP 1030.003 D6a), or the deep-link association file (`PUBLIC_FILES`).
+  if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || path.split('/').some(part => part === '.' || part === '..')) return null;
+  const hidden = !PUBLIC_FILES.has(path) && path.replace(/^\/\.exact\/auth\//, '/').split('/').some(part => part.startsWith('.'));
   const navigation = acceptsHTML(accept), page = navigation && appDocumentPath(pathname, true);
   // Asked again, three times at most: a build put in place as it was looked up
   // moves the tree it resolved away under it (its files then resolve to
@@ -852,9 +854,18 @@ function* treeFile(dist, pathname, accept, miss) {
       try { if (at.startsWith(prefix) && realpathSync(at) === at && statSync(at).isFile()) return { path: at, route }; } catch { /* none */ }
       return null;
     };
-    const exact = file(path);
+    const named = filePathOf(pathname).replace(/\/?$/, '/index.html'), decoded = path.replace(/\/?$/, '/index.html');
+    let index = file(named);
+    // A hidden path is only a build route's page, whose file keeps its escapes; an asset directory's is decoded.
+    if (hidden || (!index && named !== decoded && !/%2f/i.test(pathname))) {
+      const routes = yield* servedRouteTable(root);
+      if (!stillBuild(dist, was)) continue;
+      const built = routes?.[matchPattern(routes, canonical(pathname))]?.render === 'build';
+      if (hidden) return built ? index : null;
+      if (!built) index = file(decoded);
+    }
+    const exact = /%2f/i.test(pathname) ? null : file(path);
     if (exact) return exact;
-    const index = file(path.replace(/\/?$/, '/index.html'));
     // Only a navigation gets the shell; a dotted last segment is a page only when it is no file's extension or a
     // route matches it (`appDocumentPath`).
     if (navigation) {
@@ -900,14 +911,18 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     sendStaticBody(req, res, answers.body, { 'content-type': answers.status === 200 ? 'application/json' : 'text/plain; charset=utf-8', 'cache-control': answers.status === 200 ? 'private, max-age=3600, immutable' : 'no-store' }, answers.status);
     return;
   }
-  const under = target && generationPath(target.pathname), path = under?.path ?? target?.pathname;
-  const negotiated = !!target && under !== 'bad' && !extname(path), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${under ? target.pathname.slice(0, -path.length) : ''}${path.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
+  const under = target && generationPath(target.pathname), path = under?.path ?? target?.pathname, prefix = under ? target.pathname.slice(0, -path.length) : '';
+  const negotiated = !!target && under !== 'bad' && !extname(path), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${prefix}${path.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
   let r = markdown?.status === 200 && markdown.route.endsWith('.md') ? markdown : target ? await servedFile(dist, target.pathname, req.headers.accept, { pinned }) : { status: 404 };
   // A request taking any type (curl's) is answered as a navigation where that is a page rendered for it, as any
   // server rendering pages answers it; a route the client draws stays a browser's.
   if (pages && target && r !== markdown && asksPage(req, target.pathname) && !acceptsHTML(req.headers.accept)) {
     const page = await servedFile(dist, target.pathname, 'text/html', { pinned });
     if (page.route === '/shell.html' && ['request', 'cached'].includes(page.render)) r = page;
+  }
+  if (markdown && r.status === 404 && (await servedFile(dist, target.pathname, 'text/html', { pinned })).status === 404) {
+    const missing = await servedFile(dist, `${prefix}/404.md`, req.headers.accept, { pinned });
+    if (missing.status === 200 && missing.route === '/404.md') r = { ...missing, status: 404 };
   }
   if (r.status === 410) { res.writeHead(410, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`build generation ${r.id} is no longer kept here: load the page again\n`); return; }
   if (pages && [200, 404].includes(r.status) && r.route === '/shell.html' && ['request', 'cached'].includes(r.render) && ['GET', 'HEAD'].includes(req.method)) {
@@ -1096,52 +1111,9 @@ export function webCacheControl(found) {
   return found.route.startsWith(UPDATE_TREE) && !INSTALL_PUBLIC.includes(found.route) ? 'no-store' : 'no-cache';
 }
 
-// Compressed representations for the production server (`serve.mjs` itself;
-// the dev server and drivers send identity bytes). Brotli at quality 11 takes
-// seconds for an app's wasm, so a variant is made once per body digest, off
-// the request path — the server warms its tree at startup — and a request that
-// arrives first gets the identity bytes. A variant no smaller is not kept.
-const COMPRESSIBLE = new Set(['application/wasm', 'text/javascript', 'text/css', 'text/html', 'application/json',
-  'application/manifest+json', 'application/vnd.exact.envelope+json', 'image/svg+xml', 'text/wgsl',
-  'application/vnd.exact.model', 'application/vnd.exact.texture']);
-export function compressionCache(limit = 256 * 1024 * 1024) {
-  const variants = new Map(), pending = new Map();
-  let held = 0;
-  const make = (digest, body, encoding) => {
-    const key = `${digest}:${encoding}`;
-    if (variants.has(key)) return Promise.resolve();
-    if (!pending.has(key)) pending.set(key, new Promise(done => {
-      const finish = (error, out) => {
-        pending.delete(key);
-        if (!error && out.length < body.length && held + out.length <= limit) { variants.set(key, out); held += out.length; }
-        done();
-      };
-      if (encoding === 'br') brotliCompress(body, { params: { [zlib.BROTLI_PARAM_QUALITY]: 11, [zlib.BROTLI_PARAM_SIZE_HINT]: body.length } }, finish);
-      else gzip(body, { level: 9 }, finish);
-    }));
-    return pending.get(key);
-  };
-  return {
-    get: (digest, encoding) => variants.get(`${digest}:${encoding}`) ?? null,
-    warm: (digest, body) => Promise.all(['br', 'gzip'].map(encoding => make(digest, body, encoding))),
-  };
-}
-const bodyDigest = body => createHash('sha256').update(body).digest('base64url').slice(0, 32);
-/** The encodings a request accepts, per RFC 9110 §12.5.3 (a q of 0 refuses). */
-function acceptedEncodings(header = '') {
-  const accepted = new Set();
-  for (const part of String(header).split(',')) {
-    const [name, ...params] = part.trim().toLowerCase().split(';');
-    const q = params.map(p => /^\s*q=([0-9.]+)\s*$/.exec(p)?.[1]).find(Boolean);
-    if (name && (q === undefined || Number(q) > 0)) accepted.add(name);
-  }
-  return accepted;
-}
-const matchesETag = (header, etag) => typeof header === 'string'
-  && header.split(',').some(tag => { const t = tag.trim(); return t === '*' || t.replace(/^W\//, '') === etag; });
-
 /** Warm every compressible file the server will answer for: a local build's
  * public files, or a published root's current release. */
+export { compressionCache };
 export async function warmCompression(dist, compression, js = false) {
   let names;
   try { names = listPublicFiles(dist); } catch { names = []; }

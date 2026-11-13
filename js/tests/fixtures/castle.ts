@@ -389,6 +389,21 @@ function answer(source: string, args: unknown[], store: Store): unknown {
     case "held": return fetch("https://api.castle.xyz/changes", (args[0] === "stream" || args[0] === "yes-stream"
       ? { exactHeld: args[0] === "stream" ? true : "yes", exactStream: (event: unknown) => event }
       : { exactHeld: args[0] === "true" ? true : args[0] === "false" ? false : args[0] }) as RequestInit).then(r => r.text(), (e: Error) => `refused: ${e.message}`);
+    case "prefetched": return fetch("https://api.castle.xyz/feed", {
+      ...(args[0] === "stream" ? { exactStream: (event: unknown) => event } : {}),
+      ...(args[0] === "file" ? { exactBodyTo: "app:/data/reply" } : {}),
+      ...(args[0] === "independent" ? { exactIndependentHttp: { maxResponseBytes: 1024 } } : {}),
+      get exactPrefetch() {
+        if (args[0] === "throws") throw new Error("prefetch getter");
+        return args[0] === "absent" ? undefined : args[0] === "false" ? false : args[0] === "number" ? 7 : args[0] === "null" ? null : true;
+      },
+    } as RequestInit).then(r => r.text(), (e: Error) => `${e instanceof TypeError ? "TypeError" : "Error"}: ${e.message}`);
+    case "preloaded": return fetch("https://api.castle.xyz/feed", args[0] === "absent" ? {} : {
+      get exactPreload() {
+        if (args[0] === "throws") throw new Error("preload getter");
+        return args[0] === "number" ? 7 : args[0] === "null" ? null : args[0];
+      },
+    } as RequestInit).then(r => r.text(), (e: Error) => `${e instanceof TypeError ? "TypeError" : "Error"}: ${e.message}`);
     case "cached": return fetch("https://api.castle.xyz/cache", args[0] === "absent" ? {} : {
       get cache() {
         if (args[0] === "throws") throw new Error("cache getter");

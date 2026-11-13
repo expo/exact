@@ -1,4 +1,4 @@
-//! Failed store writes remain owed until persisted or superseded.
+//! Failed store writes remain owed until persisted or superseded by a peer's.
 //! Report each pending name once, even when later commits retry it.
 use super::*;
 
@@ -33,6 +33,7 @@ impl<D: DataSource> Host<D> {
             if write.durable {
                 self.pending_store_writes
                     .retain(|pending| pending.name != write.name);
+                self.pending_store_bases.remove(&write.name);
                 changed = true;
                 continue;
             }
@@ -53,16 +54,23 @@ impl<D: DataSource> Host<D> {
                 self.pending_store_writes.push(write);
             }
         }
+        let mut disk = None;
         for write in std::mem::take(&mut self.pending_store_writes) {
             let stamp = self.pending_store_stamps.remove(&write.name);
-            if let Err(error) = self
-                .secrets
-                .as_ref()
-                .expect("checked above")
-                .write_stamped(&write, stamp.as_ref())
-            {
+            let store = self.secrets.as_ref().expect("checked above");
+            if let Err(error) = store.write_stamped(&write, stamp.as_ref()) {
                 if let Some(stamp) = stamp {
                     self.pending_store_stamps.insert(write.name.clone(), stamp);
+                }
+                if !self.pending_store_bases.contains_key(&write.name) {
+                    // The disk's bytes at the first failure: a refresh that
+                    // reads them again finds no peer write since.
+                    let read = disk.get_or_insert_with(|| store.snapshot(Vec::new()));
+                    if read.complete {
+                        let base = read.values.iter().find(|(name, _)| name == &write.name);
+                        self.pending_store_bases
+                            .insert(write.name.clone(), base.map(|(_, value)| value.clone()));
+                    }
                 }
                 if self.reported_store_failures.insert(write.name.clone()) {
                     self.store_failure(format!("store {} failed: {error}", write.name));
@@ -70,6 +78,7 @@ impl<D: DataSource> Host<D> {
                 self.pending_store_writes.push(write);
             } else {
                 self.reported_store_failures.remove(&write.name);
+                self.pending_store_bases.remove(&write.name);
                 changed = true;
             }
         }

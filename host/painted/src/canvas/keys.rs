@@ -93,6 +93,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// (LLP 1133.023 D15 item 3). The one at launch is `EXACT_LAUNCH_URL`.
     pub fn open(&mut self, href: &str) {
         let now = self.now();
+        if exact_runner::auth::receive_callback(self.p.host_mut().runner_mut(), href) {
+            self.force = true;
+            return;
+        }
         if let Some(error) = self.p.open_location(href, now) {
             eprintln!("exact: {error}");
         }

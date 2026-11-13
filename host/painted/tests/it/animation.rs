@@ -123,3 +123,37 @@ fn continuous_animation_still_paints_each_display_period() {
         p.frame();
     }
 }
+
+/// LLP 1055.000 D15: a radius moving toward a length that becomes a
+/// percentage stops being presented; the circle draws the percentage.
+#[test]
+fn a_radius_that_becomes_a_percentage_is_no_longer_presented() {
+    let src = r#"component App
+  state step = 0
+  action next
+    step = step + 1
+  view
+    column
+      button press=next aria-label="Next" testId="next"
+        text "Next"
+      svg width=100 height=100
+        circle testId="dot" cx=50 cy=50 r=(step == 0 ? "10px" : (step == 1 ? "20px" : "50%")) transition="r 1s linear"
+"#;
+    let plan = contract::compile(src).unwrap().encode();
+    let boot = Host::boot(
+        &plan,
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        600.,
+    );
+    let mut h = boot.unwrap().0;
+    let (next, dot) = (view(&h, "next"), view(&h, "dot"));
+    h.dispatch_at(next, Event::Press, 0.);
+    h.tick(250.);
+    close(h.presented(dot).svg[0].unwrap(), 12.5);
+    h.dispatch_at(next, Event::Press, 250.);
+    assert_eq!(h.presented(dot).svg[0], None);
+    h.tick(2000.);
+    assert_eq!(h.presented(dot).svg[0], None);
+}

@@ -12,8 +12,8 @@
 //! A node is lowered only when every animation on it is, and nothing the
 //! layer cannot show depends on the values: a turned SVG element (its
 //! transform is its scene's), a stroked circle (its stroke would scale), a
-//! filter, mask or clip, a paint server, a `light-dark()` keyframe, a drag
-//! timeline. Anything else is sampled as before.
+//! filter, mask, clip or blend, a paint server, a `light-dark()` keyframe, a
+//! drag timeline. Anything else is sampled as before.
 
 use super::Host;
 #[cfg(target_os = "android")]
@@ -686,11 +686,13 @@ fn playable(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
         .any(|p| matches!(p, Property::Translate | Property::Scale | Property::Rotate));
     if svg {
         // The scene keeps an animated element's transform in parts about its
-        // origin; a non-scaling stroke would scale, a clip or effect would not move.
+        // origin; a non-scaling stroke would scale, a clip or effect would not
+        // move, and a blend reads the backdrop, which a layer does not hold.
         let moves = props
             .iter()
             .any(|p| matches!(p, Property::Cx | Property::Cy));
         if !s.filter.is_none()
+            || s.mix_blend_mode != exact_kernel::MixBlendMode::Normal
             || s.rare.svg_mask.url().is_some()
             || s.rare.clip_path.url().is_some()
             || served(&s.fill)

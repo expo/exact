@@ -178,6 +178,7 @@ pub(crate) struct Mirror {
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
     pub(crate) preloads: Option<crate::launch_preloads::LaunchPreloads>,
+    pub(crate) launch_store: Option<std::sync::Arc<crate::launch_preloads::StoreWatch>>,
     boot_requests: Vec<RequestOut>,
     preload_content: Vec<String>,
     preload_accepted: bool,
@@ -262,6 +263,8 @@ pub struct Host<D: DataSource> {
     secrets: Option<Box<dyn crate::store::KeptStore>>,
     pending_store_writes: Vec<exact_runner::StoreWrite>,
     pending_store_stamps: std::collections::BTreeMap<String, exact_data::secrets::Stamp>,
+    /// What the disk held for each owed name when its write first failed.
+    pending_store_bases: std::collections::BTreeMap<String, Option<Vec<u8>>>,
     reported_store_failures: BTreeSet<String>,
     data_activated: bool,
     /// The source's activation, run ahead of `activate_data` by `prepare_data`.
@@ -539,6 +542,7 @@ impl<D: DataSource> Host<D> {
             .transpose()?
             .unwrap_or_default();
         let mut host = Host {
+            launch_store: None,
             preloads,
             boot_requests,
             preload_content,
@@ -618,6 +622,7 @@ impl<D: DataSource> Host<D> {
             secrets,
             pending_store_writes: Vec::new(),
             pending_store_stamps: Default::default(),
+            pending_store_bases: Default::default(),
             reported_store_failures: BTreeSet::new(),
             update_line: None,
             delivery,
@@ -812,6 +817,9 @@ impl<D: DataSource> Host<D> {
 
     /// Take the source's announced topics, waking the host (LLP 1016.002).
     pub fn listen(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        if let Some(store) = &self.launch_store {
+            store.listen(wake.clone());
+        }
         self.preload_wake.set(wake.clone());
         self.runner.listen(wake);
     }

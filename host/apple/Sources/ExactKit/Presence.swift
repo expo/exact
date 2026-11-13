@@ -172,15 +172,18 @@ typealias PresenceAuthenticateFn = @convention(c) (UnsafeMutableRawPointer?, Uns
 
 extension ExactSession {
     /// A batch's `presence` op: the platform's check, then the item's read.
-    func presenceOp(_ op: [String: Any]) {
+    /// `issued` is the generation whose batch asked: the call number is its
+    /// runner's, so the answer goes nowhere once that generation has ended.
+    func presenceOp(_ op: [String: Any], issued: GenerationStamp) {
         guard let call = (op["call"] as? NSNumber)?.uint64Value else { return }
-        let answer = { [weak self] (fields: [String: Any]) in
+        let answer = { (fields: [String: Any]) in
             var fields = fields
             fields["call"] = call
-            self?.runtime.presence(fields)
+            issued.session?.runtime.presence(fields)
         }
-        let failed = { [weak self] (code: String, message: String) in
-            self?.runtime.log("presence \(op["name"] as? String ?? ""): the platform's check failed \(code): \(message)")
+        let failed = { (code: String, message: String) in
+            guard let session = issued.session else { return }
+            session.runtime.log("presence \(op["name"] as? String ?? ""): the platform's check failed \(code): \(message)")
             answer(["status": "failed", "code": code, "message": message])
         }
         let policy = op["policy"] as? String ?? ""
@@ -195,7 +198,8 @@ extension ExactSession {
             guard let context else {
                 return failed(error?["error"] as? String ?? "UnknownError", error?["message"] as? String ?? "")
             }
-            guard let service, let account else {
+            // A check that passed for an ended generation reads no item.
+            guard let service, let account, issued.session != nil else {
                 invalidate(context)
                 return answer(["status": "passed"])
             }

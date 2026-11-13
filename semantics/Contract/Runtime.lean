@@ -192,6 +192,11 @@ structure Oracle where
   kept value, by the state's name, as the host read it before boot — the
   device's, like every answer here. A fresh install's is empty. -/
   stored : List (String × Value) := []
+  /-- The sources a native module answers (LLP 1133.002 D13): the runner
+  answers them from the module's substitute, whose state (a permission, a
+  preferred value) is its own, so a call to one with no answer and no fact
+  is outside the semantics, not a refusal. -/
+  modules : List String := []
   /-- The host built every tab panel at boot and builds each as it is made
   (LLP 1075.003 §9.14: a page rendered ahead of its runtime, which the
   runtime adopts whole; `Runner::build_every_tab`). -/
@@ -231,6 +236,8 @@ def Oracle.ask (o : Oracle) (src : String) (args : List Value) (resource : Strin
     | .none =>
       if src = "exactTransport" ∨ src = "exactMIDI" then
         .error (.unsupported s!"`{src}`: the runner answers it from its transport or its MIDI ports, which change as they play (LLP 1125)")
+      else if o.modules.contains src then
+        .error (.unsupported s!"`{src}`: a native module's, which the runner answers from the module's substitute (LLP 1133.002 D13)")
       else .error (.refused s!"the oracle has no answer for {src}")
 
 /-! ## Settlement -/

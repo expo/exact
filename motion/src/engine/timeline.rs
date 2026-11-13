@@ -157,9 +157,9 @@ impl Engine {
                         }
                     }
                 }
-                if pending.is_some() {
-                    self.schedule_animations(node);
-                }
+                // Binding took the node off the clock's list; a live play
+                // goes back on it, waiting for the frame or not.
+                self.schedule_animations(node);
                 // Onto a clock timeline: in its phase (LLP 1055.002).
                 self.join_clock_node(node);
             }

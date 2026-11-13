@@ -60,6 +60,15 @@ pub(super) fn kept_module(plan: &exact_plan::Plan, i: usize) -> bool {
         })
 }
 
+/// Whether a store reader of `source` waits for the data module at boot,
+/// so that the answer it kept stands in until then (LLP 1027 D4): not a
+/// runner fact's, which is this launch's own (LLP 1039 D3, LLP 1030 D7),
+/// nor a declared source's, which the launch asks at boot, as it never waits
+/// for the module (LLP 1162.001 D4).
+pub(super) fn waits_for_module(plan: &exact_plan::Plan, source: &str) -> bool {
+    !exact_plan::runner_owned_source(source) && plan.fetch_named(source).is_none()
+}
+
 /// Note that resource `i`'s kept answer, kept for `kept`, was refused
 /// for this launch's identifying `now` (or, with `now` unknown, because
 /// they read a store reader still on its fallback). Once per resource.
@@ -91,9 +100,11 @@ pub(super) fn refuse(
         .push((i, super::lines::kept_refused(name, Some(&json(kept)), &why)));
 }
 
-/// The kept entries in `names` no declared reader of `plan` seeds. A
-/// cold boot seeds a first frame only from declared readers' kept answers,
-/// so any other entry (a reader made `transient`, a resource removed) is
+/// The kept entries in `names` that no resource of `plan` seeds. A cold
+/// boot seeds a first frame only from the kept answers of a surface record,
+/// a kept module source, and a row the plan marks `reader` whose source
+/// waits for the data module ([`waits_for_module`]). Any other entry (a
+/// reader made `transient`, a resource removed, a declared source's) is
 /// forgotten on disk, not carried forever. A reload's carried readers are
 /// checked for compatibility instead.
 pub(super) fn obsolete<'n>(
@@ -107,7 +118,7 @@ pub(super) fn obsolete<'n>(
                 (kept_surface(plan, i)
                     || kept_module(plan, i)
                     || plan.resources[i].reader
-                        && !exact_plan::runner_owned_source(plan.str(plan.resources[i].source)))
+                        && waits_for_module(plan, plan.str(plan.resources[i].source)))
                     && !plan.resources[i].transient
                     && plan.str(plan.resources[i].name) == resource
             }))
@@ -216,6 +227,27 @@ impl<D: DataSource> Runner<D> {
     /// another launch kept (LLP 1027.005 D3, 2026-10-10). Kept seeds,
     /// carried and checkpoint answers and non-store values are known.
     pub(super) fn identity_unknown(&self, i: usize, states: &[Option<ResourceState>]) -> bool {
+        self.identity_reads(i, |r| {
+            self.resources[r].store_reader
+                && states[r]
+                    .as_ref()
+                    .is_some_and(|s| s.placeholder || s.value.is_compiled())
+        })
+    }
+
+    /// Whether resource `i`'s identifying arguments read a resource of a
+    /// source declared in Contract, a list's included, which no kept answer
+    /// seeds.
+    fn identity_reads_declared(&self, i: usize) -> bool {
+        self.identity_reads(i, |r| {
+            let source = self.plan.str(self.resource_row(r).source);
+            self.plan.fetch_named(source).is_some()
+        })
+    }
+
+    /// Whether resource `i`'s identifying arguments read, directly or
+    /// through derives, a resource `hit` names.
+    fn identity_reads(&self, i: usize, hit: impl Fn(usize) -> bool) -> bool {
         use crate::instance::Input;
         let deps = self.sites.deps();
         let row = self.resource_row(i).clone();
@@ -231,10 +263,7 @@ impl<D: DataSource> Runner<D> {
             for input in deps.inputs(&reads) {
                 match input {
                     Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r)
-                        if self.resources[r].store_reader
-                            && states[r]
-                                .as_ref()
-                                .is_some_and(|s| s.placeholder || s.value.is_compiled()) =>
+                        if hit(r) =>
                     {
                         return true;
                     }
@@ -337,10 +366,11 @@ impl<D: DataSource> Runner<D> {
         seed
     }
 
-    /// Before the source is ready, each row the bake marked `reader` is
-    /// asked again at `data_ready`, and shows the answer kept from the last
-    /// launch where it still fits. A row a page's answer seeded (`seeded`)
-    /// is left to the page, whose checkpoint says whether it is asked again
+    /// Before the data module is ready, each row the bake marked `reader`
+    /// whose source waits for it ([`waits_for_module`]) is asked again at
+    /// `data_ready`, and shows the answer kept from the last launch where it
+    /// still fits. A row a page's answer seeded (`seeded`) is left to the
+    /// page, whose checkpoint says whether it is asked again
     /// ([`Runner::seed_checkpoint`]). A launch that begins with a presence
     /// secret locked or pending shows none (LLP 1133.010 D5): a kept answer
     /// is the account's content, and the person has not passed the check yet.
@@ -350,10 +380,8 @@ impl<D: DataSource> Runner<D> {
             self.log("kept answers not shown: the launch begins with a presence secret locked (LLP 1133.010 D5)");
         }
         for (i, &taken) in seeded.iter().enumerate() {
-            if taken
-                || !self.resource_row(i).reader
-                || exact_plan::runner_owned_source(self.plan.str(self.resource_row(i).source))
-            {
+            let row = self.resource_row(i);
+            if taken || !row.reader || !waits_for_module(&self.plan, self.plan.str(row.source)) {
                 continue;
             }
             self.resources[i].stale = true;
@@ -383,7 +411,7 @@ impl<D: DataSource> Runner<D> {
         if !ready {
             self.seed_kept(seeded);
         }
-        self.seed_kept_modules(ready, private);
+        self.seed_kept_modules(private);
         if !private && !self.store.opened_locked() {
             for i in 0..self.plan.resources.len() {
                 if !kept_surface(&self.plan, i) || self.resources[i].state.is_some() {
@@ -409,10 +437,9 @@ impl<D: DataSource> Runner<D> {
 
     /// Each resource reading a kept module source (LLP 1133.015 D4) shows
     /// the answer kept from the last launch where it still fits, and is
-    /// asked again: at `data_ready` when the data source is not ready yet,
-    /// else at once. The seed is provisional, as any kept answer is. A
-    /// private session keeps none.
-    pub(super) fn seed_kept_modules(&mut self, ready: bool, private: bool) {
+    /// asked again ([`Runner::ask_at_launch`]). The seed is provisional, as
+    /// any kept answer is. A private session keeps none.
+    pub(super) fn seed_kept_modules(&mut self, private: bool) {
         self.keeping.modules = !private;
         if private || self.store.opened_locked() {
             return;
@@ -436,10 +463,7 @@ impl<D: DataSource> Runner<D> {
                 slept: false,
                 origin: 0,
             });
-            match ready {
-                true => self.ask_at_launch(i),
-                false => self.resources[i].stale = true,
-            }
+            self.ask_at_launch(i);
         }
     }
 
@@ -461,8 +485,17 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         // @ref LLP 1039 D3 / LLP 1030 D7 — runner facts are never kept answers.
-        let source = self.plan.str(self.resource_row(i).source);
-        if exact_plan::runner_owned_source(source) && !surface {
+        // @ref LLP 1162.001 D4 — nor is a declared source's, nor one whose
+        // identifying arguments read a declared resource, a kept module
+        // source's included: a launch with no rendered page starts that
+        // resource on its placeholder, so such a kept answer would not fit
+        // (LLP 1027.005 D3), and an older one is forgotten.
+        if !surface && !waits_for_module(&self.plan, self.plan.str(self.resource_row(i).source)) {
+            return;
+        }
+        if !surface && self.identity_reads_declared(i) {
+            self.store
+                .forget_kept(&kept_name(self.plan.str(self.resource_row(i).name)));
             return;
         }
         // @ref LLP 1027.005 D6 — context reaches the source but does not

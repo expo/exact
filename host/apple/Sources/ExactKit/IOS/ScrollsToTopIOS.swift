@@ -94,8 +94,8 @@ extension NavigationHost {
         c.nativeContentScrollEdges.contains(.top) ? c.nativeContentScroller : automaticContentScroller(of: c)
     }
 
-    /// The content scroller with no native selection: the one `navigationScroll` names, else the
-    /// first vertical scroller.
+    /// The content scroller with no native selection: the one `navigationScroll` names (none when
+    /// no scrolling element carries the name), else the first vertical scroller.
     func automaticContentScroller(of c: RouteController) -> NodeView? {
         if let name = c.node.props["navigationScroll"], !name.isEmpty {
             return element(named: name, in: c.node).flatMap { $0.scrollView == nil ? nil : $0 }
@@ -103,7 +103,8 @@ extension NavigationHost {
         return Presenter.firstVerticalScroller(under: c.node)
     }
 
-    /// The native selection, authored scroller or default document viewport.
+    /// The native selection, else the automatic content scroller's scroll view, else, with no
+    /// `navigationScroll`, the route's own viewport where it has one.
     func contentScrollView(of route: RouteController) -> UIScrollView? {
         if route.nativeContentScrollEdges.contains(.top) { return route.contentScrollView(for: .top) }
         if let node = automaticContentScroller(of: route) { return shownScroll(node) }

@@ -91,7 +91,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     val made = java.util.concurrent.ConcurrentHashMap<Int, android.graphics.Bitmap>()
     /** Called on the main thread with what exact2 asks of the platform ([Native.requests], LLP 1115.001 D5): the
      * view's activity that reads this owner now acts on them ([Requests]). */
-    @Volatile var asked: (IntArray) -> Unit = {}
+    @Volatile var asked: ((IntArray) -> Unit)? = null
 
     // The exact thread's own state.
     private val timerReports = TimerReports()
@@ -264,7 +264,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * acts on it. After every turn, and when exact2 wakes this thread for a request no frame follows (a haptic
      * changes no pixel); also while the activity is stopped, when no stream is made. */
     private fun requests() {
-        Native.requests()?.let { r -> postMain { asked(r) } }
+        Native.requests()?.let { r -> postMain { asked?.invoke(r) ?: Requests.detached(r) } }
     }
 
     /** The window ([Native.window]): told before [boot] so the host is laid out in it from its first frame, and

@@ -208,6 +208,37 @@ fn host_facts_are_the_runners_own_sources_never_a_gated_resources() {
     );
 }
 
+/// A native module's read is answered by the runner from the module's
+/// substitute (#401): its boot answer is a host fact, the oracle's text names
+/// the module's source, and a step that re-asks the app's own source beside
+/// it leaves the module's answer where it was.
+#[test]
+fn a_module_read_is_a_host_fact_and_its_source_a_module() {
+    let path = crate::leanrun::project().join("corpus/resources/module.contract");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let s = script::scripted("module", &source, Some(&path))
+        .unwrap()
+        .remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, oracle) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &lines).unwrap();
+    let oracle = oracle.unwrap();
+    assert_eq!(oracle.host_sources(), ["geolocationStatus"]);
+    let text = oracle.text();
+    assert!(text.contains("module \"geolocationStatus\"\n"), "{text}");
+    assert!(text.contains("fact \"status\" "), "{text}");
+    // The app's own source is the oracle's, asked once per argument.
+    assert_eq!(text.matches("answer \"here\"").count(), 2, "{text}");
+    assert!(
+        !lines.iter().any(|l| l.starts_with(observe::MODULE_MOVED)),
+        "{lines:#?}"
+    );
+}
+
 #[test]
 fn scripted_state_bounds_and_membership_check_the_runner_observation() {
     let source = r#"component App
@@ -236,4 +267,75 @@ test "bounds"
     assert!(crate::expectations_on(&wrong, &lines)
         .unwrap_err()
         .contains("does not hold"));
+}
+
+/// A module read held at boot (its permission still prompt) shows its
+/// placeholder, which is no answer: no host fact, so the semantics leaves the
+/// read out (#401).
+#[test]
+fn an_unanswered_module_read_is_no_fact() {
+    let path = crate::leanrun::project().join("corpus/resources/module-unanswered.contract");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let s = script::scripted("unanswered", &source, Some(&path))
+        .unwrap()
+        .remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, oracle) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &lines).unwrap();
+    let oracle = oracle.unwrap();
+    assert!(oracle.host_sources().is_empty());
+    let text = oracle.text();
+    assert!(!text.contains("fact \"position\""), "{text}");
+    assert!(text.contains("module \"watchPosition\"\n"), "{text}");
+}
+
+/// A polled substitute (an accelerometer's samples) moves its read on a clock
+/// advance, a commit the trace leaves out: the step carries both notes, and
+/// the semantics' observation, which holds the boot answer, differs there.
+/// That difference is outside the semantics, not a divergence (#401).
+#[test]
+fn a_polled_module_answer_that_moves_is_outside() {
+    let path = crate::leanrun::project().join("corpus/resources/module.contract");
+    let source = "use accelerometer, Accelerometer from \"@exact/motion\"\n\ncomponent App\n  resource motion = accelerometer() as shape Accelerometer else empty()\n  view\n    text `${motion.sequence}` testId=\"motion\"\n\ntest \"polls\"\n  clock +3000\n";
+    let s = script::scripted("polled", source, Some(&path))
+        .unwrap()
+        .remove(0);
+    let plan = compile(&s.case).unwrap();
+    let mut oracle = Oracle::for_case(&plan, &s.case);
+    oracle.grants = "device.motion".into();
+    let (rust, oracle) = observe::run(plan, oracle, &s.case.events);
+    assert_eq!(oracle.unwrap().host_sources(), ["accelerometer"]);
+    let steps = crate::chunks(&rust);
+    let moved = steps[1];
+    assert!(
+        moved.contains(&observe::OMITTED_COMMIT.to_string()),
+        "{rust:#?}"
+    );
+    assert!(
+        moved.iter().any(|l| l.starts_with(observe::MODULE_MOVED)),
+        "{rust:#?}"
+    );
+    // What the semantics prints: the boot answer through the advance.
+    let held: Vec<&String> = steps[0]
+        .iter()
+        .filter(|l| l.starts_with("resource ") || l.starts_with("view "))
+        .collect();
+    let mut lean: Vec<String> = steps[0].to_vec();
+    lean.extend(["== clock +3000".to_string(), "outcome ok".to_string()]);
+    lean.extend(held.into_iter().cloned());
+    assert_ne!(
+        lean[4..],
+        moved
+            .iter()
+            .filter(|l| !l.starts_with('#'))
+            .cloned()
+            .collect::<Vec<_>>()[..]
+    );
+    assert!(
+        matches!(crate::compare(rust, lean), crate::Verdict::Unsupported(why) if why.starts_with(observe::MODULE_MOVED))
+    );
 }

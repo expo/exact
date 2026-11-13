@@ -48,6 +48,9 @@ public enum WakeStore {
         let token = UUID().uuidString, kind: String, due: [Request]
         let complete: (Bool) -> Void
         var waiting: Set<String> = [], success = true, offered = false, booted = false
+        /// Its packages are being offered their work: one that finishes
+        /// meanwhile does not end it, since others may not have been offered yet.
+        var offering = false
         init(kind: String, due: [Request], complete: @escaping (Bool) -> Void) { self.kind = kind; self.due = due; self.complete = complete }
         #if os(iOS)
         var task: BGTask?
@@ -103,7 +106,7 @@ public enum WakeStore {
                   let a = arrivals.first(where: { $0.token == token }) else { return }
             a.waiting.remove(package)
             if body["success"] as? Bool == false { a.success = false }
-            if a.waiting.isEmpty { finish(a, a.success) }
+            if a.waiting.isEmpty, !a.offering { finish(a, a.success) }
         }
         center.addObserver(forName: Notification.Name("exact.wakes.ready"), object: nil, queue: .main) { _ in
             for a in arrivals where !a.offered { offer(a) }
@@ -135,16 +138,26 @@ public enum WakeStore {
     private static func offer(_ a: Arrival) {
         let packages = Dictionary(grouping: a.due, by: \.package)
         guard !packages.isEmpty else { return finish(a, true) }
+        // A package waits from before its offer is posted, since it may
+        // finish while the post is delivered; one that declines is let go.
         a.waiting = []
+        a.offering = true
+        var taken = false
         for (package, due) in packages {
             let body = NSMutableDictionary(dictionary: ["token": a.token, "package": package, "kind": a.kind, "keys": due.map(\.key)])
             #if os(iOS)
             if let task = a.task { body["task"] = task }
             #endif
+            a.waiting.insert(package)
             NotificationCenter.default.post(name: Notification.Name("exact.wakes.due"), object: body)
-            if body["taken"] as? Bool == true { a.waiting.insert(package) }
+            if body["taken"] as? Bool == true { taken = true } else { a.waiting.remove(package) }
         }
-        if !a.waiting.isEmpty { a.offered = true; return }
+        a.offering = false
+        if taken {
+            a.offered = true
+            if a.waiting.isEmpty { finish(a, a.success) }
+            return
+        }
         if !a.booted, let boot {
             a.booted = true
             log("wakes: a \(a.kind) wake found no module ready; booting a session for it")

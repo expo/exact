@@ -158,8 +158,8 @@ impl<D: DataSource> Presenter<D> {
         self.brush.forget_rows();
         // Nor of what it was told of the scrollers: the new one asks again.
         self.reader = Default::default();
-        // Nor of Back and the keyboard, which it is told anew (D5), nor of
-        // the text fields it hosts (D8).
+        // Nor of Back, the keyboard, the wake lock and the orientation lock,
+        // which it is told anew (D5), nor of the text fields it hosts (D8).
         self.requests_reset();
         self.hosted_reset();
         // Nor of the top layer's open surface, whose window it makes anew,

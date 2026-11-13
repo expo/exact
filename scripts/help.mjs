@@ -142,13 +142,14 @@ file at its path; else, for a browser's navigation to a path a route in routes.j
 shell.html with 200, or for a render=request or cached route its page rendered under Bun
 (curl's request too); else 404.html with 404. A static host serves the directory so, with
 those routes' shell. A request preferring text/markdown (its Accept header) for a page whose
-.md file is beside it gets that file, with Vary: Accept. Beside the app's sources, a page asked for after a source changed
+.md file is beside it gets that file, with Vary: Accept; for a path nothing answers, 404.md
+with 404 where the build has one. Beside the app's sources, a page asked for after a source changed
 builds the site again first (no restart); a build that fails is the answer, with its errors.
 Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreground until ^C.`,
     example: 'bun exact.mjs serve dist --port 3000',
   },
   test: {
-    line: 'run *.test.contract (or the files named) on a host: web by default',
+    line: 'run *.test.contract (or the files named) on a host app.json ships',
     usage: 'bun exact.mjs test [web|ios|macos|linux|windows|android] [<file.test.contract>|<glob>]… [flags]',
     common: ['test [web|ios] [<file>…] [--size <w>x<h>] [--sim <name>]'],
     flags: DRIVE.filter(naming(['--size', '--sim'], true)),
@@ -161,8 +162,8 @@ Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreg
     body: `Compiles first, a compile error said as contract build says it, so no contract build before
 it: web builds the app (web-build); ios, macos and windows build when the build is missing or
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
-store, after its first data has landed; its leading lines (size, epoch, fail fetch …)
-override flags.
+store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags.
+Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
 Server   runs server.ts on DB=.exact/test/db.sqlite; refuses a live server or an entry ignoring DB.
 Runs     to completion, exit 1 when a test fails; nothing is left running.
 Backend  test web never starts a Snapback backend: start snapback4 dev on app.ts’s selected origin’s port
@@ -193,7 +194,7 @@ Ops      a target is a testId, else a view's exact text or label
   clock data|settle|held|+<ms> [real]    replies · transitions · push
   check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>`,
-    bodyAll: `Builds if stale, launches, runs each quoted op on the agent's clock and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down" "screenshot <png>" "tap up". clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
+    bodyAll: `Unnamed, the host is one app.json ships, as test's. Builds if stale, launches, runs each quoted op on the agent's clock and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down" "screenshot <png>" "tap up". clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
 Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else free. ${NATIVE_PORTS}`,
     example: 'bun exact.mjs agent web --storage s1 tree "tap add" "screenshot .exact/a.png"',
   },
@@ -209,7 +210,9 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
       ['--json', 'the report as one JSON object (ios: `scrolling`, each finding\'s metric, value, UIKit\'s and remedy)'],
     ],
     internal: ['--app <name>'],
-    body: `web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
+    body: `Host     unnamed: one app.json ships (host, deploy.store, deploy.binaries): web when they name it or nothing, else the
+         first of ios, windows and android that drives here; with none of those, the semantics check alone, saying why.
+web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
 beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
@@ -228,14 +231,12 @@ Large    each of those screens again at the largest text size (ios: the simulato
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.
-Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the
-         findings (check's, the relaunch's, the largest text size's, scrolling's) and the compiler's
-         warnings are counted, never fail it but under --strict. A screen no test ends on is not checked: end a test there.
-         Its first line says about how long it takes (its last run's time): wait that once.
-Server   an app with its own (server.ts, the rest pattern's): verify runs it where app.ts calls
-         it, on an empty database (DB=.exact/verify/db.sqlite), through the relaunch, then stops
-         it; one already answering there (a dev server) is refused, named, never written to; so is
-         a server entry that does not read DB (process.env.DB), with the fix.
+Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the findings (check's, the relaunch's,
+         the largest text size's, scrolling's) and the compiler's warnings are counted, never fail it but under --strict. A
+         screen no test ends on is not checked: end a test there. Its first line says about how long it takes (its last run's time): wait that once.
+Server   an app with its own (server.ts, the rest pattern's): verify runs it where app.ts calls it, on an empty database
+         (DB=.exact/verify/db.sqlite), through the relaunch, then stops it; one already answering there (a dev server) is
+         refused, named, never written to; so is a server entry that does not read DB (process.env.DB), with the fix.
 Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simulator's socket).`,
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
   },

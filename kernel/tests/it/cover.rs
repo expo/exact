@@ -705,9 +705,8 @@ fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
 fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
     let n = StyleValue::Number;
     let text = |t: &'static str| StyleValue::Text(t.into());
-    // A two-column list (4) whose rows (5, then 20 to 25) are 100 and 20
-    // points tall
-    let columns = |extra: &[(StyleId, StyleValue)], rows: u32| {
+    // A two-column list (4) holding a row for each height, numbered from 20
+    let columns = |extra: &[(StyleId, StyleValue)], rows: &[f64]| {
         let mut kernel = scroller(false);
         let mut list = vec![
             (StyleId::Display, text("block")),
@@ -716,62 +715,75 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
             (StyleId::FlexShrink, n(0.0)),
         ];
         list.extend_from_slice(extra);
-        let mut ops = vec![
-            Op::SetStyle {
-                id: 4,
-                patch: Box::new(style(&list)),
-            },
-            Op::SetStyle {
-                id: 5,
-                patch: Box::new(style(&[(StyleId::Height, n(100.0))])),
-            },
-        ];
-        for id in 20..20 + rows {
+        let mut ops = vec![Op::SetStyle {
+            id: 4,
+            patch: Box::new(style(&list)),
+        }];
+        for (id, &height) in (20..).zip(rows) {
             ops.push(Op::CreateView {
                 id,
                 node_type: NodeType::View,
             });
             ops.push(Op::SetStyle {
                 id,
-                patch: Box::new(style(&[(StyleId::Height, n(20.0))])),
+                patch: Box::new(style(&[(StyleId::Height, n(height))])),
             });
         }
-        if rows > 0 {
-            ops.push(Op::SetChildren {
-                id: 4,
-                children: (20..20 + rows).collect(),
-            });
-        }
+        ops.push(Op::SetChildren {
+            id: 4,
+            children: (20..20 + rows.len() as u32).collect(),
+        });
         kernel.apply(2, 3, &ops).unwrap();
         kernel
     };
-    // Its extent is at least its client box, which the platform's insets and
-    // a native scrollbar's gutters are outside of (CSS 2.1 §11.1.1): a list
-    // that fits does not scroll by them. A vertical scrollbar's gutter is at
-    // the end edge, which is the left in right-to-left text, and the first
-    // column starts at the client box's start edge. Points are from the
-    // border box's left (AppKit's `kernelDocumentOrigin` takes a left gutter
-    // off), so the client box's right edge is 375 left to right and 390
-    // right to left.
-    let full = [(StyleId::Height, StyleValue::Percent(100.0))];
-    let mut kernel = columns(&full, 0);
+    // Forty 20-point rows fill a full-height list's columns in turn: the
+    // padding and the platform's insets leave each column 638 points, which
+    // hold 31 rows, so the 32nd opens the second. The columns and the end
+    // padding reach the client box, which leaves the insets out (CSS 2.1
+    // §11.1.1).
+    let full = (StyleId::Height, StyleValue::Percent(100.0));
+    let mut kernel = columns(
+        &[full.clone(), (StyleId::ColumnFill, text("auto"))],
+        &[20.0; 40],
+    );
     kernel
         .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
         .unwrap();
-    frame(&mut kernel, 4);
+    assert_eq!(
+        (frame(&mut kernel, 50), frame(&mut kernel, 51)),
+        ((0.0, 616.0, 187.0, 20.0), (203.0, 16.0, 187.0, 20.0)),
+        "the 31st row ends the first column and the 32nd starts the second"
+    );
     assert_eq!(kernel.node(4).unwrap().content.1, 670.0, "844 - 174");
-    for (direction, start, right) in [("ltr", 0.0, 375.0), ("rtl", 390.0, 390.0)] {
-        let mut kernel = columns(&[full[0].clone(), (StyleId::Direction, text(direction))], 0);
+    // A vertical scrollbar's gutter is at the end edge, which is the left in
+    // right-to-left text; there the first row starts at the client box's
+    // right edge. Points are from the border box's left (AppKit's
+    // `kernelDocumentOrigin` takes a left gutter off), so the client box's
+    // right edge is 375 left to right and 390 right to left, and an empty
+    // list's extent ends there.
+    for (direction, right) in [("ltr", 375.0), ("rtl", 390.0)] {
+        let mut kernel = columns(
+            &[full.clone(), (StyleId::Direction, text(direction))],
+            &[100.0],
+        );
         kernel
             .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
             .unwrap();
-        let first = frame(&mut kernel, 5);
-        let edge = if direction == "rtl" {
-            first.0 + first.2
-        } else {
-            first.0
-        };
-        assert_eq!(edge, start, "{direction}: the first column's start");
+        if direction == "rtl" {
+            let row = frame(&mut kernel, 20);
+            assert_eq!(row.0 + row.2, 390.0, "rtl: the first row's start");
+        }
+        kernel
+            .apply(
+                3,
+                4,
+                &[Op::SetChildren {
+                    id: 4,
+                    children: vec![],
+                }],
+            )
+            .unwrap();
+        frame(&mut kernel, 4);
         assert_eq!(
             kernel.node(4).unwrap().content.0,
             right,
@@ -780,8 +792,16 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
     }
     // Six 20-point rows under an 80-point cap: the columns end above the
     // bottom gutter, 33 points tall, so each holds one row and they run on
-    // sideways
-    let mut kernel = columns(&[(StyleId::MaxHeight, n(80.0))], 6);
+    // sideways. `align-content: end` moves them by the space the cut finds
+    // below them, which is none while it counts the gutter there. Not
+    // growing, the list is as tall as its columns and what lies outside its
+    // content box, its cap.
+    let capped = [
+        (StyleId::MaxHeight, n(80.0)),
+        (StyleId::AlignContent, text("end")),
+        (StyleId::FlexGrow, n(0.0)),
+    ];
+    let mut kernel = columns(&capped, &[20.0; 6]);
     kernel
         .set_host_cover(4, Some(HostCover::Gutter([0.0, 15.0])))
         .unwrap();
@@ -791,6 +811,7 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
         (1202.0, 65.0),
         "six 187-point columns with their gaps, and the client box above the gutter"
     );
+    assert_eq!(frame(&mut kernel, 4).3, 80.0, "the list's height");
 }
 
 /// The route's list (4) as a column holding a 40-point header (5) and then

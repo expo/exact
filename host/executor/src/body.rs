@@ -119,7 +119,7 @@ pub(super) fn acquire(
     }
     if readers
         .0
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_READERS).then_some(n + 1)
         })
         .is_err()
@@ -332,7 +332,7 @@ pub(super) fn reader(
     use std::sync::atomic::Ordering;
     if READERS
         .0
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_READERS).then_some(n + 1)
         })
         .is_err()

@@ -76,6 +76,10 @@ impl<D: DataSource> Presenter<D> {
                 self.run_dispatch(r, dispatch);
             }
         }
+        // A request the runner let go (newer arguments, a refresh, a target
+        // answered now) is never released; one it keeps for its effects is.
+        let runner = self.host.runner();
+        self.parked.retain(|_, r| runner.holds(r.ticket));
     }
 }
 

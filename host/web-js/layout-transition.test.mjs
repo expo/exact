@@ -3,6 +3,7 @@
 // that gains the curve in the commit that moves it slides from where it was, as presence-glue.js plays a style op that
 // gains the row. Build exact-web-js once before running this test (docs/testing.md).
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -38,7 +39,7 @@ test('a bound layout transition slides while it holds a curve, jumps at none, an
   let server, browser;
   try {
     writeFileSync(resolve(dir, 'app.contract'), SOURCE);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
       const path = new URL(request.url).pathname.slice(1);
@@ -555,7 +556,7 @@ async function exitApp(engine, source, pageOptions) {
   const close = async () => { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); };
   try {
     writeFileSync(resolve(dir, 'app.contract'), source);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
       const path = new URL(request.url).pathname.slice(1);

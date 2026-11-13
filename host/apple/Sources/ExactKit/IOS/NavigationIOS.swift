@@ -354,7 +354,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// An app's selection; Exact's own goes through `projectContentScrollView`.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         if let scrollView {
-            // UIKit takes a selection for the top and bottom edges only and ignores the others
+            // Record only the top and bottom edges: UIKit takes no other
             nativeContentScrollEdges.formUnion(edge.intersection([.top, .bottom]))
             select(scrollView, for: edge)
         } else {

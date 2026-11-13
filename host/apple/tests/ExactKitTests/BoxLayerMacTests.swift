@@ -270,6 +270,45 @@ final class BoxLayerMacTests: XCTestCase {
         }
     }
 
+    /// A rounded image that does not clip and whose picture `draw(_:)`
+    /// paints (here, inside a padding) keeps its `background-color` under
+    /// the picture, as CSS paints a background: a fill sublayer would
+    /// composite over the layer's contents and hide the picture.
+    func testARoundedPaddedImageDrawsItsPictureOverItsBackground() throws {
+        _ = NSApplication.shared
+        let ctx = try XCTUnwrap(CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 400,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(red: 1, green: 0, blue: 0, alpha: 1); ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: try XCTUnwrap(ctx.makeImage())).representation(using: .png, properties: [:]))
+        let p = Presenter(), loader = RasterLoader(), resolver = AssetResolver(root: URL(fileURLWithPath: NSTemporaryDirectory()))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        let n = NodeView(id: 1, kind: "image", presenter: p)
+        defer { loader.shutdown(); n.raster = nil; window.close(); withExtendedLifetime(resolver) {} }
+        p.views[1] = n; p.viewport.addSubview(n)
+        n.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        var style = round(12); style["background_color"] = [128, 128, 128, 255]
+        n.applyStyle(style)
+        n.loadGeneration = 1
+        loader.load(n, source: "data:image/png;base64," + png.base64EncodedString(), resolver: resolver)
+        let end = Date(timeIntervalSinceNow: 5)
+        while n.raster == nil && Date() < end { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) }
+        XCTAssertNotNil(n.raster)
+        // An 8 px padding: the content box layout sends.
+        n.applyFieldContent(["rect": [8.0, 8.0, 84.0, 84.0]])
+        n.display()
+        // The layer tree as the window composites it.
+        let layer = try XCTUnwrap(n.layer)
+        let shot = try XCTUnwrap(CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 400,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        layer.render(in: shot)
+        let pixels = try XCTUnwrap(shot.data).assumingMemoryBound(to: UInt8.self)
+        func rgb(_ x: Int, _ y: Int) -> [UInt8] { let i = (y * 100 + x) * 4; return [pixels[i], pixels[i + 1], pixels[i + 2]] }
+        XCTAssertEqual(rgb(50, 50), [255, 0, 0], "the picture")
+        XCTAssertEqual(rgb(4, 50), [128, 128, 128], "the background in the padding")
+    }
+
     /// LLP 1116: a padding that resolves at layout (`min(10%, 20px)`
     /// arrives as a calculation) reads the content box the kernel published,
     /// for the box and for each side; without one, the box's bounds.

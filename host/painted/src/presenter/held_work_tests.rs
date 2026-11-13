@@ -103,6 +103,92 @@ fn a_wake_without_a_reply_releases_held_work() {
     assert_eq!(p.host.runner_mut().data().settled, 1);
 }
 
+/// Holds every call it is asked for until `release` names one.
+#[derive(Default)]
+struct Holding {
+    asked: u64,
+    release: Option<u64>,
+}
+
+impl DataSource for Holding {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(name.into()))
+    }
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        self.asked += 1;
+        Ok(Answer::Later(Request::continuation(self.asked)))
+    }
+    fn dispatch(&mut self, _: u64, _: &Store) -> Dispatch {
+        Dispatch::Held
+    }
+    fn release(&mut self, _: &Store) -> Vec<(u64, Dispatch)> {
+        let token = self.release.take();
+        token
+            .map(|t| vec![(t, Dispatch::Again)])
+            .unwrap_or_default()
+    }
+    fn parse(
+        &mut self,
+        _: &mut Store,
+        _: &str,
+        _: &[Value],
+        _: Outcome,
+    ) -> Result<Answer, DataError> {
+        Ok(Answer::Now(Value::Number(1.0)))
+    }
+}
+
+/// A held request newer arguments replaced goes with them; the one still in
+/// flight stays parked, and runs when its source releases it.
+#[test]
+fn a_held_request_the_runner_let_go_is_not_kept() {
+    let plan = crate::test_plan(
+        r#"component App
+  state n = 0
+  state m = 0
+  resource item = item(n) as shape number
+  action bump
+    n = n + 1
+  action nudge
+    m = m + 1
+  view
+    column width=200 height=200
+      button press=bump testId="bump"
+        text `${n}`
+      button press=nudge testId="nudge"
+        text `${m}`
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        Holding::default(),
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let press = |p: &mut Presenter<Holding>, id: &str| {
+        let k = p.host.kernel();
+        let view = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id;
+        p.tap(view).unwrap();
+    };
+    assert_eq!(p.parked.len(), 1);
+    for _ in 0..3 {
+        press(&mut p, "bump");
+    }
+    assert_eq!(p.host.runner_mut().data().asked, 4);
+    let parked: Vec<u64> = p.parked.keys().copied().collect();
+    assert_eq!(parked, [4], "only the request in flight is parked");
+    // A commit that changes nothing it reads keeps it, until released.
+    press(&mut p, "nudge");
+    assert!(p.parked.contains_key(&4));
+    p.host.runner_mut().data().release = Some(4);
+    press(&mut p, "nudge");
+    assert!(p.parked.is_empty(), "a request released runs");
+}
+
 struct Oversized;
 
 impl DataSource for Oversized {

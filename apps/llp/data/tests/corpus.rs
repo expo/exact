@@ -307,3 +307,64 @@ fn a_deep_citation_links_the_document_it_names() {
         ]
     );
 }
+
+/// What `source` answers for `path`: the path it shows and its message.
+fn shown(
+    data: &mut llp_data::Llp,
+    source: &str,
+    path: &std::path::Path,
+) -> (std::path::PathBuf, String) {
+    use exact_plan::Value;
+    use exact_runner::{Answer, DataSource, Store};
+    let mut store = Store::new("", []);
+    let args = [Value::str(&path.to_string_lossy()), Value::str("")];
+    let answer = match data.answer(&mut store, source, &args).unwrap() {
+        Answer::Later(request) => {
+            let loaded = data.continuation(request.continuation.unwrap()).unwrap()();
+            data.parse(&mut store, source, &args, loaded).unwrap()
+        }
+        now => now,
+    };
+    let Answer::Now(Value::Record(value)) = answer else {
+        panic!("{source} answers a record");
+    };
+    let message = value[6].as_str().unwrap().to_string();
+    assert_eq!(value[7], Value::Bool(!message.is_empty()));
+    (value[0].as_str().unwrap().into(), message)
+}
+
+#[test]
+fn a_missing_document_fails_and_keeps_the_open_one() {
+    let root = std::env::temp_dir().join(format!("llp-missing-corpus-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let (first, second) = (root.join("1000-first.md"), root.join("1001-second.md"));
+    std::fs::write(&first, "# First\n\nText.").unwrap();
+    std::fs::write(&second, "# Second\n\nText.").unwrap();
+    let missing = root.join("9999-missing.md");
+    for source in ["document", "page"] {
+        let mut data = llp_data::Llp::new();
+        // A directory opens its first document.
+        assert_eq!(
+            shown(&mut data, source, &root),
+            (first.clone(), String::new())
+        );
+        assert_eq!(
+            shown(&mut data, source, &second),
+            (second.clone(), String::new())
+        );
+        let (path, message) = shown(&mut data, source, &missing);
+        assert_eq!(path, second, "{source}");
+        assert!(message.contains("9999-missing.md"), "{source}: {message:?}");
+    }
+    // A document the index lists, deleted after the index was read.
+    let mut data = llp_data::Llp::new();
+    assert_eq!(
+        shown(&mut data, "document", &second),
+        (second.clone(), String::new())
+    );
+    std::fs::remove_file(&first).unwrap();
+    let (path, message) = shown(&mut data, "document", &first);
+    assert_eq!(path, second);
+    assert!(message.contains("1000-first.md"), "{message:?}");
+    std::fs::remove_dir_all(root).unwrap();
+}

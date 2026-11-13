@@ -1863,15 +1863,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `shared.js` runs a view transition. A Back or Forward flies too, unless the browser
   animated it itself (`hasUAVisualTransition`: a phone browser's swipe back can).
 
-- **`pages=` on a `render=build` route renders no pages in an app without a Rust render
-  entry.** A route `product "/product/:id" render=build pages=productPages()` compiles, and
-  `web-build --out dist` writes `/`, `/about` and `404.html` with no word about the product
-  pages: the JS target lists only unparameterised build routes (`host/web-js/src/emit.rs`,
-  `build_pages`), and the `pages=` source is asked only by the Rust render entry
-  (`exact_render::pages`), which an app `exact new` made has none of. A static host then
-  serves the shell for every product page. Until the JS build asks the source (QUEUE), make
-  the route `render=request`, which `serve` renders per request with its data, as the site
-  pattern's planet page is. (A web store from `pattern site`, 2026-11-01.)
+- **A parameterized page is absent from a static build unless its route lists its
+  pages.** Declare it with `render=build pages=productPages()`. The source returns
+  `string[]`: the values of the route's one parameter. Both renderers ask it once in the
+  render environment and render each returned value, encoding it as a path segment. An
+  app `exact new` made needs no Rust render entry. A source that fails or misses its
+  deadline fails the build; an empty list renders no pages. A static build contains only
+  the returned values.
 
 - **A link to the same route with a new query pushes a second entry.** A filter written as
   `link href=(path("shop") + "?cat=" + c)` on the shop page reached `follow`, whose

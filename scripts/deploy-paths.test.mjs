@@ -1,5 +1,5 @@
 // Deployment classification and source capture admission (LLP 1091 §11).
-// Only Contract compiler discovery below runs Cargo; no native build or host process is needed here.
+// The build fixtures use Cargo; no native host process is needed here.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
 import * as asyncLane from './async.mjs';
 import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
@@ -564,3 +564,34 @@ test.skipIf(!caseMode.available)('actual case-sensitive stage and STAGE are dist
   expect(() => assertCapturedContractSources(graph(inside), lower)).not.toThrow();
   expect(() => assertCapturedContractSources(graph(outside), lower)).toThrow('outside the captured snapshot');
 });
+
+test('unchanged production web roots stay current and source edits publish', async () => {
+  const root = resolve(import.meta.dir, '..');
+  mkdirSync(join(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(join(root, 'target/web-reproducible-'));
+  try {
+    const app = { id: 'test.reproducible', displayName: 'Reproducible', dir, manifest: {} };
+    writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: app.displayName, app: { id: app.id, name: app.displayName } }));
+    const source = join(dir, 'app.contract');
+    writeFileSync(source, 'component App\n  view\n    text "Before"\n');
+    const origin = new DirectoryOrigin(join(dir, 'origin'));
+    const build = name => {
+      const out = join(dir, name);
+      const run = spawnSync(process.execPath, ['host/web-js/build.mjs', 'reproducible', '--out', out, '--production', '--render', 'none'],
+        { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+      expect(run.status, run.stdout + run.stderr).toBe(0);
+      return out;
+    };
+    const classifyRoot = async web => (await classify({ app, opts: {}, origin, channel: 'prod',
+      snapshot: { commit: 'fixture', dirty: false, changes: [] }, release: 'fixture', web, compat: {}, platforms: [], wantOrigin: true })).rows[0];
+    const first = build('first');
+    await publishRoot({ origin, row: {}, web: first });
+    const again = build('second');
+    expect(await classifyRoot(again)).toMatchObject({ action: 'current', files: { changed: [], new: [], removed: [] } });
+    const data = JSON.parse(readFileSync(join(again, '.exact/install.json')));
+    expect(data.build).toMatchObject({ builtAt: null, source: null, dirty: null, mode: 'Release build' });
+    expect(data.build.id).toMatch(/^[0-9a-f]{64}$/);
+    writeFileSync(source, 'component App\n  view\n    text "After"\n');
+    expect(await classifyRoot(build('changed'))).toMatchObject({ action: 'publish' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 300000);

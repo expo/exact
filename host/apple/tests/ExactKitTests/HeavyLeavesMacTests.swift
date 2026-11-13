@@ -31,12 +31,12 @@ final class HeavyLeavesMacTests: XCTestCase {
           resource allStations = stations(location) as shape Station[]
           view
             column width="100%" height="100%"
-              video "clip.mp4" width="100%" height=40 muted=true testId="lead"
+              video "assets/clip.mp4" width="100%" height=40 muted=true testId="lead"
               list virtualized=true estimated-item-height=120 flex=1 min-height=0 width="100%" testId="feed"
                 for s in allStations key=s.id
                   column width="100%" height=120 padding=8
                     text s.name
-                    video "clip.mp4" width="100%" height=80 muted=true
+                    video "assets/clip.mp4" width="100%" height=80 muted=true
 
         """
         try source.write(to: dir.appendingPathComponent("app.contract"), atomically: true, encoding: .utf8)

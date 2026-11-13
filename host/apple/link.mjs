@@ -114,6 +114,13 @@ export function appleLaunchFrameworks(destination, product) {
   return destination === 'ios' && ['ExactIOS', 'ExactHostIOS'].includes(product) ? ['SafariServices'] : [];
 }
 
+/** Every Swift product's link, a development one too, drops the code nothing reaches. Swift Build
+ * links a debug product with `-dead_strip`; SwiftPM's native build system, which the Linux cross build
+ * uses (toolchain.mjs), does not, and an unreached function then keeps its imports in the executable:
+ * Hermes's llvh `disk_space` and `is_local`, whose `statfs` and `fstatfs` the required-reason check
+ * refuses (privacy.mjs). A release link already passes it. */
+export const appleDeadStrip = ['-Xlinker', '-dead_strip'];
+
 export function appleLaunchLinkArgs(destination, product) {
   // UIKit's -[UIApplication _accessibilityInit] loads this closure at every launch;
   // dyld loads it cheaper (LLP 1047.001.001). Keep the link even with dylib dead stripping.

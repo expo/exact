@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -53,7 +54,7 @@ async function fixture(runtime, run, contract, files = {}, engine = 'chromium') 
     const source = resolve(dir, 'app.contract');
     writeFileSync(source, contract);
     for (const [name, text] of Object.entries(files)) writeFileSync(resolve(dir, name), text);
-    const built = spawnSync(resolve(ROOT, 'target/debug/exact-web-js'), ['js', source, '-o', dir], { encoding: 'utf8' });
+    const built = spawnSync(resolve(ROOT, `target/debug/exact-web-js${EXE}`), ['js', source, '-o', dir], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     if (runtime === 'wasm') {
       session = await open({ host: 'web', plan: resolve(dir, 'app.plan'), webDist: resolve(process.env.EXACT_WEB_DIST) });

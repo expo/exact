@@ -108,3 +108,26 @@ test('a change waits for deferred view-transition tails and their host commands'
     expect(result).toEqual({ deferred: true, waiting: [[0, 'old', [], 0]], seen: [[0, 'old', [], 0], [2, 'new', [1, 2], 20]], now: 20 });
   } finally { await page.close(); await browser.close(); server.stop(true); }
 }, 60_000);
+
+test('an input runs after the change action and the timers due before it', async () => {
+  const server = serve(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href + '?agent');
+    const order = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { on } = await import('/host/web-js/events.js');
+      const { every } = await import('/host/web-js/clock.js');
+      const key = rt.sig(0), order = [];
+      every(0, () => rt.commit(() => order.push('timer')), true, 'timer');
+      rt.gated(0, () => rt.commit(() => order.push('change')), true, false, () => true, key, 'sync', 0, 0, 0, true);
+      every(0, () => rt.commit(() => order.push('after')), true, 'after');
+      rt.mount(() => {});
+      const button = document.createElement('button');
+      document.body.append(button);
+      on(button, 'click', () => order.push('input'));
+      button.click();
+      return order;
+    });
+    expect(order).toEqual(['timer', 'change', 'after', 'input']);
+  } finally { await page.close(); await browser.close(); server.stop(true); }
+}, 60_000);

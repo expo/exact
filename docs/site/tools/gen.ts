@@ -403,7 +403,6 @@ const dateOf = (source: string) => {
   const iso = isoDateOf(source);
   return iso ? new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) : '';
 };
-const literal = (value: unknown) => JSON.stringify(value).replaceAll("'", '\\u0027');
 const none: Link = { title: '', href: '' };
 const prompt = (url: string) => encodeURIComponent(`Read this documentation page, so I can ask questions about it:\n\n${url}`);
 const listed = pages.filter(p => !p.hidden);
@@ -446,7 +445,7 @@ pages.forEach(page => {
     blocks,
     toc,
   };
-  writeFileSync(join(OUT, `${page.route}.ts`), `export default ${literal(data)};\n`);
+  writeFileSync(join(OUT, `${page.route}.ts`), `export default ${JSON.stringify(data)};\n`);
 });
 
 const nav = {
@@ -471,7 +470,7 @@ const nav = {
     }),
   })),
 };
-writeFileSync(join(OUT, 'nav.ts'), `export default ${literal(nav)};\n`);
+writeFileSync(join(OUT, 'nav.ts'), `export default ${JSON.stringify(nav)};\n`);
 writeFileSync(join(OUT, 'index.ts'), `export const pages: Record<string, () => Promise<{ default: unknown }>> = {\n${pages.map(p => `  ${p.route}: () => import('./${p.route}.ts'),`).join('\n')}\n};\n`);
 
 const paths = new Set(pages.map(p => p.path));

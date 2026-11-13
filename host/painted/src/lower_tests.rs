@@ -432,3 +432,48 @@ fn a_looks_color_leaves_the_colour_track_to_the_reader() {
         Property::BackgroundColor
     ));
 }
+
+/// A blended SVG element is drawn alone into an island and blended onto
+/// what is below it (LLP 1055.000 D19): a layer the reader moves holds no
+/// backdrop to blend with, so the engine samples its animation. The same
+/// element unblended is the reader's.
+#[test]
+fn a_blended_svg_element_is_sampled_not_the_readers() {
+    for (blend, played) in [("normal", true), ("multiply", false)] {
+        let source = format!(
+            r##"component App
+  state o = 1
+  action go
+    o = 0.2
+  view
+    box width=400 height=500
+      svg width=100 height=100
+        circle testId="target" cx=50 cy=50 r=40 fill="#3366cc" opacity=o transition="opacity 1s linear" mix-blend-mode="{blend}"
+      button testId="go" press=go
+        text "Go"
+"##
+        );
+        let (mut h, error) = Host::boot(
+            &contract::compile(&source).unwrap().encode(),
+            (),
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            500.,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        h.lowering = true;
+        let target = h.kernel().find_by_test_id("target")[0];
+        let go = h.kernel().find_by_test_id("go")[0];
+        let go = h.kernel().node_by_key(go).unwrap().id;
+        assert!(h.dispatch_at(go, Event::Press, 0.).is_none());
+        let node = motion_node(target);
+        assert_eq!(
+            h.engine.is_played(node, Property::Opacity),
+            played,
+            "{blend}"
+        );
+        let mask = if played { LOWER_OPACITY } else { 0 };
+        assert_eq!(h.lowered_mask(target), mask, "{blend}");
+    }
+}

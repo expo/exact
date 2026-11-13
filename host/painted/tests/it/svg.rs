@@ -303,6 +303,49 @@ fn a_zero_length_subpath_paints_its_cap() {
     assert_ne!(red(70), (255, 0, 255), "a butt cap paints nothing");
 }
 
+#[test]
+fn a_collapsed_calibrated_path_keeps_its_cap_and_siblings() {
+    let plan = contract::compile(
+        r##"component App
+  view
+    svg width=120 height=60 viewBox="0 0 120 60"
+      rect width=120 height=60 fill="#ffffff"
+      rect x=100 y=45 width=10 height=10 fill="#0000ff"
+      path d="M20 30Z" stroke="#ff0000" stroke-width=12 stroke-linecap="round" pathLength=1 stroke-dasharray="0.2 0.2"
+      path d="M50 30L50 30" stroke="#ff0000" stroke-width=12 stroke-linecap="square" pathLength=1 stroke-dasharray="0.2 0.2"
+      path d="M80 30L80 30" stroke="#ff0000" stroke-width=12 pathLength=1 stroke-dasharray="0.2 0.2"
+"##,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (mut presenter, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (120., 60.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let frame = presenter.frame();
+    // Chrome 157: a calibrated zero-length dash is solid; caps still apply.
+    for (x, y, expected) in [
+        (105, 50, (0, 0, 255, 255)),
+        (20, 30, (255, 0, 0, 255)),
+        (16, 30, (255, 0, 0, 255)),
+        (50, 30, (255, 0, 0, 255)),
+        (46, 26, (255, 0, 0, 255)),
+        (80, 30, (255, 255, 255, 255)),
+    ] {
+        let pixel = frame.pixel(x, y).unwrap().demultiply();
+        assert_eq!(
+            (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+            expected,
+            "({x}, {y})"
+        );
+    }
+}
+
 /// LLP 1084 §4: a portable symbol role is its path, stroked as the web
 /// strokes it, in its `color`; an `sf/` name stays an empty box, unless it is a
 /// role's own Apple name, which draws that role (LLP 1121 D10).

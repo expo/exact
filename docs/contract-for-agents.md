@@ -157,7 +157,8 @@ name or key a host would refuse or ignore at run time: a
 swipe row's `swipeTrailing` naming a button outside its `scroll` (`lower-swipe-wiring`),
 a navigation root's `navigationKey` that never meets its routes' (`lower-navigation-key`),
 a `navigationSplit` off the root route (`lower-navigation-split`), an `image` source
-that is a bare word, neither a symbol nor a file (`lower-image-source`), and a literal `RoundButton`
+that is a bare word, neither a symbol nor a file (`lower-image-source`), an `image`, `video` or `audio`
+file outside `assets/`, which the app would ship without (`lower-asset-path`), and a literal `RoundButton`
 label of more than the 7 characters its circle holds (`lower-round-button-label`); each names its repair, and fixing it is part of the edit.
 
 Formatting is explicit. `fmt --stdout` previews, `fmt --check` checks, and plain
@@ -727,7 +728,11 @@ kept for the resource is forgotten, so a launch never shows an answer since repl
 `logs` says `too big to keep` once, naming the resource and what to do. An
 identifying argument that changes every launch (the launch's time or seed) never
 matches the kept one: pass it after `with`, as `resource lib = library() with
-time.epochAtZero`; the compiler and `logs` both say so.
+time.epochAtZero`; the compiler and `logs` both say so. A source declared in
+`app.contract` keeps no answer, as the launch asks it at boot, and neither does a
+resource whose identifying arguments read a declared resource, which a launch
+starts on its placeholder: pass such an argument after `with` when it does not
+identify the answer.
 An answer that must never reach the device's storage (a one-time code, a message
 shown once) ends its line with `transient`: `resource code = otp(request) as shape
 Code transient`. It is never kept, a launch starts from its placeholder, and an
@@ -2146,7 +2151,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | the same, `listStyle="plain"`, each `section`'s `header` one letter (Contacts) | the list with UIKit's A–Z section index at its trailing edge, when every section has a row; sections above the letters (Favorites) stay out of it; a name that starts with no letter A–Z goes under `#`, not nowhere. Its headers pin as the list scrolls, over UIKit's blur; a `grouped` list's scroll away |
 | `list` with no `appearance`, its rows down the page (each child is a row) | a plain list's cells: UIKit's separators, the cell's grey ground while a row is pressed, the row selected under the screen it pushed. Draw none of it, and no inset either: a row's content stands at the cell's margin (16 at each end; UIKit's, 20 in an iPhone's landscape) where you write no padding, the row `border-box` (LLP 1138); write a padding to choose your own. The row is your box; a border you write on a row is yours and replaces the separator there (`border-bottom="none"`: none), and `appearance="none"` keeps rows of your own (a transcript, a feed of cards). The Mac shows a table, the web and the Linux desktop one line between rows, Android none (LLP 1115.000 D16) |
 | `delete=remove(id)` on either list's row (`disabled` beside it: no delete) | the cell's swipe action Delete, which a full swipe performs (`contract vocab swipe`) |
-| `input type="checkbox" switch` | `UISwitch` |
+| `input type="checkbox" switch` | `UISwitch`; in a grouped list's row, the row and its switch are one VoiceOver element, as a Settings row is, named by the row's `aria-label`, else the switch's, else the row's text |
 | `input type="radio"` (the radios of one `name` are a group) | the SF Symbols circle, filled at its centre when checked, at body size; in a grouped list's row no circle but the row's checkmark, which a tap on the row moves (LLP 1115.000 D13.2) |
 | `input type="range"` (as wide as what holds it; in a `row`, `flex=1 min-width=0` beside its label) | `UISlider` |
 | `input type="date"`, `"time"`, `"datetime-local"` | `UIDatePicker`; with an empty `value` its pill shows your `placeholder` (`placeholder="Add a date"`) or, with none, no words (LLP 1115.000 D13.1). Opening it accepts the current local date or time within `min`/`max`. On macOS, typing, an arrow or Return accepts the field's displayed value; focus alone leaves it empty. The web shows the browser's own empty field. Android shows Material's filled field, the value as the phone writes dates and `placeholder` its floating label, and Material 3's picker, in the control's `accent-color` where it has one (LLP 1115.001.000) |
@@ -2959,6 +2964,11 @@ proposed constraints, including text wrapping and resolved pane margins.
 Content and margin changes update the measure; the allocated pane size remains
 UIKit's. Automatic, absolute and fractional dimensions use UIKit's sizing rules.
 
+Each pane is laid out as a root in the space UIKit gives it: an automatic width fills
+that space and an automatic height is the content's, so a pane scroller without a
+height or a maximum height does not scroll. Give a pane that should fill its
+allocation a height such as `height="100%"`.
+
 Use a bounded scroller in each child for independent scrolling. The first visible
 vertical scroller is the default title and scroll-to-top target; `navigationScroll`
 can name another. UIKit owns bar minimization, safe-area changes, each pane's
@@ -2978,13 +2988,15 @@ Set only the native properties the app needs to change. For a fixed header, set
 `route.controller.setContentScrollView(_:for:)`. An explicit native selection
 survives authored layout updates. Passing `nil` makes the edge automatic again, as
 in UIKit, and Exact selects as on a route the app never touched: for the top edge
-the scroller `navigationScroll` names, else the first visible vertical one, when it
-sits under the bar (none when content other than control bars sits above it), and
-for the bottom edge the scroller at the route's bottom.
+the scroller `navigationScroll` names (none when it names no scroller), else the
+first visible vertical one, when it sits under the bar (none when content other than
+control bars sits above it), and for the bottom edge the scroller at the route's
+bottom.
 `contentScrollView(for:)` reports Exact's selections too, so it does not tell an
 automatic edge from a selected one. UIKit takes a selection for the top and bottom
-edges only: it ignores one for a side edge, and `contentScrollView(for:)` raises an
-exception when asked for one. The two edges are independent, and `.all` selects both.
+edges only: it ignores a selection for a side edge, and `contentScrollView(for:)`
+raises an exception when asked for a side edge. The two edges are independent, and
+`.all` selects both.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 
@@ -2998,8 +3010,17 @@ A pane's view controller reports its scroll view only while UIKit insets the pan
 reports none for a pane UIKit hides. A pane `scroll` with an element hatch always has its
 scroller in the hatch's `element.scrollView`.
 
-The route hatch's `contentScrollView` is the actual selected view, including a
-native collection view or an app-owned `UIScrollView`.
+The route hatch's `contentScrollView` is the route's content scroll view when the
+hatch was last called: an app's top-edge selection, an app-owned `UIScrollView`
+included; else, where the route has a `navigationScroll`, the scroll view of the
+element it names, or nil when no element carries the name or it does not scroll;
+else the scroll view of the route's first vertical scroller; else the route's own
+viewport, which only an unpresented route under `interactive-widget="resizes-visual"`
+has; else nil. A native list's scroll view is its collection view. UIKit's
+`contentScrollView(for: .top)` reports Exact's scroller only while it sits under the
+bar. A top-edge selection or nil reaches the hatch when Exact next prepares the
+route, at the next authored update (after a nil, possibly within the call), and the
+hatch is called again then.
 
 The containing navigation controller still owns one shared navigation bar. UIKit
 decides where its large title and each pane's edge effect appear; the panes keep
@@ -4430,7 +4451,12 @@ edges, and on release it springs to the point along the edges of an area 8 point
 the window, past the safe area and above any keyboard, that is nearest where its
 momentum would carry it; accessibility actions move it to an edge, keeping its position
 along the other axis. Close, at its top left, or the checked **Frame Health** dismisses
-it. Touches outside it reach the app. LLP 1079.000 §7.2 describes its rows: Live, Paused
+it. On iOS, Minimize leaves a small status and frame rate at the same edge, below
+the status bar, while measurement continues; tap it to restore the card. Dragging and
+accessibility actions move either form, and rotation and keyboard changes keep it
+within the window.
+Minimize also stays available below Details and on the compact card. Touches outside
+the visible form reach the app. LLP 1079.000 §7.2 describes its rows: Live, Paused
 or Idle; the requested rate and any system limit; frame rate
 and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate and
 frame time, or a table of work time, late frames, maximum frame time and pacing
@@ -4438,7 +4464,7 @@ changes. A tap on a chart expands it; a tap on the title defines each figure; Sh
 at its top right, asks what to share, Agent Report, Summary or Image, and opens the
 system's share sheet with that one item; where the card measures the screen, it offers
 two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
-Details, beside Share, swaps everything below the header for `perf frames health`'s
+Details, beside Share, swaps the figures and charts for `perf frames health`'s
 three results over the last 5 s with their reasons and the counts behind them, in rows
 that scroll within the card. These are timing proxies; actual presentation and
 native-only animation cadence are unmeasured. While the card is shown, bounded hitch
@@ -5321,7 +5347,7 @@ overflows below showing, with square corners.
 
 `filter` on a box or an `image` takes CSS's functions in order (`blur`,
 `brightness`, `contrast`, `drop-shadow`, `grayscale`, `hue-rotate`, `invert`,
-`opacity`, `saturate`, `sepia`): `image "logo.png" filter="brightness(0.6)"`
+`opacity`, `saturate`, `sepia`): `image "assets/logo.png" filter="brightness(0.6)"`
 dims a logo. The element and its content are drawn, then filtered (Filter
 Effects 1 §12); the web, macOS and iOS draw it, and Linux draws it unfiltered
 for now (SVG Gallery's `fx-box-filter` and `fx-image-filter`). `url(#id)`

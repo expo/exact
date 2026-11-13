@@ -931,7 +931,12 @@ impl<'k> Resolver<'k, '_> {
             .filter(|_| width > 0.0);
         let scale = dash_scale(&path, node.props);
         let offset = style.stroke_dashoffset;
-        let dash = style.stroke_dasharray.pattern(scale);
+        let mut dash = style.stroke_dasharray.pattern(scale);
+        // Zero-length geometry keeps its caps. Underflow on a nonzero path
+        // must still reach the dash budget, even when the scale is zero.
+        if !dash.is_empty() && dash.iter().all(|v| *v == 0.0) && path.length() == 0.0 {
+            dash.clear();
+        }
         if !self.budget.cost(dash.len() as u64) {
             return None;
         }

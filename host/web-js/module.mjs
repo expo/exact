@@ -1,5 +1,5 @@
 // An app's Rust data source as a standalone logic module (LLP 1029.000,
-// ABI 8) for the JS runtime, when the app declares none of its own: a
+// ABI 9) for the JS runtime, when the app declares none of its own: a
 // generated crate exporting the same DataSource the web build bakes with
 // (`contract::bake` or `exact_js_bake::build_mixed_with` in web/build.rs).
 // usage: bun host/web-js/module.mjs <app> [--out <dir>] → <dir>/app.module.wasm
@@ -18,6 +18,8 @@ import { withHostDeployment } from '../../scripts/filesystem.mjs';
 import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
+import { EXE } from '../../scripts/paths.mjs';
+export { EXE };
 import { BINARYEN_DOWNLOAD } from '../web/stages.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -100,6 +102,18 @@ const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target'
 function cargoWasm(manifest) {
   return spawnSync('cargo', cargoWasmArgs(manifest), { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET } });
 }
+/** The dep-info Cargo writes beside binary `product`: `<name>.d`, beside
+ * `<name>` or `<name>.exe` alike. */
+export const depInfoOf = (product) => product.replace(/\.exe$/i, '') + '.d';
+/** The package directory of a source a dep-info lists: the path before its
+ * last `src` component, by either separator. null outside one. */
+export function crateDir(file) {
+  const at = Math.max(file.lastIndexOf('/src/'), file.lastIndexOf('\\src\\'));
+  return at < 0 ? null : file.slice(0, at);
+}
+/** The build script directory (`…/build/<package>-<hash>`) of a file a
+ * dep-info lists under its `out/`, by either separator. null for others. */
+export const buildScriptDir = (file) => /^(.*[\\/]build[\\/][^\\/]+)[\\/]out[\\/]/.exec(file)?.[1] ?? null;
 /** Whether `product` is newer than everything Cargo's dep-info `dep` says
  * it was built from, and than what the build scripts behind it declared
  * (`cargo:rerun-if-changed`, beside each `out/` it read). An unchanged
@@ -113,12 +127,12 @@ export function fresh(product, dep, also = []) {
     // found by name among the crate roots the dep-info lists.
     const roots = new Map();
     for (const f of files) {
-      const at = f.lastIndexOf('/src/'), dir = at < 0 ? null : f.slice(0, at);
+      const dir = crateDir(f);
       if (dir && !roots.has(dir)) roots.set(dir, /^name\s*=\s*"([^"]+)"/m.exec(readFileSync(resolve(dir, 'Cargo.toml'), 'utf8'))?.[1]);
     }
     const byName = new Map([...roots].map(([dir, name]) => [name, dir]));
-    for (const o of new Set(files.map(f => /^(.*\/build\/[^/]+)\/out\//.exec(f)?.[1]).filter(Boolean))) {
-      const dir = byName.get(/\/build\/(.+)-[0-9a-f]+$/.exec(o)[1]);
+    for (const o of new Set(files.map(buildScriptDir).filter(Boolean))) {
+      const dir = byName.get(/[\\/]build[\\/](.+)-[0-9a-f]+$/.exec(o)[1]);
       for (const m of readFileSync(resolve(o, 'output'), 'utf8').matchAll(/^cargo:(?::)?rerun-if-changed=(.+)$/gm)) files.push(resolve(dir, m[1]));
     }
     // A directory is watched whole, as Cargo scans one.
@@ -234,7 +248,7 @@ function ownModule(app, out, dir) {
 export async function moduleGrants(path) {
   const { instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
   const abi = e.exact_logic_abi();
-  if (abi !== 8) throw new Error(`${path}: Rust module ABI ${abi} is not 8; rebuild it with this checkout`);
+  if (abi !== 9) throw new Error(`${path}: Rust module ABI ${abi} is not 9; rebuild it with this checkout`);
   const session = e.exact_logic_create(), request = new Uint8Array(5), p = e.exact_logic_alloc(request.length);
   new DataView(request.buffer).setUint32(0, abi, true);
   new Uint8Array(e.memory.buffer, p, request.length).set(request);
@@ -399,16 +413,16 @@ export const withoutDev = (text) => text.replace(/^[ \t]*\/\/ dev-only \{.*\n[\s
 /** The plan-to-JavaScript compiler (`exact-web-js`) as `[cmd, args]`: its
  * binary when nothing it was built from changed, one kept for the machine,
  * or `cargo run`, whose binary `done()` keeps. */
-const COMPILER = resolve(TARGET_DIR, 'debug/exact-web-js');
-const compilerKept = () => kept({ crate: 'exact-web-js', product: COMPILER, depInfo: `${COMPILER}.d`, group: ['debug'], buildDirs: [resolve(TARGET_DIR, 'debug/build')], stamp: resolve(MODULES, 'kept', 'exact-web-js.json') });
+const COMPILER = resolve(TARGET_DIR, `debug/exact-web-js${EXE}`);
+const compilerKept = () => kept({ crate: 'exact-web-js', product: COMPILER, depInfo: depInfoOf(COMPILER), group: ['debug'], buildDirs: [resolve(TARGET_DIR, 'debug/build')], stamp: resolve(MODULES, 'kept', 'exact-web-js.json') });
 /** `fresh`, for a compiler binary: also stale after an edit to the lockfile
  * or to the manifest of the workspace or of any crate it was built from. */
 export function freshCompiler(product) {
   try {
-    const text = readFileSync(`${product}.d`, 'utf8');
+    const dep = depInfoOf(product), text = readFileSync(dep, 'utf8');
     const files = text.slice(text.indexOf(': ') + 2).trim().split(/(?<!\\)\s+/).map(f => f.replace(/\\ /g, ' '));
-    const crates = new Set(files.filter(f => f.lastIndexOf('/src/') > 0).map(f => resolve(f.slice(0, f.lastIndexOf('/src/')), 'Cargo.toml')));
-    return fresh(product, `${product}.d`, [resolve(root, 'Cargo.lock'), resolve(root, 'Cargo.toml'), ...crates]);
+    const crates = new Set(files.map(crateDir).filter(Boolean).map(dir => resolve(dir, 'Cargo.toml')));
+    return fresh(product, dep, [resolve(root, 'Cargo.lock'), resolve(root, 'Cargo.toml'), ...crates]);
   } catch { return false; }
 }
 export function webCompiler() {

@@ -83,7 +83,9 @@ pub enum HttpScheduling {
 pub use http::{CacheMode, Redirect};
 #[path = "request_preload.rs"]
 mod preload;
-pub use preload::{MissingPreloadSecret, Preload, PreloadPart, PreloadWhen};
+pub use preload::{
+    Launch, LaunchContext, LaunchRequest, MissingPreloadSecret, Preload, PreloadPart, PreloadWhen,
+};
 #[path = "request_http.rs"]
 mod http;
 
@@ -167,6 +169,10 @@ pub struct Request {
     pub redirect: Redirect,
     /// Fetch's HTTP cache mode (LLP 1162 D4).
     pub cache: CacheMode,
+    /// A preload to take by name when method and URL agree (LLP 1162.000 D1).
+    pub preload: Option<Box<str>>,
+    /// Checked prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
+    pub prefetch: bool,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,
     /// neither a jump nor `clock settle` nor `clock data`, and each reply
@@ -311,6 +317,8 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
+            preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -418,6 +426,8 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
+            preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -464,6 +474,8 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
+            preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,

@@ -6,6 +6,14 @@ use exact_kernel::CommitReceipt;
 const UNCHANGED: &str = "{\"ops\":[],\"unchanged\":true}";
 
 impl<D: DataSource> Host<D> {
+    pub(crate) fn launch_store_pending(&self) -> bool {
+        self.store_refresh_pending
+            || self
+                .launch_store
+                .as_ref()
+                .is_some_and(|store| store.pending())
+    }
+
     /// The common post-pixel activation order for committed sources.
     pub(crate) fn activate_source(source: &mut D) -> Result<(), exact_runner::DataError> {
         Self::configure_storage(source)?;
@@ -30,8 +38,15 @@ impl<D: DataSource> Host<D> {
 
     /// Load deferred app logic only after the presenter reports first pixel.
     pub fn activate_data(&mut self) -> String {
+        if self
+            .launch_store
+            .as_ref()
+            .is_some_and(|store| store.take_changed())
+        {
+            self.store_refresh_pending = true;
+        }
         if self.data_activated {
-            return self.refresh_store_after(true);
+            return self.refresh_store_after(!self.store_refresh_pending);
         }
         match self.runner.data_ref().preload() {
             Ok(false) => {
@@ -118,11 +133,32 @@ impl<D: DataSource> Host<D> {
     fn read_shared_store(&self, retry_only: bool) -> Option<crate::store::StoreRead> {
         let store = self.secrets.as_ref()?;
         let previous = self.runner.store().snapshot();
-        Some(if retry_only && !self.store_retry_names.is_empty() {
+        let mut read = if retry_only && !self.store_retry_names.is_empty() {
             store.retry_snapshot(previous, &self.store_retry_names)
         } else {
             store.snapshot(previous)
-        })
+        };
+        // A name the disk still holds as it was when its write failed has no
+        // peer write to adopt: the session keeps the value it still owes.
+        for write in &self.pending_store_writes {
+            let held = read.values.iter().position(|(name, _)| name == &write.name);
+            let on_disk = held.map(|i| &read.values[i].1);
+            if self
+                .pending_store_bases
+                .get(&write.name)
+                .map(Option::as_ref)
+                != Some(on_disk)
+            {
+                continue;
+            }
+            match (held, &write.value) {
+                (Some(i), Some(value)) => read.values[i].1 = value.clone(),
+                (Some(i), None) => drop(read.values.remove(i)),
+                (None, Some(value)) => read.values.push((write.name.clone(), value.clone())),
+                (None, None) => {}
+            }
+        }
+        Some(read)
     }
 
     fn store_read_finished(&mut self, read: crate::store::StoreRead) {
@@ -136,6 +172,7 @@ impl<D: DataSource> Host<D> {
                 == write.value.as_deref();
             if !retained {
                 self.reported_store_failures.remove(&write.name);
+                self.pending_store_bases.remove(&write.name);
             }
             retained
         });

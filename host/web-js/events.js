@@ -50,8 +50,9 @@ export function on(e, kind, f, bind) {
     };
   f = (...a) => {
     const to = wall && start ? Math.max(clock.now, performance.now() - start) : clock.now;
+    // A change action's receipt boundary yields (true): what is due after it runs before the event too.
     if (clock.timers.some(t => t.due <= to && !(wall && t.frame)) || Mutations.some(m => m.due <= to || m.next <= to))
-      advance(to, wall);
+      while (advance(to, wall) === true);
     if (!ends || (e.isConnected && !own?.gone)) return run(...a);
   };
   // A queued dialog close (or a scroll's end a due task's removal outlived) can outlive its arm, even while an exit

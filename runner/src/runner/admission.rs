@@ -221,6 +221,18 @@ impl<D: DataSource> Runner<D> {
         None
     }
 
+    /// Put back aborted answers a host took and did not apply (a fulfil
+    /// before them was refused): uncancelled, they wait for the next pump,
+    /// in the order taken. Tickets that are not taken aborts are ignored.
+    pub fn requeue_aborted_answers(&mut self, tickets: &[u64]) {
+        let mut back: Vec<u64> = (tickets.iter().copied())
+            .filter(|t| self.explicit_aborts.contains(t))
+            .collect();
+        self.explicit_aborts.retain(|t| !back.contains(t));
+        back.retain(|t| !self.module_aborts.contains(t));
+        self.module_aborts.splice(0..0, back);
+    }
+
     /// Take one refusal for ordinary transactional parsing/settlement. A
     /// source that shapes the failure settles it like any reply. A failure
     /// it cannot take ends the request without automatically asking again:

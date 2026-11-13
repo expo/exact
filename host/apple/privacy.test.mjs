@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { capturePrivacyManifest, mergePrivacyManifests, privacyManifestForBinaries, readPrivacyManifest, writePrivacyManifest } from './privacy.mjs';
 import { signedGpuProduct, plistFile } from './assets.mjs';
+import { appleDeadStrip } from './link.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 
 const row = (name, reasons) => ({ NSPrivacyAccessedAPIType: `NSPrivacyAccessedAPICategory${name}`, NSPrivacyAccessedAPITypeReasons: reasons });
@@ -106,6 +107,25 @@ test.skipIf(process.platform !== 'darwin')('filesystem-type probes cannot silent
     assert.throws(() => privacyManifestForBinaries([binary]), /audit getattrlist attributes/);
     const files = manifest(row('FileTimestamp', ['C617.1']));
     assert.deepEqual(privacyManifestForBinaries([binary], [files]), files);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Hermes's llvh Path.cpp keeps `disk_space` and `is_local` beside the file functions Hermes calls, and a
+// link without dead stripping kept their `statfs` imports in every development executable (#408).
+test.skipIf(process.platform !== 'darwin')('a development link drops an archived object\'s unreached disk-space call', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-privacy-strip-'));
+  try {
+    const path = resolve(dir, 'path.c'), main = resolve(dir, 'main.c'), binary = resolve(dir, 'App');
+    writeFileSync(path, `#include <sys/mount.h>
+__attribute__((visibility("hidden"))) long disk_space(const char *p) { struct statfs s; return statfs(p, &s) ? -1 : (long)s.f_bavail; }
+__attribute__((visibility("hidden"))) int open_for_read(const char *p) { return p[0]; }`);
+    writeFileSync(main, 'int open_for_read(const char *);\nint main(int argc, char **argv) { return open_for_read(argv[0]); }');
+    command('xcrun', ['clang', '-c', path, '-o', resolve(dir, 'Path.o')]);
+    command('xcrun', ['ar', 'rcs', resolve(dir, 'libpath.a'), resolve(dir, 'Path.o')]);
+    command('xcrun', ['clang', main, '-L', dir, '-lpath', '-o', binary]);
+    assert.throws(() => privacyManifestForBinaries([binary]), /disk-space APIs without an audited reason/, 'the whole object, without dead stripping');
+    command('xcrun', ['clang', main, '-L', dir, '-lpath', ...appleDeadStrip, '-o', binary]);
+    assert.deepEqual(privacyManifestForBinaries([binary]), manifest());
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

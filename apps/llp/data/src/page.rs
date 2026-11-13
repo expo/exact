@@ -310,7 +310,7 @@ fn finish(path: &Path, doc: &Document, place: &Place<'_>, message: &str, page: P
 /// The original `shape Page` assembler, retained as an independent test oracle.
 #[cfg(test)]
 fn reference_value(path: &Path, doc: &Document, place: &Place<'_>, message: &str) -> Value {
-    let find = place.find.trim().to_lowercase();
+    let find = fold(place.find.trim());
     let mut hits = 0usize;
     let mut marks = Vec::new();
     let mut links = Vec::new();
@@ -485,7 +485,7 @@ fn uncached_value(
 
 /// `shape Page`.
 pub(crate) fn value(path: &Path, doc: &Document, place: &Place<'_>, message: &str) -> Value {
-    let find = place.find.trim().to_lowercase();
+    let find = fold(place.find.trim());
     uncached_value(path, doc, place, message, &find)
 }
 
@@ -500,7 +500,7 @@ pub(crate) fn value_reusing(
     message: &str,
     cache: &mut Option<Cache>,
 ) -> Value {
-    let find = place.find.trim().to_lowercase();
+    let find = fold(place.find.trim());
     if find.is_empty() {
         if let Some(base) = cache.as_ref().filter(|c| c.is_for(path, scope, doc)) {
             return finish(
@@ -627,14 +627,55 @@ fn metadata(i: usize, b: &markdown_parse::Block) -> Option<Vec<(String, Vec<Run>
     (fields.len() >= 2).then_some(fields)
 }
 
+/// `text` as find compares it: each character lowercased on its own, and
+/// final sigma as sigma, so a query matches whatever ends the word.
+fn fold(text: &str) -> String {
+    text.chars().flat_map(fold_char).collect()
+}
+
+fn fold_char(c: char) -> impl Iterator<Item = char> {
+    c.to_lowercase().map(|l| if l == 'ς' { 'σ' } else { l })
+}
+
+/// The byte ranges of `text` where `find` (already folded) matches its
+/// folded form. Folding can lengthen a character (`İ` to `i̇`) and shorten
+/// another (`ẞ` to `ß`), so a match is mapped back character by character
+/// and widened to the whole characters it touches.
+fn matches(text: &str, find: &str) -> Vec<Range<usize>> {
+    if find.is_empty() {
+        return Vec::new();
+    }
+    // Each character's start in `text` and in the folded text.
+    let mut starts = Vec::new();
+    let mut folded = String::with_capacity(text.len());
+    for (at, c) in text.char_indices() {
+        starts.push((at, folded.len()));
+        folded.extend(fold_char(c));
+    }
+    // The character of `text` that folded byte `at` came from.
+    let char_at = |at: usize| starts.partition_point(|&(_, f)| f <= at) - 1;
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(found) = folded[from..].find(find) {
+        let first = char_at(from + found);
+        let last = char_at(from + found + find.len() - 1);
+        let (end, next) = starts
+            .get(last + 1)
+            .copied()
+            .unwrap_or((text.len(), folded.len()));
+        out.push(starts[first].0..end);
+        from = next;
+    }
+    out
+}
+
 fn text_matches(text: &str, find: &str) -> bool {
-    let lower = text.to_lowercase();
-    lower.len() == text.len() && lower.contains(find)
+    !find.is_empty() && fold(text).contains(find)
 }
 
 /// Whether rendering this block for `find` would change any of its base
-/// spans. This follows the same run boundaries and Unicode length guard as
-/// `split`; it deliberately does no `Value` construction.
+/// spans. This follows the same run boundaries and folding as `split`; it
+/// deliberately does no `Value` construction.
 fn block_matches(i: usize, b: &markdown_parse::Block, find: &str) -> bool {
     if let Some(fields) = metadata(i, b) {
         return fields
@@ -654,8 +695,7 @@ fn block_matches(i: usize, b: &markdown_parse::Block, find: &str) -> bool {
 }
 
 /// One run as spans: the stretches between matches, and each match with its
-/// ordinal (from 1). Text whose lowercase form changes length is not split
-/// (its byte offsets would not line up), so it finds nothing.
+/// ordinal (from 1).
 fn split(prefix: &str, run: &Run, mono: bool, find: &str, hits: &mut usize, out: &mut Vec<Value>) {
     let push = |text: &str, hit: usize, out: &mut Vec<Value>| {
         if text.is_empty() {
@@ -671,23 +711,12 @@ fn split(prefix: &str, run: &Run, mono: bool, find: &str, hits: &mut usize, out:
             Value::Number(hit as f64),
         ]));
     };
-    if find.is_empty() {
-        push(&run.text, 0, out);
-        return;
-    }
-    let lower = run.text.to_lowercase();
-    if lower.len() != run.text.len() {
-        push(&run.text, 0, out);
-        return;
-    }
     let mut at = 0;
-    while let Some(found) = lower[at..].find(find) {
-        let start = at + found;
-        let end = start + find.len();
-        push(&run.text[at..start], 0, out);
+    for found in matches(&run.text, find) {
+        push(&run.text[at..found.start], 0, out);
         *hits += 1;
-        push(&run.text[start..end], *hits, out);
-        at = end;
+        push(&run.text[found.clone()], *hits, out);
+        at = found.end;
     }
     push(&run.text[at..], 0, out);
 }
@@ -706,7 +735,7 @@ KERNEL before **kernel** and [local document](other.md).
 
 This paragraph stays untouched by the query.
 
-İstanbul keeps the Unicode expansion guard.
+İstanbul and STRAẞE fold to other lengths.
 
 | Name | Value |
 | --- | --- |
@@ -803,13 +832,39 @@ kernel();
     }
 
     #[test]
+    fn find_maps_folded_matches_to_whole_characters() {
+        // `İ` folds one byte longer and `ẞ` one byte shorter: the folded
+        // text is as long as the original, but its offsets differ.
+        let text = "İstanbul and STRAẞE.";
+        assert_eq!(fold(text).len(), text.len());
+        let found = |find: &str| -> Vec<&str> {
+            matches(text, &fold(find))
+                .into_iter()
+                .map(|r| &text[r])
+                .collect()
+        };
+        assert_eq!(found("i"), ["İ"]);
+        assert_eq!(found("i\u{307}"), ["İ"]);
+        assert_eq!(found("\u{307}s"), ["İs"]);
+        assert_eq!(found("stanbul"), ["stanbul"]);
+        assert_eq!(found("ß"), ["ẞ"]);
+        assert_eq!(found("e."), ["E."]);
+        assert_eq!(found("STRASSE"), Vec::<&str>::new());
+        assert_eq!(found("straße"), ["STRAẞE"]);
+        assert_eq!(found("a"), ["a", "a", "A"]);
+        assert_eq!(matches("ΟΔΟΣ", &fold("οδος")), vec![0..8]);
+        assert!(matches(text, "").is_empty());
+    }
+
+    #[test]
     fn production_pages_are_canonical_for_every_find_shape() {
         let path = Path::new("/corpus/0001-kernel.rfc.md");
         let doc = document(MARKDOWN);
         let local = |href: &str| href.ends_with("other.md").then_some("Other LLP".into());
         let mut cache = None;
         for query in [
-            "", "k", "ke", "ker", "kernel", "absent", "i\u{307}", "table", "html",
+            "", "k", "ke", "ker", "kernel", "absent", "i\u{307}", "table", "html", "i", "stanbul",
+            "straße", "e f",
         ] {
             let place = place(query, &local);
             let expected = reference_value(path, &doc, &place, "");

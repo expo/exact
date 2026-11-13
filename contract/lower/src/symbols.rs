@@ -82,7 +82,7 @@ pub(crate) fn roles(e: &Expr) -> Option<Expr> {
 }
 
 /// A template's text when every part of it is a literal.
-fn constant(parts: &[TemplatePart]) -> Option<String> {
+pub(crate) fn constant(parts: &[TemplatePart]) -> Option<String> {
     parts.iter().try_fold(String::new(), |mut out, part| {
         match part {
             TemplatePart::Text(t) => out.push_str(t),

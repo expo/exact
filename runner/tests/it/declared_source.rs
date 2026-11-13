@@ -3,8 +3,11 @@
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
-    DataError, DataSource, FailureKind, Outcome, RequestClass, RequestOut, Response, Runner,
+    Answer, DataError, DataSource, FailureKind, Outcome, RequestClass, RequestOut, Response,
+    Runner, Store,
 };
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 const SOURCE: &str = r##"shape Current
   temperature_2m: number
@@ -288,7 +291,7 @@ impl DataSource for Loading {
 }
 
 /// In an app with a data module too, a declared source asks at once: no
-/// module answers it, so none it waits for (LLP 1162.001 D7). The module's
+/// module answers it, so none it waits for (LLP 1162.001 D4). The module's
 /// own resource waits for it, as before.
 #[test]
 fn a_declared_source_does_not_wait_for_the_data_module() {
@@ -321,4 +324,252 @@ fn a_declared_source_does_not_wait_for_the_data_module() {
         sent, 2,
         "both queued sends went out before the module loaded"
     );
+}
+
+const READS: &str = r##"shape Current
+  temperature_2m: number
+
+source weather(place: string) as shape Current
+  url "https://api.example.test/forecast?place={place}"
+  pointer "/current"
+
+source nearby(place: string, city: string) as shape Current
+  url "https://api.example.test/near?place={place}&city={city}"
+  pointer "/current"
+
+component App
+  state places: string[] = ["harbor"]
+  resource city = savedCity() as shape string
+  resource now = weather(city) as shape Current
+  resource near = nearby(p, city) for p in places as shape Current
+  derive temperature = now.temperature_2m
+  view
+    text `${now.temperature_2m}`
+"##;
+
+/// A data module whose `savedCity()` answers the city its store keeps, or
+/// Berlin, and `dress(t)` what to wear at `t` degrees, once it has loaded
+/// (`loaded`).
+#[derive(Clone, Default)]
+struct Module {
+    loaded: Rc<Cell<bool>>,
+    asked: Rc<RefCell<Vec<String>>>,
+}
+
+impl Module {
+    fn loaded() -> Module {
+        let module = Module::default();
+        module.loaded.set(true);
+        module
+    }
+}
+
+impl DataSource for Module {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+    fn answer(
+        &mut self,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+    ) -> Result<Answer, DataError> {
+        assert!(self.loaded.get(), "the module was asked before it loaded");
+        self.asked.borrow_mut().push(source.into());
+        Ok(Answer::Now(match source {
+            "savedCity" => Value::str(store.get("city").unwrap_or("Berlin")),
+            "dress" if args[0].as_number() > Some(10.0) => Value::str("shorts"),
+            "dress" => Value::str("coat"),
+            other => return Err(DataError::UnknownSource(other.into())),
+        }))
+    }
+    fn ready(&self) -> bool {
+        self.loaded.get()
+    }
+    fn grants(&self) -> &str {
+        "secret.keep city\n"
+    }
+}
+
+/// The URLs the host was handed.
+fn urls(r: &mut Runner<Module>) -> Vec<String> {
+    (r.take_requests().into_iter())
+        .map(|o| o.request.url)
+        .collect()
+}
+
+/// The checkpoint of a page whose module read no `city`, and whose
+/// forecasts answered 12.
+fn rendered(plan: &exact_plan::Plan) -> exact_runner::Checkpoint {
+    let mut render = Runner::boot(
+        plan.clone(),
+        Module::loaded(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    for out in render.take_requests() {
+        let reply = json(200, r#"{"current":{"temperature_2m":12}}"#);
+        render.fulfill(out.ticket, reply).unwrap();
+    }
+    render.document_checkpoint("/")
+}
+
+/// A render holds no secret, so a declared source's page answer that read
+/// the store read it only through its arguments: the page doesn't list it in
+/// `readers` (LLP 1048.000 D6), and a device that boots from the page asks it
+/// when its arguments change, once the module's reader they read answers,
+/// never at the same arguments. This holds for a declared resource and for a
+/// list's elements.
+#[test]
+fn a_declared_source_s_page_answer_is_asked_when_its_arguments_change() {
+    let plan = contract::compile(READS).unwrap();
+    let checkpoint = rendered(&plan);
+    let readers: Vec<&str> = (checkpoint.readers.iter())
+        .map(|&k| checkpoint.answers[k].0.as_str())
+        .collect();
+    assert_eq!(readers, ["city"]);
+
+    // The module loads after the boot, on a device whose store keeps `city`
+    let launch = |city: &str| {
+        let module = Module::default();
+        let mut r = Runner::boot_checkpoint(
+            plan.clone(),
+            module.clone(),
+            Kernel::with_monospace(),
+            &checkpoint,
+            vec![("city".into(), city.as_bytes().to_vec())],
+            Default::default(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        assert!(urls(&mut r).is_empty(), "nothing is asked at boot");
+        assert_eq!(r.derive("temperature"), Some(&Value::Number(12.0)));
+        module.loaded.set(true);
+        r.data_ready().unwrap();
+        assert_eq!(*module.asked.borrow(), ["savedCity"]);
+        urls(&mut r)
+    };
+    assert_eq!(
+        launch("Paris"),
+        [
+            "https://api.example.test/forecast?place=Paris",
+            "https://api.example.test/near?place=harbor&city=Paris",
+        ]
+    );
+    assert!(launch("Berlin").is_empty());
+}
+
+/// A page's answer that the launch asks again is asked at boot when its
+/// source can answer, before the module loads, as the launch's own ask (LLP
+/// 1048.000 D6). A JavaScript render lists a request still pending at its
+/// end in `open`, a declared one too.
+#[test]
+fn a_page_answer_asked_again_is_asked_at_boot_when_its_source_can_answer() {
+    let plan = contract::compile(READS).unwrap();
+    let mut checkpoint = rendered(&plan);
+    checkpoint.open = (0..checkpoint.answers.len())
+        .filter(|&k| checkpoint.answers[k].0 != "city")
+        .collect();
+    let mut r = Runner::boot_checkpoint(
+        plan,
+        Module::default(),
+        Kernel::with_monospace(),
+        &checkpoint,
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let requests = r.take_requests();
+    assert!(requests.iter().all(|o| !o.forced), "{requests:?}");
+    let urls: Vec<&str> = (requests.iter()).map(|o| o.request.url.as_str()).collect();
+    assert_eq!(
+        urls,
+        [
+            "https://api.example.test/forecast?place=Berlin",
+            "https://api.example.test/near?place=harbor&city=Berlin",
+        ]
+    );
+}
+
+/// A declared source never waits for the data module, so a launch asks a
+/// declared resource at boot and keeps no answer of it for the next launch
+/// (LLP 1027 D4, LLP 1162.001 D4). Nor does it keep one of a resource whose
+/// identifying arguments read a declared store reader: that reader shows its
+/// placeholder until it answers, so such a kept answer could never show (LLP
+/// 1027.005 D3). A launch whose module loads after the boot forgets what an
+/// earlier build kept for both, asks the declared resource at boot, at the
+/// arguments the module's kept answer gives, and not again when the module
+/// loads, and keeps neither reply.
+#[test]
+fn a_declared_reader_and_a_resource_it_identifies_keep_no_answer() {
+    let src = READS.replace(
+        "  derive temperature",
+        "  resource outfit = dress(now.temperature_2m) as shape string\n  derive temperature",
+    );
+    let plan = contract::bake(contract::compile(&src).unwrap(), Module::loaded()).unwrap();
+    let kept = |args: Vec<Value>, value: Value| {
+        let mut w = exact_plan::bytes::Writer::default();
+        Value::list(args).encode(&mut w);
+        value.encode(&mut w);
+        w.into_vec()
+    };
+    let snapshot = vec![
+        ("city".to_string(), b"Paris".to_vec()),
+        (
+            "exact.kept.city".into(),
+            kept(Vec::new(), Value::str("Paris")),
+        ),
+        (
+            "exact.kept.now".into(),
+            kept(
+                vec![Value::str("Paris")],
+                Value::record(vec![Value::Number(3.0)]),
+            ),
+        ),
+        (
+            "exact.kept.outfit".into(),
+            kept(vec![Value::Number(3.0)], Value::str("coat")),
+        ),
+    ];
+    let module = Module::default();
+    let mut r = Runner::boot_stored(
+        plan,
+        module.clone(),
+        Kernel::with_monospace(),
+        snapshot,
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let requests = r.take_requests();
+    let now = named(&requests, "now");
+    assert_eq!(
+        now.request.url,
+        "https://api.example.test/forecast?place=Paris"
+    );
+    assert!(!now.forced, "the launch's own ask");
+    assert_eq!(
+        r.derive("temperature"),
+        Some(&Value::Number(0.0)),
+        "the placeholder, not an answer kept for it"
+    );
+    module.loaded.set(true);
+    r.data_ready().unwrap();
+    assert!((r.take_requests().iter()).all(|o| o.target != "now"));
+    let reply = json(200, r#"{"current":{"temperature_2m":12}}"#);
+    r.fulfill(now.ticket, reply).unwrap();
+    assert_eq!(r.resource("outfit"), Some(&Value::str("shorts")));
+    let writes = r.take_store_writes();
+    for name in ["exact.kept.now", "exact.kept.outfit"] {
+        let kept: Vec<_> = (writes.iter())
+            .filter(|w| w.name == name)
+            .map(|w| &w.value)
+            .collect();
+        assert_eq!(kept, [&None], "{name}: forgotten, never kept");
+    }
 }

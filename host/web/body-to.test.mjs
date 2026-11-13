@@ -4,6 +4,7 @@
 // 2xx body into the app's store (storage-fs.js `bodyTarget`), whole or not
 // at all, and read any other reply as usual.
 import { expect, test } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { hostFixtureFile as readFileSync, glueCase } from './tests/glue-fixture.mjs';
 import { request } from './http-body.js';
@@ -58,7 +59,7 @@ function normalized(spec) {
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-grants-'));
   try {
     writeFileSync(resolve(scratch, 'grants.txt'), spec);
-    const bin = resolve(process.env.CARGO_TARGET_DIR || resolve(ROOT, 'target'), 'debug/exact-web-js');
+    const bin = resolve(process.env.CARGO_TARGET_DIR || resolve(ROOT, 'target'), `debug/exact-web-js${EXE}`);
     const run = spawnSync(bin, ['normalize-grants', resolve(scratch, 'grants.txt')], { cwd: ROOT, encoding: 'utf8' });
     if (run.status !== 0) throw new Error(run.stderr || 'grant normalizer failed');
     return JSON.parse(run.stdout);

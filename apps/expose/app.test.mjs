@@ -88,3 +88,47 @@ for (const appearance of ['system', 'light', 'dark']) {
     }
   }, 30000);
 }
+
+// The module alone, over a stand-in fetch: each answer from OpenRouter that
+// fails after its headers ends the turn, and Clear ends one still answering.
+test('a body that fails after its headers ends the turn, and Clear aborts one still answering', async () => {
+  const { answer } = await import('./app.ts');
+  const store = { get: name => (name === 'assistant.key' ? 'sk-test' : null) };
+  const thread = () => answer('conversation', ['expose'], store);
+  const fetch = globalThis.fetch, native = globalThis.__exact_message;
+  try {
+    // The native path reads one JSON body: a 200 that is not JSON.
+    globalThis.__exact_message = () => {};
+    globalThis.fetch = async () => new Response('<html>busy</html>', { status: 200 });
+    let done = await answer('ask', ['expose', 'hello', '', 0], store);
+    expect(done).toMatchObject({ done: true });
+    expect(done.error).not.toBe('');
+    expect(thread().streaming).toBe(false);
+
+    // The page path reads the stream: one that errors after the headers.
+    delete globalThis.__exact_message;
+    globalThis.fetch = async () => new Response(new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n')); },
+      pull(c) { c.error(new Error('connection reset')); },
+    }), { status: 200 });
+    done = await answer('ask', ['expose', 'again', '', 0], store);
+    expect(done.error).toContain('connection reset');
+    expect(thread().streaming).toBe(false);
+
+    // A stream that never ends: Clear aborts it and empties the thread.
+    globalThis.fetch = (_url, init) => new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    });
+    const asked = answer('ask', ['expose', 'and again', '', 0], store);
+    expect(thread().streaming).toBe(true);
+    answer('clearThread', ['expose'], store);
+    expect(thread()).toMatchObject({ streaming: false, error: '' });
+    expect(thread().messages.length).toBe(1);
+    expect(await asked).toMatchObject({ done: true, error: '' });
+    expect(thread().messages.length).toBe(1);
+  } finally {
+    globalThis.fetch = fetch;
+    if (native === undefined) delete globalThis.__exact_message;
+    else globalThis.__exact_message = native;
+  }
+});

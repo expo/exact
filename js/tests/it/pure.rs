@@ -128,6 +128,40 @@ fn readable_stream_bodies_are_collected_by_responses() {
     );
 }
 
+/// Each step of a URLSearchParams iteration once parsed the whole query
+/// again, so iterating N pairs parsed N² of them: 2,000 pairs three ways
+/// overran a two-second turn. An unchanged query is now parsed once.
+#[test]
+fn iterating_unchanged_search_params_is_linear_in_them() {
+    let mut module = Module::loaded(
+        include_bytes!(concat!(env!("OUT_DIR"), "/pure.hbc")).to_vec(),
+        "test.pure",
+        "",
+    )
+    .unwrap();
+    module.bind(&contract::compile("component App\n  resource value = searchParamsWork() as shape string\n  view\n    text value\n").unwrap());
+    module.set_budget_ms(2_000.0);
+    let seen = module.query("searchParamsWork", &[]).unwrap();
+    assert_eq!(seen.as_str().unwrap(), "6000");
+}
+
+/// Each step of a Headers iteration once copied and sorted the whole list
+/// twice, once for the name and once for the value: 2N sorts of N pairs.
+/// The sorted order is now kept until a header is added or deleted.
+#[test]
+fn iterating_unchanged_headers_is_linear_in_them() {
+    let mut module = Module::loaded(
+        include_bytes!(concat!(env!("OUT_DIR"), "/pure.hbc")).to_vec(),
+        "test.pure",
+        "",
+    )
+    .unwrap();
+    module.bind(&contract::compile("component App\n  resource value = headersWork() as shape string\n  view\n    text value\n").unwrap());
+    module.set_budget_ms(2_000.0);
+    let seen = module.query("headersWork", &[]).unwrap();
+    assert_eq!(seen.as_str().unwrap(), "12000");
+}
+
 #[test]
 fn readable_stream_bodies_and_chunks_use_intrinsic_brands() {
     let mut module = Module::loaded(

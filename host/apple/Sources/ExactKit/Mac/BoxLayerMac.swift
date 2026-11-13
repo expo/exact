@@ -140,6 +140,11 @@ extension NodeView {
         // and AppKit makes a backing layer's radius clip: where the node
         // does not clip, a rounded one draws.
         if p.own && !clipsToBounds && p.radius > 0 && p.widths.contains(where: { $0 > 0 }) { p.drawn = !away }
+        // An image whose picture `draw(_:)` paints into the layer's contents
+        // draws its fill there too, under the picture: a rounded fill that
+        // does not clip is a sublayer, which would cover the contents.
+        let layerRadius = clipsToBounds && p.oneRadius && !p.shaped && !p.partialCorners ? p.radius : 0
+        if kind == "image", p.fill != nil, p.radius > 0, layerRadius == 0, !hasSymbolLeaf, raster != nil, imagePlan == nil { p.drawn = !away }
         return p
     }
 

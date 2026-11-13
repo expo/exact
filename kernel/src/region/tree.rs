@@ -56,11 +56,12 @@ impl Derived {
                     .filter_map(|b| nodes.get(&b).copied())
                     .collect()
             } else {
-                arena
+                let items = arena
                     .children(s)
                     .iter()
-                    .filter_map(|c| nodes.get(c).copied())
-                    .collect::<Vec<_>>()
+                    .filter_map(|c| Some((arena.style(*c).order, nodes.get(c).copied()?)))
+                    .collect();
+                crate::layout::order::ordered(arena, s, items)
             };
             tree.set_children(nodes[&s], &children);
         }

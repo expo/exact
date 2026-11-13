@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 fn identity() -> u64 {
     NEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .expect("native raster identity space exhausted")
 }
 

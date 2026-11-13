@@ -6,12 +6,141 @@ import { launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 // Load the comparisons without starting the harness's builds and browser drives.
 const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
+test('TypeScript fixture JS reuse checks the parent source fingerprint', async () => {
+  const sourceDeclaration = comparisonSource.slice(comparisonSource.indexOf('const sourceTree ='), comparisonSource.indexOf('const fileDigest ='));
+  const fingerprint = (env, git) => new Function('process', 'spawnSync', 'root', 'createHash', sourceDeclaration + '; return sourceTree;')(
+    { env }, git, '/checkout', createHash,
+  );
+  const parent = diff => fingerprint({}, (_command, args) => ({ stdout: args[0] === 'rev-parse' ? 'head' : diff }));
+  const noGit = () => ({ status: 128, stdout: '', stderr: 'fatal: invalid gitfile format' });
+  const fixtureSource = comparisonSource.slice(comparisonSource.indexOf('async function typescriptFixture('), comparisonSource.indexOf('// ---------------------------------------------------------------- the run'));
+  const reuseSource = comparisonSource.slice(comparisonSource.indexOf('  const earlier = jsFrom'), comparisonSource.indexOf('  // A route that paints its boot document'));
+  const files = new Map(), report = { targets: {} }, writes = [], builds = [];
+  const jsFrom = '/previous/comparison', out = '/current/comparison', t = { name: 'fieldnotes', app: 'fieldnotes', wasm: '/wasm' };
+  const read = path => files.get(path), write = (path, value) => { files.set(path, value); writes.push(path); };
+  const reuse = async source => {
+    const deps = {
+      t: { ...t }, plan: '/wasm/app.plan', inputs: { plan: 'plan', data: 'data', source }, jsFrom, out, root: '/checkout', JS_BUILT: '.conform-js.json',
+      resolve, existsSync: path => files.has(path), readFileSync: read, writeFileSync: write, report,
+      process: { stderr: { write() {} } },
+      spawned: async () => { builds.push(source); return { status: 0, stderr: '' }; }, fail: () => { throw new Error('JS build failed'); },
+    };
+    await new Function(...Object.keys(deps), `return (async () => { ${reuseSource} })();`)(...Object.values(deps));
+  };
+  const carry = async sourceTree => {
+    const deps = {
+      out: '/fixture-run', root: '/checkout', sdir: '/checkout/host/web-js/conformance', sourceTree,
+      resolve, dirname, basename, mkdirSync() {}, rmSync() {}, cpSync() {}, symlinkSync() {}, appendFileSync() {},
+      existsSync: path => files.has(path) || path.endsWith('/report.json'), writeFileSync: write,
+      readFileSync: path => path.endsWith('/app.ts') ? 'export const appId = "fieldnotes";\nexport const grants = {};'
+        : path.endsWith('/app.json') ? '{}' : path.endsWith('/report.json') ? '{"targets":{},"steps":[],"failures":[],"known":[]}' : '',
+      spawnSync: () => ({ status: 0, stdout: '', stderr: '' }), process: { env: {}, execPath: process.execPath },
+      crossBrowser: 'firefox', jsFrom: '/previous', linuxRef: false, argv: [],
+      spawned: async (_command, _args, { env }) => {
+        const source = fingerprint(env, noGit);
+        expect(source).toBe(sourceTree);
+        await reuse(source);
+        return { status: 0, stderr: '', stdout: '' };
+      },
+    };
+    const fixture = new Function(...Object.keys(deps), fixtureSource + '; return typescriptFixture;')(...Object.values(deps));
+    await fixture({ name: 'synthetic-storage-background', app: 'fieldnotes', contract: '/fixture/app.contract' },
+      { targets: {}, steps: [], failures: [], known: [] }, (step, what) => { throw new Error(`${step}: ${what}`); });
+  };
+  const before = parent(''), after = parent('host/web-js/ts-data.js changed');
+  expect(before).not.toBe(after);
+  files.set(resolve(jsFrom, 'dist', t.name, '.conform-js.json'), JSON.stringify({ plan: 'plan', data: 'data', source: before, warnings: 0 }));
+  await carry(before);
+  expect(builds).toEqual([]);
+  expect(report.targets.fieldnotes.sharedFrom).toBe(jsFrom);
+  await carry(after);
+  expect(builds).toEqual([after]);
+  expect(report.targets.fieldnotes.sharedFrom).toBeUndefined();
+  const artifact = resolve(out, 'dist', t.name, '.conform-js.json');
+  expect(writes).toContain(artifact);
+  expect(JSON.parse(read(artifact)).source).toBe(after);
+});
+
+test('TypeScript fixture reuse removes deleted source files and keeps build artifacts', async () => {
+  const target = resolve(import.meta.dir, '../../target'); mkdirSync(target, { recursive: true });
+  const dir = mkdtempSync(resolve(target, 'conform-source-'));
+  try {
+    const root = resolve(dir, 'checkout'), out = resolve(dir, 'out'), sdir = resolve(root, 'host/web-js/conformance');
+    const t = { name: 'synthetic-storage-background', app: 'fieldnotes', contract: resolve(sdir, 'storage-background/app.contract') };
+    const inputs = {
+      'apps/fieldnotes/app.ts': 'export const appId = "fieldnotes";\nexport const grants = {};\n',
+      'apps/fieldnotes/app.json': '{"typescript":{"placement":"worker"}}',
+      'host/web-js/ts-data.js': 'export const runtime = "current";\n',
+      'host/web-js/conformance/storage-background/app.ts': 'export const answers = {};\n',
+      'host/web-js/conformance/storage-background/app.contract': '// data: fieldnotes\n',
+      'host/web-js/conformance/storage-background/app.test.contract': 'test "storage" {}\n',
+      'host/web-js/conformance/storage-background.steps': 'clock settle\n',
+    };
+    for (const [file, text] of Object.entries(inputs)) {
+      const path = resolve(root, file); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text);
+    }
+    mkdirSync(resolve(root, 'node_modules'));
+    const carrier = resolve(out, t.name, 'carrier'), copied = resolve(carrier, 'source/host/web-js/ts-data.js');
+    const artifact = resolve(carrier, 'target/cached-build'), builds = [];
+    const deps = {
+      root, out, sdir, sourceTree: 'current-inputs', resolve, dirname, basename,
+      appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+      spawnSync: () => ({ status: 0, stdout: Object.keys(inputs).join('\0'), stderr: '' }),
+      process: { env: {}, execPath: process.execPath }, crossBrowser: null, jsFrom: null, linuxRef: true, argv: ['--build'],
+      spawned: async () => {
+        builds.push(existsSync(copied) ? readFileSync(copied, 'utf8') : null);
+        const comparison = resolve(carrier, 'comparison'); mkdirSync(comparison, { recursive: true });
+        writeFileSync(resolve(comparison, 'report.json'), '{"targets":{},"steps":[],"failures":[],"known":[]}');
+        return { status: 0, stderr: '', stdout: '' };
+      },
+    };
+    const fixtureSource = comparisonSource.slice(comparisonSource.indexOf('async function typescriptFixture('), comparisonSource.indexOf('// ---------------------------------------------------------------- the run'));
+    const fixture = new Function(...Object.keys(deps), fixtureSource + '; return typescriptFixture;')(...Object.values(deps));
+    const carry = () => fixture(t, { targets: {}, steps: [], failures: [], known: [] }, (step, what) => { throw new Error(`${step}: ${what}`); });
+    await carry();
+    mkdirSync(dirname(artifact), { recursive: true }); writeFileSync(artifact, 'cached');
+    rmSync(resolve(root, 'host/web-js/ts-data.js'));
+    await carry();
+    expect(builds).toEqual([inputs['host/web-js/ts-data.js'], null]);
+    expect(readFileSync(artifact, 'utf8')).toBe('cached');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('conformance compares background accounting and storage failures by operation, path and code', async () => {
+  const keys = new Function(comparisonSource.match(/const STATE_KEYS = .*;/)[0] + '; return STATE_KEYS;')();
+  expect(keys).toContain('background');
+  const { journal, storageLine } = new Function(comparisonSource.slice(
+    comparisonSource.indexOf('const BOUND ='), comparisonSource.indexOf('// A rendered page caches'),
+  ) + '; return { journal, storageLine };')();
+  const read = lines => journal({ logs: async () => ({ lines }) });
+  const a = await read(['t=0 console: storage failed: readFile app:/data/backups/missing: ENOENT No such file or directory']);
+  const b = await read(['t=0 storage failed: readFile app:/data/backups/missing: ENOENT file not found']);
+  expect(a.storage).toEqual(['storage failed: readFile app:/data/backups/missing: ENOENT']);
+  expect(a.storage).toEqual(b.storage);
+  expect((await read(['t=0 storage failed: readFile app:/data/backups/missing: EACCES denied'])).storage).not.toEqual(a.storage);
+  for (const line of ['storage failed: stat app:/data/backups/missing: ENOENT missing', 'storage failed: readFile app:/data/backups/other: ENOENT missing']) {
+    expect((await read([`t=0 ${line}`])).storage).not.toEqual(a.storage);
+  }
+  expect(storageLine(null)).toBeNull();
+  expect(storageLine('storage failed: an executor failure without a code')).toBe('storage failed: an executor failure without a code');
+  // The lowercase codes (js/src/storage.js `storageCode`) keep the code and drop the message too.
+  for (const code of ['failed', 'denied', 'full', 'EBUSY']) {
+    const [x, y] = [await read([`t=0 storage failed: readFile app:/data/a: ${code} one host's words`]), await read([`t=0 console: storage failed: readFile app:/data/a: ${code} another's`])];
+    expect(x.storage).toEqual([`storage failed: readFile app:/data/a: ${code}`]);
+    expect(x.storage).toEqual(y.storage);
+  }
+  // A handle left open after background work failed (LLP 1097 D7) is journaled with `storage:`.
+  const open = 'storage: app:/data/fieldnotes.db is still open after a failure in background work that opened it';
+  expect((await read([`t=0 ${open}`])).storage).toEqual([open]);
+  expect((await read([`t=0 console: ${open}`])).storage).not.toEqual((await read([])).storage);
+});
 const { comparisonTree, comparisonLayout, norm, diffLists, diffLayout } = new Function(comparisonSource.slice(
   comparisonSource.indexOf('async function comparisonTree('), comparisonSource.indexOf('function diffPng('),
 ) + '; return { comparisonTree, comparisonLayout, norm, diffLists, diffLayout };')();
@@ -297,7 +426,13 @@ test('every existing step parses and keeps the driver call forms', async () => {
   const root = resolve(import.meta.dir, 'conformance');
   const files = readdirSync(root, { recursive: true }).filter(f => f.endsWith('.steps'));
   const record = async line => {
-    const calls = [], s = Object.fromEntries(['tap', 'type', 'pointer', 'clock', 'resize', 'prefer'].map(method => [method, async (...args) => { calls.push([method, args]); }]));
+    const calls = [], s = Object.fromEntries(['tap', 'type', 'pointer', 'clock', 'resize', 'prefer', 'reload'].map(method => [method, async (...args) => { calls.push([method, args]); }]));
+    s.state = async () => {
+      calls.push(['state', []]);
+      const [, path, , ...value] = line.split(/\s+/), parts = path.split('.'), state = {};
+      parts.reduce((at, key, i) => at[key] = i === parts.length - 1 ? JSON.parse(value.join(' ')) : {}, state);
+      return state;
+    };
     await parseStep(line).run(s); return calls;
   };
   let count = 0;
@@ -329,6 +464,30 @@ test('every existing step parses and keeps the driver call forms', async () => {
     ['resize 800x600', [['resize', [800, 600]]]],
   ];
   for (const [line, calls] of forms) expect(await record(line), line).toEqual(calls);
+});
+
+test('a storage checkpoint fails for missing or wrong state', async () => {
+  const checkpoint = parseStep('expect background.done == 3');
+  await checkpoint.run({ state: async () => ({ background: { done: 3 } }) });
+  for (const state of [{}, { background: { done: 2 } }]) {
+    await expect(checkpoint.run({ state: async () => state })).rejects.toThrow('expected 3');
+  }
+  await parseStep('expect slots.answer == "two  spaces"').run({ state: async () => ({ slots: { answer: 'two  spaces' } }) });
+  for (const line of ['expect background.done == nope', 'expect slots.answer ==', 'expect done == 3', 'refused expect background.done == 3']) {
+    expect(() => parseStep(line)).toThrow('not a step');
+  }
+});
+
+test('a reload step restarts each executor on the store it had', async () => {
+  const calls = [];
+  await parseStep('reload').run({ reload: async () => { calls.push('reload'); } });
+  expect(calls).toEqual(['reload']);
+  for (const line of ['reload now', 'refused reload']) expect(() => parseStep(line)).toThrow('not a step');
+  // The storage fixture holds the accounting to a fresh start after its restart.
+  const steps = readFileSync(resolve(import.meta.dir, 'conformance/storage-background.steps'), 'utf8').split('\n');
+  const after = steps.slice(steps.indexOf('reload') + 1);
+  expect(steps).toContain('reload');
+  for (const line of ['expect background.failed == 0', 'expect background.last == null']) expect(after).toContain(line);
 });
 
 test('cross-browser wheel steps request hover and wheel at one resolved point', async () => {
@@ -454,9 +613,9 @@ test('every wasm-vs-JS comparison site records through differ, which alone tags 
   const source = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
   expect(source).toContain('const differ = (step, what, field = null) => fail(step, what, field, !crossBrowser);');
   const sites = source.split('\n').filter(l => /\bdiffer\(step,/.test(l));
-  expect(sites.length).toBe(7);
+  expect(sites.length).toBe(8);
   for (const [i, mark] of ["differ(step, 'state ' + x)", 'differ(step, x, crossBrowser ? `tree.${i}` : null)', 'differ(step, x.what, crossBrowser ? x.field : null)',
-    'op.forEach(x => differ(step, x))', 'differ(step, `screenshot: ', 'differ(step, `bound refusals: ', 'differ(step, `sound lines: '].entries()) expect(sites[i], mark).toContain(mark);
+    'op.forEach(x => differ(step, x))', 'differ(step, `screenshot: ', 'differ(step, `bound refusals: ', 'differ(step, `sound lines: ', 'differ(step, `storage lines: '].entries()) expect(sites[i], mark).toContain(mark);
   // No other call passes `fail`'s difference flag, and Linux's comparisons fail as they are.
   expect(source.split('\n').filter(l => /\bfail\([^\n]*,\s*(?:true|!crossBrowser)\)/.test(l) && !l.includes('const differ ='))).toEqual([]);
   expect(source).toContain("o.forEach(x => fail(step, 'linux ' + x));");

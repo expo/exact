@@ -501,10 +501,10 @@ pub(crate) fn without_inset(arena: &NodeArena, slot: u32, s: &mut taffy::style::
     }
 }
 
-/// Reserve native scrollbar gutters beside and below the padding box,
-/// `right` and `bottom` wide (CSS 2.1 §11.1.1). Taffy reserves one width on
-/// each `Scroll` axis, and `Hidden` keeps the same scroll container without
-/// reserving that axis's gutter.
+/// Reserve native scrollbar gutters beside and below the padding box (CSS
+/// 2.1 §11.1.1). Taffy reserves one width, the larger of `right` and
+/// `bottom`, on each `Scroll` axis, and `Hidden` keeps the same scroll
+/// container without reserving that axis's gutter.
 fn lay_gutter(s: &mut taffy::style::Style, [right, bottom]: [f32; 2]) {
     s.scrollbar_width = right.max(bottom);
     if right == 0.0 && s.overflow.y == taffy::style::Overflow::Scroll {

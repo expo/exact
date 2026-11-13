@@ -151,6 +151,8 @@ impl<D: DataSource> Runner<D> {
     fn other_timer_due_ms(&self) -> Option<f64> {
         self.wake_due()
             .into_iter()
+            // An input held behind a change action's receipt (`inputs.rs`).
+            .chain(self.held_input_due())
             .chain(self.call_due())
             .chain(self.presence_due_ms())
             // A resource a turn over its budget refused, asked again (`overrun.rs`).

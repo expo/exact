@@ -142,8 +142,13 @@ impl Drop for Fixture {
 /// which the default checks skip: an Ibex refresh once replaced the
 /// declaration with the engine's positional binding and nothing failed.
 #[test]
-fn generated_request_init_names_every_fetch_cache_mode() {
+fn generated_request_init_names_cache_modes_and_preloads() {
     let declarations = contract::typescript(&contract::compile(CONTRACT).unwrap()).unwrap();
+    assert!(declarations.contains("exactPreload?: string;"));
+    assert!(declarations.contains("exactPrefetch?: boolean;"));
+    assert!(declarations.contains(
+        "Checked on every host; the request is made as written. No host holds its reply yet."
+    ));
     assert!(declarations.contains("cache?: \"default\" | \"no-store\" | \"reload\" | \"no-cache\" | \"force-cache\" | \"only-if-cached\";"));
 }
 

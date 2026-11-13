@@ -787,6 +787,47 @@ fn prompts_queue_while_a_turn_runs() {
     assert!(h.shared.lock().queue.is_empty());
 }
 
+/// Pumps racing, as a finishing turn's and a submit's do: each queued
+/// prompt starts once, in queue order.
+#[test]
+fn racing_pumps_start_queued_prompts_once_in_order() {
+    let h = mock();
+    for round in 0..100 {
+        let before = h.shared.lock().entries.len();
+        let prompts: Vec<String> = (0..6).map(|i| format!("error {round}.{i}")).collect();
+        h.shared.lock().queue.extend(prompts.iter().cloned());
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let pumps: Vec<_> = (0..8)
+            .map(|_| {
+                let (shared, barrier) = (h.shared.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    agent::pump(&shared);
+                })
+            })
+            .collect();
+        for pump in pumps {
+            pump.join().unwrap();
+        }
+        let start = Instant::now();
+        loop {
+            let s = h.shared.lock();
+            if !s.busy() && s.queue.is_empty() {
+                break;
+            }
+            drop(s);
+            assert!(start.elapsed() < Duration::from_secs(10), "never drained");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let users: Vec<String> = h.shared.lock().entries[before..]
+            .iter()
+            .filter(|e| e.kind == "user")
+            .map(|e| e.blocks[0].lines[0].text())
+            .collect();
+        assert_eq!(users, prompts);
+    }
+}
+
 #[test]
 fn the_chaos_run_ends_bounded() {
     let mut h = mock();

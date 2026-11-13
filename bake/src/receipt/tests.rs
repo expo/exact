@@ -914,6 +914,10 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
             json!({"name":"deck/nested/index.html","sha256":hash(b"deck"),"bytes":4}),
         ]
     );
+    assert_eq!(
+        asset_cards(&root.join("absent/.."), &root.join("out"), &manifest).unwrap(),
+        cards
+    );
     std::fs::write(root.join("assets/two words.png"), b"space").unwrap();
     assert!(asset_cards(&root, &root.join("out"), &manifest)
         .unwrap_err()
@@ -924,7 +928,55 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
     assert!(asset_cards(&root, &root.join("out"), &manifest)
         .unwrap_err()
         .contains("bake asset gate"));
+    std::fs::remove_file(root.join("assets/escape")).unwrap();
+    std::fs::create_dir(root.join("outside-dir")).unwrap();
+    std::fs::write(root.join("outside-dir/file"), b"outside").unwrap();
+    for target in ["../outside-dir", "../missing"] {
+        std::os::unix::fs::symlink(target, root.join("assets/nested")).unwrap();
+        assert!(asset_cards(&root, &root.join("out"), &manifest)
+            .unwrap_err()
+            .contains("bake asset gate"));
+        std::fs::remove_file(root.join("assets/nested")).unwrap();
+    }
+    std::fs::remove_dir_all(root.join("assets")).unwrap();
+    for target in ["outside-dir", "missing"] {
+        std::os::unix::fs::symlink(target, root.join("assets")).unwrap();
+        assert!(asset_cards(&root, &root.join("out"), &manifest)
+            .unwrap_err()
+            .contains("bake asset gate"));
+        std::fs::remove_file(root.join("assets")).unwrap();
+    }
+    std::fs::remove_dir_all(root.join("deck")).unwrap();
+    assert!(asset_cards(&root, &root.join("out"), &manifest)
+        .unwrap()
+        .is_empty());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "async lane: inventories a 392 MiB asset tree"]
+fn a_large_embedded_roster_hashes_each_file_without_a_tree_reply() {
+    let root = std::env::temp_dir().join(format!(
+        "exact-bake-large-assets-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("assets")).unwrap();
+    let mut expected = Vec::new();
+    // Base64 for this tree exceeds the helper's 512 MiB reply buffer.
+    for index in 0..7 {
+        let bytes = vec![index as u8; 56 << 20];
+        let name = format!("assets/{index}.bin");
+        std::fs::write(root.join(&name), &bytes).unwrap();
+        expected.push(json!({"name":name,"sha256":hash(&bytes),"bytes":bytes.len()}));
+    }
+    let manifest = Manifest::read(&root).unwrap();
+    let cards = asset_cards(&root, &root.join("out"), &manifest);
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(cards.unwrap(), expected);
 }
 
 fn signed_fixture() -> (Compat, Value, Vec<u8>) {

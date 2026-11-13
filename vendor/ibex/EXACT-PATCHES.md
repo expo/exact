@@ -298,6 +298,10 @@ remains available.
 declare empty workspaces. This stops Cargo from discovering an enclosing checkout
 when formatting excluded path dependencies or running the printed installer command
 in a nested worktree. Preserve these boundaries when refreshing the vendored crates.
+The installer's own workspace takes none of the root's profiles, so its manifest
+optimizes dependencies in the dev profile as the root's does: unoptimized, sha2
+takes about nine seconds to verify each bundle under `--check`, which setup and
+`sdkReport` run per target.
 `scripts/app-workspace.test.mjs` checks the installer's workspace with locked,
 offline Cargo metadata in ordinary and nested checkout layouts.
 
@@ -901,3 +905,35 @@ takes `&mut` to install the authorizer, and reports a failed prepare as
 `SqlInputError`, whose text appends the whole SQL and an offset;
 `sql_error` reads SQLite's message from it, so a refusal and a batch's
 shortened statement read as before. Replay on a refresh.
+
+## Local patch 39, live URLSearchParams iteration parsed once per change
+
+`bindings/url.js` iterates as WebIDL's pair iterators do: each `next()`
+reads the pair at its index in the list as the list is then, and
+`forEach` likewise. The parsed pairs are kept until the query changes (a
+view's URL replaces its components on every change; a list of its own
+drops them on a write), so iterating an unchanged query of N pairs parses
+it once rather than N times. Exact's `js/src/pure.js` wrapper, which made
+iteration live by taking a snapshot per step, is gone.
+`js/tests/it/pure.rs` checks mutation during iteration against Chrome and
+the scaling. Replay on a refresh unless upstream iterates live.
+
+## Local patch 40, a header list's sorted order kept between indexed reads
+
+`Headers` keeps its entries' indexes in name order once an indexed read
+asks (`Headers::sorted_entry`), and drops them when a header is added or
+deleted; a changed value keeps its place. `bindings/headers_ops.rs` reads
+an iteration step's name or value through it, where it copied and sorted
+the whole list for each, so iterating N headers sorted them 2N times.
+`PartialEq` compares the entries alone. `stdlib/fetch.rs` tests the reads
+across changes; `js/tests/it/pure.rs` checks the scaling and, against
+Chrome, mutation during iteration. Replay on a refresh.
+
+## Local patch 41, query data keeps a `?` that begins a name
+
+`stdlib/url.rs`'s `SearchParams::parse` no longer removes a leading `?`.
+Its input is query data: `bindings/url.js` removes the one delimiter the
+URL Standard's constructor removes, and a URL's query excludes its own, so
+a second removal made `??a=1` the name `a` rather than `?a`. `url.rs`
+tests the parse; `js/tests/it/pure.rs` compares construction, a URL's
+view, lookup and mutation with Chrome. Replay on a refresh.

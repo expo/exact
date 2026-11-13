@@ -1,5 +1,5 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
-import { writeCrawlerFiles } from '../web/crawl.mjs';
+import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
@@ -503,6 +503,9 @@ if (rust) {
   // The module binds with the plan's declarations, not the bake's answers.
   cpSync(resolve(gen, 'app.bind.plan'), resolve(out, 'app.bind.plan'));
 }
+// The granted secrets: a launch whose store holds one passes over a store reader's build-time answer (store-reader.js).
+// A page whose app grants none ships none of it.
+const secretNames = [...new Set([...tsGrantSet.entries, ...rustGrantSet.entries].filter(([, , grant]) => grant?.[0] === 'secret-keep').map(([, , grant]) => grant[1]))];
 writeFileSync(resolve(gen, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(tsGrantSet)}),rustGrantSet=createGrantSet(${JSON.stringify(rustGrantSet)});\n`);
 // The app's launch modules that have a web service.
 const launchWeb = launchModules(appDir, manifest).filter(m => m.web);
@@ -529,6 +532,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // loop read the rest, so a development page names them too.
   `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources${production ? '' : ', agentMode, advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
   `data.keepSurfaceAnswers = ${!tsGrantSet.keepsNoAnswers && !rustGrantSet.keepsNoAnswers};`,
+  ...(secretNames.length ? [`import { install as secrets } from './store-reader.js'; secrets(${JSON.stringify(secretNames)});`] : []),
   ...(production ? [] : ["import { develop } from './perf.js';"]),
   // A data module's answers, watched from before the app asks (seam.js).
   ...(production || !asks ? [] : ["import { seam } from './perf.js';", 'seam();']),
@@ -617,7 +621,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js']) cpSync(resolve(here, f), resolve(gen, f));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js']) cpSync(resolve(here, f), resolve(gen, f));
 writeFileSync(resolve(gen, 'modules.js'), localImports(readFileSync(resolve(here, 'modules.js'), 'utf8')));
 // The web host's own pieces the runtime loads (glue.mjs).
 stageHostGlue(root, gen);
@@ -712,10 +716,11 @@ cpSync(resolve(here, 'midi.js'), resolve(gen, 'midi.js'));
 // The server bundle a JavaScript render runs (render.mjs), one script per VM context.
 writeFileSync(resolve(gen, 'main-server.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
-  `import app${rust ? ', { sources }' : ''} from './app.js';`,
+  `import app${rust || declared ? `, { ${[rust && 'sources', declared && 'prepareSources'].filter(Boolean).join(', ')} }` : ''} from './app.js';`,
   ...(soundTable ? [`import { install as sounds } from './sounds.js'; sounds(${soundTable});`] : []),
-  "import { data, clock, inflight, Resources, Mutations, routeAt, Head, canSetStatus, resolvedLanguage } from './rt.js'; import { answersAtWork, looseOut } from './held.js';",
+  "import { data, clock, inflight, Resources, Mutations, routeAt, Head, canSetStatus, resolvedLanguage, res, commit, refused } from './rt.js'; import { answersAtWork, looseOut } from './held.js';",
   "import { types, sourceTypes, pages, viewportMedia, activation, markdownPaths } from './names.js';",
+  "import { segmentOf } from './router.js';",
   ...(existsSync(resolve(gen, 'markdown.flag')) ? ["import { compileReaders } from './markdown.js';", 'globalThis.__markdown = () => compileReaders(markdownPaths, planResources.map(g => g.r));'] : []),
   "import { viewportFacts } from './facts.js';",
   "import { answers } from './checkpoint.js';",
@@ -733,10 +738,33 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   // Two steps, so a server can send the page's head between them
   // (render.mjs): the app starts and names its route, then settles.
   'let t0, route, planResources;',
-  'globalThis.__start = async () => {',
-  '  t0 = performance.now();',
+  'const prepare = async () => {',
   ...(ts ? [`  ts(data, ${mixed});`] : []),
   ...(rust ? ['  await install(data, sources, async p => __files(p));'] : []),
+  ...(declared ? ['  prepareSources();'] : []),
+  '};',
+  // Enumeration asks only its source, through the resource executor, with no app boot (LLP 1048.000 D2).
+  // Its answer is the route's locations, each value a path segment as `path(…)` makes it.
+  'globalThis.__pages = async (pattern, source, args, deadline) => {',
+  '  const end = performance.now() + deadline;',
+  '  await prepare();',
+  // A parse that immediately asks again must meet the bound on every turn (host/render/src/pages.rs).
+  '  const parse = data.parse;',
+  '  if (parse) data.parse = (...args) => { if (performance.now() >= end) throw new Error("it didn\'t answer before the deadline"); return parse(...args); };',
+  '  let listed;',
+  '  if (commit(() => { listed = res("pages", source, () => args, undefined, undefined, "[s", []); listed(); }, "pages") === false) throw refused();',
+  '  const r = listed.r;',
+  '  while (r.settled === undefined && !r.failed) {',
+  '    if (performance.now() >= end) throw new Error("it didn\'t answer before the deadline");',
+  '    if (r.ticket?.refused || r.ticket?.call?.refused || r.ticket?.ctl?.refused) throw new Error(String(r.ticket.refused ?? r.ticket.call?.refused ?? r.ticket.ctl?.refused));',
+  '    await new Promise(resolve => setTimeout(resolve, 1));',
+  '  }',
+  '  if (r.failed) throw new Error(r.error);',
+  "  return r.value.map(value => pattern.split('/').map(s => s[0] === ':' ? segmentOf(value) : s).join('/'));",
+  '};',
+  'globalThis.__start = async () => {',
+  '  t0 = performance.now();',
+  '  await prepare();',
   // Types and Markdown paths index the declared resources. Resources holds list members instead of their aggregate.
   '  planResources = app()[2];',
   '  route = routeAt(location.pathname + location.search);',
@@ -1024,7 +1052,7 @@ async function copyLazyModules(roots) {
     const from = resolve(root, source), code = name.endsWith('.js') || name.endsWith('.mjs') ? readFileSync(from, 'utf8') : null;
     mkdirSync(dirname(resolve(out, name)), { recursive: true });
     // The adapters' own storage-environment.js names the app's development store, as the page's chunk does (above).
-    const scoped = code == null || from.startsWith(gen + '/') ? code
+    const scoped = code == null || within(from, gen) ? code
       : production ? gateAgent(code, name) : developmentStore(code, realpathSync(appDir));
     if (scoped !== code) writeFileSync(resolve(out, name), scoped);
     else cpSync(from, resolve(out, name));
@@ -1081,7 +1109,7 @@ if (!production || !opt('--plan')) {
   // whatever the shell's EXACT_UPDATE_TRUST; with no bake receipt its reach is unknown.
   const [source, changes] = await revision ?? [null, null];
   const id = createHash('sha256').update(readFileSync(resolve(out, 'app.plan'))).update(readFileSync(resolve(out, 'app.js'))).digest('hex');
-  writeInstallPages(out, readManifest(appDir, app), { id, source, dirty: changes === null ? null : !!changes, builtAt: new Date().toISOString(),
+  writeInstallPages(out, readManifest(appDir, app), { id, source, dirty: changes === null ? null : !!changes, builtAt: production ? null : new Date().toISOString(),
     mode: production ? 'Release build' : 'Development build' });
 }
 // The type check, which ran while the page bundled: its diagnostics are the
@@ -1132,9 +1160,10 @@ if (pages.length && how === 'rust') {
     { cwd: renderApp.workspace, encoding: 'utf8', maxBuffer: 256 << 20, env: { ...process.env, CARGO_TARGET_DIR: renderApp.target, EXACT_UPDATE_TRUST: 'development' } });
   if (r.status !== 0) { console.error(r.stderr); process.exit(1); }
   const docs = r.stdout.split('\n').filter(Boolean).map(l => JSON.parse(l));
-  for (const doc of docs) {
-    if (doc.error) { console.error(`${bin} ${doc.location}: ${doc.error}`); process.exit(1); }
-    const file = doc.notfound ? '404.html' : `${decodeURIComponent(doc.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
+  for (const doc of docs) if (doc.error) { console.error(`${bin} ${doc.location}: ${doc.error}`); process.exit(1); }
+  const files = buildPageFiles(out, docs, routes);
+  for (const [i, doc] of docs.entries()) {
+    const file = files[i];
     mkdirSync(dirname(resolve(out, file)), { recursive: true });
     writeFileSync(resolve(out, file), doc.page);
   }

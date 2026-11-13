@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-// `bun exact.mjs verify [web|ios|windows|android]` (LLP 1116.004 D7, 1116.005 D7): one command a builder can stop on, where test,
+// `bun exact.mjs verify [web|ios|windows|android]` (LLP 1116.004 D7, 1116.005 D7; unnamed, a host the app ships, app-cli.mjs
+// `shippedHost`): one command a builder can stop on, where test,
 // drives, check and screenshots were three to five turns. It builds when the build is stale (web: the dist's
 // record against its sources, as the driver checks it; iOS: agent-build.mjs `buildFirst`, the plan fast path
 // included), runs the app's tests (app.test.contract and each other `*.test.contract` beside it, app.mjs
@@ -46,7 +47,7 @@ import { createRequire } from 'node:module';
 import { availableParallelism, loadavg, networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { findings as feelFindings, summary as feelSummary } from '../host/apple/feel/analyze.mjs';
-import { compilerWarnings, information, windowsWindow } from './app-cli.mjs';
+import { compilerWarnings, information, shippedHost, windowsWindow } from './app-cli.mjs';
 import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
 import { backendOriginSelection, privateNetwork, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
@@ -423,19 +424,22 @@ export function buildWarnings(output) {
   return kept.split('\n').filter(line => /^warning: /.test(line));
 }
 
+/** A line a drive's build says that `verify` shows as it comes: the build or the wait starting (minutes, and the report
+ * comes after them), and `logged`'s ticker while it runs. */
+export const buildProgress = line => /^(?:(?:building|waiting) for|\s*still building)/.test(line);
+
 /** The iOS build a drive needs, or its plan alone (agent-build.mjs): null when fresh, else what it said. */
 async function iosBuild(app) {
   const { buildFirst } = await import('./agent-build.mjs');
   const said = [], started = Date.now();
-  // A native build (or the wait for one) is said as it starts too: it is minutes, and the report comes after it.
-  const code = await buildFirst('ios', app, { say: (line) => { said.push(line); if (/^(building|waiting) for/.test(line)) console.error(line); } });
+  const code = await buildFirst('ios', app, { say: (line) => { said.push(line); if (buildProgress(line)) console.error(line); } });
   return said.length || code ? { ms: Date.now() - started, code, said, warnings: [] } : null;
 }
 
 /** The Windows build a drive needs (agent-build.mjs `windowsBuildFirst`): null when fresh, else what it said. */
 async function windowsBuild(app) {
   const { windowsBuildFirst } = await import('./agent-build.mjs'), said = [], started = Date.now();
-  const code = await windowsBuildFirst(app, { say: (line) => { said.push(line); if (/^building for/.test(line)) console.error(line); } });
+  const code = await windowsBuildFirst(app, { say: (line) => { said.push(line); if (buildProgress(line)) console.error(line); } });
   return said.length || code ? { ms: Date.now() - started, code, said, warnings: [] } : null;
 }
 /** A drive's own options on a host: iOS shows UIKit's bars; Windows opens at app.json's window size, as a person sees it. */
@@ -1325,14 +1329,20 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   const value = (flag) => args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : undefined;
   const json = args.includes('--json'), sim = value('--sim'), copyTo = value('--shots');
   const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1].filter((i) => i > 0));
-  const host = args.find((a, i) => !a.startsWith('-') && !flagged.has(i)) ?? 'web';
+  const { resolveApp } = await import('./app.mjs');
+  const app = resolveApp(value('--app'));
+  const named = args.find((a, i) => !a.startsWith('-') && !flagged.has(i)), chosen = named ? { host: named } : shippedHost('verify', app.manifest);
+  // No platform the app ships has a leg here: the semantics check runs alone, and the run says so.
+  if (!chosen.host) {
+    if (json) emitJSON({ host: null, skipped: chosen.why, problems: 0, exit: 0 }); else ended(`verify: ${chosen.why}`);
+    return 0;
+  }
+  const host = chosen.host;
   if (!['web', 'ios', 'windows', 'android'].includes(host)) { console.error(`verify: web, ios, windows or android, not ${host} (test ${host} runs the tests there)`); return declined(2); }
   if (host === 'windows' && process.platform !== 'win32') { console.error('verify windows runs on Windows (bun exact.mjs verify windows there)'); return declined(2); }
   if (host === 'android') process.env.EXACT_ANDROID_READER = '1'; // the APK, as `test android` drives it
   if (sim) process.env.EXACT_SIM = sim; // as the driver names it (devices.mjs `simulator`)
   const started = Date.now();
-  const { resolveApp } = await import('./app.mjs');
-  const app = resolveApp(value('--app'));
   ACCEPT = app.manifest.verify?.accept ?? [];
   const say = (lines) => console.log(lines.join('\n'));
   // An app with a server of its own: verify runs it where the app calls it, on an empty database. One already

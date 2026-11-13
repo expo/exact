@@ -143,26 +143,32 @@ component PhotoEditor
     send adjusted = applyConstraints(track=track, torch=not torchOn)
   action shutter
     send shot = takePhoto(track=track)
+  // Cancel and back drop a photo still being taken (`shot = none`). One that lands after the camera was left
+  // another way is dropped here, so it neither replaces the picture nor pops a route opened since.
   action taken
     match shot
       case some(p)
-        photo = p.path
-        turns = 0
-        resets = resets + 1
-        openedPicture = ""
-        photoEdit = "{}"
-        send stopped = stopTrack(track=track)
-        nav = back(nav)
+        if top(nav).name == "camera"
+          photo = p.path
+          turns = 0
+          resets = resets + 1
+          openedPicture = ""
+          photoEdit = "{}"
+          send stopped = stopTrack(track=track)
+          nav = back(nav)
       case none
         photo = photo
   action cancel
+    shot = none
     send stopped = stopTrack(track=track)
     nav = back(nav)
-  // Leaving the print sheet lets its payment go (`ordered = none`).
+  // Leaving the print sheet lets its payment go (`ordered = none`), and leaving the camera its photo.
   action back
     if printing
       ordered = none
       printing = false
+    if top(nav).name == "camera"
+      shot = none
     nav = back(nav)
   action orderPrint
     printing = true

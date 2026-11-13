@@ -356,6 +356,8 @@ impl Lowerer<'_> {
     /// the evaluator that will sample it.
     pub(crate) fn declare_keyframes(&mut self, file: &File) -> Vec<LowerError> {
         let mut errors = Vec::new();
+        // A keyframe takes any colour a row does (`values.rs` links them for rows).
+        exact_kernel::style::link_wide_colors();
         for decl in &file.keyframes {
             if self.keyframes.contains_key(&decl.name) {
                 errors.push(LowerError {

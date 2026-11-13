@@ -555,6 +555,10 @@ impl Painter {
         // @ref LLP 1055.000 D19 — a blended element is drawn alone into an
         // island over the frame, then blended onto what is below it.
         if item.blend != 0 {
+            // The reader does not play a blended element (`crate::host::lower`):
+            // a layer opened for one anyway closes, and the island draws the
+            // element at its values.
+            self.layer_close(layer);
             let (vw, vh) = self.viewport;
             let mut plain = item.clone();
             plain.blend = 0;

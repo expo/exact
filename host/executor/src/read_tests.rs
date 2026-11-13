@@ -1186,3 +1186,49 @@ fn held_portable_workers_at_other_origins_leave_the_ordered_read_and_send_free()
     core.forget(|_| false);
     wait_state(&core, |s| s.running.is_empty() && s.bytes == [0, 0]);
 }
+
+#[test]
+fn forgetting_a_prefetch_cancels_a_safe_read_running_or_queued_as_any_fetch() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            for queued in [false, true] {
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous);
+                core.enable_http_cache();
+                if queued {
+                    core.run(job(1, server.post(1), RequestClass::Ordered), None)
+                        .unwrap();
+                    server.seen(&[1]);
+                }
+                let mut request = server.request(2);
+                request.prefetch = prefetch;
+                core.run(job(2, request, RequestClass::Read), None).unwrap();
+                if !queued {
+                    server.seen(&[2]);
+                }
+                core.forget(|ticket| ticket != 2);
+                if queued {
+                    assert!(!core.shared.state.lock().unwrap().jobs[0]
+                        .iter()
+                        .any(|j| j.ticket == 2));
+                    server.reply(1, b"write");
+                    assert_eq!(tickets(&collect(&core, &woke, 1)), [1]);
+                } else {
+                    server.wait(|s| s.closed.contains(&2));
+                }
+                core.run(read_job(&server, 3), None).unwrap();
+                server.seen(&[3]);
+                server.reply(3, b"later");
+                let done = collect(&core, &woke, 1);
+                assert_eq!(tickets(&done), [3]);
+                assert!(matches!(&done[0].1, Outcome::Response(r) if r.body == b"later"));
+                wait_state(&core, |s| s.running.is_empty() && s.bytes == [0, 0]);
+                assert!(core.ordered_idle());
+                assert!(core.drain().is_empty());
+                let state = server.state.0.lock().unwrap();
+                assert_eq!(state.seen.len(), 2);
+                assert!(!queued || !state.seen.iter().any(|(ticket, _)| *ticket == 2));
+            }
+        }
+    }
+}

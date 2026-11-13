@@ -143,6 +143,43 @@ test('a miss fails at its bound naming the last value; a missing field is named 
   await expect(untilClock(flipping(0).s, 'until state gateway.user == null within 60')).rejects.toThrow('gateway has no field "user"');
 });
 
+/** A session holding a password field: `secret` revealed, bullets masked. `masked` answers the masked read. */
+function guarded(masked = (state) => state) {
+  const secret = 'synthetic-password-value';
+  const s = {
+    now: 7, carrier: { host: 'web' },
+    async op(req) {
+      if (req.land) return { clock: s.now };
+      const form = { password: req.reveal ? secret : '••••', user: 'ada' };
+      return req.reveal ? { slots: { form }, tasks: {} } : masked({ slots: { form }, tasks: {} });
+    },
+  };
+  return { s, secret };
+}
+
+test('clock until state never says a revealed value, when the masked read fails or no longer has it', async () => {
+  const { secret } = guarded();
+  const said = (spec, masked) => untilClock(guarded(masked).s, spec).then(() => '', (e) => e.message);
+  const fails = () => { throw new Error('transport'); };
+  const removed = () => ({ slots: { form: { user: 'ada' } }, tasks: {} });
+  const cases = [
+    ['until state form.password == "other" within 10', undefined, 'form.password was "••••"'],
+    ['until state form.password == "other" within 10', fails, 'form.password could not be read masked'],
+    ['until state form.password == "other" within 10', removed, 'form.password could not be read masked'],
+    ['until state form.password.length == 3 within 10', undefined, 'form.password has no field "length" (it is "••••")'],
+    ['until state form.password.length == 3 within 10', fails, 'form.password has no field "length" (it is a string)'],
+    ['until state form.pin == 3 within 10', fails, 'form has no field "pin" (it is a record of password, user)'],
+  ];
+  for (const [spec, masked, says] of cases) {
+    const message = await said(spec, masked);
+    expect(message).toContain(says);
+    expect(message).not.toContain(secret);
+  }
+  // Met, its value is the masked one, or none when that read fails.
+  expect(await untilClock(guarded().s, `until state form.password == "${secret}" within 10`)).toMatchObject({ until: 'met', value: '••••' });
+  expect(await untilClock(guarded(fails).s, `until state form.password == "${secret}" within 10`)).not.toHaveProperty('value');
+});
+
 test('a look that answers past the bound counts nothing, a value met late included', async () => {
   const started = performance.now();
   await expect(untilClock(flipping(0, 'web', { slow: 300 }).s, 'until state gateway.state == "ready" within 50')).rejects.toThrow(

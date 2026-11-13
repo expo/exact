@@ -454,3 +454,53 @@ fn inline_and_shared_text_are_one_text_across_the_bridge() {
         );
     }
 }
+
+#[test]
+fn a_wide_object_parses_in_time_independent_of_its_key_order() {
+    // 50,000 members: inserting each in its sorted place moves ~1.25e9
+    // members when the keys descend, seconds where one sort takes
+    // milliseconds.
+    let n = 50_000;
+    let text = |keys: &mut dyn Iterator<Item = usize>| {
+        let members: Vec<String> = keys.map(|i| format!("\"k{i:07}\":{i}")).collect();
+        format!("{{{}}}", members.join(","))
+    };
+    let ascending = text(&mut (0..n));
+    let descending = text(&mut (0..n).rev());
+    let timed = |text: &str| {
+        let start = std::time::Instant::now();
+        let Json::Object(object) = json::parse(text.as_bytes()).unwrap() else {
+            panic!("not an object");
+        };
+        let elapsed = start.elapsed();
+        assert_eq!(object.len(), n);
+        assert!(object.keys().zip(object.keys().skip(1)).all(|(a, b)| a < b));
+        assert_eq!(
+            object.get("k0000007"),
+            Some(&Json::Number(Number::PosInt(7)))
+        );
+        elapsed
+    };
+    let (up, down) = (timed(&ascending), timed(&descending));
+    assert!(
+        down < up * 5 + std::time::Duration::from_millis(200),
+        "descending keys took {down:?}, ascending {up:?}"
+    );
+}
+
+#[test]
+fn members_in_any_order_keep_the_last_of_a_repeated_key_as_serde_json_does() {
+    for text in [
+        r#"{"b":1,"a":2,"b":3,"c":{"z":1,"y":2,"z":3},"a":4}"#,
+        r#"{"c":1,"b":2,"a":3,"b":4,"c":5}"#,
+        r#"{"x":[{"q":1,"p":2}],"w":{},"x":null}"#,
+    ] {
+        let lean = json::parse(text.as_bytes()).unwrap();
+        let serde: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(lean.to_string(), serde.to_string(), "{text}");
+    }
+    let text = r#"{"b":1,"a":2,"a"}"#;
+    let lean = json::parse(text.as_bytes()).unwrap_err();
+    let serde = serde_json::from_str::<serde_json::Value>(text).unwrap_err();
+    assert_eq!(lean.to_string(), serde.to_string());
+}

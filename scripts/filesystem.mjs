@@ -413,30 +413,13 @@ export function removePrivateTree(path) {
 if (import.meta.main && process.argv[2] === '--helper') process.stdout.write(filesystemHelper());
 
 /** `body`'s result, run while holding the install lock `lock`: one process installs into a `node_modules` at a time,
- * holding a lock file of its pid and a token; the others wait. A lock whose process is gone, or older than any
- * install, is taken over by renaming exactly what was read aside, never by deleting a path read earlier. */
+ * and the others wait for as long as it takes. The lock is the OS's on a file that is never removed, released when
+ * its holder's descriptor closes, so a slow install keeps it and a killed one gives it up. */
 export function withInstallLock(lock, body) {
-  const mine = `${process.pid} ${randomBytes(8).toString('hex')}`;
-  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  // Removes `path` only while it still holds `seen`: renamed aside, compared, and put back when another's.
-  const drop = (path, seen) => {
-    const aside = `${path}.${process.pid}`;
-    try { renameSync(path, aside); } catch { return; }
-    if (read(aside) !== seen) try { linkSync(aside, path); } catch { /* a newer lock stands */ }
-    rmSync(aside, { force: true });
-  };
-  const stale = (seen) => {
-    try { if (Date.now() - statSync(lock).mtimeMs > 600_000) return true; process.kill(Number(seen.split(' ')[0]), 0); return false; }
-    catch (e) { return e.code === 'ESRCH'; }
-  };
-  for (;;) {
-    try { writeFileSync(lock, mine, { flag: 'wx' }); } catch {
-      const seen = read(lock);
-      if (seen !== null && stale(seen)) drop(lock, seen); else Bun.sleepSync(200);
-      continue;
-    }
-    try { return body(); } finally { drop(lock, mine); }
-  }
+  // Required when used: the tests' fixtures copy this file without host/.
+  const { takeLock } = import.meta.require('../host/web/build-lock.mjs');
+  const release = takeLock(lock, { waitMs: Infinity });
+  try { return body(); } finally { release(); }
 }
 /** The install lock of the `node_modules` in `dir`. */
 export const installLock = (dir) => resolve(tmpdir(), `exact-install-${createHash('sha256').update(dir).digest('hex').slice(0, 16)}.lock`);
@@ -448,25 +431,28 @@ export const installLock = (dir) => resolve(tmpdir(), `exact-install-${createHas
  * by hand (`bun install`, deploy's capture) has none. One process installs at a time (`withInstallLock`). */
 export function installedModules(modules = resolve(root, 'node_modules'), lock = installLock(root)) {
   const marker = resolve(modules, '.exact-install');
-  if (!existsSync(modules) || existsSync(marker)) withInstallLock(lock, () => {
-    if (existsSync(modules) && !existsSync(marker)) return;
-    if (!existsSync(modules)) {
-      const made = `${modules}.${process.pid}`;
-      rmSync(made, { recursive: true, force: true });
-      mkdirSync(made); writeFileSync(resolve(made, '.exact-install'), '');
-      renameSync(made, modules);
+  const whole = () => existsSync(modules) && !existsSync(marker);
+  if (whole() && !lockMismatches(dirname(modules)).length) return;
+  withInstallLock(lock, () => {
+    if (!whole()) {
+      if (!existsSync(modules)) {
+        const made = `${modules}.${process.pid}`;
+        rmSync(made, { recursive: true, force: true });
+        mkdirSync(made); writeFileSync(resolve(made, '.exact-install'), '');
+        renameSync(made, modules);
+      }
+      console.error(`${resolve(root)}: ${existsSync(resolve(modules, '.bin')) ? 'an install of node_modules did not finish' : 'no node_modules'}; bun install --frozen-lockfile there`);
+      if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: root, stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${resolve(root)}: bun install --frozen-lockfile failed (above); run it there, then this again`);
+      rmSync(marker, { force: true });
     }
-    console.error(`${resolve(root)}: ${existsSync(resolve(modules, '.bin')) ? 'an install of node_modules did not finish' : 'no node_modules'}; bun install --frozen-lockfile there`);
-    if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: root, stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${resolve(root)}: bun install --frozen-lockfile failed (above); run it there, then this again`);
-    rmSync(marker, { force: true });
+    // What is installed is what `bun.lock` says (LLP 1133.001 D9): installed again from it when not, and
+    // refused by name when that does not mend it.
+    if (!lockMismatches(dirname(modules)).length) return;
+    console.error(`${resolve(root)}: node_modules differs from bun.lock (${lockMismatches(dirname(modules)).join('; ')}); bun install --frozen-lockfile there`);
+    if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: dirname(modules), stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${dirname(modules)}: bun install --frozen-lockfile failed (above)`);
+    const left = lockMismatches(dirname(modules));
+    if (left.length) throw new Error(`${dirname(modules)}: node_modules still differs from bun.lock: ${left.join('; ')}`);
   });
-  // What is installed is what `bun.lock` says (LLP 1133.001 D9): installed again from it when not, and
-  // refused by name when that does not mend it.
-  if (!lockMismatches(dirname(modules)).length) return;
-  console.error(`${resolve(root)}: node_modules differs from bun.lock (${lockMismatches(dirname(modules)).join('; ')}); bun install --frozen-lockfile there`);
-  if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: dirname(modules), stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${dirname(modules)}: bun install --frozen-lockfile failed (above)`);
-  const left = lockMismatches(dirname(modules));
-  if (left.length) throw new Error(`${dirname(modules)}: node_modules still differs from bun.lock: ${left.join('; ')}`);
 }
 
 /** Each package `dir/bun.lock` pins at the top of its `node_modules` that is installed at another version,
