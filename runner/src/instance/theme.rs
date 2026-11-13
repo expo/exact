@@ -52,6 +52,16 @@ pub struct ThemedRow {
     pub tokens: u64,
 }
 
+impl ThemedRow {
+    /// Its text parsed in `tuple`; `None` when the row refuses it there.
+    pub fn resolve_in(&self, plan: &Plan, tuple: u32) -> Option<exact_kernel::StyleProps> {
+        let mut patch = exact_kernel::StyleProps::default();
+        let _tuple = Bound::new(tuple);
+        let set = crate::bridge::set_plan_style(&mut patch, self.style as u16, &self.text, plan);
+        set.is_ok().then_some(patch)
+    }
+}
+
 /// A Markdown node's `atomFaces` whose colours read a token (LLP 1045.000
 /// D2): the faces as the bridge named them, read again in their tuple when
 /// a token changes, as a row's text is.
@@ -170,6 +180,11 @@ impl ThemeIndex {
         self.looks.iter().map(|(view, l)| (*view, l))
     }
 
+    /// `view`'s state looks, when they read a token.
+    pub fn look(&self, view: ViewId) -> Option<&super::looks::Looks> {
+        self.looks.get(&view)
+    }
+
     /// Every themed row, in no order.
     pub fn rows(&self) -> impl Iterator<Item = (ViewId, &ThemedRow)> + '_ {
         self.rows.iter().map(|((view, _), r)| (*view, r))
@@ -195,7 +210,7 @@ pub(super) fn binding_of(plan: &Plan, row: &NodesRow, style: StyleId) -> Option<
 }
 
 /// Whether `row` is a mode boundary: it pins modes or sets a scheme (D7).
-pub(super) fn boundary(plan: &Plan, row: &NodesRow) -> bool {
+pub(crate) fn boundary(plan: &Plan, row: &NodesRow) -> bool {
     binding_of(plan, row, StyleId::Mode).is_some()
         || binding_of(plan, row, StyleId::ColorScheme).is_some()
 }

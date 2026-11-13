@@ -426,10 +426,10 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         if (transitioned(cs, "color")) next.color = d; else out.push(d);
       } else if (!transitioned(cs, "color")) out.push(`color: color-mix(in srgb, var(--exact-press-color) calc(${p} * 100%), ${cs.color}) !important`);
     }
-    // A boundary below that writes again the colour this node gives it (modes.js `pressBelow`) takes the press's
-    // colour too, as this node's own colour paints it, on this node's progress, inherited (`hold`).
+    // A boundary below that writes again the colour this node gives it takes the press's colour too, as this node's
+    // own colour paints it, on this node's progress, inherited (`hold`).
     const coloured = !!next.color || out.some(d => d.startsWith("color:"));
-    state.below = coloured ? globalThis.exact?.pressBelow?.(el) ?? [] : [];
+    state.below = coloured ? pressBelow(el) : [];
     if (state.below.length) out.push("--x-press-paint: var(--exact-press-paint)");
     state.kept = next;
     // The look each kept declaration was written from: carried with it while it is kept (a re-read with it on sees
@@ -471,6 +471,13 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     } catch { return null; }
     return sheet;
   };
+  // The boundaries under `el` that write again the colour `el` gives them: the JS target's modes.js finds them; on
+  // the wasm target each names the view whose colour it writes again (`data-exact-from`, host/web/src/host/looks.rs),
+  // which is `el` or a view above it.
+  const pressBelow = el => globalThis.exact?.pressBelow?.(el) ?? [...el.querySelectorAll("[data-exact-from]")].filter(b => {
+    const from = views.get(Number(b.getAttribute("data-exact-from")));
+    return !!from && (from === el || !el.contains(from));
+  });
   const hold = (el, state, declarations, below = state.below) => {
     drop(state);
     const sheet = declarations && sheetOf(el);
@@ -480,8 +487,10 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const insert = text => sheet.cssRules[sheet.insertRule(text, sheet.cssRules.length)];
     state.rule = { sheet, rule: insert(`${painting} { ${declarations} }`), below: [] };
     // Each boundary below it eases from the colour it shows (a look's included; its own rule is off) to the press's,
-    // as written, so a token resolves in the boundary's modes.
-    const pressed = el.style.getPropertyValue("--exact-press-color");
+    // resolved in the boundary's modes: the JS target's is a token's property, which resolves there; the wasm host
+    // resolves it on each boundary, by the pressed view (`--exact-press-color-below-<view>`, host/web/src/host/looks.rs).
+    const own = el.style.getPropertyValue("--exact-press-color"), view = el.getAttribute("data-view");
+    const pressed = own && view ? `var(--exact-press-color-below-${view}, ${own})` : own;
     below.forEach((b, n) => {
       const base = getComputedStyle(b).color, mark = `${state.key}.${n}`;
       if (!base || !pressed) return;

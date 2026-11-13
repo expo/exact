@@ -336,6 +336,8 @@ pub struct Host<D: DataSource> {
     collections: String,
     /// Head nodes (LLP 1048.003 D1): the page's `<head>`, never an element.
     heads: SortedSet<ViewId>,
+    /// The boundaries that do not set their own colour (LLP 1121 D7, D8).
+    boundaries: SortedSet<ViewId>,
     /// The head the page was last told, and whether a commit may move it.
     head: exact_runner::Head,
     language: Option<String>,
@@ -508,6 +510,7 @@ impl<D: DataSource> Host<D> {
             exclusions: Default::default(),
             textflow: String::new(),
             heads: Default::default(),
+            boundaries: Default::default(),
             head: Default::default(),
             language: None,
             large_title_size: None,
@@ -963,9 +966,7 @@ impl<D: DataSource> Host<D> {
                         self.head_dirty = true;
                         continue;
                     }
-                    if self.mirror.remove(&id).is_some_and(|m| !m.looks.is_empty()) {
-                        batch.looks(id, "");
-                    }
+                    self.forget_looks(id, batch);
                     self.layers.forget(id);
                     self.exclusions.remove(&id);
                     if let Some(drag) = self.drag {
@@ -1034,6 +1035,7 @@ impl<D: DataSource> Host<D> {
         }
         if !receipts.is_empty() {
             self.emit_textflow(batch);
+            self.emit_boundaries(batch);
         }
         // A canvas's inputs (LLP 1009 D2): the runner's side-output, only
         // from commits that applied.
@@ -1388,10 +1390,9 @@ impl<D: DataSource> Host<D> {
             Mirror {
                 props,
                 css,
-                children: Vec::new(),
                 in_button,
                 handled: !kinds.is_empty(),
-                looks: String::new(),
+                ..Default::default()
             },
         );
         self.emit_looks(id, batch);
