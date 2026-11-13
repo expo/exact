@@ -447,5 +447,13 @@ mod tests {
             read("// a plain list, not the exact-camera view\n"),
             Vec::<String>::new()
         );
+        assert_eq!(
+            read("const s = \"\\\r\nimport { open } from '@exact/hid'\";\n"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            read("\u{feff}// notes\u{2028}import\u{a0}{ open } from \"@exact/hid\";\n"),
+            ["@exact/hid"]
+        );
     }
 }
