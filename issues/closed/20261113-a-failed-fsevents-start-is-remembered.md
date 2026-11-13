@@ -1,6 +1,7 @@
 # A failed FSEvents start is remembered as installed
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A document watch records its folders only once a stream has started on them, so a failed `FSEventStreamStart` is tried again on the next sync.
 **Systems:** host/apple
 **Severity:** P3
 **Author:** Grok 4.7

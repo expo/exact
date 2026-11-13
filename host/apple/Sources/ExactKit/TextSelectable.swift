@@ -61,11 +61,20 @@ extension NodeView {
     /// The outermost view from here up that says `user-select: all`: CSS UI
     /// 4 §6.1 selects its content atomically, so a selection that takes part
     /// of it takes all of it. An element inside another is part of the outer.
+    /// The walk is `textSelectable`'s, through authored parents. When the
+    /// element is above a subtree shown in a view of its own (a dialog, a
+    /// popover, a presented route), this is that subtree's root: the part of
+    /// the element's content this text's selection can reach.
     var selectAllElement: NodeView? {
-        var found: NodeView?, current: AncestorView? = self
+        var found: NodeView?, root: NodeView?, crossed = false
+        var current: AncestorView? = self
         while let view = current {
-            if let node = view as? NodeView, node.style["user_select"]?.string == "all" { found = node }
-            current = view.superview
+            if let node = view as? NodeView {
+                if !crossed { root = node }
+                if node.style["user_select"]?.string == "all" { found = crossed ? root : node }
+            }
+            current = presenter?.eventParent(of: view) ?? view.superview
+            if current !== view.superview { crossed = true }
         }
         return found
     }

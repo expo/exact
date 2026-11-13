@@ -1,6 +1,7 @@
 # user-select all on a logical parent does not select as one unit
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `selectAllElement` walks the authored parents `textSelectable` walks, and an element above a subtree shown in a view of its own answers with that subtree's root, the part of it the selection can reach.
 **Systems:** host/apple
 **Severity:** P3
 **Author:** Grok 4.7

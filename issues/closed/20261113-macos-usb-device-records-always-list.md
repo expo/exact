@@ -1,6 +1,7 @@
 # macOS USB device records always list no endpoints
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Each alternate's endpoints are read from the device's configuration descriptor through IOUSBLib, which needs no open device, since the IORegistry publishes no endpoint children.
 **Systems:** packages/usb
 **Severity:** P3
 **Author:** Grok 4.7
