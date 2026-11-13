@@ -52,6 +52,7 @@ struct Abi {
     library: Library,
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
+    device_loaded: bool,
     shaders: shaders::Pack,
     /// Each symbol's address, looked up once: an animated canvas calls a
     /// handful every frame, and `dlsym` walks the library's hash table.
@@ -101,8 +102,7 @@ impl Abi {
     fn open_path(path: &std::path::Path, compat: &Value, artifact: &str) -> Result<Self, String> {
         Self::open_path_as(path, compat, artifact, true)
     }
-    /// The module verified and opened; `load`: its device made (on Android,
-    /// with its shaders), else nothing called yet.
+    /// The module verified and opened; `load`: its device made on Android.
     fn open_path_as(
         path: &std::path::Path,
         compat: &Value,
@@ -111,11 +111,12 @@ impl Abi {
     ) -> Result<Self, String> {
         verify_module(path, compat, artifact)?;
         // SAFETY: the app's own module, with the ABI checked before any call.
-        let abi = Self {
+        let mut abi = Self {
             library: unsafe { Library::new(path) }.map_err(|e| e.to_string())?,
             output_error: Default::default(),
             shaders: Default::default(),
             rendered: std::env::var("EXACT_GPU_RENDER").as_deref() == Ok("1"),
+            device_loaded: false,
             symbols: Default::default(),
         };
         unsafe {
@@ -169,9 +170,7 @@ impl Abi {
                         .get::<*const ()>(name.as_bytes())
                         .map_err(|e| format!("GPU ABI {name}: {e}"))?;
                 }
-                if abi.symbol::<unsafe extern "C" fn() -> u32>(b"gpu_load")() != 0 {
-                    return Err(abi.error().unwrap_or("GPU initialization failed".into()));
-                }
+                abi.load_device()?;
                 abi.symbol::<unsafe extern "C" fn(bool)>(b"gpu_seekable")(
                     std::env::var("EXACT_AGENT").as_deref() == Ok("1"),
                 );
@@ -183,11 +182,18 @@ impl Abi {
         }
         #[cfg(target_os = "android")]
         if load {
-            android::load(&abi, artifact.is_empty())?;
+            android::load(&mut abi)?;
         }
         #[cfg(not(target_os = "android"))]
         let _ = load;
         Ok(abi)
+    }
+    fn load_device(&mut self) -> Result<(), String> {
+        if unsafe { self.symbol::<unsafe extern "C" fn() -> u32>(b"gpu_load")() } != 0 {
+            return Err(self.error().unwrap_or("GPU initialization failed".into()));
+        }
+        self.device_loaded = true;
+        Ok(())
     }
     // SAFETY: all callers supply the signature declared by gpu/src/native.rs.
     unsafe fn symbol<T: Copy>(&self, name: &'static [u8]) -> T {
@@ -588,10 +594,8 @@ impl Surfaces {
             // LLP 1015.004) is the reply's error.
             let present = !absent(Abi::file(&compat, &artifact));
             let opened = Abi::open(&compat, &artifact).and_then(|mut abi| {
-                if artifact.is_empty() {
-                    let pack = abi.prepare_shaders(&compat, assets)?;
-                    abi.commit_shaders(pack)?;
-                }
+                let pack = abi.prepare_shaders(&compat, assets)?;
+                abi.commit_shaders(pack)?;
                 Ok(abi)
             });
             match opened {

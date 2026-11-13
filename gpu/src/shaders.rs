@@ -21,8 +21,8 @@
 //! rebuilds it at its next frame, which is how a `.wgsl` edit in the dev
 //! loop becomes a new picture with no rebuild.
 //!
-//! The registry is process-global, as the module is (one module per
-//! process, `native.rs`); a host with several sessions shares it.
+//! The registry is global within each GPU artifact. A host with several
+//! sessions loading the same artifact shares its registry.
 //!
 //! On the web the digest is not computed: the browser compiles WGSL itself
 //! and naga would cost the GPU module 740 KiB; the wasm and its shader

@@ -519,6 +519,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// the clearance its scrollers' insets hold (D3, ClearanceIOS.swift).
     var delivered: [UInt32: HostCover] = [:], localInsets = LocalInsetsReport(), clearance: [ObjectIdentifier: ClearanceInset] = [:]
     var deliveringCovers = false
+    /// A header was lifted in a batch and the runtime's answer to its cover
+    /// is still to come (`coverLifted`, `deliverCovers`): a stack change waits.
+    var liftHeld = false
     /// Whether this boot's first batch looked for the tablist the boot
     /// covered (`adoptBootCover`); every boot covers its own.
     private(set) var bootCoverSeen = false
@@ -860,13 +863,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 tabsHeld = true
                 continue
             }
-            let waits = prepareRoutes(stack, in: nav)
+            prepareRoutes(stack, in: nav)
             // Compare and write only the routes: under More, UIKit's list stays before them (`stackFront`)
             let routes = nav.stackRoutes
             if !routes.elementsEqual(stack, by: ===) {
-                // UIKit lays an arriving route out as it is given the stack: a header
-                // lifted in this batch must have left the layout by then (`coverLifted`).
-                if waits {
+                // UIKit lays an arriving route out as it is given the stack: a lifted
+                // header must have left the layout by then (`coverLifted`).
+                if liftHeld {
                     held = true
                     continue
                 }
@@ -890,7 +893,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             ApplyProfile.time("nav.layout") { nav.view.layoutIfNeeded() }
         }
         if held {
-            syncAfterBatch()
+            pendingSync = true
         } else {
             unanimated = false
         }
@@ -1039,16 +1042,12 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         pendingPress = press
     }
 
-    /// Sync again once the batch being applied and the covers it lifted have
-    /// been applied. The runtime's answer to the covers syncs first when it
-    /// moves anything, and this sync is then owed nothing.
-    private func syncAfterBatch() {
-        pendingSync = true
-        presenter.afterBatch { [weak self] in
-            guard let self, pendingSync, !syncing else { return }
-            pendingSync = false
-            sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
-        }
+    /// After the runtime's answer to a lifted header's cover: a stack change
+    /// still held, as when the answer moved nothing, is given to UIKit.
+    func liftAnswered() {
+        guard !liftHeld, !syncing, pendingSync else { return }
+        pendingSync = false
+        resync()
     }
 
     func modalDidDismiss() {

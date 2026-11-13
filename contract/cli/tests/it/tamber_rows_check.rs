@@ -1,8 +1,7 @@
 //! The design server's write check of the rows a write reaches (LLP 1121
 //! D3 and D7; QUEUE's "the server's write check doesn't see a Contract
-//! row's kind", theme2's 14:19 ruling): a write that breaks a literal row
-//! that passed is refused in the compiler's own words, at the row, as
-//! `contract build` refuses the design it would write.
+//! row's kind", theme2's 14:19 ruling). A newly broken row triggers a whole
+//! build with the proposed design; the refusal is its first diagnostic.
 #![cfg(unix)]
 
 use super::tamber_package_params::reading;
@@ -17,15 +16,19 @@ pub(super) fn transaction(s: &mut Serve, dir: &Path, op: Value) -> Value {
 
 /// The server refuses `op`, and `contract build` refuses the design the
 /// write would leave (`written`), with the same id and words, at the same
-/// row.
+/// row: before the design's whole build is known, and once it passed.
 pub(super) fn same_words(dir: &Path, design: &str, contract: &str, op: Value, written: &str) {
     std::fs::write(dir.join("app.tamber"), design).unwrap();
     std::fs::write(dir.join("app.contract"), contract).unwrap();
-    let mut s = Serve::start(dir, &[]);
-    let (first, _) = s.ask(json!({"method": "propose", "ops": [{"op": "set-token", "name": "ink", "value": "#444444"}]}));
+    let (mut s, release) = held(dir);
+    let probe = json!({"method": "propose", "ops": [{"op": "set-token", "name": "ink", "value": "#444444"}]});
+    let (first, _) = s.ask(probe.clone());
     assert!(first.get("ok").is_some(), "{first}");
+    let unverified = transaction(&mut s, dir, op.clone());
+    release(&mut s, probe);
     let refused = transaction(&mut s, dir, op);
     drop(s);
+    assert_eq!(unverified["error"], refused["error"]);
     let d = &refused["error"]["diagnostics"][0];
     assert!(d.is_object(), "the write is refused: {refused}");
     // The design it would have written, built.
@@ -37,6 +40,36 @@ pub(super) fn same_words(dir: &Path, design: &str, contract: &str, op: Value, wr
     assert_eq!(d["col"], built.span.col, "{refused}");
     assert_eq!(d["file"], "app.contract");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A server for `dir` whose background whole build waits until `release`,
+/// which lets it run, waits for its verdict and has the server read it
+/// with the answer to a `probe` that passes: writes before are checked
+/// under a build not yet verified, writes after under one known to pass.
+pub(super) fn held(dir: &Path) -> (Serve, impl Fn(&mut Serve, Value)) {
+    let name = dir.file_name().unwrap().to_string_lossy().to_string();
+    let gate = std::env::temp_dir().join(format!("{name}.gate"));
+    let log = std::env::temp_dir().join(format!("{name}.log"));
+    let _ = std::fs::remove_file(&gate);
+    let _ = std::fs::remove_file(&log);
+    let s = Serve::start(
+        dir,
+        &[
+            ("EXACT_TAMBER_CHECK_GATE", gate.to_str().unwrap()),
+            ("EXACT_TAMBER_CHECK_LOG", log.to_str().unwrap()),
+        ],
+    );
+    let release = move |s: &mut Serve, probe: Value| {
+        std::fs::write(&gate, "").unwrap();
+        let began = std::time::Instant::now();
+        while !std::fs::read_to_string(&log).is_ok_and(|l| l.contains("passed")) {
+            assert!(began.elapsed().as_secs() < 120, "the whole build's verdict");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (answer, _) = s.ask(probe);
+        assert!(answer.get("ok").is_some(), "{answer}");
+    };
+    (s, release)
 }
 
 const DESIGN: &str =
@@ -145,10 +178,10 @@ fn an_unused_style_and_a_shorthand_are_not_judged() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Rows alike (one name, one value) are judged once and each refused at
-/// its own place, as the build refuses each.
+/// Rows alike (one name, one value) are judged once; the refusal is at
+/// the first place the build refuses.
 #[test]
-fn rows_alike_are_each_refused_at_their_place() {
+fn rows_alike_are_refused_at_the_builds_first_place() {
     let dir = reading("rows-alike");
     let design = "tamber t\n\ntheme\n  ink = #111111\n  mute = #777777\n";
     let contract = "use Card from \"@acme/reading\"\ncomponent App\n  view\n    column color=\"mute\"\n      text \"a\" color=\"mute\"\n      Card()\n";
@@ -183,6 +216,7 @@ fn rows_alike_are_each_refused_at_their_place() {
             .unwrap_or_default()
             .into_iter()
             .filter(|e| e.id == "tamber-unknown-token")
+            .take(1)
             .map(|e| (e.span.line as u64, e.span.col as u64, e.message))
             .collect();
     built.sort();
@@ -237,9 +271,8 @@ fn rows_the_build_judges_otherwise_are_left_to_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A plain row and an arm alike (one name, one literal) are each refused
-/// where the build refuses each: a shadow's at the attribute, the arm's at
-/// its literal (Astra's round 3: columns 14 and 25).
+/// A plain row and an arm alike (one name, one literal) are refused at
+/// the first place the build refuses, keeping its column.
 #[test]
 fn a_plain_row_and_an_arm_alike_keep_their_places() {
     let dir = reading("rows-plain-arm");
@@ -275,6 +308,7 @@ fn a_plain_row_and_an_arm_alike_keep_their_places() {
             .err()
             .unwrap_or_default()
             .into_iter()
+            .take(1)
             .map(|e| (e.span.line as u64, e.span.col as u64, e.message))
             .collect();
     built.sort();
@@ -357,8 +391,8 @@ fn the_row_map_of_a_reused_build_is_a_fresh_ones() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// D2's budget, through the check's whole entry (the planned design's fold
-/// included): 102 distinct rows (six row names over seventeen tokens, each
+/// The row trigger's budget (the planned design's fold included): 102
+/// distinct rows (six row names over seventeen tokens, each
 /// an alias of one base), every one reached by a write to the base, after
 /// the best of ten. The Bluesky clone's map is 833 distinct rows (73,151
 /// as written), and a write to one of its tokens reaches at most 7 (a

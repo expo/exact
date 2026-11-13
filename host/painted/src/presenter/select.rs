@@ -30,8 +30,14 @@ impl<D: DataSource> Presenter<D> {
         self.menu_paint()
     }
 
-    /// Open select `id`'s menu at its chosen row.
-    pub(super) fn open_menu(&mut self, id: ViewId) {
+    /// Open select `id`'s menu at its chosen row: the top layer's where a
+    /// shell presents one (`top/select.rs`), else painted over the frame.
+    /// `keyboard`: a key opened it.
+    pub(super) fn open_menu(&mut self, id: ViewId, keyboard: bool) {
+        if self.has_windows() {
+            self.present_select(id, keyboard);
+            return;
+        }
         self.menu = Some(id);
         self.menu_row = None;
         self.menu_scroll = 0.0;
@@ -44,6 +50,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Close the open menu; false when none was open.
     pub(super) fn close_menu(&mut self) -> bool {
+        if self.select_surface().is_some() {
+            self.close_surface(self.host.now());
+            return true;
+        }
         self.menu_row = None;
         self.menu_scroll = 0.0;
         let open = self.menu.take().is_some();
@@ -56,6 +66,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Scroll the open menu so that row `at` shows, and put the keys there.
     fn reveal_menu_row(&mut self, at: usize) {
+        if self.select_surface().is_some() {
+            self.focus_select_row(at);
+            return;
+        }
         self.menu_row = Some(at);
         self.dirty = true;
         let Some(menu) = self.menu_now() else {
@@ -91,7 +105,7 @@ impl<D: DataSource> Presenter<D> {
     /// The row a letter moves to: the next enabled one after `after`
     /// (wrapping) whose label starts with `letter`, ignoring case, as a
     /// browser's select types ahead.
-    fn typed_row(
+    pub(super) fn typed_row(
         choices: &[exact_kernel::Choice],
         after: Option<usize>,
         letter: &str,
@@ -197,13 +211,13 @@ impl<D: DataSource> Presenter<D> {
         let choices = self.host.kernel().select_choices(id);
         let enabled = || (0..choices.len()).filter(|&i| !choices[i].disabled);
         match name {
-            " " | "Enter" | "ArrowDown" | "ArrowUp" | "F4" => self.open_menu(id),
+            " " | "Enter" | "ArrowDown" | "ArrowUp" | "F4" => self.open_menu(id, true),
             "Home" | "End" => {
                 let at = match name {
                     "Home" => enabled().next(),
                     _ => enabled().next_back(),
                 };
-                self.open_menu(id);
+                self.open_menu(id, true);
                 if let Some(at) = at {
                     self.reveal_menu_row(at);
                 }

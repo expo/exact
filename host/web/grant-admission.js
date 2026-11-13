@@ -35,9 +35,8 @@ const nameGrants = new Set([
 const validGrantName = (name) => typeof name === "string" && name.length >= 1 && name.length <= 64 && /^[a-z0-9._-]+$/.test(name) && !/^\.+$/.test(name);
 // Rust `str::trim`/`split_whitespace` use Unicode White_Space, which differs
 // from JavaScript's `\s` at U+0085 and U+FEFF.
-const rustSpace = "[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
-const rustTrim = (value) => String(value).replace(new RegExp(`^${rustSpace}+|${rustSpace}+$`, "g"), "");
-const rustWords = (value) => rustTrim(value).split(new RegExp(`${rustSpace}+`)).filter(Boolean);
+export const trimGrant = (value) => String(value).replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+export const grantWords = (value) => String(value).split(/\p{White_Space}+/u).filter(Boolean);
 const nativeNamespace = (value) => typeof value === "string" && /^win:[A-Z]$/.test(value);
 const nativeLeaf = (value) => {
   if (typeof value !== "string" || !value || value.length > 255 || value === "." || value === ".." || /[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]/.test(value) || /[. ]$/.test(value) || /[\ud800-\udfff]/u.test(value)) {
@@ -138,10 +137,10 @@ const networkTuple = (kind, target) => {
   }
 };
 const sourceTuple = (source) => {
-  const words = rustWords(source);
+  const words = grantWords(source);
   const capability = words[0];
   if (capability === "fs.read" || capability === "fs.write") {
-    const rest = rustTrim(source.slice(capability.length));
+    const rest = trimGrant(source.slice(capability.length));
     if (rest.startsWith("\"")) {
       try {
         const target = JSON.parse(rest);
@@ -207,7 +206,7 @@ function validateGrantSet(set) {
   }
   let last = 0, hasError = false;
   for (const entry of set.entries) {
-    if (!Array.isArray(entry) || entry.length !== 4 || !Number.isInteger(entry[0]) || entry[0] <= last || typeof entry[1] !== "string" || !entry[1] || rustTrim(entry[1]) !== entry[1] || entry[2] !== null && !grantTupleValid(entry[2]) || entry[3] !== null && typeof entry[3] !== "string" || !entryMatchesSource(entry)) {
+    if (!Array.isArray(entry) || entry.length !== 4 || !Number.isInteger(entry[0]) || entry[0] <= last || typeof entry[1] !== "string" || !entry[1] || trimGrant(entry[1]) !== entry[1] || entry[2] !== null && !grantTupleValid(entry[2]) || entry[3] !== null && typeof entry[3] !== "string" || !entryMatchesSource(entry)) {
       return false;
     }
     last = entry[0];
@@ -273,7 +272,7 @@ export function scopedGrantSet(parent, source) {
   const available = new Map(parent.entries.map((entry) => [entry[1], entry]));
   const entries = [], errors = [];
   for (const [index, raw] of source.split("\n").entries()) {
-    const line = rustTrim(raw);
+    const line = trimGrant(raw);
     if (!line) {
       continue;
     }

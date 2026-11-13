@@ -370,6 +370,39 @@ fn a_module_read_is_a_host_fact_and_its_source_a_module() {
     );
 }
 
+/// What the runner does itself is outside the semantics: a declared
+/// source's request (LLP 1162.001), which the oracle's text names so the
+/// semantics calls it unsupported, and a live time's text (LLP 1126 D6),
+/// which the observation leaves out.
+#[test]
+fn a_declared_source_and_a_live_time_are_the_runners_own() {
+    let source = r#"shape Now
+  t: number
+
+source current(city: string) as shape Now
+  url "https://example.test/now?city={city}"
+
+component App
+  resource now = current("Berlin") as shape Now
+  view
+    time datetime=0 format="timer" testId="time"
+
+test "tick"
+  clock +1000
+"#;
+    let s = script::scripted("own", source, None).unwrap().remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, oracle) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    let text = oracle.unwrap().text();
+    assert!(text.contains("fetch \"current\"\n"), "{text}");
+    assert!(!text.contains("answer \"current\""), "{text}");
+    assert!(lines.contains(&"view \"time\" -".to_string()), "{lines:#?}");
+}
+
 #[test]
 fn scripted_state_bounds_and_membership_check_the_runner_observation() {
     let source = r#"component App

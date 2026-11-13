@@ -20,6 +20,7 @@ game/.shells/
 
 # Declarations the dev producer writes beside each app.ts for an editor.
 apps/*/app.contract.d.ts
+scripts/fixtures/*/app.contract.d.ts
 # The design server's lock and journal (contract tamber serve, LLP 1121 D13).
 apps/*/.exact/
 scripts/fixtures/*/.exact/

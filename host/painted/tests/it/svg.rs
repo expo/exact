@@ -539,3 +539,270 @@ fn an_even_odd_icon_draws_its_hole() {
         "and filled through, as before"
     );
 }
+
+fn file_icons_app(source: &str, case: &str) -> (Vec<u8>, std::path::PathBuf) {
+    const AI: &str = r#"<svg viewBox="0 0 24 24"><defs><style>.cls-1{fill:#000}</style></defs><path class="cls-1" d="M2 2h20v20H2Z"/></svg>"#;
+    const COLOURS: &str = r##"<svg viewBox="0 0 24 24"><defs><style>.red{fill:#ff0000}.blue{fill:#0000ff}</style></defs><g transform="translate(2 2)" opacity="0.5"><path class="red" d="M0 0h10v20H0Z"/><path class="blue" d="M10 0h10v20H10Z"/></g></svg>"##;
+    let dir = std::env::temp_dir().join(format!("exact-file-icons-{case}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    for (name, bytes) in [
+        ("ai", AI),
+        ("colours", COLOURS),
+        (
+            "rectangle",
+            r##"<svg viewBox="0 0 40 20"><style>.red{fill:#ff0000}</style><circle class="red" cx="20" cy="10" r="8"/></svg>"##,
+        ),
+        (
+            "template",
+            r#"<svg viewBox="0 0 24 24"><path d="M2 2h20v20H2Z"/></svg>"#,
+        ),
+    ] {
+        std::fs::write(dir.join(format!("assets/{name}.svg")), bytes).unwrap();
+    }
+    std::fs::write(
+        dir.join("app.json"),
+        r#"{"app":{"id":"dev.test.file-icons","name":"File icons"},"host":{"web":{},"linux":{}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.tamber"),
+        "tamber t\n\nicons\n  icon.ai = icon(svg \"ai.svg\")\n  icon.colours = icon(svg \"colours.svg\")\n  icon.rectangle = icon(svg \"rectangle.svg\")\n  icon.template = icon(svg \"template.svg\")\n",
+    )
+    .unwrap();
+    let entry = dir.join("app.contract");
+    std::fs::write(&entry, source).unwrap();
+    let plan = contract::compile_path(&entry).unwrap_or_else(|e| panic!("{e}"));
+    (plan.encode(), dir)
+}
+
+#[test]
+fn file_icons_draw_the_svg_scene_and_templates_keep_their_tint() {
+    let source = r##"component App
+  state chosen = "symbol:icon.colours"
+  action change
+    chosen = chosen == "symbol:icon.template" ? "symbol:icon.ai" : "symbol:icon.template"
+  view
+    column width=96 background-color="#ffffff"
+      row
+        image "symbol:icon.ai" testId="ai" width=48 height=48 color="#00ff00"
+        svg width=48 height=48 viewBox="0 0 24 24"
+          path fill="#000000" d="M2 2h20v20H2Z"
+      row
+        image chosen testId="chosen" width=48 height=48 color="#00ff00"
+        svg width=48 height=48 viewBox="0 0 24 24"
+          g transform="translate(2 2)" opacity=0.5
+            path fill="#ff0000" d="M0 0h10v20H0Z"
+            path fill="#0000ff" d="M10 0h10v20H10Z"
+      row
+        image "symbol:icon.template" testId="template" width=48 height=48 color="#00ff00"
+        svg width=48 height=48 viewBox="0 0 24 24"
+          path fill="#00ff00" d="M2 2h20v20H2Z"
+      row
+        button appearance="auto" aria-label="Illustrator" width=48 height=48
+          image "symbol:icon.ai" font-size=48 -exact-tint-color="#00ff00"
+        svg width=48 height=48 viewBox="0 0 24 24"
+          path fill="#000000" d="M2 2h20v20H2Z"
+      button press=change testId="change"
+        text "Change"
+"##;
+    let (plan, dir) = file_icons_app(source, "paint");
+    let (mut p, error) =
+        Presenter::boot_with(&plan, (), (96., 250.), 1., dir.clone(), PainterChoice::Cpu).unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let wait = |p: &mut Presenter<()>, pictures| {
+        p.wait_images(std::time::Duration::from_secs(30));
+        assert_eq!(
+            p.images().bitmaps.len(),
+            pictures,
+            "file icons did not load"
+        );
+    };
+    wait(&mut p, 3);
+    let crop = |p: &mut Presenter<()>, x: u32, y: u32| {
+        let frame = p.frame();
+        (0..48)
+            .flat_map(|dy| (0..48).map(move |dx| (x + dx, y + dy)))
+            .map(|(x, y)| frame.pixel(x, y).unwrap())
+            .collect::<Vec<_>>()
+    };
+    for (row, name) in [
+        (0, "Illustrator"),
+        (48, "colours, transform and opacity"),
+        (96, "template tint"),
+    ] {
+        let actual = crop(&mut p, 0, row);
+        let expected = crop(&mut p, 48, row);
+        // The file's translucent scene is composited through an 8-bit
+        // bitmap, rounding half opacity to 128 before painting on white.
+        let tolerance = u8::from(row == 48);
+        let different = actual
+            .iter()
+            .zip(expected)
+            .filter(|(a, b)| {
+                [
+                    a.red().abs_diff(b.red()),
+                    a.green().abs_diff(b.green()),
+                    a.blue().abs_diff(b.blue()),
+                    a.alpha().abs_diff(b.alpha()),
+                ]
+                .into_iter()
+                .any(|delta| delta > tolerance)
+            })
+            .count();
+        assert_eq!(different, 0, "{name}: differing pixels");
+    }
+    let pixel = |p: &mut Presenter<()>, x, y| {
+        let c = p.frame().pixel(x, y).unwrap().demultiply();
+        (c.red(), c.green(), c.blue(), c.alpha())
+    };
+    assert_eq!(pixel(&mut p, 12, 12), (0, 0, 0, 255));
+    assert_eq!(pixel(&mut p, 12, 108), (0, 255, 0, 255));
+    let native = crop(&mut p, 0, 144);
+    assert!(
+        native
+            .iter()
+            .filter(|c| c.red() == 0 && c.green() == 0 && c.blue() == 0)
+            .count()
+            > 100,
+        "a native button draws the file in its platform-sized symbol box"
+    );
+    assert!(
+        native
+            .iter()
+            .all(|c| c.red() != 0 || c.green() != 255 || c.blue() != 0),
+        "a native button keeps the file's paint"
+    );
+    let k = p.host().kernel();
+    let change = k.node_by_key(k.find_by_test_id("change")[0]).unwrap().id;
+    p.tap(change).unwrap();
+    wait(&mut p, 2);
+    assert_eq!(crop(&mut p, 0, 48), crop(&mut p, 0, 96), "file to template");
+    p.tap(change).unwrap();
+    wait(&mut p, 3);
+    assert_eq!(crop(&mut p, 0, 48), crop(&mut p, 0, 0), "template to file");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn file_icons_in_native_buttons_resolve_rectangular_svgs_at_the_drawn_size() {
+    for scale in [1., 2.] {
+        let (plan, dir) = file_icons_app(
+            r##"component App
+  state large = false
+  action grow
+    large = !large
+  view
+    column width=192 background-color="#ffffff"
+      row
+        button appearance="auto" aria-label="Circle" testId="button" width=96 height=96 press=grow
+          image "symbol:icon.rectangle" testId="icon" font-size=(large ? 48 : 24)
+        box width=96 height=96 display="flex" align-items="center" justify-content="center"
+          svg testId="reference" width=(large ? 48 : 24) height=(large ? 48 : 24) viewBox="0 0 40 20"
+            circle cx=20 cy=10 r=8 fill="#ff0000"
+"##,
+            &format!("button-rectangle-{scale}"),
+        );
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            (),
+            (192., 96.),
+            scale,
+            dir.clone(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let k = p.host().kernel();
+        let id = |name| k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+        let (button, icon, reference) = (id("button"), id("icon"), id("reference"));
+        for size in [24., 48.] {
+            p.wait_images(std::time::Duration::from_secs(30));
+            let (x, y, w, h) = p.rect_of(button).unwrap();
+            let expected = p.rect_of(reference).unwrap();
+            let origin = ((x + (w - size) / 2.) * scale, (y + (h - size) / 2.) * scale);
+            let frame = p.frame();
+            let red = |x, y| {
+                let c = frame.pixel(x, y).unwrap();
+                c.red().saturating_sub(c.green().max(c.blue())) > 127
+            };
+            let mut ink = 0;
+            for dy in 0..(size * scale) as u32 {
+                for dx in 0..(size * scale) as u32 {
+                    let actual = red(origin.0 as u32 + dx, origin.1 as u32 + dy);
+                    let expected = red(
+                        (expected.0 * scale) as u32 + dx,
+                        (expected.1 * scale) as u32 + dy,
+                    );
+                    ink += usize::from(expected);
+                    assert_eq!(actual, expected, "{size}px at {scale}x, ({dx}, {dy})");
+                }
+            }
+            assert!(ink > 40, "the reference circle has ink");
+            let bitmap = &p.images().bitmaps[&icon];
+            let pixels = (size * scale) as u32;
+            assert_eq!((bitmap.width(), bitmap.height()), (pixels, pixels));
+            if size == 24. {
+                p.tap(button).unwrap();
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn file_icons_keep_their_natural_size_after_a_colour_update() {
+    let (plan, dir) = file_icons_app(
+        r##"component App
+  state green = false
+  action change
+    green = !green
+  view
+    column align-items="flex-start"
+      image "symbol:icon.ai" testId="icon" font-size=16 color=(green ? "#00ff00" : "#ff0000")
+      button "Change" testId="change" press=change
+"##,
+        "size",
+    );
+    let (mut p, error) =
+        Presenter::boot_with(&plan, (), (100., 100.), 1., dir.clone(), PainterChoice::Cpu).unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.wait_images(std::time::Duration::from_secs(30));
+    let k = p.host().kernel();
+    let image = k.node_by_key(k.find_by_test_id("icon")[0]).unwrap().id;
+    let change = k.node_by_key(k.find_by_test_id("change")[0]).unwrap().id;
+    let size = |p: &Presenter<()>| {
+        let frame = p.host().kernel().node(image).unwrap().frame;
+        (frame.width, frame.height)
+    };
+    assert_eq!(size(&p), (24., 24.));
+    p.tap(change).unwrap();
+    p.wait_images(std::time::Duration::from_secs(30));
+    assert_eq!(
+        size(&p),
+        (24., 24.),
+        "an unrelated update keeps the file's size"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn file_icons_are_found_in_the_layout_reply() {
+    let (plan, dir) = file_icons_app(
+        "component App\n  view\n    image \"symbol:icon.ai\" testId=\"icon\" width=24 height=24\n",
+        "layout",
+    );
+    let (mut p, error) =
+        Presenter::boot_with(&plan, (), (100., 100.), 1., dir.clone(), PainterChoice::Cpu).unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.wait_images(std::time::Duration::from_secs(30));
+    let k = p.host().kernel();
+    let image = k.node_by_key(k.find_by_test_id("icon")[0]).unwrap().id;
+    let reply: serde_json::Value =
+        serde_json::from_str(&p.layout_json(Some(image), false)).unwrap();
+    assert_eq!(reply["node"]["native"]["symbol"]["found"], true, "{reply}");
+    assert!(
+        reply["node"]["native"]["symbol"]["reason"].is_null(),
+        "{reply}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

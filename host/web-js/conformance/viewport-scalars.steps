@@ -1,0 +1,5 @@
+resize 400x600
+tap flip
+resize 800x300
+tap flip
+resize 400x600

@@ -156,11 +156,13 @@ pub fn parse_transform(options: &Value) -> Result<Transform, String> {
     if !(options.is_object() || options.is_null()) {
         return Err(invalid(CALL, "options must be an object"));
     }
+    // A whole number, however its JSON is written: a Rust source's `f64`
+    // serializes 32 as `32.0`.
     let side = |k: &str| match &options[k] {
         Value::Null => Ok(None),
         v => v
-            .as_u64()
-            .filter(|n| (1..=u64::from(MAX_SIDE)).contains(n))
+            .as_f64()
+            .filter(|n| n.fract() == 0.0 && (1.0..=f64::from(MAX_SIDE)).contains(n))
             .map(|n| Some(n as u32))
             .ok_or_else(|| invalid(CALL, format!("{k} must be an integer from 1 to {MAX_SIDE}"))),
     };

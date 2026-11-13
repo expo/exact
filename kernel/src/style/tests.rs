@@ -943,15 +943,11 @@ fn takes_text_is_what_set_dynamic_reads_on_a_number_row() {
             assert!(takes_text(row), "{row:?}");
         }
     }
-    for row in [
-        StyleId::Opacity,
-        StyleId::FlexGrow,
-        StyleId::ZIndex,
-        StyleId::FontWeight,
-    ] {
+    for row in [StyleId::Opacity, StyleId::FlexGrow, StyleId::FontWeight] {
         assert!(!takes_text(row), "{row:?}");
     }
     for row in [
+        StyleId::ZIndex,
         StyleId::FontSize,
         StyleId::LetterSpacing,
         StyleId::StrokeWidth,

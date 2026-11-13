@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 mod rust;
 #[path = "launch_store.rs"]
 mod store;
-pub(crate) use store::StoreWatch;
+pub use store::StoreWatch;
 
 const BEGUN: u8 = 1;
 const PREWARM: u8 = 2;
@@ -82,6 +82,128 @@ pub struct LaunchMark {
 /// The process's handoff, if a launch entry point has run.
 pub fn current() -> Option<LaunchPreloads> {
     PROCESS.get().cloned()
+}
+
+/// [`current`] as a session holds it: [`crate::link::IoLinks`]'s `preloads`.
+pub fn linked() -> Option<Box<dyn LaunchWork>> {
+    current().map(|launch| Box::new(launch) as Box<dyn LaunchWork>)
+}
+
+/// What a session asks of the launch's work. A session reaches it only
+/// through [`crate::link::IoLinks`], so an archive that links no I/O
+/// carries none of it, nor the executor behind it (LLP 1047.001).
+pub trait LaunchWork: Send + Sync {
+    /// Whether a launch entry point started the work.
+    fn started(&self) -> bool;
+    /// The launch's answer to one of the boot's requests, if it has one.
+    fn answer(
+        &self,
+        request: &exact_runner::RequestOut,
+    ) -> Option<(exact_runner::Outcome, exact_runner::CompletionTiming)>;
+    /// The app selected an update: the baked plan's definitions are stale.
+    fn select_update(&self);
+    /// Hand what is still in flight to the session's executor.
+    fn adopt(&self, executor: &dyn Io);
+    /// A write changed the secret `name`.
+    fn drop_secret(&self, name: &str);
+    /// What happened to each definition since the last call.
+    fn journal(&self) -> Vec<PreloadFact>;
+    /// The definition the ticket's request came from, once.
+    fn fulfilled(&self, ticket: u64) -> Option<String>;
+    /// The named definitions' answers reached a batch at `sequence`.
+    fn committed(&self, names: Vec<String>, sequence: u64);
+    /// Watch the launch's store writes, `pending` read under the writers' lock.
+    fn watch_store(&self, pending: &dyn Fn() -> bool) -> Arc<StoreWatch>;
+}
+
+impl LaunchWork for LaunchPreloads {
+    fn started(&self) -> bool {
+        self.0.set.get().is_some()
+    }
+    fn answer(
+        &self,
+        request: &exact_runner::RequestOut,
+    ) -> Option<(exact_runner::Outcome, exact_runner::CompletionTiming)> {
+        self.0.set.get()?.control.settle(request)
+    }
+    fn select_update(&self) {
+        self.0.selected_update.store(true, Ordering::Release);
+        if let Some(set) = self.0.set.get() {
+            set.control.select_update();
+        }
+    }
+    fn adopt(&self, executor: &dyn Io) {
+        if let Some(set) = self.0.set.get() {
+            let owner = set.owner.lock().unwrap().take();
+            if let Some(owner) = owner {
+                if let Err(owner) = executor.adopt_preloads(owner) {
+                    *set.owner.lock().unwrap() = Some(owner);
+                }
+            }
+        }
+    }
+    fn drop_secret(&self, name: &str) {
+        self.invalidate(name);
+    }
+    fn journal(&self) -> Vec<PreloadFact> {
+        LaunchPreloads::journal(self)
+    }
+    fn fulfilled(&self, ticket: u64) -> Option<String> {
+        LaunchPreloads::fulfilled(self, ticket)
+    }
+    fn committed(&self, names: Vec<String>, sequence: u64) {
+        LaunchPreloads::committed(self, names, sequence)
+    }
+    fn watch_store(&self, pending: &dyn Fn() -> bool) -> Arc<StoreWatch> {
+        LaunchPreloads::watch_store(self, pending)
+    }
+}
+
+impl dyn LaunchWork {
+    /// Answer the boot's requests the launch already holds, in ticket order,
+    /// up to the first it does not; the rest are the boot's to send.
+    pub(crate) fn settle<D: DataSource>(
+        &self,
+        runner: &mut Runner<D>,
+    ) -> Result<(Vec<exact_runner::RequestOut>, Vec<String>), crate::host::HostError> {
+        if !self.started() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut pending = Vec::new();
+        let mut fulfilled = Vec::new();
+        let mut requests = runner.take_requests();
+        requests.sort_by_key(|request| request.ticket);
+        let mut requests = requests.into_iter();
+        while let Some(request) = requests.next() {
+            if !runner.holds(request.ticket) {
+                continue;
+            }
+            if let Some((outcome, timing)) = request
+                .request
+                .continuation
+                .is_none()
+                .then(|| self.answer(&request))
+                .flatten()
+            {
+                let name = self.fulfilled(request.ticket);
+                if runner
+                    .fulfill_measured(request.ticket, outcome, Some(timing))
+                    .map_err(crate::host::HostError::Runner)?
+                    .is_some()
+                {
+                    fulfilled.extend(name);
+                }
+            } else {
+                pending.push(request);
+                pending.extend(requests);
+                break;
+            }
+        }
+        pending.extend(runner.take_requests());
+        pending.sort_by_key(|request| request.ticket);
+        pending.retain(|request| runner.holds(request.ticket));
+        Ok((pending, fulfilled))
+    }
 }
 
 /// Begin at the top of main; the factory is evaluated only on the launch thread.
@@ -296,67 +418,6 @@ impl LaunchPreloads {
                 PreloadObservation::Taken(_) => unreachable!(),
             }
         }
-    }
-    pub(crate) fn settle<D: DataSource>(
-        &self,
-        runner: &mut Runner<D>,
-    ) -> Result<(Vec<exact_runner::RequestOut>, Vec<String>), crate::host::HostError> {
-        let Some(set) = self.0.set.get() else {
-            return Ok((Vec::new(), Vec::new()));
-        };
-        let mut pending = Vec::new();
-        let mut fulfilled = Vec::new();
-        let mut requests = runner.take_requests();
-        requests.sort_by_key(|request| request.ticket);
-        let mut requests = requests.into_iter();
-        while let Some(request) = requests.next() {
-            if !runner.holds(request.ticket) {
-                continue;
-            }
-            if let Some((outcome, timing)) = request
-                .request
-                .continuation
-                .is_none()
-                .then(|| set.control.settle(&request))
-                .flatten()
-            {
-                let name = self.fulfilled(request.ticket);
-                if runner
-                    .fulfill_measured(request.ticket, outcome, Some(timing))
-                    .map_err(crate::host::HostError::Runner)?
-                    .is_some()
-                {
-                    fulfilled.extend(name);
-                }
-            } else {
-                pending.push(request);
-                pending.extend(requests);
-                break;
-            }
-        }
-        pending.extend(runner.take_requests());
-        pending.sort_by_key(|request| request.ticket);
-        pending.retain(|request| runner.holds(request.ticket));
-        Ok((pending, fulfilled))
-    }
-    pub(crate) fn select_update(&self) {
-        self.0.selected_update.store(true, Ordering::Release);
-        if let Some(set) = self.0.set.get() {
-            set.control.select_update();
-        }
-    }
-    pub(crate) fn adopt(&self, executor: &dyn Io) {
-        if let Some(set) = self.0.set.get() {
-            let owner = set.owner.lock().unwrap().take();
-            if let Some(owner) = owner {
-                if let Err(owner) = executor.adopt_preloads(owner) {
-                    *set.owner.lock().unwrap() = Some(owner);
-                }
-            }
-        }
-    }
-    pub(crate) fn drop_secret(&self, name: &str) {
-        self.invalidate(name);
     }
     fn invalidate(&self, name: &str) -> u64 {
         let mut versions = self.0.invalidated.lock().unwrap();

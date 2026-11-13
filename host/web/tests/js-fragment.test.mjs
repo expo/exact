@@ -3,7 +3,7 @@
 // too, as the runner's `fragment_command` waits on `has_pending`. rt.js and router.js run beside stand-ins for the
 // modules they import, and a fragment.js that records what it is asked.
 import { test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { standIns } from './stand-ins.mjs';
@@ -58,4 +58,20 @@ test('a fragment scrolls for a navigation a landed commit assigns the router, on
     rt.Hosts.scrollIntoView('row-1');
     expect(asked.at(-1)).toEqual(['cancel']);
   } finally { if (page === undefined) delete globalThis.document; else globalThis.document = page; }
+});
+
+// The route corpus's launches (route/tests/corpus.json), as exact-route spends their ids: a query on a root location
+// spends none, so a document rendered at `/?agent=1` is one the runtime at `/` adopts.
+test('a launch spends the ids the route corpus says', async () => {
+  const rt = await import(resolve(dir, 'rt.js'));
+  const corpus = JSON.parse(readFileSync(new URL('../../../route/tests/corpus.json', import.meta.url), 'utf8'));
+  const launches = corpus.sequences.flatMap(s => s.steps.filter(st => st.verb === 'launch').map(st => [s.table, st]));
+  expect(launches.some(([, st]) => st.arg.startsWith('/?'))).toBe(true);
+  for (const [table, { arg, expected }] of launches) {
+    rt.routes(corpus.tables[table].routes.map(r => [r.name, r.pattern, r.parent, r.tab, r.notfound]));
+    const [tab, tabs, next] = rt.launch(arg);
+    const visits = tabs.map(([name, stack]) => ({ name, stack: stack.map(([id, name, url, tab]) => ({ id, name, url, tab })) }));
+    const want = expected.tabs.map(({ name, stack }) => ({ name, stack: stack.map(({ id, name, url, tab }) => ({ id, name, url, tab })) }));
+    expect({ arg, tab, visits, next }).toEqual({ arg, tab: expected.tab, visits: want, next: expected.next });
+  }
 });

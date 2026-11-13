@@ -7,6 +7,7 @@ for (const file of process.argv.slice(2)) {
   let i = 0;
   while ((i = raw.indexOf('"id":"lower-', i)) >= 0) {
     const idEnd = raw.indexOf('"', i + 6);
+    if (idEnd < 0) break; // the log ends inside this id: an interrupted run
     const id = raw.slice(i + 6, idEnd);
     const mi = raw.indexOf('"message":"', idEnd);
     const msg = mi > 0 && mi - idEnd < 60 ? raw.slice(mi + 11, mi + 11 + 140).split('","')[0] : '';

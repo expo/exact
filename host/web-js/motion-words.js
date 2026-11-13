@@ -80,8 +80,8 @@
     if (name === "steps") {
       const count = /^\+?\d+$/.test(args[0] ?? "") ? Number(args[0]) : 0;
       const position = args[1] ?? "jump-end";
-      // The kernel reads only the first two arguments of steps().
-      if (!(count > 0 && count <= 65535 && (position !== "jump-none" || count > 1)
+      // A count and at most one position (CSS Easing 1 §3.1).
+      if (!(args.length <= 2 && count > 0 && count <= 65535 && (position !== "jump-none" || count > 1)
         && ["jump-start", "start", "jump-end", "end", "jump-none", "jump-both"].includes(position))) return 0;
       return css ? `steps(${count},${position === "start" ? "jump-start" : position === "end" ? "jump-end" : position})` : 1;
     }

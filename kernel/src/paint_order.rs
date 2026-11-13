@@ -227,8 +227,10 @@ pub fn own_from(f: Facts<'_>) -> Own {
     let position = crate::style::top_layer::of(s, props);
     let positioned = position != PositionType::Static || f.root;
     let item = matches!(f.parent_display, Some(Display::Flex | Display::Grid));
-    let z =
-        (m.has(StyleId::ZIndex) && (positioned || item)).then(|| s.z_index.clamp(-Z_MAX, Z_MAX));
+    let z = (m.has(StyleId::ZIndex) && (positioned || item))
+        .then_some(s.z_index)
+        .flatten()
+        .map(|z| z.clamp(-Z_MAX, Z_MAX));
     let authored = (m.has(StyleId::Opacity) && s.opacity < 1.0)
         || m.has(StyleId::Translate)
         || m.has(StyleId::Scale)

@@ -29,6 +29,9 @@ shape Thread
   preview: string
   at: number
   draft: string
+shape TranscriptRow
+  id: string
+  messages: Message[]
 shape Snapshot
   revision: number
   connected: bool

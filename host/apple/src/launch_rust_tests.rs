@@ -1011,7 +1011,7 @@ fn a_timeline_neither_adopts_rust_preloads_nor_runs_the_function() {
         let bytes = widget_plan();
         let mut entry = Bridge::with_links(Links {
             io: Some(IoLinks {
-                preloads: local,
+                preloads: linked,
                 endow: memory_endow,
                 start: start_io,
                 ..IoLinks::LINKED

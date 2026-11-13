@@ -22,8 +22,8 @@ impl<D: DataSource> Runner<D> {
         let mut out = Map::new();
         for row in &self.plan.modules {
             let extension = self.plan.str(row.extension).to_owned();
-            let declared = self.plan.str(row.declared).to_owned();
             let key = self.key(row);
+            let declared = key.split_once('.').unwrap().1.to_owned();
             let bound = self.extensions.bound.contains(&extension);
             let entry = out.entry(extension.clone()).or_insert_with(
                 || json!({ "bound": bound, "preferred": {}, "readers": {}, "held": [] }),
@@ -34,6 +34,9 @@ impl<D: DataSource> Runner<D> {
             self.devices_json(&extension, entry);
             // Each permission by name; `permission` too where it has one.
             let sub = self.substitute(row);
+            if sub["owner"].is_string() {
+                entry["names"][&declared] = json!({ "owner": sub["owner"], "route": match self.route(row) { Route::Real => "real", Route::Agent => "agent", Route::Substitute => "substitute" } });
+            }
             let by = sub["permissionBy"].as_object().into_iter().flatten();
             let list = sub["permissionList"].as_array().into_iter().flatten();
             for p in std::iter::once(&sub["permission"])

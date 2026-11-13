@@ -99,3 +99,15 @@ test("a state outside the BMP is matched whole, as auth.rs decodes it", async ()
   answer({ ticket: hold.ticket, op: "type", text: "https://app.example/cb?code=c&state=s😀" });
   expect(await pending).toBe("https://app.example/cb?code=c&state=s😀");
 });
+
+test('auth grants trim Rust whitespace and keep FEFF as part of a declaration', async () => {
+  globalThis.location = { origin: 'https://app.example' };
+  clock.agent = true;
+  install('\u0085auth.session https://login.example\u0085\nauth.callback https://app.example/cb', () => 'login');
+  const pending = openAuthSession('https://login.example/authorize', { callback: 'https://app.example/cb', state: 's' });
+  expect(holds()).toHaveLength(1);
+  answer({ ticket: holds()[0].ticket, op: 'tap', choice: 'cancel' });
+  await expect(pending).rejects.toMatchObject({ status: 499 });
+  install('\ufeffauth.session https://login.example\nauth.callback https://app.example/cb', () => 'login');
+  await expect(openAuthSession('https://login.example/authorize', { callback: 'https://app.example/cb', state: 's' })).rejects.toMatchObject({ status: 403 });
+});

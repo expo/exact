@@ -4,7 +4,30 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSync } from 'rolldown/utils';
-import { check, configure } from '../src/typescript.mjs';
+import { check, configure, implementationFor, moduleInterfaces } from '../src/typescript.mjs';
+import { languageModelToolCheck, languageModelTools } from '../src/__exact_binding.mjs';
+
+test('literal model declarations follow only constants whose objects cannot escape or mutate', () => {
+  const declaration='export type LanguageModelToolSchemas = [];';
+  const definition="{name:'draft', description:'Tool', inputSchema:{type:'object'}}";
+  const checked=(code)=>languageModelToolCheck(languageModelTools(declaration,[['app.ts', `import {createLanguageModel} from '@exact/language-model';\n${code}`]],parseSync));
+  for (const code of [
+    `const definition=${definition}; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const alias=definition; const options={tools:[alias]}; createLanguageModel(options);`,
+    `const definition=${definition}; function other(definition: any) { definition.name='live'; } createLanguageModel({tools:[definition]});`,
+    `export const name='draft'; const definition={name, inputSchema:{type:'object'}}; createLanguageModel({tools:[definition]});`,
+  ]) expect(checked(code)).toContain('"name":"draft"');
+  for (const code of [
+    `const definition=${definition}; definition.name='live'; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const alias=definition; alias.name='live'; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const options={tools:[definition]}; alter(options); createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const list=[definition]; list.push(${definition}); createLanguageModel({tools:list});`,
+    `const definition=${definition}; export {definition}; createLanguageModel({tools:[definition]});`,
+    `export const definition=${definition}; createLanguageModel({tools:[definition]});`,
+    `const schema={type:'object'}; const definition={name:'draft', inputSchema:schema}; schema.type='array'; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const alias=definition; export const options={tools:[alias]}; createLanguageModel({tools:[definition]});`,
+  ]) expect(checked(code)).toBe('');
+});
 
 test('generated json bindings narrow opaque values and retain known DOM dictionaries', async () => {
   const root = mkdtempSync(join(tmpdir(), 'exact-json-bindings-'));
@@ -113,5 +136,115 @@ test('json<T> refuses at bake what JSON does not carry, naming what it holds', (
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+});
+
+test('implementation imports export their own names and call the interface instance', async () => {
+  const { root, stage } = cloudApp({ kind: 'interface', name: '@scratch/cloud', shapes: {}, names: [] }, `
+import { reading, readingSync, sample, type Reading } from '@scratch/cloud/apple';
+import { fast } from '@scratch/cloud-fast';
+// @ts-expect-error A platform name is imported from its implementation.
+import { reading as sharedReading } from '@scratch/cloud';
+export const result: Promise<Reading> = reading();
+export const now: Reading = readingSync();
+export const sampled = sample({ count: 2 });
+export const faster: Promise<Reading> = fast();
+// @ts-expect-error A platform option keeps its declared type.
+sample({ count: 'two' });
+`);
+  try {
+    const pkg = join(root, 'app/node_modules/@scratch/cloud');
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@scratch/cloud', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+    mkdirSync(join(pkg, 'apple'));
+    writeFileSync(join(pkg, 'apple/exact.json'), JSON.stringify({
+      kind: 'implementation', implements: '@scratch/cloud@^1.0', platform: 'apple', targets: ['ios'],
+      shapes: { Reading: { value: 'number' } }, names: [
+        { source: 'reading', answers: 'Reading', sync: { name: 'readingSync' } },
+        { send: 'sample', answers: 'Reading', options: { count: 'number' } },
+      ],
+    }));
+    const other = join(root, 'app/node_modules/@scratch/cloud-fast');
+    mkdirSync(other);
+    writeFileSync(join(other, 'package.json'), JSON.stringify({ name: '@scratch/cloud-fast', version: '1.0.0', exports: './exact.json' }));
+    writeFileSync(join(other, 'exact.json'), JSON.stringify({
+      kind: 'implementation', implements: '@scratch/cloud@^1.0', targets: ['ios'],
+      shapes: { Reading: { value: 'number' } }, names: [{ source: 'fast', answers: 'Reading' }, { source: 'reading', answers: 'Reading', sync: { name: 'readingSync' } }],
+    }));
+    const app = join(root, 'app'), iface = moduleInterfaces(app).find(i => i.name === '@scratch/cloud');
+    expect(implementationFor(app, iface, 'ios').name).toBe('@scratch/cloud/apple');
+    writeFileSync(join(app, 'app.json'), JSON.stringify({ implementations: { '@scratch/cloud': { ios: '@scratch/cloud/apple' } } }));
+    expect(implementationFor(app, iface, 'ios').name).toBe('@scratch/cloud/apple');
+    writeFileSync(join(app, 'app.json'), JSON.stringify({ implementations: { '@scratch/cloud': { ios: '@scratch/cloud-fast' } } }));
+    expect(implementationFor(app, iface, 'ios').name).toBe('@scratch/cloud-fast');
+    configure(stage, false, parseSync);
+    const libraries = resolve(dirname(fileURLToPath(import.meta.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`))), 'lib');
+    await check(stage, join(libraries, 'tsc'), libraries);
+    const shared = readFileSync(join(stage, '__exact_modules/scratch__cloud.ts'), 'utf8');
+    expect(shared).not.toContain('export function reading(');
+    expect(readFileSync(join(stage, '__exact_modules/scratch__cloud-fast.ts'), 'utf8')).toContain('extension: \"cloud\"');
+    const binding = readFileSync(join(stage, '__exact_modules/scratch__cloud__apple.ts'), 'utf8');
+    const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(binding);
+    writeFileSync(join(stage, 'binding.mjs'), js);
+    const calls = [], previous = globalThis.__exact_module;
+    globalThis.__exact_module = async (body) => { calls.push(body); return { value: 7 }; };
+    try {
+      const bound = await import(join(stage, 'binding.mjs'));
+      expect(await bound.reading()).toEqual({ value: 7 });
+      expect(await bound.sample({ count: 2 })).toEqual({ value: 7 });
+      const otherBinding = readFileSync(join(stage, '__exact_modules/scratch__cloud-fast.ts'), 'utf8');
+      writeFileSync(join(stage, 'other-binding.mjs'), new Bun.Transpiler({ loader: 'ts' }).transformSync(otherBinding));
+      const other = await import(join(stage, 'other-binding.mjs'));
+      expect(await other.reading()).toEqual({ value: 7 });
+      expect(calls).toEqual([
+        { extension: 'cloud', owner: '@scratch/cloud/apple', source: 'reading', args: {} },
+        { extension: 'cloud', owner: '@scratch/cloud/apple', send: 'sample', args: { count: 2 } },
+        { extension: 'cloud', owner: '@scratch/cloud-fast', source: 'reading', args: {} },
+      ]);
+      const priorSync = globalThis.__exact_module_sync;
+      globalThis.__exact_module_sync = body => { calls.push(body); return { value: 8 }; };
+      try {
+        expect(bound.readingSync()).toEqual({ value: 8 });
+        expect(other.readingSync()).toEqual({ value: 8 });
+        expect(calls.slice(-2)).toEqual([
+          { extension: 'cloud', owner: '@scratch/cloud/apple', sync: 'readingSync', args: {} },
+          { extension: 'cloud', owner: '@scratch/cloud-fast', sync: 'readingSync', args: {} },
+        ]);
+      } finally { globalThis.__exact_module_sync = priorSync; }
+    } finally { globalThis.__exact_module = previous; }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a keyed value made by the interface binding keeps its data in an implementation send', async () => {
+  const { root, stage } = cloudApp({ kind: 'interface', name: '@scratch/cloud', shapes: { Item: { record: { 'text/plain': 'string' } } }, names: [] }, `
+import { Item } from '@scratch/cloud';
+import { put } from '@scratch/cloud/apple';
+export const sent = put({ item: new Item({ 'text/plain': 'hello' }) });
+`);
+  try {
+    const pkg = join(root, 'app/node_modules/@scratch/cloud');
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@scratch/cloud', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+    mkdirSync(join(pkg, 'apple'));
+    writeFileSync(join(pkg, 'apple/exact.json'), JSON.stringify({
+      kind: 'implementation', implements: '@scratch/cloud@^1.0', platform: 'apple', targets: ['ios'],
+      names: [{ send: 'put', answers: null, options: { item: 'Item' } }],
+    }));
+    configure(stage, false, parseSync);
+    const libraries = resolve(dirname(fileURLToPath(import.meta.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`))), 'lib');
+    await check(stage, join(libraries, 'tsc'), libraries);
+    const load = async (file, as) => {
+      writeFileSync(join(stage, as), new Bun.Transpiler({ loader: 'ts' }).transformSync(readFileSync(join(stage, '__exact_modules', file), 'utf8')));
+      return import(join(stage, as));
+    };
+    const shared = await load('scratch__cloud.ts', 'shared.mjs'), apple = await load('scratch__cloud__apple.ts', 'apple.mjs');
+    const calls = [], previous = globalThis.__exact_module;
+    globalThis.__exact_module = async (body) => { calls.push(body); return null; };
+    try {
+      await apple.put({ item: new shared.Item({ 'text/plain': 'hello' }) });
+      expect(calls).toEqual([{ extension: 'cloud', owner: '@scratch/cloud/apple', send: 'put', args: { item: { 'text/plain': 'hello' } } }]);
+    } finally { globalThis.__exact_module = previous; }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

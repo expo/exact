@@ -302,7 +302,7 @@ fn the_transition_row_lowers_to_css_transition_and_springs_are_named() {
     let (css, spring) = transition_css(&rows);
     assert_eq!(
         css,
-        "opacity 0.25s ease-in-out 0s,all 0.5s cubic-bezier(0.4,0,0.2,1) 0s"
+        "opacity 0.25s ease-in-out 0s,all 0.5s cubic-bezier(0.4,0,0.2,1) 0s,translate 0s ease 0s"
     );
     assert!(spring, "the spring is reported, not silently dropped");
     assert_eq!(
@@ -438,6 +438,37 @@ fn relative_lengths_keep_em_live_and_rem_ahead_of_time() {
     ] {
         assert!(live.contains(&live_decl), "{live_decl} in {live}");
         assert!(ahead.contains(&ahead_decl), "{ahead_decl} in {ahead}");
+    }
+}
+
+#[test]
+fn scalar_viewport_units_stay_authored_on_both_web_targets() {
+    use exact_kernel::{StyleId, StyleProps, StyleValue, ViewportUnit};
+    for unit in ViewportUnit::ALL {
+        for (id, name) in [
+            (StyleId::FontSize, "font-size"),
+            (StyleId::LineHeight, "line-height"),
+            (StyleId::LetterSpacing, "letter-spacing"),
+            (StyleId::TextIndent, "text-indent"),
+            (StyleId::RowGap, "row-gap"),
+            (StyleId::ColumnGap, "column-gap"),
+            (StyleId::BorderWidthTop, "border-top-width"),
+            (StyleId::BorderSpacing, "border-spacing"),
+            (StyleId::ShapeMargin, "shape-margin"),
+        ] {
+            let value = format!("2{}", unit.name());
+            let mut style = StyleProps::default();
+            style
+                .set_dynamic(id, &StyleValue::Text(value.clone().into()))
+                .unwrap();
+            for (css, skipped) in [
+                css_text(&style, &[]),
+                exact_web::css::css_text_relative(&style, &[]),
+            ] {
+                assert!(skipped.is_empty(), "{skipped:?}");
+                assert!(css.contains(&format!("{name}:{value};")), "{css}");
+            }
+        }
     }
 }
 

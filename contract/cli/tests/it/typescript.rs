@@ -72,7 +72,7 @@ async function storageTypes() {
   const lossy: number = batch[0].lastInsertRowid;
   // `fs.compressImage` as the docs give it (LLP 1069.002 A1): options in, the record out.
   const image = await storage.fs.compressImage(path, storage.fs.directories.cache + '/out.jpg', {maxDimension: 1024, maxBytes: 1_000_000});
-  const shrunk: {path: string; type: 'image/jpeg'; size: number; width: number; height: number} = image;
+  const shrunk: {path: string; type: 'image/jpeg' | 'image/png'; size: number; width: number; height: number} = image;
   // @ts-expect-error the engine's positional binding is not the app interface
   await storage.fs.compressImage(path, path, 1024, 1_000_000);
   // `fs.transformImage` (LLP 1133.019 D14): the edit in, what was written out.

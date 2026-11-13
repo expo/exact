@@ -45,21 +45,23 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// A native module may only answer for the node allocation its painted view represents.
+    /// A native module may only answer for the session and allocation its painted view represents.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_module_event(
         &mut self,
         id: ViewId,
         key: exact_kernel::NodeKey,
+        session: u64,
         kind: &str,
         payload: String,
         now_ms: f64,
     ) -> bool {
-        let valid = self
-            .host
-            .kernel()
-            .node(id)
-            .is_some_and(|node| node.node_type == NodeType::NativeView && node.key == key);
+        let valid = session == self.brush.native_session
+            && self
+                .host
+                .kernel()
+                .node(id)
+                .is_some_and(|node| node.node_type == NodeType::NativeView && node.key == key);
         // A control disabled or hidden since its view was shown (by itself or
         // an ancestor) takes no action, as a popup it opened before may still send one.
         let action = matches!(kind, "press" | "change" | "input");

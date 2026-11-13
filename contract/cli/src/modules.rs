@@ -47,6 +47,7 @@ pub(crate) fn desugar(file: &mut File, scopes: &[Scope]) -> Result<(), Vec<Compi
             .map(|s| (s.name.clone(), s.clone()))
             .collect(),
     };
+    crate::shape_schema::tool_inputs(file, &surfaces.shapes);
     for c in &mut file.components {
         for r in &mut c.resources {
             if let Some(p) = &r.placeholder {

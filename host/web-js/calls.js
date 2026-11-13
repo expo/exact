@@ -1,13 +1,12 @@
 // Tool calls on the JS target (LLP 1111 D4, LLP 1133.023 D7), as the runner's `modules/calls.rs`: a door hands
 // `{tool, args, door}`, and the tool's action runs as one commit of origin `tool`, after any wake or earlier call
 // (waiting up to 5 s), done when the work it owns has settled, else `timeout` 10 s after its dispatch. `fails when`
-// and `returns` are read once, at the end.
+// and `returns` are read once, at the end. The runner refuses `busy` while either reads a resource with no value; here
+// every resource has one (a commit that would leave one with nothing to show is refused), so none does.
 //
-// What a call owns (D7, "The web"): the page cannot tell one request from another, so the call stamps the requests
-// its dispatch commit issued, and then those issued in a turn in which one of its own settled (a `then`'s ask, an
-// answer's next send); a mutation queued from its dispatch on; a request the server holds among them. A person's
-// commit meanwhile is not the call's, but neither is it told apart when it replaces the call's ask, so a call here
-// never ends `superseded`.
+// Requests, queued sends and armed `then`s carry the invocation that issued them (D7). Their replies and continuations
+// run under it too, and a commit's tree update, which a view transition may defer, is owned until it runs. A person's
+// commit carries none; replacing owned work ends the call `superseded` once it stands.
 //
 // Each faced tool is offered to the browser's agent through WebMCP where the page has `document.modelContext`
 // (https://webmachinelearning.github.io/webmcp/, D8): registered with an input schema from the plan's types and the
@@ -15,8 +14,8 @@
 // nothing, `consequentialHint` for a `destroys` and for a `writes` but an `additive closed` one, `untrustedContentHint`
 // for a string `returns`), withdrawn while `available when` is false, and its `execute` a call through the `web` door,
 // which the caller's abort cancels.
-import { clock, data, After, Clocked, Mutations, Origin, say, time as refreshTime, drive, order } from "./rt.js";
-import { Counting, heldTickets } from "./held.js";
+import { clock, data, After, Clocked, Resources, Mutations, Origin, Invocation, Writes, stood, say, time as refreshTime, drive, order } from "./rt.js";
+import { Counting } from "./held.js";
 
 const WAIT = 5_000, BOUND = 10_000, KEPT = 20;
 /** The commands a call's commit does not run, each moving the person's view (D4a); any other but RUN is refused. */
@@ -87,23 +86,14 @@ function output(type) {
 export function tools(table) {
   const waiting = [], ended = [];
   let current = null, ids = 0, poll = 0, wake = null;
-  const answer = t => !t.stream && !t.req?.stream;
   const time = () => (globalThis.exact?.epochAtZero ?? 0) + clock.now;
   const wakeRunning = () => { const w = globalThis.exact?.extensions?.wake?.(); return !!w && w.outcome == null; };
 
-  // ---- what the call owns: the tickets its dispatch commit issued, then those issued in a turn in which one of its
-  // own settled, and the mutations queued from its dispatch on
-  let seen = new Set();
-  const look = () => {
-    const now = new Set([...Counting, ...heldTickets()]), own = current?.own;
-    if (own) {
-      const settled = [...own.tickets].some(t => !now.has(t));
-      if (own.adopting || settled) for (const t of now) if (!seen.has(t)) own.tickets.add(t);
-      for (const t of [...own.tickets]) if (!now.has(t)) own.tickets.delete(t);
-    }
-    seen = now;
+  const owns = () => {
+    const id = current.id, ticket = t => t?.invocation === id;
+    return [...Invocation.pending].some(go => go.id === id) || Resources.some(r => !r.gone && ticket(r.ticket)) || Mutations.some(m =>
+      ticket(m.ticket) || m.tickets.some(ticket) || (m.due < Infinity && m.thenInvocation === id) || m.wait?.some(w => w[2] === id));
   };
-  const owns = () => { const own = current?.own; return !!own && ([...own.tickets].some(answer) || Mutations.some(m => !own.mutations.has(m) && (m.due < Infinity || m.wait?.length))); };
 
   const finish = (c, outcome, certainty, reason = "", value = null, message = "") => {
     say(`tool ${c.name} ${outcome} ${certainty}`);
@@ -135,16 +125,11 @@ export function tools(table) {
     if (storage() > 0) return refuse("busy", "the app's storage is still writing");
     current.dispatched = clock.now;
     say(`tool:system:${current.door} ${current.name} dispatched`);
-    look();
-    // Each look until the dispatch commit returns takes what it issued.
-    current.own = { tickets: new Set(), mutations: new Set(Mutations), adopting: true };
     // A refused commit puts everything back and answers false (rt.js `commit`); one whose tree update a view
     // transition defers has already landed its writes and answers true.
     let landed;
-    try { landed = action()(...values); } catch { landed = false; }
+    try { landed = Invocation.run(current.id, () => action()(...values)); } catch { landed = false; }
     if (landed === false) { end("failed", "uncertain", "refused-commit"); return; }
-    look();
-    current.own.adopting = false;
   };
   const complete = () => {
     const [, , , , , fails, returns] = table[current.name];
@@ -156,7 +141,6 @@ export function tools(table) {
   function step() {
     refreshTime();
     if (wake) { const i = clock.timers.indexOf(wake); if (i >= 0) clock.timers.splice(i, 1); wake = null; }
-    look();
     for (;;) {
       // A waiting call's 5 s runs out whatever holds it: a wake or another call.
       while (waiting.length && clock.now >= waiting[0].arrived + WAIT) {
@@ -182,15 +166,33 @@ export function tools(table) {
     clock.timers.push(wake); drive();
     if (!poll) poll = setTimeout(() => { poll = 0; step(); }, 20);
   }
-  After.push(() => { if (current || waiting.length) queueMicrotask(step); else look(); });
+  After.push(() => { if (current || waiting.length) queueMicrotask(step); });
   Clocked.push(() => { if (current || waiting.length) queueMicrotask(step); });
 
+  // ---- what a call owns (D7): `run` stamps what `f` issues with invocation `id`. A commit of another invocation that
+  // lets go of a call's ticket ends the call `superseded` (`uncertain` for a send) once that commit stands, or at once
+  // when it lets go in its tree update.
+  const superseded = (id, send) => { if (current?.id === id) end("superseded", send ? "uncertain" : "applied"); };
+  Invocation.run = (id, f) => {
+    const was = Invocation.id;
+    Invocation.id = id ?? 0;
+    try { return f(); } finally { Invocation.id = was; }
+  };
+  Invocation.letGo = (t, send = false) => {
+    const id = t?.invocation;
+    if (!id || id === Invocation.id) return;
+    if (!Writes) return superseded(id, send);
+    const go = Object.assign(() => { Invocation.pending.delete(go); superseded(id, send); }, { id, refused: () => Invocation.pending.delete(go) });
+    Invocation.pending.add(go);
+    stood(go);
+  };
+
   // ---- a call's origin and its commands (D4a), beside a wake's (modules.js)
-  Origin.call = () => current?.dispatched != null ? "tool" : null;
+  Origin.call = () => Invocation.id ? "tool" : null;
   const outerNow = Origin.now, outerRefused = Origin.refused;
   Origin.now = () => { const o = outerNow(); return o === "app" ? Origin.call() ?? o : o; };
   Origin.callRefuses = name => {
-    if (RUN.has(name)) return false;
+    if (current?.id !== Invocation.id || RUN.has(name)) return false;
     if (SKIPPED.has(name)) { current?.skipped.push(name); say(`${name}: skipped in a tool call`); } else say(`${name}: refused: in a tool call`);
     return true;
   };

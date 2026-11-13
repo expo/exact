@@ -2,7 +2,7 @@
 use super::{Dimension, Env};
 
 /// The viewport dimension a CSS length uses (CSS Values 4 §6.1.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ViewportUnit {
     /// Large viewport width (`vw`).
@@ -66,10 +66,12 @@ impl ViewportUnit {
 }
 
 pub(super) fn parse(text: &str) -> Option<Dimension> {
-    let text = text.trim().to_ascii_lowercase();
+    let text = text
+        .trim_matches(['\t', '\n', '\u{c}', '\r', ' '])
+        .to_ascii_lowercase();
     ViewportUnit::ALL.into_iter().find_map(|unit| {
         text.strip_suffix(unit.name())
-            .and_then(|n| exact_num::parse_f32(n).ok())
+            .and_then(|n| super::parse_pixel_length(&format!("{n}px")))
             .filter(|n| n.is_finite())
             .map(|n| Dimension::Viewport(unit, n))
     })

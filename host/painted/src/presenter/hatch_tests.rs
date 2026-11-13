@@ -877,6 +877,7 @@ const ASKS: &str = r##"component App
   state looping = false
   state presses = 0
   state text = ""
+  state kind = ""
   state secret = ""
   action arm
     armed = true
@@ -886,8 +887,9 @@ const ASKS: &str = r##"component App
     looping = false
   action pressed
     presses = presses + 1
-  action edit(value)
+  action edit(value: string, e: InputEvent)
     text = value
+    kind = e.inputType
   action hide(value)
     secret = value
   view
@@ -943,6 +945,7 @@ fn acts_are_queued_run_between_turns_and_journaled_an_input_by_its_length() {
         s["slots"]["text"], "Palo Alto",
         "cut to the field's maxlength, as typing is"
     );
+    assert_eq!(s["slots"]["kind"], "insertReplacementText");
     // A password field's slot is masked in `state` and kept whole (LLP 1156.001 D6).
     assert_eq!(s["slots"]["secret"], "•••");
     assert_eq!(

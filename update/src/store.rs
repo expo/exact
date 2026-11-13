@@ -702,7 +702,7 @@ impl Store {
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
     ) -> Result<Check, String> {
         let envelope = self.download(head_url, fetch, embedded_asset)?;
-        self.finish_check(envelope, head_url, embedded_asset)
+        self.finish_check(envelope, head_url, embedded_asset, true)
     }
 
     /// The immutable facts a download uses while its host releases the lock.
@@ -750,12 +750,14 @@ impl Store {
 
     /// Recheck against the live record after downloading: activation, boot
     /// marks, and a newer accepted head must never be overwritten by a copy
-    /// of the record taken before network I/O.
+    /// of the record taken before network I/O. `collect` is false while
+    /// another download of this store is outstanding.
     pub(crate) fn finish_check(
         &mut self,
         envelope: Envelope,
         head_url: &str,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
+        collect: bool,
     ) -> Result<Check, String> {
         if self.admit_check(&envelope, head_url, embedded_asset)? {
             let witness = self.entry_dir(&envelope.digest);
@@ -774,7 +776,9 @@ impl Store {
                 self.adopt_record(record)?;
             }
             self.sunset = envelope.sunset.clone();
-            self.collect();
+            if collect {
+                self.collect();
+            }
             return Ok(Check::Current {
                 sunset: envelope.sunset,
             });
@@ -804,7 +808,9 @@ impl Store {
             self.view = Some(view);
         }
         self.sunset = envelope.sunset.clone();
-        self.collect();
+        if collect {
+            self.collect();
+        }
         Ok(Check::Staged {
             entry: envelope.digest,
             seq: envelope.stream.seq,
@@ -1413,7 +1419,8 @@ impl Store {
     /// reader runs. Returns the digests the kept entries name, or `None`
     /// when this store writes nothing or cannot list its entries. Best
     /// effort. It runs where no download of this store can be in flight — at
-    /// open, and as a check finishes — and never touches a temporary.
+    /// open, and as the last outstanding check finishes — and never touches a
+    /// temporary.
     fn collect_entries(&self) -> Option<std::collections::BTreeSet<String>> {
         if self.read_only().is_some() {
             return None;
