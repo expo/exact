@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
-import { capturedLockDrift, gameDefaults, gameShells, prepareGame } from './app/shells.mjs';
+import { capturedLockDrift, gameDefaults, gameShells, prepareGame, sdkFetch } from './app/shells.mjs';
 import { cargoEnvironment, lockedMetadata, pathFrom, patchLines } from '../scripts/app.mjs';
 import { PLATFORMS, SDK_CRATES, appCrateName, authoredCrate, copiedBuildScripts, namePlatform, withoutPlatformKeys } from '../scripts/app-shells.mjs';
 import { updateManifests } from './update-manifests.mjs';
@@ -144,7 +144,9 @@ function writeGame(destination, directory, options, {name, local}) {
   let uncached = null;
   try { prepareGame(destination, gameDefaults(destination).game, directory); }
   catch (error) {
-    if (!/^game Cargo graph: /.test(error.message) || !/--offline was specified/.test(error.message)) throw error;
+    // Ask the cache directly (sdkFetch, as exact setup --check does): Cargo's offline wording for a missing crate
+    // is also what a stale SDK lock says. Only when the SDK lock's crates are not all there is the graph deferred.
+    if (!/^game Cargo graph: /.test(error?.message ?? '') || sdkFetch({offline:true, source:directory}).ok) throw error;
     uncached = `Cargo's cache lacks the game SDK's crates. A build service fetches its own; to build or test here first, run:\n  cargo fetch --manifest-path ${quote(resolve(destination, '.shells/Cargo.toml'))}`;
   }
 
