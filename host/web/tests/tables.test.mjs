@@ -8,7 +8,8 @@ import {tableOperation, watchTables} from '../../../game/app/tables.mjs';
 import {filesystem} from '../../../scripts/filesystem.mjs';
 import {devGenerationDigest} from '../serve.mjs';
 import {sealEnvelope} from '../../../scripts/deploy-signing.mjs';
-import {pendingBuildInputs} from '../../../scripts/app.mjs';
+import {pendingBuildInputs, resolveApp} from '../../../scripts/app.mjs';
+import {driveStore, removeBrowserProfile} from '../../../scripts/agent-launch.mjs';
 const source = readFileSync(new URL('../dev.mjs', import.meta.url), 'utf8');
 
 test('table publication counts the whole operation and refuses imported subprocess helpers', () => {
@@ -130,6 +131,7 @@ test('real game dev journals rejected edits and reloads tables after a gpu-dev p
   const originals=[table,rust].map(path=>({path,text:readFileSync(path,'utf8')}));
   const oldApp=process.env.EXACT_APP_DIR;
   const env={...process.env,PATH:`${process.env.HOME}/.cargo/bin:${process.env.PATH}`,EXACT_APP_DIR:app,CARGO_TERM_COLOR:'never',CARGO_TERM_QUIET:'false'};delete env.EXACT_GAME_PROOF_PROFILE;
+  const storage=`table-dev-${process.pid}`, store=driveStore(resolveApp(app),storage,env);
   let child,drive,log='';
   const until=async(read,ms=60000,step='dev condition')=>{const end=Date.now()+ms;while(Date.now()<end){if(child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('dev exited '+child.exitCode+':\n'+log);const value=await read();if(value)return value;await Bun.sleep(50);}throw Error(step+' missing after '+ms/1000+' s:\n'+log.slice(-4000));};
   try {
@@ -138,7 +140,8 @@ test('real game dev journals rejected edits and reloads tables after a gpu-dev p
     for(const stream of [child.stdout,child.stderr])stream.on('data',bytes=>{log+=bytes;});
     await until(()=>log.includes('plan ready'),600000);
     const url=await until(()=>log.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]);expect(url).toBeTruthy();
-    drive=await open({host:'web',app:'beacons',url:url+'/',size:[1280,720]});await drive.tap('play');
+    drive=await open({host:'web',app:'beacons',url:url+'/',size:[1280,720],storage,env:{EXACT_AGENT_STORAGE_FRESH:'1'}});
+    expect((await drive.clock('data')).settled).toBe(true);await drive.tap('play');
     let world=drive.world('world');
     const valid=speed=>JSON.stringify({speed:[[0,speed],[1,speed]],jump:1.2});
     const editToObserved=async(speed,edits,label)=>{
@@ -183,29 +186,40 @@ test('real game dev journals rejected edits and reloads tables after a gpu-dev p
     // The rebuild restarts its resident producer; wait for its first generation. A game with data of its own bakes
     // through its web shell's dev bin: a hang guard sized for a loaded machine, not a deadline (theme2's 05:50 ruling).
     await until(async()=>(await fetch(url+'/exact.json')).ok,300000,'the rebuilt producer\'s first generation (exact.json)');
-    // A second logic edit compiles nothing of the app wasm: the first rebuild's table reload left assets/ alone (an
-    // identical table isn't rewritten), so the web shell's build script, which watches assets/, doesn't rerun (Beacons:
-    // 34-58 s at `web`). Cargo's own lines, uncoloured (the env), show the wasm build ran and found nothing to do.
+    // A GPU product change rebakes the web host to validate its arguments (#176).
+    // The table reload must still leave the unchanged carrier alone.
+    const carrier=resolve(app,'assets/exact-tables.json'), unchanged=statSync(carrier);
     const second=log.length;
     writeFileSync(rust,originals[1].text+'\n// Exercise the primary development rebuild again.\n');
     await until(()=>log.slice(second).includes('rust: rebuilt'),600000);
     expect(log.slice(second)).toContain('Finished `web` profile');
-    expect(log.slice(second)).not.toContain('Compiling beacons-web');
+    expect(statSync(carrier).mtimeMs).toBe(unchanged.mtimeMs);
+    expect(statSync(carrier).ino).toBe(unchanged.ino);
     await until(async()=>(await fetch(url+'/exact.json')).ok,300000,'the second rebuild\'s first generation (exact.json)');
-    await drive.close();
-    drive=await open({host:'web',app:'beacons',url:url+'/',size:[1280,720]});
-    await drive.tap('play');world=drive.world('world');
+    await drive.close();drive=null;
+    drive=await open({host:'web',app:'beacons',url:url+'/',size:[1280,720],storage});
+    expect((await drive.clock('data')).settled).toBe(true);await drive.tap('play');world=drive.world('world');
     // Removing tuning.reload() leaves the watcher closed after the primary build.
     await editToObserved(9,1,'after primary rebuild');
     expect(log).toMatch(/table: validated and published in .*subprocesses 0/);
   } finally {
-    await drive?.close();
-    if(child?.exitCode===null){const ended=new Promise(ok=>child.once('exit',ok));child.kill('SIGTERM');await ended;}
-    for(const {path,text} of originals)writeFileSync(path,text);
-    // Proofs may reuse a build receipt, so restore the generated tables through its validator too.
-    const restored=await watchTables({app,dist:resolve(app,'dist'),publish:()=>false,refused:error=>{throw new Error(error);}});
-    restored.close();
-    if(oldApp===undefined)delete process.env.EXACT_APP_DIR;else process.env.EXACT_APP_DIR=oldApp;
+    try { await drive?.close(); }
+    finally {
+      try {
+        try {
+          if(child?.exitCode===null){const ended=new Promise(ok=>child.once('exit',ok));child.kill('SIGTERM');await ended;}
+        } finally {
+          for(const {path,text} of originals)writeFileSync(path,text);
+          // Proofs may reuse a build receipt, so restore the generated tables through its validator too.
+          const restored=await watchTables({app,dist:resolve(app,'dist'),publish:()=>false,refused:error=>{throw new Error(error);}});
+          restored.close();
+        }
+      } finally {
+        if(oldApp===undefined)delete process.env.EXACT_APP_DIR;else process.env.EXACT_APP_DIR=oldApp;
+        try { await removeBrowserProfile(store.profile); }
+        finally { rmSync(resolve(store.base+'-locks',storage),{recursive:true,force:true}); }
+      }
+    }
   }
 }, 1_500_000);
 
