@@ -28,6 +28,14 @@ test "a deep link opens a section page at its heading"
   at "/learn/contract-for-humans/input-events-and-commands#choosing-a-native-button"
   expect tree has "h-choosing-a-native-button"
 
+test "a page shows its full path, and a crumb opens that page"
+  size 1440x900
+  at "/learn/contract-for-humans/values-and-types"
+  expect text "crumb-current" == "Values and types"
+  expect tree has "crumb-Learn"
+  tap "crumb-Contract: a guide for humans"
+  expect text "crumb-current" == "Contract: a guide for humans"
+
 test "the recipe page renders"
   at "/recipes/website"
   expect tree has "h-a-deep-link"

@@ -416,6 +416,17 @@ const homeMarkdown = () => {
   const rows = agentRows.map(r => `- [${r.title}](${md('/agents', r.anchor)}): ${r.detail}.`);
   return `\n## Explore the docs\n\n${cards.join('\n')}\n\n## For AI agents\n\n${AGENT_INTRO} [See all agent resources](${md('/agents')}).\n\n${rows.join('\n')}\n`;
 };
+const crumbsOf = (page: (typeof pages)[number]) => {
+  const section = sections.find(s => s.pages.some(n => n.source === page.source));
+  if (!section || page.route === 'home') return [];
+  const tab = tabs.find(t => t.id === section.tab)!;
+  const entry = section.pages.find(n => n.source === page.source)!;
+  return [
+    { title: tab.title, href: sections.find(s => s.tab === tab.id)!.pages[0].path, icon: tab.icon },
+    ...(section.title === tab.title ? [] : [{ title: section.title, href: '', icon: '' }]),
+    ...(entry.route === page.route ? [] : [{ title: bySource.get(page.source)!.title, href: entry.path, icon: '' }]),
+  ];
+};
 pages.forEach(page => {
   const i = listed.indexOf(page);
   const { blocks, toc } = render(page);
@@ -428,6 +439,7 @@ pages.forEach(page => {
     path: page.path,
     movedFrom: Object.entries(redirects).filter(([, to]) => to === page.path).map(([from]) => from),
     section: sections.find(x => x.pages.some(n => n.source === page.source))?.title ?? '',
+    crumbs: crumbsOf(page),
     title: page.title,
     description: page.description,
     subtitle: page.tocDepth === 2 ? page.description : '',
