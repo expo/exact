@@ -258,7 +258,7 @@ final class ArrangementHost {
             // the route's top, and a pane when it starts at its block's top. Owning the bottom keeps the cover and takes
             // only the padding, which moves a pane's end only toward the route's edge, so a pane owns it while its end lies
             // within the cover: the arrangement's gap to the route's bottom and the pane's shortfall in its block (a
-            // `max-height`) are together at most the cover, as `NavigationHost.bottomScroller` allows the route's child.
+            // `max-height`) are together at most the cover, as for the route's bottom scroller (`bottomScroller`).
             guard node.isDescendant(of: route), node.transform.isIdentity, node.clipPath == nil,
                   top ? room.minY <= 0.5 : node.bounds.maxY - room.maxY <= 0.5,
                   let gap = gap(from: node, to: route, top: top), top ? abs(gap - cover) < 1 : gap < cover + 1 else { return [] }
@@ -286,9 +286,9 @@ final class ArrangementHost {
     }
 
     /// How far `node`'s top or bottom edge lies inside its route's content box, which the route's padding for the bars
-    /// may still be in, or nil where something else comes between. Each box from `node` up spans that edge of its
-    /// parent alone, as the route's own scroller does (`NavigationHost.topScroller`, `bottomScroller`), and each below
-    /// the route's child touches it.
+    /// may still be in, or nil where something else comes between. Each box from `node` up lies alone at that edge of
+    /// its parent, as the route's own scroller does (`NavigationHost.topScroller`, `bottomScroller`), with nothing (a
+    /// padding, a border) between, and at the top, below the route's child, each starts at its parent's top.
     private func gap(from node: NodeView, to route: NodeView, top: Bool) -> CGFloat? {
         var child = node
         while child !== route {
@@ -306,9 +306,12 @@ final class ArrangementHost {
             guard others.allSatisfy({ top ? $0.frame.minY >= child.frame.maxY - 0.5 : $0.frame.maxY <= child.frame.minY + 0.5 }) else { return nil }
             let room = parent.contentBox()
             let rect = child.convert(child.bounds, to: parent)
-            let distance = top ? rect.minY - room.minY : room.maxY - rect.maxY
-            if parent === route { return distance > -1 ? distance : nil }
-            guard abs(distance) < 1, top ? room.minY <= 0.5 : parent.bounds.maxY - room.maxY <= 0.5 else { return nil }
+            if parent === route {
+                // The bottom's is the arrangement's own end, however far the boxes it sits in stop short of their parents'
+                let distance = top ? rect.minY - room.minY : room.maxY - route.convert(node.bounds, from: node).maxY
+                return distance > -1 ? distance : nil
+            }
+            guard top ? abs(rect.minY - room.minY) < 1 && room.minY <= 0.5 : parent.bounds.maxY - room.maxY <= 0.5 else { return nil }
             child = parent
         }
         return 0

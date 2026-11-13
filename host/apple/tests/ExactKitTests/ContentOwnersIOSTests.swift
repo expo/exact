@@ -526,12 +526,12 @@ final class ContentOwnersIOSTests: XCTestCase {
         var bottomCover: CGFloat = 0
         if case .edges(let edges)? = p.navigation.covers[route.node.id] { bottomCover = edges.bottom }
         XCTAssertGreaterThan(bottomCover, 25, "the route's bottom has bars")
-        let wrapperFrame = wrapper.frame, routeCover = p.navigation.covers[route.node.id]
-        wrapper.frame.origin.y -= bottomCover - 2
-        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "an arrangement ending within the cover above the route's bottom keeps its edge")
+        let wrapperFrame = wrapper.frame, rootFrame = root.frame, routeCover = p.navigation.covers[route.node.id]
+        root.frame.origin.y -= bottomCover - 2
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "an arrangement ending within the cover above the route's bottom, in its parent, keeps its edge")
         second.frame.size.height = secondFrame.height - 25
         XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "the arrangement's gap counts with the pane's shortfall, past the cover")
-        wrapper.frame = wrapperFrame
+        root.frame = rootFrame
         XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "a pane ending within the cover keeps the route's bottom edge")
         second.frame.size.height = secondFrame.height + 25
         XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "a pane taller than its block gives the route's bottom edge up")

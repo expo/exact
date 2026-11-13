@@ -1031,9 +1031,9 @@ extension NavigationHost {
 
     /// The bottom edge, as `collapse` is the top's (LLP 1116 D2): a route
     /// whose last in-flow child is a scroller — a `navigationScroll` or not —
-    /// lets it run to the screen's bottom edge, under the home indicator and
-    /// a tab bar, and UIKit insets its content there
-    /// (`adjustedContentInset.bottom`), as a hand-built table view's is. The
+    /// lets it run under the home indicator and a tab bar, to the screen's
+    /// bottom edge or within their cover of it, and UIKit insets its content
+    /// there (`adjustedContentInset.bottom`), as a hand-built table view's is. The
     /// route keeps its bottom cover, which the kernel pads nothing of while
     /// UIKit insets the scroller (`reportCovers`, `scroller_insets_bottom`),
     /// so an absolutely positioned footer still rests on the bars. A footer under
@@ -1077,18 +1077,18 @@ extension NavigationHost {
     }
 
     /// The scroller at a route's bottom edge: its last in-flow child, or
-    /// that child's last, down through boxes that alone span their parent's
-    /// bottom edge (a sheet's component whose root column holds its header
+    /// that child's last, down through boxes that each lie alone at their
+    /// parent's bottom (a sheet's component whose root column holds its header
     /// and then its `scroll`), as a hand-built screen's scroll view pinned to
-    /// its view's bottom is at the edge however deep it sits. A box that ends
-    /// short of its parent's bottom (a padding, a border or a margin under
-    /// it), or has a sibling beside it in a row or a grid, keeps the route's
-    /// cover. One that scrolls vertically only: UIKit's bottom inset would
-    /// let a sideways carousel scroll up and down. `cover` is the route's
-    /// bottom cover, which the route's child may end above.
+    /// its view's bottom is at the edge however deep it sits. A box with a
+    /// padding or a border under its children, or with a sibling beside it in
+    /// a row or a grid, keeps the route's cover, and so does a scroller that
+    /// ends above that cover (`cover`, the route's bottom cover). One that
+    /// scrolls vertically only: UIKit's bottom inset would let a sideways
+    /// carousel scroll up and down.
     static func bottomScroller(in route: NodeView, cover: CGFloat = 0) -> NodeView? {
         let flowing = inFlow
-        // The last in-flow child spans the bottom edge alone when every other
+        // The last in-flow child lies alone at the bottom when every other
         // ends above its top, as children stacked down a block or a column
         // do. Beside it in a row or a grid, a sibling reaches the edge too
         // (a column with a Save button at its foot) and keeps the cover. The
@@ -1100,14 +1100,16 @@ extension NavigationHost {
         while true {
             let children = parent.container.subviews.compactMap { $0 as? NodeView }.filter(flowing)
             guard let last = children.last, alone(last, among: children) else { return nil }
-            // Each reaches the foot of its parent's content box: the route's
-            // child that box less the cover the kernel may pad it by, a
-            // deeper one its parent's bottom, with nothing (a padding, a
-            // border) under it.
-            let foot = parent === route ? parent.contentBox().maxY - cover : parent.bounds.maxY
-            if parent !== route, parent.contentBox().maxY < foot - 0.5 { return nil }
-            if parent.convert(last.bounds, from: last).maxY < foot - 0.5 { return nil }
-            if last.scrollView != nil { return ["scroll", "auto"].contains(last.style["overflow_y"]?.string ?? "") ? last : nil }
+            // A deeper box has nothing (a padding, a border) under its children
+            if parent !== route, parent.contentBox().maxY < parent.bounds.maxY - 0.5 { return nil }
+            if last.scrollView != nil {
+                // The scroller owns the edge while its end lies within the cover the kernel may pad the route by, so that
+                // the answer holds in the layout it brings about: owning the edge takes that padding away, which moves the
+                // end only toward the route's edge. Each box down to it may stop short of its parent's bottom (a
+                // `max-height`), by as much as the cover in all.
+                guard route.convert(last.bounds, from: last).maxY >= route.contentBox().maxY - cover - 0.5 else { return nil }
+                return ["scroll", "auto"].contains(last.style["overflow_y"]?.string ?? "") ? last : nil
+            }
             parent = last
         }
     }
