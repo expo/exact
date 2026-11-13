@@ -3,7 +3,7 @@
 - **Upstream:** `taffy` 0.14.0, crates.io package supplied offline at
   `~/Library/Caches/exact2-textflow/taffy-0.14.0/` (M8, 2026-09-18).
   The archive's `.cargo_vcs_info.json` pins commit `77f385683c1d698c91a23a259f87fdddf26925fb`.
-- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73 and 74 below remain. `[patch.crates-io]`
+- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74 and 75 below remain. `[patch.crates-io]`
   selects this copy; the kernel declares `taffy = "0.14"`.
 - **Owner:** Charlie Cheever (kernel/layout).
 - **Features:** std, taffy_tree, flexbox, grid, block_layout, content_size, calc.
@@ -2373,3 +2373,20 @@ every key and size entry.
 for size probes and final layouts, with and without a ratio and percentage
 children. Before the repair a descendant kept 90 points of overflow from the
 old offer; a fresh layout under the new offer gives 45.
+
+## Patch 75: native clearance narrows the absolute containing block — Exact only
+
+The kernel supplies a container's `absolute_clearance` separately from its
+padding (LLP 1123 D3). The shared absolute solver sizes and places descendants
+inside that clearance, including percentage sizes, constraints, insets, padding
+and margins. Grid areas retain their explicit track edges; automatic edges use
+the cleared padding box. An inset marked by `inset_credit` already references
+the same edge's safe area, so its resolved length credits only the clearance
+applied to that edge of its containing block. Explicit grid lines keep the
+authored inset.
+Host blocks lay out separately and do not inherit an ancestor's clearance.
+
+**Held by** `kernel/tests/it/cover.rs`, `kernel/tests/it/cover/sizing.rs` and
+`kernel/src/kernel/owner_tests.rs`, including literal Chrome inner-box geometry,
+the Duo's 951-point allocation and 49-point bottom cover, changing covers,
+static descendants, nested positioned boxes and independent host blocks.

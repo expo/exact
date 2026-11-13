@@ -1136,7 +1136,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if disabled { pressEpoch &+= 1; cancelPressContact() }
         if props["inert"] == "true" { cancelPressContactsInSubtree() }
         swipeOwner = props["swipeContent"] != nil
-        if isParagraph, set["textOffset"] != nil || clear.contains("textOffset") { textRasterGeometryChanged() } // its lines' place in its box
+        if isParagraph, ["textOffset", "textLeft", "textWidth"].contains(where: { set[$0] != nil || clear.contains($0) }) { textRasterGeometryChanged() }
         if set["groupedSeparator"] != nil || clear.contains("groupedSeparator") { applyGroupedSeparator() }
         if set["symbolEffectValue"] != nil || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
             || set["symbolFillRule"] != nil || clear.contains("symbolFillRule") { updateSymbol() }
@@ -1481,9 +1481,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 let post = Presenter.signposts.beginInterval("text-draw"), phase = HostPhases.shared.begin(.text)
                 defer { Presenter.signposts.endInterval("text-draw", post); HostPhases.shared.end(phase) }
                 let spec = paragraphSpec()
-                if let paragraph = paragraphLayout() { eachFragment(ctx) { box, at in
-                    paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: box)
-                    TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: rect.offsetBy(dx: -at.x, dy: -at.y)) } }
+                if let paragraph = paragraphLayout() { eachFragment(ctx) { box, at, lines in
+                    paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: box, lines: lines)
+                    TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: rect.offsetBy(dx: -at.x, dy: -at.y), lines: lines) } }
             }
         }
         if !cssVisibilityHidden, Capture.capturing, let picture = Capture.web[id] {

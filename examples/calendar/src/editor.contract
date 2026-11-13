@@ -2,15 +2,16 @@ use Viewport, dialogIn from "./models.contract"
 use Event, Guest from "./models.contract"
 use Guests from "./device.contract"
 style FieldLabel
-  font-size=12 font-weight=500 color="#74747c"
+  font-size=12 font-weight=500 color="-exact-secondary-label"
 style DateField
-  box-sizing="border-box" min-width=0 height=26 padding=0 border-width=0 border-radius=6 background-color="#ffffff00" color="#242428" font-size=13
+  box-sizing="border-box" min-width=0 height=26 padding=0 border-width=0 border-radius=6 background-color="transparent" color="-exact-label" font-size=13
 style ToolButton
   display="flex" flex-direction="row" align-items="center" justify-content="center" height=28 padding=0 border-width=0 border-radius=7 -exact-press-scale=0.96
 style FooterButton
   display="flex" flex-direction="row" align-items="center" justify-content="center" height=30 padding-top=0 padding-bottom=0 padding-left=14 padding-right=14 border-radius=7 -exact-press-scale=0.97
 
 
+// Swatches are stored schedule colours; their checkmark stays dark on the pastels.
 component ColorChoice
   props
     value: string
@@ -19,9 +20,9 @@ component ColorChoice
     disabled: bool
     pick: action
   view
-    button press=pick(value) disabled=disabled testId=`color-${label}` aria-label=label aria-selected=(selected == value) width=24 height=24 flex-shrink=0 padding=0 border-width=(selected == value ? 2 : 0) border-style="solid" border-color="#ffffff" box-shadow=(selected == value ? `0 0 0 2px ${value}` : "none") border-radius=12 background-color=value display="flex" align-items="center" justify-content="center" -exact-press-scale=0.94
+    button press=pick(value) disabled=disabled testId=`color-${label}` aria-label=label aria-selected=(selected == value) width=24 height=24 flex-shrink=0 padding=0 border-width=(selected == value ? 2 : 0) border-style="solid" border-color="-exact-background" box-shadow=(selected == value ? `0 0 0 2px ${value}` : "none") border-radius=12 background-color=value display="flex" align-items="center" justify-content="center" -exact-press-scale=0.94
       if selected == value
-        text "✓" font-size=12 font-weight=700 color="#ffffff"
+        text "✓" font-size=12 font-weight=700 color="#000000"
 
 
 component KindTab
@@ -35,7 +36,7 @@ component KindTab
     surface: string
     pick: action
   view
-    button testId=`kind-${kind}` press=pick(kind) role="radio" aria-checked=(selected == kind) disabled=disabled height=28 padding-left=12 padding-right=12 border-width=0 border-radius=7 background-color=(selected == kind ? surface : "#ffffff00") box-shadow=(selected == kind ? "0 1px 2px rgba(28, 31, 44, 0.14)" : "none") display="flex" align-items="center" justify-content="center"
+    button testId=`kind-${kind}` press=pick(kind) role="radio" aria-checked=(selected == kind) disabled=disabled height=28 padding-left=12 padding-right=12 border-width=0 border-radius=7 background-color=(selected == kind ? surface : "transparent") box-shadow=(selected == kind ? "0 1px 2px rgba(28, 31, 44, 0.14)" : "none") display="flex" align-items="center" justify-content="center"
       text title font-size=13 font-weight=(selected == kind ? 600 : 500) color=(selected == kind ? ink : muted)
 
 component Editor
@@ -66,6 +67,7 @@ component Editor
     themeField: string
     themeBorder: string
     themeAccent: string
+    themeAccentInk: string
     sheetOffset: number
     viewport: Viewport
     opened: Event
@@ -100,7 +102,7 @@ component Editor
     textGuests: action
   view
     if editorOpen
-      box testId="editor-backdrop" press=refocusEditor position="absolute" left=0 right=0 top=0 bottom=0 z-index=40 background-color="rgba(28, 31, 44, 0.24)" display="flex" align-items=(compact ? "flex-end" : "center") justify-content="center" opacity=(editorClosing ? 0 : 1) transition=(viewport.prefersReducedMotion ? "none" : (editorClosing ? "opacity 120ms ease-in" : "opacity 160ms ease-out"))
+      box testId="editor-backdrop" press=refocusEditor position="absolute" left=0 right=0 top=0 bottom=0 z-index=40 background-color="-exact-fill" display="flex" align-items=(compact ? "flex-end" : "center") justify-content="center" opacity=(editorClosing ? 0 : 1) transition=(viewport.prefersReducedMotion ? "none" : (editorClosing ? "opacity 120ms ease-in" : "opacity 160ms ease-out"))
         column id="schedule-editor" testId=(editorKind == "todo" ? "todo-editor" : "schedule-editor") role="dialog" aria-label=editorLabel press=refocusEditor width=(compact ? viewport.width : 480) max-height=(compact ? "92%" : "calc(100% - 96px)") padding-bottom=(compact ? "env(safe-area-inset-bottom)" : "0px") translate=`0px ${compact ? max(0, sheetOffset) : 0}px` min-height=0 box-sizing="border-box" border-radius=14 background-color=themeSurface box-shadow="0 24px 64px rgba(28, 31, 44, 0.28)" overflow="hidden" scale=(editorClosing ? 0.98 : 1) transition=(viewport.prefersReducedMotion ? "none" : "scale 120ms ease-in") animation=(viewport.prefersReducedMotion or editorClosing ? "none" : "dialogIn 160ms ease-out")
           if compact
             row height=24 flex-shrink=0 align-items="center" justify-content="center" touch-action="none" pan=panSheet panrelease=releaseSheet testId="editor-sheet-handle"
@@ -115,12 +117,12 @@ component Editor
           scroll testId="editor-fields" flex=1 min-height=0 overflow-x="hidden" overscroll-behavior="contain"
             column padding-left=24 padding-right=24 padding-top=2 padding-bottom=18 gap=14
               if not editorReady
-                text (opening ? "Opening…" : opened.message) color="#b74238" font-size=13 testId="event-error"
+                text (opening ? "Opening…" : opened.message) color="-exact-system-red" font-size=13 testId="event-error"
                 if opened.message != "" and not opening
                   button press=retryEvent disabled=busy testId="retry-event" class=FooterButton align-self="flex-start" border-width=0 background-color=themeField
                     text "Try again" font-size=13 color=themeMuted
-              input appearance="none" id="schedule-title" testId="schedule-title" aria-label="Title" placeholder=(editorKind == "todo" ? "What needs doing?" : "What are you planning?") value=title input=writeTitle submit=save key=editorKey disabled=(busy or not editorReady) width="100%" height=40 box-sizing="border-box" padding=0 border-width=0 background-color="#ffffff00" font-size=22 font-weight=600 letter-spacing=-0.3 color=themeInk
-              textarea appearance="none" id="schedule-notes" testId="schedule-notes" aria-label="Notes" placeholder="Add a description…" value=notes input=writeNotes disabled=(busy or not editorReady) width="100%" height=60 min-height=60 box-sizing="border-box" padding=0 font-size=13 font-family="system-ui" line-height="19px" border-width=0 background-color="#ffffff00" color=themeInk
+              input appearance="none" id="schedule-title" testId="schedule-title" aria-label="Title" placeholder=(editorKind == "todo" ? "What needs doing?" : "What are you planning?") value=title input=writeTitle submit=save key=editorKey disabled=(busy or not editorReady) width="100%" height=40 box-sizing="border-box" padding=0 border-width=0 background-color="transparent" font-size=22 font-weight=600 letter-spacing=-0.3 color=themeInk
+              textarea appearance="none" id="schedule-notes" testId="schedule-notes" aria-label="Notes" placeholder="Add a description…" value=notes input=writeNotes disabled=(busy or not editorReady) width="100%" height=60 min-height=60 box-sizing="border-box" padding=0 font-size=13 font-family="system-ui" line-height="19px" border-width=0 background-color="transparent" color=themeInk
               column border-style="solid" border-top-width=1 border-right-width=0 border-bottom-width=1 border-left-width=0 border-color=themeBorder
                 if editorKind != "todo"
                   row align-items="center" gap=8 height=40
@@ -150,20 +152,20 @@ component Editor
               if editId != "" and editorKind != "todo" and (canInvite or canAdd or guests.length > 0)
                 Guests(guests=guests, canInvite=canInvite, canAdd=canAdd, note=calendarNote, disabled=(busy or not editorReady), ink=themeInk, muted=themeMuted, invite=invite, addToCalendar=addToCalendar, canEmail=canEmail, canText=canText, emailGuests=emailGuests, textGuests=textGuests)
               if error != ""
-                text error testId="editor-error" aria-live="assertive" font-size=13 color="#b74238" padding=10 border-radius=8 background-color=themeField
+                text error testId="editor-error" aria-live="assertive" font-size=13 color="-exact-system-red" padding=10 border-radius=8 background-color=themeField
           row testId="editor-footer" height=56 flex-shrink=0 box-sizing="border-box" padding-left=20 padding-right=20 align-items="center" gap=8 border-style="solid" border-top-width=1 border-right-width=0 border-bottom-width=0 border-left-width=0 border-color=themeBorder
             if confirmDelete
-              text (editorKind == "todo" ? "Delete this todo?" : "Delete this item from every date?") testId="delete-question" flex=1 min-width=0 font-size=13 font-weight=500 color="#b74238" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
+              text (editorKind == "todo" ? "Delete this todo?" : "Delete this item from every date?") testId="delete-question" flex=1 min-width=0 font-size=13 font-weight=500 color="-exact-system-red" white-space="nowrap" text-overflow="ellipsis" overflow="hidden"
               button press=keepEvent disabled=busy testId="keep-schedule" aria-keyshortcuts="Escape" class=FooterButton border-width=1 border-style="solid" border-color=themeBorder background-color=themeSurface
                 text "Keep" font-size=13 font-weight=500 color=themeInk
-              button press=remove disabled=busy testId="confirm-delete" class=FooterButton border-width=0 background-color="#df666c"
-                text (busy ? "Deleting…" : "Delete") font-size=13 font-weight=600 color="#ffffff"
+              button press=remove disabled=busy testId="confirm-delete" class=FooterButton border-width=0 background-color="light-dark(#b3261e, #ffb4ab)"
+                text (busy ? "Deleting…" : "Delete") font-size=13 font-weight=600 color=themeAccentInk
             else
               if editId != ""
-                button press=askDelete disabled=(busy or not editorReady) testId="delete-schedule" class=FooterButton padding-left=8 padding-right=8 border-width=0 background-color="#ffffff00"
-                  text (editorKind == "todo" ? "Delete Todo…" : "Delete…") font-size=13 font-weight=500 color="#c85353"
+                button press=askDelete disabled=(busy or not editorReady) testId="delete-schedule" class=FooterButton padding-left=8 padding-right=8 border-width=0 background-color="transparent"
+                  text (editorKind == "todo" ? "Delete Todo…" : "Delete…") font-size=13 font-weight=500 color="-exact-system-red"
               box flex=1
               button press=closeEditor testId="cancel-editor" aria-label="Cancel editing" aria-keyshortcuts="Escape" disabled=busy class=FooterButton border-width=1 border-style="solid" border-color=themeBorder background-color=themeSurface
                 text "Cancel" font-size=13 font-weight=500 color=themeInk
               button press=save testId="save-schedule" aria-label=(editId != "" ? "Save item" : "Add item") disabled=(busy or not libraryReady or not editorReady or title == "") class=FooterButton border-width=0 background-color=(busy or title == "" ? themeBorder : themeAccent)
-                text (busy ? "Saving…" : (editId != "" ? "Save" : "Add")) font-size=13 font-weight=600 color=(busy or title == "" ? themeMuted : "#ffffff")
+                text (busy ? "Saving…" : (editId != "" ? "Save" : "Add")) font-size=13 font-weight=600 color=(busy or title == "" ? themeMuted : themeAccentInk)

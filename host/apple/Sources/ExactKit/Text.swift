@@ -190,7 +190,7 @@ extension TextEngine {
     /// Paint a paragraph into a y-down context (a flipped NSView's, a
     /// UIView's): one CTLineDraw per line, on device-pixel baselines
     /// (`paintedBaseline`), flush by alignment.
-    static func draw(_ p: Paragraph, spec: Spec, in bounds: CGRect, context ctx: CGContext, dirty: CGRect? = nil, pass: TextLinePaint.Pass = .all) {
+    static func draw(_ p: Paragraph, spec: Spec, in bounds: CGRect, context ctx: CGContext, dirty: CGRect? = nil, pass: TextLinePaint.Pass = .all, lines: Range<Int>? = nil) {
         // Font smoothing is graphics state (LLP 1019 D12).
         ctx.saveGState()
         defer { ctx.restoreGState() }
@@ -206,6 +206,7 @@ extension TextEngine {
         }
         defer { if shadow != nil { ctx.endTransparencyLayer(); ctx.restoreGState() } }
         func paint(_ index: Int) {
+            if let lines, !lines.contains(index) { return }
             let line = spec.ellipsis ? p.ellipsized(index, spec: spec, width: bounds.width) : p.lines[index]
             let baseline = p.baselines[index]
             let x = p.origin(index, align: spec.align, width: bounds.width)
