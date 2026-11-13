@@ -199,6 +199,21 @@ an edge to each matching declaration; dynamic IDs have no static target.
 An action's definition carries `writes`: the states and mutations its body
 assigns or sends, inferred (an action declares none), in slot order: router
 state, states, then mutations, each as declared.
+A definition the type checker types carries `type`, its type in TypeScript as
+`contract types` writes it in `app.d.ts`'s summary: a state, derive, prop,
+inject, resource, mutation (`T | null`), local or parameter by its value, a shape
+by its fields, a field by its value, an action or `fn` as a function of its
+parameters. An enum is the union of its strings, `"a" | "b"`. A shape inside a type is written by its name,
+and `shapes` maps each name used so to the shape's fields, `{ id: string }`.
+A route, component, source, style, task or ID has no `type`. When the type
+check refused, only what is declared keeps one: shapes, fields, and `fn`s and
+their parameters.
+`elements` lists each view element as written, for an editor's hover and
+completion: its `tag` (the compiler's name for it; an `h2` is a `text`), its
+place and `component`, and `attrs`, each attribute written on it with the place
+of its name and, for a string literal value, `string` with the value and its
+place, quotes included. A button's one argument, which becomes its `text` child, is no element
+of its own. A `--name` query has no `elements`.
 
 When the program is refused, `symbols` still prints what it found, adds an
 `errors` array of the refusals in `build --json`'s form, writes them to stderr

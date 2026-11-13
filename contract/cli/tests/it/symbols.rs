@@ -553,6 +553,119 @@ fn route_paths_and_router_slot_offsets_follow_the_type_checker() {
 }
 
 #[test]
+fn each_definition_has_its_type_as_typescript_and_the_shapes_its_types_name() {
+    let f = Fixture::new("types");
+    let graph = f.query(
+        r#"routes nav
+  home "/"
+shape Tag
+  name: string
+shape Item
+  id: string
+  tags: string[]
+  parent: option<Tag>
+fn label(value: Item): string = value.id
+component App
+  state count = 0
+  derive doubled = count * 2
+  derive ids = items.map((i) => i.id)
+  resource items = loadItems() as shape Item[]
+  mutation saved as shape Item
+  action save(item: Item, note: string)
+    let next = count + 1
+    count = next
+    send saved = saveItem(item, note)
+  view
+    column
+      for item, at in items key=item.id
+        Row(item=item, pick=save)
+component Row
+  props
+    item: Item
+    pick: action
+  view
+    button press=pick(item, "") testId="row"
+      text label(item)
+"#,
+    );
+    let ty = |kind: &str, name: &str, owner: Option<&str>| {
+        definition(&graph, kind, name, owner)["type"]
+            .as_str()
+            .map(str::to_owned)
+    };
+    let local = |name: &str, line: u64| {
+        let d = defs(&graph)
+            .iter()
+            .find(|d| d["kind"] == "local" && d["name"] == name && d["line"] == line)
+            .unwrap_or_else(|| panic!("missing local {name}: {graph}"));
+        d["type"].as_str().map(str::to_owned)
+    };
+    let item = "{ id: string; tags: string[]; parent: Tag | null }";
+    for (got, expected) in [
+        (ty("shape", "Item", None), Some(item)),
+        (ty("field", "tags", Some("Item")), Some("string[]")),
+        (ty("field", "parent", Some("Item")), Some("Tag | null")),
+        (ty("fn", "label", None), Some("(value: Item) => string")),
+        (ty("parameter", "value", Some("label")), Some("Item")),
+        (ty("state", "count", None), Some("number")),
+        (ty("state", "nav", None), Some("Router")),
+        (ty("derive", "doubled", None), Some("number")),
+        (ty("derive", "ids", None), Some("string[]")),
+        (ty("resource", "items", None), Some("Item[]")),
+        (ty("mutation", "saved", None), Some("Item | null")),
+        (
+            ty("action", "save", None),
+            Some("(item: Item, note: string) => void"),
+        ),
+        (ty("parameter", "note", Some("save")), Some("string")),
+        (ty("prop", "pick", None), Some("() => void")),
+        (local("next", 17), Some("number")),
+        (local("i", 13), Some("Item")),
+        (local("item", 22), Some("Item")),
+        (local("at", 22), Some("number")),
+        // A route, a component and a source have no type in the checker.
+        (ty("route", "home", None), None),
+        (ty("component", "App", None), None),
+        (ty("source", "loadItems", None), None),
+    ] {
+        assert_eq!(got.as_deref(), expected, "{graph}");
+    }
+    let shapes = graph["shapes"].as_object().unwrap();
+    assert_eq!(shapes["Item"], item);
+    assert_eq!(shapes["Tag"], "{ name: string }");
+    // The router's shapes, which no file declares, are named by the router state's type.
+    assert_eq!(
+        shapes["Router"],
+        "{ tab: string; tabs: Tab[]; next: number }"
+    );
+    assert!(["Tab", "Entry", "Params"]
+        .iter()
+        .all(|s| shapes.contains_key(*s)));
+}
+
+#[test]
+fn a_refused_check_keeps_the_declared_types_of_shapes_and_fields_only() {
+    let f = Fixture::new("types-refused");
+    let path = f.write(
+        "app.contract",
+        "shape Item\n  id: string\ncomponent App\n  state count = 0\n  view\n    text count.foo\n",
+    );
+    let graph: Value =
+        serde_json::from_str(&contract::symbols_json(&path, None).unwrap_err().json).unwrap();
+    assert_eq!(
+        definition(&graph, "shape", "Item", None)["type"],
+        "{ id: string }"
+    );
+    assert_eq!(
+        definition(&graph, "field", "id", Some("Item"))["type"],
+        "string"
+    );
+    assert!(definition(&graph, "state", "count", None)
+        .get("type")
+        .is_none());
+}
+
+#[test]
 fn a_let_is_a_local_for_its_block_and_a_record_names_its_shape_and_fields() {
     // LLP 1035.005.000 D2 and D3.
     let fixture = Fixture::new("let-records");
@@ -921,13 +1034,13 @@ fn a_refusal_in_a_members_file_keeps_its_other_members() {
 }
 
 #[test]
-fn a_program_with_no_refusal_prints_exactly_its_definitions_and_references() {
+fn a_program_with_no_refusal_prints_exactly_its_definitions_elements_and_references() {
     let f = Fixture::new("whole");
     let root = f.write("app.contract", SOURCE);
     let (code, graph, stderr) = cli(&root);
     assert_eq!((code, stderr.as_str()), (Some(0), ""));
     let keys: Vec<_> = graph.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["definitions", "references"]);
+    assert_eq!(keys, ["definitions", "elements", "references", "shapes"]);
     assert_eq!(
         serde_json::to_string(&graph).unwrap(),
         contract::symbols_json(&root, None).unwrap()
@@ -1025,4 +1138,71 @@ fn a_refused_name_is_hidden_in_its_own_file_and_component() {
         .iter()
         .filter(|r| r["name"] == "count" && r["file"] == row.to_string_lossy().as_ref());
     assert_eq!(in_row.count(), 0, "{graph}");
+}
+
+#[test]
+fn elements_report_their_tag_attribute_names_string_values_and_open_line_ends() {
+    let f = Fixture::new("elements");
+    let source = "component App\n  state liked = false\n  action like\n    liked = not liked\n  view\n    main\n      button press=like aria-label=(liked ? \"Unlike\" : \"Like\") testId=\"like\"  \n        text (liked ? \"on\" : \"off\")\n      h2 \"Title\"\n      button \"Save\" press=like\n      box padding=8\n        -exact-fit=\"shrink\" // why\n";
+    let graph = f.query(source);
+    let elements = graph["elements"].as_array().unwrap();
+    let tags: Vec<_> = elements
+        .iter()
+        .map(|e| (spelling(e), e["tag"].as_str().unwrap()))
+        .collect();
+    // A heading is a `text` written as its level; a button's one argument is
+    // its `text` child, at the button's tag, and no element of its own.
+    assert_eq!(
+        tags,
+        [
+            ("main", "main"),
+            ("button", "button"),
+            ("text", "text"),
+            ("h2", "text"),
+            ("button", "button"),
+            ("box", "box")
+        ]
+        .map(|(s, t)| (s.to_owned(), t))
+    );
+    assert!(elements.iter().all(|e| e["component"] == "App"));
+    let button = &elements[1];
+    let attrs = button["attrs"].as_array().unwrap();
+    assert_eq!(
+        attrs
+            .iter()
+            .map(|a| spelling(&json_at(button, a)))
+            .collect::<Vec<_>>(),
+        ["press", "aria-label", "testId"]
+    );
+    assert_eq!(
+        attrs
+            .iter()
+            .map(|a| a["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["press", "aria-label", "testId"]
+    );
+    assert!(attrs[..2].iter().all(|a| a.get("string").is_none()));
+    let id = &attrs[2]["string"];
+    assert_eq!(id["value"], "like");
+    assert_eq!(spelling(&json_at(button, id)), "\"like\"");
+    assert!(
+        elements[3]["attrs"].as_array().unwrap().is_empty(),
+        "{graph}"
+    );
+    let box_ = &elements[5];
+    assert_eq!(box_["attrs"][1]["name"], "-exact-fit");
+    assert_eq!(spelling(&json_at(box_, &box_["attrs"][1])), "-exact-fit");
+    // A name query has no elements.
+    let named: Value = serde_json::from_str(
+        &contract::symbols_json(&f.0.join("app.contract"), Some("like")).unwrap(),
+    )
+    .unwrap();
+    assert!(named.get("elements").is_none());
+}
+
+/// A place inside `element`, with the element's file.
+fn json_at(element: &Value, place: &Value) -> Value {
+    let mut at = place.clone();
+    at["file"] = element["file"].clone();
+    at
 }
