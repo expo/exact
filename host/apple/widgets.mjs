@@ -267,7 +267,8 @@ export function placeCoreFramework(framework, to, app, platform = 'ios', plan = 
   writeFileSync(info, readFileSync(info, 'utf8').replace(`<string>${SHARED_CORE_ID}</string>`, `<string>${app.id}.runtime</string>`));
   if (!readFileSync(info, 'utf8').includes(`<string>${app.id}.runtime</string>`)) throw new Error(`host/apple: ${info} names no ExactCore identifier to replace`);
   // A core linked with reserved room (sharedWidgetCore `reserve`) takes this app's plan, from its linked bake `plan`.
-  if (plan) fitLinkedSections(resolve(to, 'ExactCore'), { plan: readFileSync(resolve(plan, 'app.plan')), compat: readFileSync(resolve(plan, 'compat.json')), bytecode: readFileSync(resolve(plan, 'app.hbc')) });
+  // Its UUID is renewed from the new bytes, so a module cache keyed by UUID never takes another plan's copy for this one.
+  if (plan) fitLinkedSections(resolve(to, 'ExactCore'), { plan: readFileSync(resolve(plan, 'app.plan')), compat: readFileSync(resolve(plan, 'compat.json')), bytecode: readFileSync(resolve(plan, 'app.hbc')) }, { renewUuid: true });
   return to;
 }
 /** `to` with `from`'s bytes and modification time, written only when the bytes differ. */
