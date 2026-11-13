@@ -44,6 +44,7 @@ impl Game for Panning {
             delta: pan.delta,
             horizontal: HORIZONTAL,
             vertical: VERTICAL,
+            ..Default::default()
         };
         drop(pan);
         p.insert(p.named("camera").unwrap(), sample);
@@ -337,4 +338,114 @@ fn mouse_look_turns_the_drawn_camera_and_its_children_about_the_eye() {
         .transform_vector3(-Vec3::Z);
     assert!((up.y - exact_game::math::sin(0.5)).abs() < 1e-4);
     assert!(f.frame(&w, 1., 1.).attachments.is_empty());
+}
+
+#[test]
+fn pointer_pan_bounds_limit_the_world_camera_and_move_its_children() {
+    let mut w = World::new(60, 0);
+    let camera = w.spawn((
+        Transform::at(1., 2., 3.),
+        Camera::default(),
+        PointerPan {
+            pointer: 1,
+            horizontal: Vec3::X,
+            vertical: Vec3::Z,
+            bounds: Some([Vec3::new(-2., 2., -4.), Vec3::new(2., 2., 4.)]),
+            ..Default::default()
+        },
+    ));
+    let child = w.spawn((Transform::at(0., 0., -1.), Parent(camera), Mesh::cube(0.1)));
+    w.propagate();
+    let hash = w.hash();
+    let save = w.save();
+    let mut feed = Feed::default();
+    feed.feed_to(&w, &mut Recording::default()).unwrap();
+    for (position, expected) in [
+        (Vec2::splat(100.), Vec3::new(2., 2., 4.)),
+        (Vec2::splat(-100.), Vec3::new(-2., 2., -4.)),
+        (Vec2::new(0.5, -0.5), Vec3::new(1.5, 2., 2.5)),
+    ] {
+        feed.pointer_sample(Some(exact_game::PointerSample {
+            id: 1,
+            position,
+            phase: PointerPhase::Move,
+            buttons: 1,
+            at_ms: 1.,
+            current_contact: true,
+        }));
+        let frame = feed.frame(&w, 0.5, 1.);
+        assert!(frame.camera_position.distance(expected) < 1e-5);
+        let moved = frame
+            .attachments
+            .iter()
+            .find(|a| a.entity == child)
+            .unwrap();
+        assert!(((frame.view * moved.matrix).w_axis.truncate() - Vec3::NEG_Z).length() < 1e-5);
+    }
+    assert_eq!(w.hash(), hash);
+    assert_eq!(w.save(), save);
+}
+
+#[test]
+fn pointer_pan_ignores_invalid_bounds_and_allows_open_axes() {
+    for bounds in [
+        [Vec3::splat(f32::NAN), Vec3::ONE],
+        [Vec3::ONE, Vec3::ZERO],
+        [Vec3::INFINITY, Vec3::INFINITY],
+        [Vec3::NEG_INFINITY, Vec3::NEG_INFINITY],
+        [Vec3::NEG_INFINITY, Vec3::INFINITY],
+    ] {
+        let mut w = World::new(60, 0);
+        w.spawn((
+            Transform::default(),
+            Camera::default(),
+            PointerPan {
+                pointer: 1,
+                horizontal: Vec3::X,
+                bounds: Some(bounds),
+                ..Default::default()
+            },
+        ));
+        w.propagate();
+        let mut feed = Feed::default();
+        feed.feed_to(&w, &mut Recording::default()).unwrap();
+        feed.pointer_sample(Some(exact_game::PointerSample {
+            id: 1,
+            position: Vec2::X,
+            phase: PointerPhase::Move,
+            buttons: 1,
+            at_ms: 1.,
+            current_contact: true,
+        }));
+        assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X);
+    }
+}
+
+#[test]
+fn pointer_pan_bounds_leave_a_camera_with_no_unshown_motion_where_its_tick_put_it() {
+    let mut w = World::new(60, 0);
+    w.spawn((
+        Transform::at(5., 0., 0.),
+        Camera::default(),
+        PointerPan {
+            pointer: 1,
+            horizontal: Vec3::X,
+            bounds: Some([Vec3::splat(-2.), Vec3::splat(2.)]),
+            ..Default::default()
+        },
+    ));
+    w.propagate();
+    let mut feed = Feed::default();
+    feed.feed_to(&w, &mut Recording::default()).unwrap();
+    // No sample: the limits apply to the frame's own translation only.
+    assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X * 5.);
+    feed.pointer_sample(Some(exact_game::PointerSample {
+        id: 1,
+        position: Vec2::ZERO,
+        phase: PointerPhase::Move,
+        buttons: 1,
+        at_ms: 1.,
+        current_contact: true,
+    }));
+    assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X * 5.);
 }

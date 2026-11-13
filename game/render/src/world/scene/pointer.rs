@@ -95,6 +95,19 @@ impl CameraPointer {
         } else {
             Vec3::ZERO
         };
+        // Only the frame's own translation is limited: a camera with no
+        // unshown pointer motion is drawn where its tick put it.
+        let translation = match self.pan.and_then(|pan| pan.bounds) {
+            Some([min, max])
+                if translation != Vec3::ZERO
+                    && min.cmple(max).all()
+                    && min.cmplt(Vec3::INFINITY).all()
+                    && max.cmpgt(Vec3::NEG_INFINITY).all() =>
+            {
+                (camera.position + translation).clamp(min, max) - camera.position
+            }
+            _ => translation,
+        };
         if translation == Vec3::ZERO && turn == glam::Quat::IDENTITY {
             return;
         }
