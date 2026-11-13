@@ -75,11 +75,16 @@ and `runExternalCode: true` in its initialization options.
    }
    ```
 
-3. Open a `.contract` file. VS Code asks, in two notifications, to use the
-   workspace's TypeScript and to let the project's content mapper run. Allow
-   both; hover shows nothing until then.
+3. Open a `.contract` file. VS Code asks "This workspace has a TypeScript 7
+   tsdk configured (7.1.0-beta). Would you like to use it?", then whether the
+   project's content mapper may run. Allow both; hover shows nothing until
+   then.
 4. Run **TypeScript: Restart TS Server** after changing the mapper or the
    `contract` binary.
+
+The extension bundles TypeScript 7.0.2, which has no content mappers, so
+`js/ts.tsdk.path` points it at the app's own 7.1 and VS Code asks to use it.
+Once the extension bundles 7.1, that setting and its prompt are not needed.
 
 The TypeScript 7 extension sends a `.contract` file to the server only after an
 extension registers `.contract` with it. `editors/vscode` does that, so install
