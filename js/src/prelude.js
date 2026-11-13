@@ -684,8 +684,30 @@
     r = f(args, store, storage);
     return r && typeof r.then === "function" ? r.then(text) : text(r);
   }
+  // The bake answers on an engine without these Intl constructors, where `new Intl.Collator()` said only "undefined
+  // cannot be used as a constructor" (expo/exact#447). At bake, and only there (a host's engine may have them), each
+  // missing one throws a TypeError naming it; installed at the first answer, where the door says whether it bakes.
+  var bakeIntlChecked = false;
+  function bakeIntl() {
+    bakeIntlChecked = true;
+    var intl = global.Intl;
+    if (!intl || host(12, "bake", "") !== "1") return;
+    ["Collator", "PluralRules", "RelativeTimeFormat", "ListFormat", "Segmenter", "DisplayNames"].forEach(function (name) {
+      if (typeof intl[name] === "function") return;
+      var missing = function () {
+        throw new TypeError(
+          "Intl." + name + " is not available while the build bakes an answer: the bake's engine has none" +
+            (name === "Collator"
+              ? ". Compare with a.localeCompare(b), which the bake has"
+              : ". Compute it where the app runs, not in an answer the build bakes")
+        );
+      };
+      try { Object.defineProperty(intl, name, { value: missing, writable: true, configurable: true }); } catch (e) {}
+    });
+  }
   global.__exact_call = function (source, argsJson, mutation) {
     initializing = false;
+    if (!bakeIntlChecked) bakeIntl();
     var call = {
       id: nextCall++,
       status: "pending",
