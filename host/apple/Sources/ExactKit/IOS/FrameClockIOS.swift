@@ -20,7 +20,7 @@ final class FrameClock: NSObject {
     static let shared = FrameClock()
 
     /// A correction moves the port before the reveal and the pump read it.
-    enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip, nativeStretch }
+    enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip, nativeResize }
 
     private struct User {
         weak var owner: AnyObject?

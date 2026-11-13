@@ -295,8 +295,8 @@ private final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
-    /// The view's picture, stretched with its box while UIKit animates the box's size (`resizeWillBegin`).
-    var stretch: UIView?
+    /// The view keeps a size of its own, centred in its clipping box, while UIKit animates the box's size (`resize`).
+    var cropped = false
     #endif
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
@@ -1164,7 +1164,7 @@ final class NativeViews {
         guard let entry = entries[owner.id], let view = entry.view else { return }
         if entry.sizing && owner.bounds.isEmpty { return }
         #if os(iOS) || os(tvOS)
-        if entry.stretch != nil { return } // its picture stands for it until the box's animation ends
+        if entry.cropped { return } // its own size until the box's animation ends
         #endif
         entry.sizing = false
         view.frame = owner.contentBox()
@@ -1174,26 +1174,28 @@ final class NativeViews {
     }
 
     #if os(iOS) || os(tvOS)
-    /// `owner`'s box is about to change size inside an animation UIKit has open (a split's column as the device
-    /// folds): a picture of its platform view as it shows now stretches with the box in that animation, as an
-    /// image's pixels do, and the view keeps its size under it until the box's animation ends; then it takes its
-    /// new size and the picture fades as it draws there. A platform view lays its content out for its bounds (a
-    /// map fits its region to them), not at each size between: given its new bounds in the animation, it showed
-    /// that layout at once inside a box still moving, and resized on every frame a map's tiles lagged its bounds.
-    func resizeWillBegin(_ owner: NodeView) {
-        guard let entry = entries[owner.id], let view = entry.view, !entry.sizing, view.window != nil,
-              entry.stretch == nil, let picture = view.snapshotView(afterScreenUpdates: false) else { return }
-        UIView.performWithoutAnimation {
-            picture.frame = view.frame
-            picture.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            owner.insertSubview(picture, aboveSubview: view)
-            view.autoresizingMask = []
-        }
-        entry.stretch = picture
+    /// `owner`'s box changes size, in `resize`, inside an animation UIKit has open (a split's column as the device
+    /// folds). A platform view lays its content out for its bounds once, not at each size between, and a map keeps its
+    /// centre and scale as they change, showing more or less around them. In a box that clips its content
+    /// (`overflow`), the view takes the larger of its old and new sizes at once, centred in the box, and only its
+    /// centre moves with the box: the clip UIKit moves shows more of the new layout as the box grows, as SwiftUI's map
+    /// does, and less of the old one as it shrinks, never a layout smaller than the box around it. Once the box's
+    /// animation ends, the view takes its content box. In a box that does not clip, the view follows the box as a
+    /// UIView in a hand-built app does.
+    func resize(_ owner: NodeView, inAnimation resize: () -> Void) {
+        guard SafeReach.clips(owner), let entry = entries[owner.id], let view = entry.view, !entry.sizing, view.window != nil else { return resize() }
+        let old = view.bounds.size
+        view.autoresizingMask = []
+        resize()
+        let box = owner.contentBox()
+        UIView.performWithoutAnimation { view.bounds.size = CGSize(width: max(old.width, box.width), height: max(old.height, box.height)) }
+        view.center = CGPoint(x: box.midX, y: box.midY)
+        guard !entry.cropped else { return }
+        entry.cropped = true
         // The box's animation ends on the first frame with nothing of its place or size in flight
-        FrameClock.shared.want(picture, .nativeStretch) { [weak self, weak entry, weak owner] _ in
+        FrameClock.shared.want(view, .nativeResize) { [weak self, weak entry, weak owner] _ in
             if let owner, owner.window != nil, Self.moving(owner.layer) { return }
-            self?.endStretch(entry)
+            self?.endCrop(entry)
         }
     }
 
@@ -1207,13 +1209,11 @@ final class NativeViews {
         }
     }
 
-    private func endStretch(_ entry: NativeEntry?) {
-        guard let entry, let picture = entry.stretch else { return }
-        FrameClock.shared.drop(picture)
-        entry.stretch = nil
-        if let owner = entry.owner, let view = entry.view { laidOut(owner); view.layoutIfNeeded() }
-        UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction],
-                       animations: { picture.alpha = 0 }, completion: { _ in picture.removeFromSuperview() })
+    private func endCrop(_ entry: NativeEntry?) {
+        guard let entry, entry.cropped else { return }
+        if let view = entry.view { FrameClock.shared.drop(view) }
+        entry.cropped = false
+        if let owner = entry.owner { UIView.performWithoutAnimation { laidOut(owner) } }
     }
     #endif
 
