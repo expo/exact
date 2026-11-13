@@ -249,11 +249,19 @@ final class ArrangementHost {
 
     /// Panes touching a route edge own its inset; interior panes must already clear that edge.
     func scrollers(in route: NodeView, top: Bool) -> [NodeView] {
-        entries.values.flatMap { entry -> [NodeView] in
+        var cover: CGFloat = 0
+        if case .edges(let edges)? = presenter.navigation.covers[route.id] { cover = top ? edges.top : edges.bottom }
+        return entries.values.flatMap { entry -> [NodeView] in
             let node = entry.node, room = node.contentBox()
+            // Decide each edge so that the answer holds in the layout it brings about. Owning the top takes the route's
+            // top cover and its padding away together, so the arrangement owns it when it starts exactly that cover below
+            // the route's top, and a pane when it starts at its block's top. Owning the bottom keeps the cover and takes
+            // only the padding, which moves a pane's end only toward the route's edge, so a pane owns it while its end lies
+            // within the cover: the arrangement's gap to the route's bottom and the pane's shortfall in its block (a
+            // `max-height`) are together at most the cover, as `NavigationHost.bottomScroller` allows the route's child.
             guard node.isDescendant(of: route), node.transform.isIdentity, node.clipPath == nil,
                   top ? room.minY <= 0.5 : node.bounds.maxY - room.maxY <= 0.5,
-                  reachesEdge(node, in: route, top: top) else { return [] }
+                  let gap = gap(from: node, to: route, top: top), top ? abs(gap - cover) < 1 : gap < cover + 1 else { return [] }
             // Leave out a pane laid out with no size, so that it neither owns an edge nor keeps its sibling from one: one
             // UIKit shows again is 0×0 until its covers follow
             let holders = entry.holders.filter { !entry.isHidden($0) && !$0.node.isHidden && !$0.view.bounds.isEmpty && !$0.node.bounds.isEmpty }
@@ -264,43 +272,46 @@ final class ArrangementHost {
             guard !touching.isEmpty, holders.allSatisfy({ holder in
                 touching.contains { $0 === holder } || (top ? holder.view.safeAreaInsets.top : holder.view.safeAreaInsets.bottom) < 1
             }), touching.allSatisfy({ holder in
-                // Compare the pane with the block it was last told, not with UIKit's allocation: when a cover's answer
-                // resizes the arrangement, UIKit resizes the allocation a layout before the pane follows, and a pane
-                // measured against it then gives up the edge, which pads the route and resizes the allocation back.
-                // The top compares only the pane's origin, where it sits whatever block it was told.
+                // UIKit insets the pane's scroll view by its own overlap with the bars, and its holder has no other content
+                // for the route's padding to clear. A pane taller than its block is clipped there. The block is the one
+                // last told, not UIKit's allocation, which UIKit resizes a layout before the pane.
                 let pane = holder.node, frame = pane.convert(pane.bounds, to: holder.view)
                 guard case .size(let height)? = presenter.owners.told[pane.id]?.block.height else { return false }
+                let within = top ? abs(frame.minY) < 1 : frame.maxY < height + 1 && gap + height - frame.maxY < cover + 1
                 return pane.scrollView != nil && pane.scrollsVertically && pane.transform.isIdentity && pane.clipPath == nil && NavigationHost.inFlow(pane)
-                    && abs(top ? frame.minY : height - frame.maxY) < 1
+                    && within
             }) else { return [] }
             return touching.map(\.node)
         }
     }
 
-    private func reachesEdge(_ node: NodeView, in route: NodeView, top: Bool) -> Bool {
+    /// How far `node`'s top or bottom edge lies inside its route's content box, which the route's padding for the bars
+    /// may still be in, or nil where something else comes between. Each box from `node` up spans that edge of its
+    /// parent alone, as the route's own scroller does (`NavigationHost.topScroller`, `bottomScroller`), and each below
+    /// the route's child touches it.
+    private func gap(from node: NodeView, to route: NodeView, top: Bool) -> CGFloat? {
         var child = node
         while child !== route {
-            guard !child.isHidden, NavigationHost.inFlow(child) else { return false }
+            guard !child.isHidden, NavigationHost.inFlow(child) else { return nil }
             var up = child.superview
             while let view = up, !(view is NodeView) {
-                guard !(view is UIScrollView), view.transform.isIdentity, view.layer.mask == nil else { return false }
+                guard !(view is UIScrollView), view.transform.isIdentity, view.layer.mask == nil else { return nil }
                 up = view.superview
             }
-            guard let parent = up as? NodeView, parent.transform.isIdentity, parent.clipPath == nil, !parent.isHidden else { return false }
+            guard let parent = up as? NodeView, parent.transform.isIdentity, parent.clipPath == nil, !parent.isHidden else { return nil }
+            // Leave out of the siblings what a cover takes whole, as the kernel does: a header the bar replaces is laid
+            // out with no size at the route's origin
+            let others = parent.container.subviews.compactMap { $0 as? NodeView }
+                .filter { $0 !== child && NavigationHost.inFlow($0) && presenter.navigation.covers[$0.id] != .whole }
+            guard others.allSatisfy({ top ? $0.frame.minY >= child.frame.maxY - 0.5 : $0.frame.maxY <= child.frame.minY + 0.5 }) else { return nil }
             let room = parent.contentBox()
             let rect = child.convert(child.bounds, to: parent)
             let distance = top ? rect.minY - room.minY : room.maxY - rect.maxY
-            if parent === route {
-                var cover: CGFloat = 0
-                if case .edges(let edges)? = presenter.navigation.covers[parent.id] { cover = top ? edges.top : edges.bottom }
-                // The route may still reserve this edge, or its scrollers may already own it
-                guard abs(distance) < 1 || abs(distance - cover) < 1 else { return false }
-            } else {
-                guard abs(distance) < 1, top ? room.minY <= 0.5 : parent.bounds.maxY - room.maxY <= 0.5 else { return false }
-            }
+            if parent === route { return distance > -1 ? distance : nil }
+            guard abs(distance) < 1, top ? room.minY <= 0.5 : parent.bounds.maxY - room.maxY <= 0.5 else { return nil }
             child = parent
         }
-        return true
+        return 0
     }
 
     private func syncInsets() {
