@@ -802,7 +802,8 @@ const USAGE = `exact — run an Exact app from the command line (macOS)
   exact new <path> --snapback [--port <n>] [--online]
                                a new app wired to a Snapback backend in the
                                directory above (a guestbook to start from; the
-                               origin's port, 4400 unless --port)
+                               origin's port, 4400 unless --port); needs the
+                               Snapback client in snapback4/, not in this repository
   exact snapback <app> [--port <n>] [--online] [--rebuild [--artifact-only]]
                                wire an app to the backend above it; --port moves
                                its loopback origin, grants and test fetch prefixes
