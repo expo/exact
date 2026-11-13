@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { shaderFiles } from '../../scripts/app.mjs';
+import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
 
 // Resolve authored keys in memory; only the bake writes the resolved manifest.
 const merge = (base, overrides) => {
@@ -29,7 +29,9 @@ const writeChanged = (path, text, authored = true) => {
 export function gameDefaults(dir) {
   const source = resolve(dir, 'logic/src/lib.rs'), path = resolve(dir, 'app.json');
   if (!existsSync(source)) return null;
-  const authored = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  let authored = {};
+  try { if (existsSync(path)) authored = parseManifest(readFileSync(path, 'utf8')); }
+  catch (error) { throw new Error(`${path}: ${error.message}`); }
   const overrides = authored;
   const rust = readFileSync(source, 'utf8');
   const declaration = /impl\s+(?:exact_game::)?Game\s+for\s+(\w+)\s*\{[^{}]*?\bconst\s+ID\s*:\s*&'static\s+str\s*=\s*"([a-z][a-z0-9-]*)"/.exec(rust);

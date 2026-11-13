@@ -28,7 +28,6 @@ import { spawnSync } from '../host/apple/toolchain.mjs';
 import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
 import { within } from './paths.mjs';
-import { parseManifest } from './manifest-text.mjs';
 import { constants, homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BINARYEN, packageGpuWasm, webGpuTools } from '../host/web/stages.mjs';
@@ -555,6 +554,13 @@ export function authoredTests(dir) {
 }
 
 /** `app.json` from `dir`, validated — or the defaults an app had before the manifest: `com.exact.<name>`, the name capitalized. */
+/** app.json's text as JSON. A byte-order mark, which some Windows editors write and JSON does not allow, is named
+ * with its fix rather than left to the parser's "Unrecognized token" (expo/exact-build#190). app-cli.mjs, which
+ * copied SDKs carry alone, keeps its own copy. */
+export function parseManifest(text) {
+  if (text.charCodeAt(0) === 0xfeff) throw new Error('starts with a byte-order mark (U+FEFF), which JSON does not allow; save it as UTF-8 without a BOM');
+  return JSON.parse(text);
+}
 export function readManifest(dir, name) {
   const path = resolve(dir, 'app.json');
   const fallback = { name: name[0].toUpperCase() + name.slice(1), app: { id: `com.exact.${name}`, name: name[0].toUpperCase() + name.slice(1) }, host: {}, deploy: {} };

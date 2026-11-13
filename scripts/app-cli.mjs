@@ -7,13 +7,18 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rena
 import { constants, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
-import { parseManifest } from './manifest-text.mjs';
 
 /** The hosts a `test`, `agent` or `verify` may name first. */
 const APP_HOSTS = ['web', 'ios', 'macos', 'mac', 'linux', 'windows', 'android'];
 /** The host `verb` runs on, taken off `rest` when its first word names one (help's optional `[web|ios|…]`): a test
  *  file or an op written first stays where it is, and the run is on a host the app ships (`shippedHost`; null when
  *  none drives here). */
+/** app.json's text as JSON, a leading byte-order mark named with its fix (scripts/app.mjs `parseManifest`; this
+ * module keeps its own copy, since copied SDKs carry it alone). */
+export function parseManifest(text) {
+  if (text.charCodeAt(0) === 0xfeff) throw new Error('starts with a byte-order mark (U+FEFF), which JSON does not allow; save it as UTF-8 without a BOM');
+  return JSON.parse(text);
+}
 export const hostOf = (verb, rest, manifest = {}, os = process.platform) => ['test', 'agent', 'verify'].includes(verb) && APP_HOSTS.includes(rest[0]) ? rest.shift()
   : ['test', 'agent', 'verify'].includes(verb) ? shippedHost(verb, manifest, os).host : 'web';
 
