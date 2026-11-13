@@ -69,3 +69,4 @@ icons
   icon.chevrondown = icon(svg "icons/chevron-down.svg")
   icon.check = icon(svg "icons/check.svg")
   icon.xclose = icon(svg "icons/x-close.svg")
+  icon.file = icon(svg "icons/file-04.svg")

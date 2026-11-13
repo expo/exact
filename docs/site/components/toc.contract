@@ -3,17 +3,14 @@ use Page from "./shapes.contract"
 style Label
   text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" font-weight=500 letter-spacing="-0.5px" color="var(--color-text-tertiary)" margin-bottom=4
 
-style PillText
+style ActionText
   font-size="var(--text-xs)" font-weight=500 line-height=1.6 color="var(--color-text-secondary)" white-space="nowrap"
 
 style Round
   display="flex" align-items="center" padding=8 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-3xl)"
 
 style Item
-  display="flex" align-items="center" gap=8 padding="6px 8px" border-radius=6
-
-style ItemText
-  font-size="var(--text-sm)" color="var(--color-text-default)" white-space="nowrap"
+  display="flex" align-items="center" gap=4 height=27 padding="0 6px" border-radius=4
 
 component Helpful
   props
@@ -51,35 +48,35 @@ component PageActions
     row gap=4 align-items="center" flex-shrink=0 margin-left=-12 testId="page-actions"
       link href=page.editUrl target="_blank" display="flex" align-items="center" gap=4 padding="4px 12px" border-radius="var(--radius-full)" testId="edit-page"
         image "symbol:icon.edit" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-        text "Edit page" class=PillText
+        text "Edit page" class=ActionText
       row align-items="center" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)"
         button press=copyLink appearance="none" display="flex" align-items="center" gap=4 padding="4px 2px 4px 12px" border-radius="var(--radius-full) 0 0 var(--radius-full)" testId="copy-link"
           image (linked ? "symbol:checkmark" : "symbol:icon.copy") aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-          text (linked ? "Copied" : "Copy link") class=PillText
+          text (linked ? "Copied" : "Copy link") class=ActionText
         button popovertarget="page-menu" appearance="none" display="flex" align-items="center" padding="4px 12px 4px 2px" border-radius="0 var(--radius-full) var(--radius-full) 0" aria-label="More page actions" testId="actions"
           image "symbol:icon.chevrondown" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-      column id="page-menu" popover="auto" role="menu" aria-label="Page actions" position="absolute" position-area="bottom span-left" margin="4px 0 0" padding=4 min-width=200 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-lg)" background-color="var(--color-background-default)" box-shadow="0 4px 16px rgba(0, 0, 0, 0.08)" testId="actions-menu"
+      column id="page-menu" popover="auto" role="menu" aria-label="Page actions" position="absolute" position-area="bottom span-left" margin="4px 0 0" padding=4 gap=4 min-width=200 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-lg)" background-color="var(--color-background-default)" box-shadow="0 2px 4px rgba(0, 0, 0, 0.07), 0 3px 6px rgba(0, 0, 0, 0.08)" testId="actions-menu"
         button press=copyMarkdown appearance="none" class=Item testId="copy-markdown"
-          image (copied ? "symbol:checkmark" : "symbol:copy") aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text (copied ? "Copied" : "Copy markdown") class=ItemText
+          image (copied ? "symbol:checkmark" : "symbol:icon.copy") aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text (copied ? "Copied" : "Copy markdown") class=ActionText
         link href=page.markdownPath target="_blank" class=Item testId="view-markdown"
-          image "symbol:document" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text "View as Markdown" class=ItemText
-        link href=page.claudeUrl target="_blank" class=Item testId="open-claude"
-          image "symbol:icon.claude" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text "Open in Claude" class=ItemText
-        button press=openApp(page.claudeCodeUrl) appearance="none" class=Item testId="open-claude-code"
-          image "symbol:icon.claude" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text "Open in Claude Code" class=ItemText
-        link href=page.cursorUrl target="_blank" class=Item testId="open-cursor"
-          image "symbol:icon.cursor" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text "Open in Cursor" class=ItemText
+          image "symbol:icon.file" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "View markdown" class=ActionText
         link href=page.chatgptUrl target="_blank" class=Item testId="open-chatgpt"
-          image "symbol:icon.openai" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text "Open in ChatGPT" class=ItemText
+          image "symbol:icon.openai" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "Open in ChatGPT" class=ActionText
         button press=openApp(page.codexUrl) appearance="none" class=Item testId="open-codex"
-          image "symbol:icon.codex" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
-          text "Open in Codex" class=ItemText
+          image "symbol:icon.codex" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "Open in Codex" class=ActionText
+        link href=page.claudeUrl target="_blank" class=Item testId="open-claude"
+          image "symbol:icon.claude" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "Open in Claude" class=ActionText
+        button press=openApp(page.claudeCodeUrl) appearance="none" class=Item testId="open-claude-code"
+          image "symbol:icon.claude" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "Open in Claude Code" class=ActionText
+        link href=page.cursorUrl target="_blank" class=Item testId="open-cursor"
+          image "symbol:icon.cursor" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "Open in Cursor" class=ActionText
 
 component Rail
   props
