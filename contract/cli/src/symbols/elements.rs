@@ -22,6 +22,9 @@ struct ElementAttr {
 
 impl Resolver<'_> {
     pub(super) fn element(&mut self, tag: &str, span: Span, attrs: &[Attr]) {
+        if !self.graph.editor {
+            return;
+        }
         // A button's one positional is the parser's `text` child, at the button's tag.
         if self.graph.elements.last().is_some_and(|e| e.span == span) {
             return;

@@ -9,7 +9,7 @@ import { basename, dirname, resolve } from 'node:path';
 const quote = JSON.stringify;
 
 export function sources(ctx) {
-  const calls = (ctx.contract(['symbols', ctx.fileName, '--stdin'])?.definitions ?? [])
+  const calls = (ctx.contract(['symbols', ctx.fileName, '--stdin', '--editor'])?.definitions ?? [])
     .filter(d => d.kind === 'source' && ctx.here(d)).map(d => [d.name, ctx.span(d)]).filter(([name, at]) => at && ctx.content.slice(at[0], at[0] + at[1]) === name && /^[A-Za-z_$][\w$]*$/.test(name));
   if (!calls.length) return;
   // The compiler's own paths: app.ts in the contract's directory, the declarations at `<file>.d.ts`.

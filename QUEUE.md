@@ -1203,6 +1203,9 @@ sits on that list carries the trade it would take.
 
 ## Cheap, any time
 
+- **Editor support in the async lane** (2026-11-13, LLP 1035.005.003): once TypeScript 7.1 is
+  stable, run `editors/content-mapper`'s tests with a pinned `tsc` (`EXACT_TSC71`).
+
 - **Drive iOS scroll drags with a real touch** (2026-11-10): `SwipeScrollDragTests` passes on a simulator, but no `--touch platform` drive has flicked a scroller with `scrolldragstart` and `scrolldragend`. Check that a flick fires one start and one end with UIKit's velocity and target.
 - **`affected.mjs --run` stops at the first failing command** (2026-11-10): `status ||= spawnSync(…)` does not call `spawnSync` once `status` is set, so a failing Cargo command skips the game workspace and every Bun file, silently. Run each command, then keep the first failure's status.
 
@@ -1428,7 +1431,8 @@ sits on that list carries the trade it would take.
   profile); the Linux file store when that host links ibex2.
 - **Plan / runner** (LLP 1005 §8): per-instance derives or resources inside `each`.
 - **Contract** (LLP 1006 §8): inlining budget; `contract` blocks as assertions;
-  `cursor`; per-instance state; LSP.
+  `cursor`; per-instance state; a Contract language server (opt-in editor support
+  through TypeScript's is LLP 1035.005.003).
 - **Web host** (LLP 1007 §9): a text-measurement bridge (the kernel's layout does not
   run on the web — and only grid has a kernel-against-browser layout check,
   `host/web-js/conformance/grid.contract` with `--linux`; a general layout parity

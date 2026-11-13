@@ -24,7 +24,7 @@ function spelling(ctx, s, text = ctx.content) {
 }
 
 export function names(ctx) {
-  const { definitions, references, shapes = {} } = ctx.contract(['symbols', ctx.fileName, '--stdin']) ?? { definitions: [], references: [] };
+  const { definitions, references, shapes = {} } = ctx.contract(['symbols', ctx.fileName, '--stdin', '--editor']) ?? { definitions: [], references: [] };
   const contract = s => s.file !== undefined && extname(s.file) === '.contract';
   const elsewhere = d => !ctx.here(d) && contract(d);
   // Another file is as the compiler read it, from disk; its own mapping places its names.

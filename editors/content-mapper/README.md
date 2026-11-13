@@ -3,9 +3,11 @@
 Language server support for `.contract` files, through TypeScript 7.1's content
 mappers: hover with types, go to definition, references, rename, completion of
 enum values, and the compiler's errors. TypeScript's own language server
-answers; there is no second server.
+answers; there is no second server. It is opt-in: nothing in Exact runs it, or
+any of what it asks the compiler for, unless an app and an editor turn it on
+(LLP 1035.005.003).
 
-Each answer comes from the `contract` binary. `contract symbols` gives the
+Each answer comes from the `contract` binary. `contract symbols --editor` gives the
 definitions, references, element positions and types; `contract build --json
 --errors-only` gives the errors; `contract vocab --json --all` gives the tags
 and attributes; `contract sources` says which app a file belongs to. The mapper writes them as a virtual `.tsx` file with span
