@@ -1,0 +1,25 @@
+component App
+  state value = "2px"
+  state unit = "px"
+  action set(next: string)
+    value = next
+  action assemble(next: string)
+    unit = next
+  view
+    column
+      input testId="value" value=value input=set
+      input testId="unit" value=unit input=assemble
+      svg width=200 height=100
+        line testId="invalid-literal-line" x1="" y1="10px 20px" x2="1e9999"
+        text "Empty" testId="invalid-literal-text" x=""
+        line testId="line" x1=value y1=`${value}` x2=(value + "") y2=value
+        line testId="assembled" x1=`2${unit}` y1=("2" + unit)
+        defs
+          linearGradient testId="linear" x1=value y1=value x2=value y2=value
+            stop testId="offset" offset=value
+          radialGradient testId="radial" fx=value fy=value fr=value
+          marker testId="marker" markerWidth=value markerHeight=value refX=value refY=value orient=value
+          filter
+            feOffset testId="primitive" dx=value dy=value
+        text testId="text" x=value y=value dx=value dy=value
+          tspan "Label" testId="span" x=value y=value dx=value dy=value

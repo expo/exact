@@ -399,6 +399,53 @@ component App
     assert_eq!(host.location(), "/?utm=x");
 }
 
+/// A view keyed by its visit, as Caltrain's is: a query on the root location
+/// spends no visit id at launch, so the document rendered with one (the agent's
+/// `?agent=1`, which the runtime's launch leaves out) is the one rendered
+/// without, and the other way round.
+#[test]
+fn a_view_keyed_by_its_visit_adopts_a_document_rendered_with_another_query() {
+    let plan = contract::bake(
+        contract::compile(
+            "routes nav\n  home \"/\" render=build\ncomponent App\n  view\n    main navigationKey=`${top(nav).id}`\n      text `visit ${top(nav).id}`\n",
+        )
+        .unwrap(),
+        Says(""),
+    )
+    .unwrap()
+    .encode();
+    exact_web::link(exact_web_capabilities::ALL);
+    for (rendered_at, launch) in [("/?agent=1", "/"), ("/", "/?utm=x")] {
+        let rendered = Host::boot(&plan, Says(""), Default::default(), rendered_at)
+            .unwrap()
+            .0;
+        let page = checkpoint(rendered.runner(), rendered_at);
+        let root = rendered.document().unwrap().root;
+        assert!(root.contains("visit 0"), "{rendered_at}: {root}");
+        let written = digest(
+            &rendered.runner().plan().encode(),
+            rendered_at,
+            &page,
+            &root,
+        );
+        let (_, batch) = Host::boot_checkpoint(
+            &plan,
+            Says(""),
+            &page,
+            &written,
+            Vec::new(),
+            None,
+            Default::default(),
+            launch,
+        )
+        .unwrap();
+        assert!(
+            batch.contains("{\"op\":\"adopt\",\"adopted\":true}"),
+            "rendered at {rendered_at}, launched at {launch}"
+        );
+    }
+}
+
 #[test]
 fn a_build_renders_the_routes_that_ask_and_the_not_found_document() {
     let plan = contract::compile(

@@ -23,7 +23,7 @@ export function standIns(real, given = {}) {
   const taken = new Map(Object.keys(given).map(file => [file, new Set()]));
   for (const file of real) {
     for (const { name, from } of imports(file)) if (!real.includes(from)) taken.set(from, (taken.get(from) ?? new Set()).add(name));
-    // A module imported for its side effects alone (rt.js's `import "./said.js"`): an empty stand-in.
+    // A module imported for its side effects alone (native.js's `import './native-glue.js'`): an empty stand-in.
     for (const [, from] of readFileSync(resolve(WEB_JS, file), 'utf8').matchAll(/import\s*['"]\.\/([\w-]+\.js)['"]/g)) if (!real.includes(from) && !taken.has(from)) taken.set(from, new Set());
   }
   return new Map([...taken].map(([file, names]) => {

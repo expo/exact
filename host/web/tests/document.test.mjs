@@ -311,8 +311,10 @@ browserCheck('Markdown adoption keeps every document element and later source ch
 }, 60000);
 
 check(`Caltrain's served document is the live host's DOM`, async () => {
-  // The live page launches at its own URL, agent query included; the
-  // document is rendered at that same location.
+  // The document is rendered at the page's URL, agent query included; the
+  // live page launches without the agent's parameters (LLP 1038 D5), and a
+  // query on the root visit spends no visit id, so its first tree is the
+  // document's.
   await withDocument('/?agent=1', async (tab) => {
     const plain = await tab(false);
     await plain.until("document.readyState === 'complete' && !!document.getElementById('exact-root')?.firstElementChild", 'the served document');

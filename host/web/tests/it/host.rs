@@ -291,7 +291,7 @@ fn a_transition_authored_in_contract_reaches_the_page_as_css() {
     let (mut host, batch) = Host::boot(&plan.encode(), NoData, Default::default(), "/").unwrap();
     assert!(batch.contains("opacity:1;"), "{batch}");
     assert!(
-        batch.contains("transition:opacity 0.25s ease-in-out 0s;"),
+        batch.contains("transition:opacity 0.25s ease-in-out 0s,translate 0s ease 0s;"),
         "the easing transition is CSS; the spring is the host's: {batch}"
     );
     let toggle = view_with_test_id_any(&host, "toggle");

@@ -10,36 +10,52 @@
 //! driver's `scroll` found): the one whose travel the windows lead by and
 //! whose rows the collection passes are timed for (`refine.rs`).
 
+#[cfg(target_os = "android")]
 use super::{CanvasHost, Section, GROUPS};
+#[cfg(target_os = "android")]
 use crate::presenter::PAGE;
 use exact_runner::DataSource;
 
+fn module_under<D: DataSource>(
+    p: &mut crate::presenter::Presenter<D>,
+    x: f32,
+    y: f32,
+    scale: f32,
+) -> [i32; 10] {
+    let module = p.hit(x / scale, y / scale).filter(|id| {
+        p.host().kernel().node(*id).is_some_and(|node| {
+            node.node_type == exact_kernel::NodeType::NativeView
+                && p.host().retained_action_eligible(node.key)
+        })
+    });
+    let rect = module.and_then(|id| p.rect_of(id)).unwrap_or_default();
+    let key = module.and_then(|id| p.host().kernel().node(id).map(|node| node.key));
+    let bits = |value: f32| (value * scale).to_bits() as i32;
+    [
+        module.unwrap_or(0) as i32,
+        bits(rect.0),
+        bits(rect.1),
+        bits(rect.2),
+        bits(rect.3),
+        key.map_or(0, |key| key.index as i32),
+        key.map_or(0, |key| key.generation as i32),
+        p.long_presses() as i32,
+        p.brush.native_session as i32,
+        (p.brush.native_session >> 32) as i32,
+    ]
+}
+
+#[cfg(target_os = "android")]
 impl<D: DataSource + Default> CanvasHost<D> {
     /// What is under a point of the view (pixels), for the reader to decide
     /// what a drag from there is: the scrollers, innermost first, and the
     /// axes the presenter's own gestures claim
     /// ([`crate::presenter::Presenter::reader_under`] has the words); then
-    /// the module under it (eight words), and each of those scrollers'
+    /// the module under it (ten words), and each of those scrollers'
     /// snap ([`crate::presenter::Presenter::reader_snaps`]).
     pub fn under(&mut self, x: f32, y: f32) -> Vec<i32> {
         let mut words = self.p.reader_under(x, y, self.scale);
-        let module = self.p.hit(x / self.scale, y / self.scale).filter(|id| {
-            self.p.host().kernel().node(*id).is_some_and(|node| {
-                node.node_type == exact_kernel::NodeType::NativeView
-                    && self.p.host().retained_action_eligible(node.key)
-            })
-        });
-        let rect = module.and_then(|id| self.p.rect_of(id)).unwrap_or_default();
-        words.push(module.unwrap_or(0) as i32);
-        words.extend(
-            [rect.0, rect.1, rect.2, rect.3].map(|value| (value * self.scale).to_bits() as i32),
-        );
-        let key = module.and_then(|id| self.p.host().kernel().node(id).map(|node| node.key));
-        words.extend([
-            key.map_or(0, |key| key.index as i32),
-            key.map_or(0, |key| key.generation as i32),
-            self.p.long_presses() as i32,
-        ]);
+        words.extend(module_under(&mut self.p, x, y, self.scale));
         let ids: Vec<_> = (0..words[1] as usize)
             .map(|k| words[3 + 11 * k] as exact_kernel::ViewId)
             .collect();
@@ -144,5 +160,68 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if let Some(id) = self.feed {
             self.p.reader_forgets(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presenter::{PainterChoice, Presenter};
+
+    fn props(p: &mut Presenter<()>) -> serde_json::Value {
+        p.frame();
+        let ops = super::super::FINISHED
+            .with(|f| f.borrow_mut().take())
+            .unwrap();
+        let mut at = 0;
+        while at < ops.len() {
+            if ops[at] == super::super::NATIVE && ops[at + 2] == 2 {
+                let len = ops[at + 15] as usize;
+                let bytes: Vec<_> = ops[at + 16..at + 16 + len.div_ceil(4)]
+                    .iter()
+                    .flat_map(|word| word.to_le_bytes())
+                    .take(len)
+                    .collect();
+                return serde_json::from_slice(&bytes).unwrap();
+            }
+            at = super::super::stream::end(&ops, at).unwrap();
+        }
+        panic!("module view was not painted");
+    }
+
+    #[test]
+    fn module_props_and_hit_answers_identify_the_session_despite_reload_collisions() {
+        let source = "component App\n  view\n    native-menu width=100 height=40 testId=\"menu\"\n";
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (200., 200.),
+            2.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.brush.native_session = 0x1234_5678_fedc_ba98;
+        let before = props(&mut p);
+        let hit = module_under(&mut p, 20., 20., 2.);
+        let token = |words: [i32; 10]| words[8] as u32 as u64 | ((words[9] as u32 as u64) << 32);
+        assert_ne!(hit[0], 0);
+        assert_eq!(hit[5] as u32 as u64, before["slot"].as_u64().unwrap());
+        assert_eq!(hit[6] as u32 as u64, before["generation"].as_u64().unwrap());
+        assert_eq!(token(hit), before["session"].as_u64().unwrap());
+        assert_eq!(f32::from_bits(hit[3] as u32), 200.);
+        assert!(p
+            .reload(&crate::test_plan(&source.replace("menu\"", "other\"")), ())
+            .unwrap()
+            .is_none());
+        let after = props(&mut p);
+        let next = module_under(&mut p, 20., 20., 2.);
+        assert_eq!(hit[..8], next[..8]);
+        for key in ["module", "slot", "generation"] {
+            assert_eq!(before[key], after[key]);
+        }
+        assert_ne!(before["session"], after["session"]);
+        assert_eq!(token(next), after["session"].as_u64().unwrap());
     }
 }

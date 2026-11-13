@@ -3,9 +3,17 @@
 use exact_kernel::{paint_order, NodeFacts, NodeType, PropId, SortedMap, StyleId, StyleProps};
 use exact_plan::{BindingKind, BindingsRow, Plan};
 
-/// The authored integer, shared by the CSS write and the paint fact.
-pub const Z_INDEX: &str =
-    "v=>v!=null&&v!==\"auto\"?Math.max(-2147483645,Math.min(2147483645,Math.trunc(Number(v)))):null";
+/// The CSS value, with NaN for a value outside the row's grammar.
+pub const Z_INDEX: &str = r#"v=>{
+  if(v==null)return null;
+  if(typeof v==='string'){
+    const t=v.trim();
+    if(!t)return null;
+    if(/^(auto|unset)$/i.test(t))return t.toLowerCase();
+  }
+  const n=typeof v==='number'?v:typeof v==='string'&&/^[+-]?\d+$/.test(v.trim())?Number(v):NaN;
+  return Number.isInteger(n)&&n>=-2147483648&&n<=2147483647?Math.max(-2147483645,Math.min(2147483645,n)):NaN;
+}"#;
 
 const MOTION: [StyleId; 4] = [
     StyleId::Transition,
@@ -158,12 +166,10 @@ pub fn attributes(node: &NodeFacts<'_>, attrs: &mut SortedMap<String, String>) {
     if bits & ISOLATION != 0 {
         attrs.insert("data-exact-own-isolation".into(), String::new());
     }
-    if s.mask.has(StyleId::ZIndex) {
+    if let Some(z) = s.z_index.filter(|_| s.mask.has(StyleId::ZIndex)) {
         attrs.insert(
             "data-exact-zi".into(),
-            s.z_index
-                .clamp(-paint_order::Z_MAX, paint_order::Z_MAX)
-                .to_string(),
+            z.clamp(-paint_order::Z_MAX, paint_order::Z_MAX).to_string(),
         );
     }
 }
@@ -230,7 +236,7 @@ pub fn binding(
         StyleId::PositionType => return bits(format!(
             "v==null||v===\"static\"?0:{POSITION}|(v===\"sticky\"?{STACK}:0)|(v===\"absolute\"?{ABSOLUTE}:0)")),
         StyleId::Display => return flag(FLEX, "v===\"flex\"||v===\"grid\""),
-        StyleId::ZIndex => return Some(("data-exact-zi".into(), format!("({Z_INDEX})(v)"))),
+        StyleId::ZIndex => return Some(("data-exact-zi".into(), format!("(z=>Number.isInteger(z)?z:null)(({Z_INDEX})(v))"))),
         StyleId::WrapFlow => return flag(WRAP, "v===\"both\""),
         StyleId::TintColor if kind == NodeType::Image => return flag(POLICY, "v!=null"),
         StyleId::Isolation => return flag(ISOLATION | STACK, "v===\"isolate\""),

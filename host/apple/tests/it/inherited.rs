@@ -490,8 +490,9 @@ try {
       [false,true].map(host => appleArtifacts(a,{destination,composition,trust,host})))));
   for (const key of ['products','binary']) assert.equal(new Set(forms.map(p => p[key])).size, forms.length, key);
   for (const key of ['scratch','embed']) assert.equal(new Set(forms.map(p => p[key])).size, forms.length / 2, key);
-  // One Swift compile per destination, whatever the app, composition, trust or product.
-  assert.equal(new Set(forms.map(p => p.swift)).size, 3);
+  // One Swift compile per destination and trust (production compiles whole-module or for size),
+  // whatever the app, composition or product.
+  assert.equal(new Set(forms.map(p => p.swift)).size, 6);
   assert.equal(appleArtifacts(b).swift, first.swift);
   assert.equal(new Set(forms.map(p => p.lock)).size, 1);
   assert.equal(appleArtifacts(a,{trust:'production'}).bundle, first.bundle);
@@ -677,12 +678,19 @@ put(lock, ['kernel', 'vendored'].map(n => `[[package]]\nname = "${n}"\nversion =
 assert.deepEqual([...registryPackages(lock)].sort(), ['over-plain', 'plain']);
 const TRIPLE = 'aarch64-apple-darwin/host-dev', HOST = 'host-dev', then = new Date(Date.now() - 3_600_000);
 // What Cargo leaves for one compiled unit: its fingerprint, its files, rustc's dep-info naming the target directory.
+// rustc's dep-info names itself first, then the unit's other outputs.
+const depInfo = (file, outputs, source) => [file, ...outputs].map(output => `${output}: ${source}\n`).join('\n');
 const unit = (target, dir, pkg, hash, build = false) => {
   const at = resolve(target, dir), lib = pkg.replaceAll('-', '_');
   put(resolve(at, '.fingerprint', `${pkg}-${hash}`, `lib-${lib}`), hash, then);
   put(resolve(at, 'deps', `lib${lib}-${hash}.rlib`), `${pkg} compiled in ${target}`, then);
-  put(resolve(at, 'deps', `${lib}-${hash}.d`), `${at}/deps/lib${lib}-${hash}.rlib: /registry/${pkg}/src/lib.rs\n`, then);
-  if (build) { put(resolve(at, 'build', `${pkg}-${hash}`, 'output'), 'cargo:rustc-cfg=x\n', then); put(resolve(at, 'build', `${pkg}-${hash}`, `build_script_build-${hash}.d`), `${at}/build/${pkg}-${hash}/build_script_build-${hash}: /registry/${pkg}/build.rs\n`, then); }
+  const deps = resolve(at, 'deps', `${lib}-${hash}.d`);
+  put(deps, depInfo(deps, [`${at}/deps/lib${lib}-${hash}.rlib`], `/registry/${pkg}/src/lib.rs`), then);
+  if (build) {
+    const script = resolve(at, 'build', `${pkg}-${hash}`, `build_script_build-${hash}`);
+    put(resolve(at, 'build', `${pkg}-${hash}`, 'output'), 'cargo:rustc-cfg=x\n', then);
+    put(`${script}.d`, depInfo(`${script}.d`, [script], `/registry/${pkg}/build.rs`), then);
+  }
 };
 const A = '0'.repeat(15), kept = (lockFile = lock) => keptCrates({root: run, env: {HOME: home, RUSTUP_TOOLCHAIN: '1.0.0'}, profile: 'host-dev'});
 const store = resolve(home, '.cache/exact/apple-crates/1.0.0-host-dev/app'), generations = () => existsSync(store) ? readdirSync(store).filter(n => n.startsWith('gen-')).sort() : [];

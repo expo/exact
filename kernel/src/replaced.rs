@@ -225,7 +225,7 @@ pub struct Icon<'a> {
     /// The SVG's viewBox, `min-x min-y width height`.
     pub view_box: &'a str,
     /// Its paths' `d`, drawn as a template (filled), its rule's marker
-    /// stripped; empty for an SVG the web draws as the file.
+    /// stripped; empty for an SVG the web and Linux draw as the file.
     pub path: &'a str,
     /// The SVG's path under `assets/`.
     pub svg: &'a str,

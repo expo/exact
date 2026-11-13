@@ -40,16 +40,23 @@ impl Loader<'_> {
         };
         let used = self.sources.paths.len();
         self.sources.paths.push(key.clone());
-        self.sources.origins.push(resolved.origin);
+        self.sources.origins.push(resolved.origin.clone());
         self.sources.digests.push(digest(&used_src));
         self.sources.texts.push(used_src.as_str().into());
         self.active.push(key.clone());
         if key.file_name().is_some_and(|f| f == "exact.json") {
             // A package's module declaration (LLP 1133.001), whose
             // `use`s name its implementations' files.
-            let file = crate::declaration::read(&key, &used_src, used as u32).map_err(
-                |(id, message)| vec![name_error(id, format!("{described}: {message}"), span)],
-            )?;
+            let file = crate::declaration::read(
+                &key,
+                &used_src,
+                used as u32,
+                &resolved.origin,
+                &mut self.sources.consulted,
+            )
+            .map_err(|(id, message)| {
+                vec![name_error(id, format!("{described}: {message}"), span)]
+            })?;
             // One package declares a member of a name (LLP 1133.014 D10 item 1).
             let member = |m: &contract_syntax::ModuleDecl| {
                 let sub: serde_json::Value =

@@ -1,12 +1,15 @@
-const CODEC_PATHS: [&str; 8] = [
+const CODEC_PATHS: [&str; 11] = [
     "../vendor/taffy/src/style/grid.rs",
     "build.rs",
     "build/codec.rs",
     "src/style/calc/wire.rs",
     "src/style/calc/parse.rs",
+    "src/style/relative.rs",
+    "src/style/relative/wire.rs",
     "src/style/grid.rs",
     "src/style/grid/parse.rs",
     "src/wire/codec.rs",
+    "src/wire/ops.rs",
 ];
 const SCHEMA_PATH: &str = "tables/schema.json";
 const DIGEST_DOMAIN: &[u8] = b"exact-kernel-schema-v1\0";
@@ -73,6 +76,7 @@ enum Codec {
     U16,
     U32,
     I32,
+    AutoI32,
     ColorValue,
     KeywordColor(&'static str),
     Vec2,
@@ -96,6 +100,7 @@ fn parse_codec(s: &str) -> Codec {
         "u16" => Codec::U16,
         "u32" => Codec::U32,
         "i32" => Codec::I32,
+        "auto-i32" => Codec::AutoI32,
         "color" => Codec::ColorValue,
         "auto-color" => Codec::KeywordColor("auto"),
         "current-color" => Codec::KeywordColor("currentcolor"),
@@ -262,6 +267,7 @@ impl Codec {
             Codec::U16 => "u16".into(),
             Codec::U32 => "u32".into(),
             Codec::I32 => "i32".into(),
+            Codec::AutoI32 => "Option<i32>".into(),
             Codec::ColorValue => "ColorValue".into(),
             Codec::KeywordColor(_) => "Option<ColorValue>".into(),
             Codec::Vec2 => "Vec2".into(),
@@ -282,6 +288,7 @@ impl Codec {
             Codec::U16 => "U16",
             Codec::U32 => "U32",
             Codec::I32 => "I32",
+            Codec::AutoI32 => "AutoI32",
             Codec::ColorValue => "ColorValue",
             Codec::KeywordColor(_) => "KeywordColor",
             Codec::Vec2 => "Vec2",
@@ -325,6 +332,10 @@ impl Codec {
             Codec::U16 => format!("{}u16", int(value, 0.0, u16::MAX as f64)),
             Codec::U32 => format!("{}u32", int(value, 0.0, u32::MAX as f64)),
             Codec::I32 => format!("{}i32", int(value, i32::MIN as f64, i32::MAX as f64)),
+            Codec::AutoI32 => {
+                assert_eq!(value.as_str(), Some("auto"));
+                "None".into()
+            }
             Codec::ColorValue => format!(
                 "ColorValue::Fixed(Color({}u32))",
                 int(value, 0.0, u32::MAX as f64)
@@ -404,6 +415,7 @@ impl Codec {
             Codec::U16 => "r.u16()?".into(),
             Codec::U32 => "r.u32()?".into(),
             Codec::I32 => "r.i32()?".into(),
+            Codec::AutoI32 => "r.auto_i32()?".into(),
             Codec::ColorValue => "r.color_value()?".into(),
             Codec::KeywordColor(_) => "r.optional_color()?".into(),
             Codec::Vec2 => "r.vec2()?".into(),
@@ -426,6 +438,7 @@ impl Codec {
             Codec::U16 => format!("w.u16({access});"),
             Codec::U32 => format!("w.u32({access});"),
             Codec::I32 => format!("w.i32({access});"),
+            Codec::AutoI32 => format!("w.auto_i32({access});"),
             Codec::ColorValue => format!("w.color_value({access});"),
             Codec::KeywordColor(_) => format!("w.optional_color({access});"),
             Codec::Vec2 => format!("w.vec2({access});"),

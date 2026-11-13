@@ -1,7 +1,7 @@
 // Run by exact-web-js's Rust test: real emitted plans and Rust DocTree pages,
 // the JS renderer before adoption, a fresh client, and both adopted pages.
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { rolldown } from 'rolldown';
 import { chromium as playwright } from 'playwright-core';
@@ -9,6 +9,7 @@ import { chromium } from '../../../../scripts/agent-launch.mjs';
 import { renderer } from '../../../web-js/render.mjs';
 import { stageHostGlue } from '../../../web-js/glue.mjs';
 import { hostFixtureFile } from '../glue-fixture.mjs';
+import { decodePng } from '../../../../scripts/png.mjs';
 
 const work = process.argv[2], root = resolve(import.meta.dir, '../../../..');
 const { executable, unavailable } = chromium();
@@ -49,8 +50,25 @@ try {
       const rust = readFileSync(resolve(dir, 'rust.html'), 'utf8');
       const page = await browser.newPage();
       const steps = JSON.parse(readFileSync(resolve(dir, 'steps.json')));
+      const probesPath = resolve(dir, 'probes.json');
+      const probes = existsSync(probesPath) ? JSON.parse(readFileSync(probesPath)) : null;
+      const checkProbes = async index => {
+        if (!probes) return;
+        const points = await page.evaluate(probes => probes.map(([scene]) => {
+          const r = document.querySelector(`[data-testid="${scene}"]`).getBoundingClientRect();
+          const x = r.x + 50, y = r.y + 50;
+          return { x, y, hit: document.elementFromPoint(x, y)?.closest('[data-testid]')?.dataset.testid };
+        }), probes[index]);
+        const png = decodePng(await page.screenshot());
+        for (let i = 0; i < points.length; i++) {
+          const { x, y, hit } = points[i], [scene, expectedHit, rgb] = probes[index][i];
+          assert.equal(hit, expectedHit, `${scene} hit at step ${index}`);
+          const offset = (Math.floor(y) * png.width + Math.floor(x)) * 4;
+          assert.deepEqual([...png.data.slice(offset, offset + 3)], rgb, `${scene} paint at step ${index}`);
+        }
+      };
       const driveSteps = async (waiting = false) => {
-        for (const step of steps) {
+        for (const [index, step] of steps.entries()) {
           await page.evaluate(id => document.querySelector(`[data-testid="${id}"]`).click(), step.action);
           if (waiting) assert.ok(await page.evaluate(() => document.querySelector('[data-testid="row-200"]').$paintWaiting), 'binding changes leave keyed rows waiting');
           assert.deepEqual(await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => {
@@ -61,6 +79,7 @@ try {
           assert.deepEqual(await page.evaluate(readIsolation), step.isolation, `after ${step.action}`);
           assert.deepEqual(await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => [e.dataset.testid, getComputedStyle(e).zIndex]))), step.zIndex, 'authored z-index remains exact and clamped');
           assert.deepEqual(await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => [e.dataset.testid, getComputedStyle(e).backdropFilter]))), step.backdrop, 'ordered backdrop values update and refused values clear');
+          await checkProbes(index + 1);
         }
       };
       const sliced = names[i].startsWith('sliced keyed');
@@ -77,6 +96,7 @@ try {
         if (mode !== 'static') await page.waitForFunction(() => globalThis.ready);
         if (mode === 'adopt') assert.ok((await page.evaluate(() => journal)).some(s => s.includes('adopted the document')), 'server document adopts without rebuilding');
         const result = await page.evaluate(readIsolation);
+        await checkProbes(0);
         if (mode === 'adopt' && sliced) {
           assert.deepEqual(result, expected, 'waiting rows retain server isolation');
           assert.ok(await page.evaluate(() => adoptionSlices.length > 0), 'the list exceeded the initial budget');
@@ -104,9 +124,11 @@ try {
       // adoption is deterministic and independent of capture scheduling.
       const adopted = rendered.replace(/<script>[^]*?<\/script>/, '') + '<script src="./app.js"></script>';
       assert.deepEqual(await check(adopted, 'adopt'), expected, 'adopted JS document');
+      if (probes) await driveSteps();
       const fromRust = adopted.replace(/<div id="exact-root">[^]*?<\/div>(?=<script type="application\/vnd.exact.checkpoint")/, `<div id="exact-root">${rust}</div>`);
       assert.notEqual(fromRust, adopted, 'Rust document substituted');
       assert.deepEqual(await check(fromRust, 'adopt'), expected, 'adopted Rust document');
+      if (probes) await driveSteps();
       const stale = fromRust.replace(/<div([^>]*data-testid[^>]*)>/g, (tag, attrs) => attrs.includes('style="') ? tag.replace(/style="([^"]*)"/, (_, css) => `style="${css}isolation:isolate;"`) : `<div${attrs} style="isolation:isolate">`);
       assert.deepEqual(await check(stale, 'adopt'), expected, 'adoption drops stale isolation even without candidacy');
       await page.close();

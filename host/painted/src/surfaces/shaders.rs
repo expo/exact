@@ -1,4 +1,4 @@
-//! Primary runtime shader packs, admitted together before any source changes.
+//! Per-module runtime shader packs, admitted together before any source changes.
 //! Device-free ownership deliberately never reads or registers shader sources.
 use super::{Abi, Surfaces, LIMIT};
 use crate::image::Assets;
@@ -7,19 +7,13 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Read, sync::Arc};
 
 pub(super) type Pack = BTreeMap<String, Arc<[u8]>>;
+pub(crate) type Packs = BTreeMap<String, Pack>;
 type Shader = unsafe extern "C" fn(*const u8, usize, *const u8, usize) -> u32;
 
-fn read_pack(compat: &Value, assets: &Assets) -> Result<Pack, String> {
+fn read_pack(compat: &Value, assets: &Assets, names: &[String]) -> Result<Pack, String> {
     let mut pack = Pack::new();
     let mut remaining = LIMIT;
-    for row in compat["inputs"]["gpuSurfaces"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        let name = row["name"]
-            .as_str()
-            .ok_or("shader roster name is not text")?;
+    for name in names {
         if name.is_empty()
             || !name
                 .bytes()
@@ -70,7 +64,7 @@ fn read_pack(compat: &Value, assets: &Assets) -> Result<Pack, String> {
                 return Err(refuse("baked size or digest mismatch".into()));
             }
         }
-        pack.insert(name.into(), bytes);
+        pack.insert(name.clone(), bytes);
     }
     Ok(pack)
 }
@@ -81,10 +75,21 @@ impl Abi {
         compat: &Value,
         assets: &Assets,
     ) -> Result<Option<Pack>, String> {
-        if !self.rendered {
+        if !self.device_loaded {
             return Ok(None);
         }
-        let pack = read_pack(compat, assets)?;
+        let names = unsafe {
+            self.library
+                .get::<unsafe extern "C" fn() -> u32>(b"gpu_shader_names")
+        }
+        .map_err(|e| format!("GPU ABI gpu_shader_names: {e}"))?;
+        let bytes = self.bytes(unsafe { names() }).ok_or_else(|| {
+            self.error()
+                .unwrap_or("GPU shader roster unavailable".into())
+        })?;
+        let names: Vec<String> =
+            serde_json::from_slice(&bytes).map_err(|e| format!("GPU shader roster: {e}"))?;
+        let pack = read_pack(compat, assets, &names)?;
         // Read integrity first: a cached good namespace must not hide a corrupt
         // selected generation. Ordinary surface binds never enter this path.
         if pack == self.shaders {
@@ -162,30 +167,30 @@ impl Abi {
 }
 
 impl Surfaces {
-    pub(crate) fn prepare_shaders(
-        &self,
-        compat: &str,
-        assets: &Assets,
-    ) -> Result<Option<Pack>, String> {
-        let Some(abi) = self.abis.get("") else {
-            return Ok(None);
-        };
+    pub(crate) fn prepare_shaders(&self, compat: &str, assets: &Assets) -> Result<Packs, String> {
+        if !self.abis.values().any(|abi| abi.device_loaded) {
+            return Ok(Packs::new());
+        }
         let compat =
             serde_json::from_str(compat).map_err(|e| format!("shader compatibility: {e}"))?;
-        abi.prepare_shaders(&compat, assets)
+        let mut packs = Packs::new();
+        for (artifact, abi) in &self.abis {
+            if let Some(pack) = abi.prepare_shaders(&compat, assets)? {
+                packs.insert(artifact.clone(), pack);
+            }
+        }
+        Ok(packs)
     }
 
     /// Shader registration and selected-store acceptance are one transaction.
     /// No host/assets swap follows unless both succeed.
     pub(crate) fn activate_shaders(
         &mut self,
-        pack: Option<Pack>,
+        packs: Packs,
         accept: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
-        let previous = pack
-            .as_ref()
-            .and_then(|_| self.abis.get("").map(|abi| abi.shaders.clone()));
-        self.commit_shaders(pack)?;
+        let previous = self.previous_shaders(&packs);
+        self.commit_shaders(packs)?;
         if let Err(error) = accept() {
             self.commit_shaders(previous)
                 .map_err(|rollback| format!("{error}; restoring shaders failed: {rollback}"))?;
@@ -194,9 +199,35 @@ impl Surfaces {
         Ok(())
     }
 
-    pub(crate) fn commit_shaders(&mut self, pack: Option<Pack>) -> Result<(), String> {
-        if let Some(abi) = self.abis.get_mut("") {
-            abi.commit_shaders(pack)?;
+    fn previous_shaders(&self, packs: &Packs) -> Packs {
+        packs
+            .keys()
+            .map(|artifact| (artifact.clone(), self.abis[artifact].shaders.clone()))
+            .collect()
+    }
+
+    pub(crate) fn commit_shaders(&mut self, packs: Packs) -> Result<(), String> {
+        let previous = self.previous_shaders(&packs);
+        for (artifact, pack) in packs {
+            if let Err(error) = self
+                .abis
+                .get_mut(&artifact)
+                .unwrap()
+                .commit_shaders(Some(pack))
+            {
+                // The refusing ABI restores itself. Restore every earlier module
+                // too, before the candidate can reach the selected store.
+                for (name, old) in previous.range(..artifact.clone()) {
+                    self.abis
+                        .get_mut(name)
+                        .unwrap()
+                        .commit_shaders(Some(old.clone()))
+                        .map_err(|rollback| {
+                            format!("{error}; restoring shaders failed: {rollback}")
+                        })?;
+                }
+                return Err(error);
+            }
         }
         Ok(())
     }

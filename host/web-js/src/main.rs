@@ -34,6 +34,8 @@ mod measures_tests;
 mod modes;
 #[cfg(test)]
 mod modes_tests;
+#[cfg(test)]
+mod module_tests;
 mod paint;
 #[cfg(test)]
 mod paint_tests;
@@ -43,6 +45,7 @@ mod presence_tests;
 mod reads;
 mod sized;
 mod style;
+mod svg_lengths;
 mod symbols;
 mod timelines;
 

@@ -109,17 +109,54 @@ impl DocWatch {
             .watches
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = now;
-        if folders == self.folders {
+        #[cfg(target_os = "macos")]
+        self.install(folders, fsevents::Stream::start);
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.folders = folders;
+        }
+    }
+
+    /// Watch `folders` with a stream from `start`, unless a running stream
+    /// already does. `self.folders` names only what a running stream
+    /// watches, so a start that failed is tried again on the next sync.
+    #[cfg(target_os = "macos")]
+    fn install(
+        &mut self,
+        folders: Vec<PathBuf>,
+        start: impl FnOnce(&[PathBuf], Arc<Shared>) -> Option<fsevents::Stream>,
+    ) {
+        if self.stream.is_some() && folders == self.folders {
             return;
         }
-        #[cfg(target_os = "macos")]
-        {
-            self.stream = None;
-            if !folders.is_empty() {
-                self.stream = fsevents::Stream::start(&folders, self.shared.clone());
-            }
+        self.stream = None;
+        self.folders.clear();
+        if folders.is_empty() {
+            return;
         }
-        self.folders = folders;
+        self.stream = start(&folders, self.shared.clone());
+        if self.stream.is_some() {
+            self.folders = folders;
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_start_is_tried_again_on_the_next_sync() {
+        let folder = std::env::temp_dir();
+        let mut watch = DocWatch::announcing(1, exact_runner::Native::default());
+        watch.install(vec![folder.clone()], |_, _| None);
+        assert!(watch.stream.is_none());
+        watch.install(vec![folder.clone()], fsevents::Stream::start);
+        assert!(
+            watch.stream.is_some(),
+            "the same folders start a stream again"
+        );
+        assert_eq!(watch.folders, vec![folder]);
     }
 }
 

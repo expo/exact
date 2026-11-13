@@ -67,7 +67,8 @@ function open_(r, location) {
   const c = chain(location);
   if (!c.length) return refuse(r, `no route matches ${canonical(location)}`);
   const out = copy(r);
-  if (!out[1].length) for (const i of roots()) out[1].push([Routes[i].name, [mint(out, { name: Routes[i].name, url: canonical(Routes[i].pattern), tab: Routes[i].name, params: empty() })]]);
+  // The location's own tab is seeded at its chain's root visit: a query on a root location changes no id (exact-route `open`).
+  if (!out[1].length) for (const i of roots()) out[1].push([Routes[i].name, [mint(out, Routes[i].name === c[0].name ? c[0] : { name: Routes[i].name, url: canonical(Routes[i].pattern), tab: Routes[i].name, params: empty() })]]);
   const t = out[1].find(t => t[0] === c[0].tab), leaf = c.length - 1, fragment = fragmentOf(location);
   if (!t) return refuse(r, `unknown tab ${c[0].tab}`);
   // The leaf takes the location's fragment; an ancestor kept keeps its own.

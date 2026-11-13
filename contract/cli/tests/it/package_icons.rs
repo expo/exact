@@ -182,12 +182,17 @@ fn a_package_svg_is_read_from_the_packages_assets() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// theme2's Q2 (a): the web, which alone draws an SVG as written, stages
-/// the app's `assets/` only, so a package's must be a template.
+/// Package icons must remain templates, including on hosts that draw an
+/// app's non-template SVG files.
 #[test]
 fn a_packages_svg_of_more_than_one_colour_is_refused() {
     let icons = "  reading.two = icon(sf \"star\", svg \"two.svg\")\n";
     let dir = reading("pkgicon-two", APP, "reading.two", icons);
+    std::fs::write(
+        dir.join("app.json"),
+        r#"{"app": {"id": "dev.test.pkgicons", "name": "Icons"}, "host": {"web": {}, "linux": {}}}"#,
+    )
+    .unwrap();
     let e = refused(&dir);
     assert_eq!(e.id, "tamber-icon-svg", "{e}");
     assert!(
@@ -195,13 +200,8 @@ fn a_packages_svg_of_more_than_one_colour_is_refused() {
             && e.message.contains("more than one colour"),
         "{e}"
     );
-    // The app's own such file stays the web's to draw as written.
+    // An app override can draw its own file as written on both hosts.
     std::fs::write(dir.join("assets/two.svg"), TWO).unwrap();
-    std::fs::write(
-        dir.join("app.json"),
-        r#"{"app": {"id": "dev.test.pkgicons", "name": "Icons"}, "host": {"web": {}}}"#,
-    )
-    .unwrap();
     std::fs::write(
         dir.join("app.tamber"),
         format!("{APP}\nicons\n  reading.two = icon(svg \"two.svg\")\n"),

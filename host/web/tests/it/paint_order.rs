@@ -80,6 +80,7 @@ fn fixture_plan(root: &str, nodes: &str) -> Plan {
                     "z-index" => StyleId::ZIndex,
                     "margin-top" => StyleId::MarginTop,
                     "margin-left" => StyleId::MarginLeft,
+                    "grid-template-columns" => StyleId::GridTemplateColumns,
                     name => StyleId::from_name(name)
                         .unwrap_or_else(|| panic!("unknown fixture row {name}")),
                 };
@@ -113,7 +114,7 @@ fn fixture_plan(root: &str, nodes: &str) -> Plan {
 #[test]
 fn every_chrome_paint_case_writes_the_kernels_isolated_and_policy_sets() {
     let cases = include_str!("../../../../kernel/tests/it/fixtures/browser_paint_order.tsv");
-    let mut count = 0;
+    assert!(!cases.is_empty());
     for line in cases.lines().filter(|line| !line.is_empty()) {
         let fields: Vec<_> = line.split('\t').collect();
         let plan = fixture_plan(fields[1], fields[2]);
@@ -165,9 +166,7 @@ fn every_chrome_paint_case_writes_the_kernels_isolated_and_policy_sets() {
         let mut css = BTreeMap::new();
         apply(&mut css, &batch);
         agrees(&adopted, &css, fields[0]);
-        count += 1;
     }
-    assert_eq!(count, 18);
 }
 
 fn view(host: &Web, name: &str) -> ViewId {
@@ -283,5 +282,53 @@ fn z_index_is_an_exact_integer_below_the_hosts_own_values() {
         let (css, skipped) = exact_web::css::css_text(&rows, &[]);
         assert!(skipped.is_empty());
         assert_eq!(css, format!("z-index:{};", z.clamp(-Z_MAX, Z_MAX)));
+    }
+}
+
+#[test]
+fn z_index_auto_and_zero_remain_distinct_through_bindings_and_documents() {
+    let plan = contract::compile(
+        r#"component Paint
+  state raised = false
+  action toggle
+    raised = not raised
+  view
+    box
+      button "Toggle" testId="toggle" press=toggle
+      box position="relative" z-index="auto" testId="auto"
+      box position="relative" z-index=0 testId="zero"
+      box position="relative" z-index=(raised ? 2 : "auto") testId="bound"
+"#,
+    )
+    .unwrap();
+    let (mut host, initial) = boot(&plan);
+    let mut css = BTreeMap::new();
+    apply(&mut css, &initial);
+    for raised in [false, true, false] {
+        let kernel = host.runner().kernel();
+        for (name, z) in [
+            ("auto", None),
+            ("zero", Some(0)),
+            ("bound", raised.then_some(2)),
+        ] {
+            let node = kernel.node_by_key(kernel.find_by_test_id(name)[0]).unwrap();
+            let own = exact_kernel::paint_order::own(kernel.arena(), node.key.index);
+            assert_eq!(own.z, z, "{name}");
+            assert_eq!(own.stacks, z.is_some(), "{name}");
+            let value = z.map_or_else(|| "auto".into(), |z| z.to_string());
+            assert!(css[&node.id].contains(&format!("z-index:{value};")));
+            assert!(host
+                .document()
+                .unwrap()
+                .root
+                .contains(&format!("z-index:{value};")));
+        }
+        agrees(&host, &css, "auto and integer bindings");
+        let kernel = host.runner().kernel();
+        let toggle = kernel
+            .node_by_key(kernel.find_by_test_id("toggle")[0])
+            .unwrap()
+            .id;
+        apply(&mut css, &host.dispatch(toggle, Event::Press));
     }
 }

@@ -1173,11 +1173,9 @@ fn check_length_choices(
 fn check_length_text(name: &str, text: &str, span: Span) -> Result<(), LowerError> {
     use exact_kernel::svg::Length;
 
-    let keywords: &[&str] = match name {
-        "refX" => &["left", "center", "right"],
-        "refY" => &["top", "center", "bottom"],
-        _ => &[],
-    };
+    let keywords = exact_kernel::PropId::from_name(name)
+        .and_then(exact_kernel::svg::length::AttributeLength::of)
+        .map_or(&[][..], |grammar| grammar.keywords);
     if keywords.contains(&text.trim_matches(|c: char| c == '\0' || c.is_whitespace())) {
         return Ok(());
     }

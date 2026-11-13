@@ -131,8 +131,7 @@ impl Loader<'_> {
 }
 
 /// The package names TypeScript reached from `app.ts` through relative
-/// imports, in name order: a bare specifier's package (`@scope/name`
-/// or `name`), never `exact:` or `node:`, and not a type-only import's.
+/// imports, in name order: a bare specifier (`@scope/name/subpath` or `name`), never `exact:` or `node:`, and not a type-only import's.
 fn imported(app: &Path) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     let mut seen = BTreeSet::new();
@@ -150,9 +149,7 @@ fn imported(app: &Path) -> BTreeSet<String> {
             if spec.starts_with('.') {
                 next.extend(ts_file(&lexical(&dir.join(&spec))));
             } else if !spec.starts_with("exact:") && !spec.starts_with("node:") {
-                let parts: Vec<&str> = spec.split('/').collect();
-                let take = if spec.starts_with('@') { 2 } else { 1 };
-                names.insert(parts[..take.min(parts.len())].join("/"));
+                names.insert(spec);
             }
         }
     }

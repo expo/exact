@@ -26,7 +26,6 @@ use contract_syntax::{Attr, Component, Expr, File, Span};
 use exact_kernel::style::{roles, theme};
 use exact_kernel::{Color, ColorValue};
 use exact_tamber as tamber;
-use scan::Said;
 pub(crate) use scan::{literal_leaves, words};
 
 /// One resolved entry: the names it answers to and the colour text it
@@ -134,7 +133,7 @@ pub fn vocab() -> tamber::Vocab {
         .filter_map(|name| {
             use exact_kernel::style::relative::{parse, MEDIUM};
             let (unit, n) = parse(&name)?;
-            let px = f64::from(unit.basis(MEDIUM, MEDIUM, 1.0) * n);
+            let px = f64::from(unit.basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default()) * n);
             Some((name, exact_num::Shortest(px).to_string()))
         })
         .chain(crate::scale::sizes())
@@ -323,9 +322,7 @@ impl Lowerer<'_> {
             self.declared_fonts.clone(),
             self.font_files.clone(),
         ));
-        let mut said = Said::of(file, root, &design, &declared, &typing);
-        // The rows a design server's write check reads again (`rows`).
-        rows::note(std::mem::take(&mut said.rows));
+        let mut said = retained::scan(file, root, &design, &declared, &typing);
         // D7's retention, left for the design server before the design is
         // folded, as it does not depend on the fold.
         // A component that isn't Contract reads its params outside the views:

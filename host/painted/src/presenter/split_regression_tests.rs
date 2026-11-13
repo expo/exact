@@ -155,32 +155,246 @@ fn split_scroller_accessibility_stops_at_the_list_column() {
 
 #[test]
 fn split_detail_text_damages_only_the_pane() {
-    let source = APP.replace("SPLIT", "auto").replace(
-        "            input value=value change=change",
-        "            text value width=250 height=40",
-    );
-    let mut p = boot_source(1200., &source);
-    tap(&mut p, "a");
-    p.pointer = None;
-    p.blur();
-    p.frame();
-    act(&mut p, "change", vec![Value::str("A changed detail")]);
-    let partial = p.frame();
-    let damage = p.damage_rects().to_vec();
-    assert!(!damage.is_empty());
-    assert!(
-        damage
-            .iter()
-            .all(|&(x, _, w, _)| x >= 321. && x + w <= 1200.),
-        "{damage:?}"
-    );
-    p.brush.colors_changed();
-    p.dirty = true;
-    assert_eq!(
-        partial.data(),
-        p.frame().data(),
-        "partial repaint matches a full repaint"
-    );
+    let source = APP.replace("SPLIT", "auto")
+        .replace("position=\"absolute\" inset=0", "position=\"absolute\" inset=0 overflow-y=\"auto\"")
+        .replace("list testId=", "list min-height=1200 flex-shrink=0 testId=")
+        .replace(
+            "            input value=value change=change",
+            "            text value width=250 height=40 flex-shrink=0\n            box height=1200 flex-shrink=0",
+        );
+    for scrollbar in [None, Some(true), Some(false)] {
+        let mut p = boot_source(1200., &source);
+        if let Some(auto_hide) = scrollbar {
+            p.set_scrollbars(auto_hide);
+        }
+        tap(&mut p, "a");
+        p.pointer = None;
+        p.blur();
+        p.frame();
+        if scrollbar.is_some() {
+            let bars = &p.brush.scrollbars.bars;
+            assert!(bars.iter().any(|b| b.id == split(&p).root));
+            assert!(bars.iter().any(|b| Some(b.id) == split(&p).detail));
+        }
+        act(&mut p, "change", vec![Value::str("A changed detail")]);
+        let partial = p.frame();
+        let damage = p.damage_rects().to_vec();
+        assert!(!damage.is_empty(), "scrollbars: {scrollbar:?}");
+        assert!(
+            damage
+                .iter()
+                .all(|&(x, _, w, _)| x >= 321. && x + w <= 1200.),
+            "{damage:?}"
+        );
+        p.brush.colors_changed();
+        p.dirty = true;
+        assert_eq!(
+            partial.data(),
+            p.frame().data(),
+            "partial repaint matches a full repaint; scrollbars: {scrollbar:?}"
+        );
+    }
+}
+
+#[test]
+fn split_detail_text_damage_includes_resized_and_removed_scrollbars() {
+    let source = APP
+        .replace("SPLIT", "auto")
+        .replace(
+            "position=\"absolute\" inset=0",
+            "position=\"absolute\" inset=0 overflow-y=\"auto\"",
+        )
+        .replace(
+            "            input value=value change=change",
+            "            text value width=250 overflow=\"hidden\" flex-shrink=0",
+        );
+    for auto_hide in [false, true] {
+        let mut p = boot_source(1200., &source);
+        p.set_scrollbars(auto_hide);
+        tap(&mut p, "a");
+        p.pointer = None;
+        p.blur();
+        let paragraph = "A long paragraph that wraps across many lines. ";
+        act(&mut p, "change", vec![Value::str(&paragraph.repeat(60))]);
+        p.frame();
+        let detail = split(&p).detail.unwrap();
+        let thumb = |p: &Presenter<()>| {
+            p.brush
+                .scrollbars
+                .bars
+                .iter()
+                .find(|b| b.id == detail && b.vertical)
+                .map(|b| b.thumb)
+        };
+        assert!(thumb(&p).is_some());
+        for repeats in [120, 30, 1] {
+            let before = thumb(&p);
+            act(
+                &mut p,
+                "change",
+                vec![Value::str(&paragraph.repeat(repeats))],
+            );
+            let partial = p.frame();
+            assert_ne!(thumb(&p), before, "repeats={repeats}");
+            let damage = p.damage_rects().to_vec();
+            assert!(!damage.is_empty());
+            assert!(
+                damage
+                    .iter()
+                    .all(|&(x, _, w, _)| x >= 321. && x + w <= 1200.),
+                "{damage:?}"
+            );
+            p.brush.colors_changed();
+            p.dirty = true;
+            assert!(
+                partial.data() == p.frame().data(),
+                "auto_hide={auto_hide}, repeats={repeats}"
+            );
+        }
+        assert!(thumb(&p).is_none());
+    }
+}
+
+/// A thumb outside the changed pane appears, disappears or changes width when
+/// the scrollbar policy or the hovered pane changes; the next frame repaints whole.
+#[test]
+fn split_scrollbar_policy_and_hover_changes_repaint_both_panes() {
+    let source = APP
+        .replace("SPLIT", "auto")
+        .replace(
+            "position=\"absolute\" inset=0",
+            "position=\"absolute\" inset=0 overflow-y=\"auto\"",
+        )
+        .replace("list testId=", "list min-height=1200 flex-shrink=0 testId=")
+        .replace(
+            "            input value=value change=change",
+            "            text value width=250 height=40 flex-shrink=0\n            box height=1200 flex-shrink=0",
+        );
+    let (list, detail) = (Some((100., 300.)), Some((800., 300.)));
+    // (policy and hover before, policy and hover after the text change)
+    let cases = [
+        ((Some(false), None), (Some(true), None)),
+        ((None, None), (Some(false), None)),
+        ((None, None), (Some(true), list)),
+        ((Some(true), list), (Some(true), detail)),
+        ((Some(true), detail), (Some(true), list)),
+        ((Some(true), list), (Some(true), None)),
+    ];
+    for (before, after) in cases {
+        let mut p = boot_source(1200., &source);
+        tap(&mut p, "a");
+        p.pointer = None;
+        p.blur();
+        for (step, (policy, hover)) in [before, after].into_iter().enumerate() {
+            if let Some(auto_hide) = policy {
+                p.set_scrollbars(auto_hide);
+            }
+            p.hover_point = hover;
+            if step == 1 {
+                act(&mut p, "change", vec![Value::str("A changed detail")]);
+            }
+            let painted = p.frame();
+            if step == 0 {
+                continue;
+            }
+            p.brush.colors_changed();
+            p.dirty = true;
+            assert!(
+                painted.data() == p.frame().data(),
+                "{before:?} -> {after:?}: partial repaint matches a full repaint"
+            );
+        }
+    }
+}
+
+#[test]
+fn text_in_a_sheet_stack_repaints_the_whole_frame_with_a_split_active() {
+    let source = APP
+        .replace("SPLIT", "auto")
+        .replace(
+            "    sheet \"/sheet\"",
+            "    sheet \"/sheet\"\n      sheetDetail \"/sheet/detail\"",
+        )
+        .replace(
+            "  state value",
+            "  action sheetDetail\n    nav = push(nav, \"/sheet/detail\")\n  state value",
+        )
+        .replace(
+            "position=\"absolute\" inset=0",
+            "position=\"absolute\" inset=0 overflow-y=\"auto\"",
+        )
+        .replace(
+            "            input value=value change=change",
+            "            text value width=250 overflow=\"hidden\" flex-shrink=0",
+        )
+        .replace(
+            "              text \"Close\"",
+            r#"              text "Close"
+            text value width=250 overflow="hidden" flex-shrink=0
+            button press=sheetDetail testId="sheet-detail"
+              text "Detail"
+          if e.name == "sheetDetail"
+            text value width=250 overflow="hidden" flex-shrink=0"#,
+        );
+    for (pushed, scrollbar) in [false, true]
+        .into_iter()
+        .flat_map(|pushed| [None, Some(false), Some(true)].map(|scrollbar| (pushed, scrollbar)))
+    {
+        let mut p = boot_source(1200., &source);
+        if let Some(auto_hide) = scrollbar {
+            p.set_scrollbars(auto_hide);
+        }
+        act(&mut p, "open", vec![Value::str("a")]);
+        act(&mut p, "sheet", vec![]);
+        if pushed {
+            act(&mut p, "sheetDetail", vec![]);
+        }
+        p.pointer = None;
+        p.blur();
+        p.brush.scrollbars.pointer = Some((1100., 200.));
+        let route = id(
+            &p,
+            if pushed {
+                "route-sheetDetail"
+            } else {
+                "route-sheet"
+            },
+        );
+        assert_eq!(p.host.kernel().host_block(route).is_some(), pushed);
+        assert!(!split(&p).block(route));
+        let paragraph = "A long paragraph that wraps across many lines. ";
+        act(&mut p, "change", vec![Value::str(&paragraph.repeat(60))]);
+        p.frame();
+        let thumb = |p: &Presenter<()>| {
+            p.brush
+                .scrollbars
+                .bars
+                .iter()
+                .find(|b| b.id == route && b.vertical)
+                .map(|b| b.thumb)
+        };
+        assert_eq!(thumb(&p).is_some(), scrollbar.is_some());
+        for repeats in [120, 30, 1] {
+            let before = thumb(&p);
+            act(
+                &mut p,
+                "change",
+                vec![Value::str(&paragraph.repeat(repeats))],
+            );
+            let updated = p.frame();
+            if scrollbar.is_some() {
+                assert_ne!(thumb(&p), before, "repeats={repeats}");
+            }
+            assert!(p.damage_rects().is_empty());
+            p.brush.colors_changed();
+            p.dirty = true;
+            assert!(
+                updated.data() == p.frame().data(),
+                "pushed={pushed}, scrollbars={scrollbar:?}, repeats={repeats}"
+            );
+        }
+        assert!(thumb(&p).is_none());
+    }
 }
 
 #[test]
@@ -402,4 +616,160 @@ fn split_base_outlives_its_row() {
         .covers
         .values()
         .any(|(id, cover)| { *cover == HostCover::Whole && within(k, *id, b) }));
+}
+
+#[test]
+fn split_column_bounds_runner_hits_and_observations_without_rescaling_frames() {
+    let source = APP.replace("SPLIT", "auto")
+        .replace("  state value", r#"  state bounds = []
+  state found = ""
+  action probe(x: number, y: number)
+    bounds = [frame("overflow").x, frame("overflow").width]
+    found = match elementFromPoint(x, y) { case some(id) => id, case none => "none" }
+  action seen(e: IntersectionObserverEntry)
+    value = `${e.intersectionRatio}`
+  state value"#)
+        .replace("            box navigationSplit", r#"            box id="overflow" testId="overflow" position="absolute" top=300 left=300 width=100 height=40 intersect=seen aria-label="Overflow" role="region"
+            box id="outside" testId="outside" position="absolute" top=400 left=400 width=100 height=40 intersect=seen aria-label="Outside" role="region"
+            box navigationSplit"#);
+    let source = source.replace(
+        "            box navigationSplit=\"placeholder\" testId=\"empty\"\n              text \"Choose an item\"\n",
+        "",
+    );
+    let mut p = boot_source(1200., &source);
+    for (i, width) in [1200., 800., 1000.].into_iter().enumerate() {
+        assert_eq!(p.resize(width, 800.), None);
+        let wide = width >= THRESHOLD;
+        let overflow = id(&p, "overflow");
+        let outside = id(&p, "outside");
+        let painted = p.box_of(overflow).unwrap();
+        assert_eq!(painted.rect, (300., 300., 100., 40.));
+        act(
+            &mut p,
+            "probe",
+            vec![Value::Number(350.), Value::Number(320.)],
+        );
+        assert_eq!(
+            p.host.runner().slot("bounds"),
+            Some(&Value::list(vec![Value::Number(300.), Value::Number(100.)]))
+        );
+        assert_eq!(
+            p.host.runner().slot("found") == Some(&Value::str("overflow")),
+            !wide
+        );
+        assert_eq!(p.hit(350., 320.) == Some(overflow), !wide);
+        let access = p.access_tree().0;
+        let accessible = access.iter().find(|n| n.view == overflow).unwrap();
+        assert_eq!(accessible.rect[2], if wide { 20. } else { 100. });
+        // Equivalent margins start a fresh observation after a ratio-only resize.
+        p.host
+            .apply_test_ops(&[overflow, outside].map(|id| exact_kernel::Op::SetProp {
+                id,
+                prop: PropId::IntersectMargin,
+                value: exact_kernel::PropValue::Str("0px ".repeat(i + 2).into()),
+            }));
+        let observed = p.host.runner_mut().intersect_due();
+        for (view, inside, ratio) in [
+            (overflow, true, if wide { 0.2 } else { 1. }),
+            (outside, !wide, if wide { 0. } else { 1. }),
+        ] {
+            let entry = observed.iter().find(|e| e.view == view).unwrap();
+            assert_eq!(
+                (entry.is_intersecting, entry.intersection_ratio),
+                (inside, ratio)
+            );
+        }
+    }
+}
+
+#[test]
+fn split_retains_an_empty_list_across_its_remount() {
+    let source = APP.replace(
+        "  state value",
+        r#"  state showList = true
+  state showRows = true
+  action empty
+    showRows = false
+  action show(show: bool)
+    showList = show
+  state value"#,
+    );
+    let start = source.find("            list testId").unwrap();
+    let end = source[start..]
+        .find("            box navigationSplit")
+        .unwrap()
+        + start;
+    let source = format!(
+        "{}{}{}",
+        &source[..start],
+        r#"            if showList
+              list testId="rows"
+                if showRows
+                  button press=open("a") height=48 testId="a"
+                    text "Alpha"
+            else
+              list testId="other-rows"
+                text "A different empty list"
+"#,
+        &source[end..]
+    );
+    for width in ["auto", "280"] {
+        let mut p = boot_source(1200., &source.replace("SPLIT", width));
+        let old_list = id(&p, "rows");
+        act(&mut p, "empty", vec![]);
+        assert_eq!(split(&p).list, Some(old_list));
+        act(&mut p, "show", vec![Value::Bool(false)]);
+        assert!(p.host.kernel().node(old_list).is_none());
+        if width == "auto" {
+            assert!(state(&mut p).is_null());
+        } else {
+            assert_eq!(split(&p).list, None, "another empty list inherits no split");
+        }
+        act(&mut p, "show", vec![Value::Bool(true)]);
+        let new_list = id(&p, "rows");
+        assert_ne!(old_list, new_list);
+        assert_eq!(
+            state(&mut p)["listWidth"],
+            if width == "auto" { 320. } else { 280. }
+        );
+        assert_eq!(split(&p).list, Some(new_list));
+    }
+}
+
+#[test]
+fn a_scrollable_split_list_reports_enter_and_leave_across_the_threshold() {
+    let source = APP.replace("SPLIT", "auto")
+        .replace("position=\"absolute\" inset=0", "position=\"absolute\" inset=0 overflow-y=\"auto\"")
+        .replace("  state value", r#"  state inside = false
+  state ratio = 0
+  state observations = 0
+  action seen(e: IntersectionObserverEntry)
+    inside = e.isIntersecting
+    ratio = e.intersectionRatio
+    observations = observations + 1
+  state value"#)
+        .replace("            box navigationSplit", r#"            box id="outside" testId="outside" position="absolute" top=400 left=400 width=100 height=40 intersect=seen
+            box navigationSplit"#);
+    let mut p = boot_source(600., &source);
+    assert_eq!(p.host.runner().slot("inside"), Some(&Value::Bool(true)));
+    assert_eq!(p.host.runner().slot("ratio"), Some(&Value::Number(1.)));
+    assert_eq!(
+        p.host.runner().slot("observations"),
+        Some(&Value::Number(1.))
+    );
+    for (i, width) in [1200., 600., 1200., 600.].into_iter().enumerate() {
+        assert_eq!(p.resize(width, 800.), None);
+        assert_eq!(
+            p.host.runner().slot("inside"),
+            Some(&Value::Bool(width < THRESHOLD))
+        );
+        assert_eq!(
+            p.host.runner().slot("ratio"),
+            Some(&Value::Number(if width < THRESHOLD { 1. } else { 0. }))
+        );
+        assert_eq!(
+            p.host.runner().slot("observations"),
+            Some(&Value::Number((i + 2) as f64))
+        );
+    }
 }

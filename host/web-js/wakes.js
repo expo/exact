@@ -178,7 +178,7 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
     /** `--wake '<entry>'`: listed again, then raised as a cold wake. */
     launch(row, entry, ref) {
       const { ref: _ref, delivered: _d, due: _due, lastRun, ...fields } = entry;
-      const state = row.sub.list.state, key = row.sub.list.key;
+      const state = lists.state(row, row.sub.list.state), key = row.sub.list.key;
       const kept = (lists.get(state) ?? []).filter(x => x.fields[key] !== fields[key] || x.fields.kind !== fields.kind);
       const e = { ref, row, fields };
       lists.set(state, [...kept, e]);
@@ -188,8 +188,8 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
       return raiseEntry(e, true);
     },
     /** A source declared `"listed"`: the entries of its kind, its fields each. */
-    listed(spec) {
-      return (lists.get(spec.state) ?? []).filter(e => spec.kind == null || e.fields.kind === spec.kind)
+    listed(spec, row) {
+      return (lists.get(lists.state(row, spec.state)) ?? []).filter(e => spec.kind == null || e.fields.kind === spec.kind)
         .map(e => { const all = { ...e.fields, ...(e.fields.kind ? { lastRun: meta.get(e.ref)?.lastRun ?? null, due: due(e) } : {}) }; return Object.fromEntries((spec.fields ?? []).map(f => [f, all[f] ?? null])); });
     },
   };

@@ -69,6 +69,10 @@ pub(crate) fn declared(tag: &str) -> Option<DeclaredView> {
     DECLARED.with(|d| d.borrow().get(tag).cloned())
 }
 
+pub(crate) fn declarations() -> BTreeMap<String, DeclaredView> {
+    DECLARED.with(|d| d.borrow().clone())
+}
+
 pub(crate) fn used_extensions(
     nodes: &[contract_syntax::Node],
 ) -> std::collections::BTreeSet<String> {

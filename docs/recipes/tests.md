@@ -28,7 +28,7 @@ test "a repeat is refused and keeps its text; the list survives a relaunch"
 | `clock data` · `clock settle` · `clock +5000` · `reload` | Lands replies · ends transitions · moves virtual time · reloads on the same storage and date: web at its URL, native at a path or scheme `--url`, else its cold launch location. |
 | `back` | The platform's Back: cancels a dialog, else dismisses a sheet, else pops the route. |
 | `fail fetch "<prefix>"`, `pass fetch …` | A lost connection there, then none. |
-| `request POST "/items" {…} as grace expect 409` | Writes through the app's server as another person ([a REST server](rest-backend.md)); a status not 2xx fails, or with `expect 409` any other. |
+| `request POST "/items" {…} as grace expect 409` | Writes through the app's server as another person ([its database](rest-backend.md#where-the-server-lives) is the run's); a status not 2xx fails, or with `expect 409` any other. |
 | `size 390x844`, `at "/item/7#moves"`, `epoch`, `time-zone`, `locale`, `seed`, `before data` | Launch lines, first in a test or atop the file. |
 
 Every other form (drags, `perf`, `on web`): [the grammar](../contract-grammar.md#authored-tests).
@@ -43,7 +43,7 @@ every screen its own ids; tap a tab before reading in it.
 `verify` (`verify ios`) runs these tests, then `check`s the first screen and each test's end
 screen, light and dark at two widths; on the web it reloads each end screen (a saved value that
 comes back changed is a finding), then relaunches on a test's storage and checks what it stored
-came back. Screenshots: `.exact/verify/` (`--shots <dir>` copies them). A clean `verify` is
+came back. Screenshots: `.exact/verify/`. A clean `verify` is
 done; a screen no test ends on is not checked, so end a test there. A finding that is the design
 is listed, not counted, with `"verify": {"accept": [{"finding": "contrast", "node": "<testId>",
 "why": "…"}]}` in app.json. Drive by hand to see why a step fails (`agent web --storage s1 …`).

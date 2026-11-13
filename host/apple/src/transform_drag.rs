@@ -361,8 +361,10 @@ impl<D: DataSource> Host<D> {
         // Latest authored pair targets/declarations arrive while still held.
         if let Some(node) = self.runner.kernel().node_by_key(input.binding.target) {
             let mut sync = exact_kernel::motion::MotionSync::default();
-            sync.transitions
-                .push((motion_node(node.key), node.style.transition.clone()));
+            sync.transitions.push((
+                motion_node(node.key),
+                exact_kernel::motion::transitions(node.style),
+            ));
             for (property, value) in exact_kernel::motion::targets(node.style) {
                 if matches!(property, Property::Translate | Property::Scale) {
                     sync.changes.push(exact_motion::Change {

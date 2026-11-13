@@ -1,8 +1,10 @@
 //! @exact/global-shortcuts on Windows (LLP 1133.025 D3): a chord registered
 //! system-wide while something reads it, through the host's one hot-key
 //! table (`exact_painted::desktop`, `RegisterHotKey`), which raises
-//! `globalshortcut` as a person's activation when it is pressed. Under the
-//! agent the runner's substitute answers, unless the drive binds it.
+//! `globalshortcut` as a person's activation when it is pressed, once per
+//! press unless `windows.repeat` asks for a press per keyboard repeat (LLP
+//! 1133.025 D8). Under the agent the runner's substitute answers, unless the
+//! drive binds it.
 
 use exact_painted::package::{json, Context, Json, Package, Reply};
 
@@ -39,7 +41,9 @@ impl Package for GlobalShortcuts {
                 let id = args["id"].as_str().unwrap_or_default();
                 let (session, extension) =
                     (self.context.session().to_owned(), self.context.extension());
-                let outcome = host.register_hotkey(&session, id, keys, extension, "globalshortcut");
+                let repeat = args["windows"]["repeat"] == true;
+                let outcome =
+                    host.register_hotkey(&session, id, keys, repeat, extension, "globalshortcut");
                 let reading = (id.to_owned(), keys.to_owned());
                 if outcome.is_ok() && !self.reading.contains(&reading) {
                     self.reading.push(reading);

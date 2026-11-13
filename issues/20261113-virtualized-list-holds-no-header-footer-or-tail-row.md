@@ -53,3 +53,10 @@ a footer row reading its own state, and a token rewrites only that row.
 Until then, the chat-thread recipe should show the streaming case as it must
 be written today (the tail kept in its own state and appended by a derive)
 and name D11 as the coming form, and the refusal could point at that recipe.
+
+## Status (2026-11-13)
+
+The refusal now says what to write today and names `docs/recipes/long-lists.md`,
+whose loading row is the pattern: a row of the `for`'s collection, appended by
+a derive. The chat-thread recipe has no room under its size cap for the
+streaming case. What remains is selecting LLP 1035.005.000 D11.

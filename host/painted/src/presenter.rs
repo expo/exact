@@ -147,6 +147,8 @@ mod kept_rows_tests;
 #[cfg(test)]
 mod longpoll_tests;
 #[cfg(test)]
+mod module_events_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod swipe_left_tests;

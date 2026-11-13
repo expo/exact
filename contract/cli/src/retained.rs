@@ -21,6 +21,7 @@ pub struct Kept {
     mapped: bool,
     types: Types,
     expanded: Expanded,
+    scan: Option<contract_lower::DesignScan>,
 }
 
 /// What [`retention_build`] found.
@@ -44,6 +45,18 @@ pub struct Retained {
     pub rows: Vec<contract_lower::rows::Row>,
     /// Each source's path, by source id: where a row is.
     pub paths: Vec<std::path::PathBuf>,
+    /// What those rows leave to the build.
+    pub left: contract_lower::rows::Left,
+}
+
+/// How far [`check_path_reusing`] lowers a proposed design.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Stop {
+    /// Before the view's first element: the refusals that precede every
+    /// element's, the surfaces' arguments not checked.
+    View,
+    /// The whole build, to its first refusal.
+    Refusal,
 }
 
 #[derive(Default)]
@@ -60,6 +73,44 @@ struct Program {
 
 thread_local! {
     static PROGRAM: RefCell<Program> = RefCell::new(Program::default());
+}
+
+/// Restore the compiler's thread state even when a caller catches a panic.
+struct Scope(Option<Program>, bool, bool, bool);
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        contract_lower::retention_only(self.1);
+        contract_lower::first_refusal(self.2);
+        contract_lower::before_view(self.3);
+        let outer = self.0.take().unwrap_or_default();
+        PROGRAM.with(|p| *p.borrow_mut() = outer);
+    }
+}
+
+/// Run `run` on this thread's compiler with `offered` to reuse: stopped at
+/// the design's retention (`None`) or as `stop` says.
+fn scoped<R>(offered: Option<Kept>, stop: Option<Stop>, run: impl FnOnce() -> R) -> (R, Program) {
+    let outer = PROGRAM.with(|p| {
+        std::mem::replace(
+            &mut *p.borrow_mut(),
+            Program {
+                offered,
+                keep: true,
+                ..Program::default()
+            },
+        )
+    });
+    let scope = Scope(
+        Some(outer),
+        contract_lower::retention_only(stop.is_none()),
+        contract_lower::first_refusal(stop.is_some()),
+        contract_lower::before_view(stop == Some(Stop::View)),
+    );
+    let result = contract_lower::with_design_scan(run);
+    let program = PROGRAM.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    drop(scope);
+    (result, program)
 }
 
 /// `file` as types and expansion read it: the designs, which only lowering
@@ -79,33 +130,11 @@ fn cleared(file: &File) -> File {
 /// them as any build does. Pure but for the files read and this thread's
 /// lowering state.
 pub fn retention_build(path: &Path, offered: Option<Kept>) -> Retained {
-    /// Restores this thread's state however the build ends (a panic a
-    /// caller catches too): no later build stops at retention or reuses.
-    struct Scope(Option<Program>, bool);
-    impl Drop for Scope {
-        fn drop(&mut self) {
-            contract_lower::retention_only(self.1);
-            let outer = self.0.take().unwrap_or_default();
-            PROGRAM.with(|p| *p.borrow_mut() = outer);
-        }
-    }
     let _ = contract_lower::synthetic_candidates();
     let _ = contract_lower::retention();
     let _ = contract_lower::rows::rows();
-    let outer = PROGRAM.with(|p| {
-        std::mem::replace(
-            &mut *p.borrow_mut(),
-            Program {
-                offered,
-                keep: true,
-                ..Program::default()
-            },
-        )
-    });
-    let scope = Scope(Some(outer), contract_lower::retention_only(true));
-    let _ = crate::compile_path_all(path, false);
-    let program = PROGRAM.with(|p| std::mem::take(&mut *p.borrow_mut()));
-    drop(scope);
+    let _ = contract_lower::rows::left();
+    let (_, program) = scoped(offered, None, || crate::compile_path_all(path, false));
     Retained {
         retention: contract_lower::retention(),
         candidates: contract_lower::synthetic_candidates(),
@@ -114,6 +143,38 @@ pub fn retention_build(path: &Path, offered: Option<Kept>) -> Retained {
         stale: program.stale,
         rows: contract_lower::rows::rows(),
         paths: program.paths,
+        left: contract_lower::rows::left(),
+    }
+}
+
+/// What [`check_path_reusing`] found.
+pub struct Check {
+    /// The build's first refusal, as far as it lowered.
+    pub first: Option<crate::CompileError>,
+    /// Whether the sources loaded to the program `kept` held (a design's
+    /// motion tokens are written into it), whose work was reused.
+    pub reused: bool,
+}
+
+/// The first refusal of the build of `path`, lowered as far as `stop`
+/// says, reusing `kept`'s types, expansion and design scan where the
+/// sources load to the program they were computed from (a design that
+/// writes other motion values into it is checked again). `kept` is left
+/// holding that program's work.
+pub fn check_path_reusing(path: &Path, kept: &mut Option<Kept>, stop: Stop) -> Check {
+    let build = || {
+        let src = crate::read_source(path).map_err(|e| vec![e])?;
+        let surfaces = stop == Stop::Refusal;
+        crate::compile_path_checked(path, &src, false, surfaces, contract_lower::Profile::Web)
+    };
+    let (result, program) = scoped(kept.take(), Some(stop), build);
+    *kept = match program.reused {
+        true => program.kept,
+        false => program.offered,
+    };
+    Check {
+        first: result.err().and_then(|all| all.into_iter().next()),
+        reused: program.reused,
     }
 }
 
@@ -137,10 +198,14 @@ pub(crate) fn reuse(
         && offered.mapped == mapped
         && offered.strings == *strings
         && offered.file == cleared(file);
-    same.then(|| {
-        PROGRAM.with(|p| p.borrow_mut().reused = true);
-        (offered.types, offered.expanded)
-    })
+    if !same {
+        // Declined, it stays offered: a write check keeps it.
+        PROGRAM.with(|p| p.borrow_mut().offered = Some(offered));
+        return None;
+    }
+    PROGRAM.with(|p| p.borrow_mut().reused = true);
+    contract_lower::offer_design_scan(offered.scan);
+    Some((offered.types, offered.expanded))
 }
 
 /// Keep what `file` checked to, when the design server asked.
@@ -148,8 +213,7 @@ pub(crate) fn keep(
     file: &File,
     strings: &Option<Arc<Strings>>,
     mapped: bool,
-    types: &Types,
-    expanded: &Expanded,
+    checked: contract_types::Checked<'_>,
 ) {
     PROGRAM.with(|p| {
         let mut p = p.borrow_mut();
@@ -158,8 +222,9 @@ pub(crate) fn keep(
                 file: cleared(file),
                 strings: strings.clone(),
                 mapped,
-                types: types.clone(),
-                expanded: expanded.clone(),
+                types: checked.types,
+                expanded: checked.expanded,
+                scan: contract_lower::take_design_scan(),
             });
         }
     })
@@ -179,6 +244,7 @@ pub(crate) fn verify(fresh: (&Types, &Expanded), reused: (&Types, &Expanded)) ->
     let same = format!("{:?}", fresh.0) == format!("{:?}", reused.0) && fresh.1 == reused.1;
     if !same {
         PROGRAM.with(|p| p.borrow_mut().stale = true);
+        contract_lower::offer_design_scan(None);
     }
     same
 }

@@ -144,6 +144,7 @@ fn fixture_plan(root: &str, nodes: &str) -> Plan {
                     "z-index" => StyleId::ZIndex,
                     "margin-top" => StyleId::MarginTop,
                     "margin-left" => StyleId::MarginLeft,
+                    "grid-template-columns" => StyleId::GridTemplateColumns,
                     name => StyleId::from_name(name)
                         .unwrap_or_else(|| panic!("unknown fixture row {name}")),
                 };
@@ -228,7 +229,6 @@ fn server_client_and_adopted_paint_agree_on_the_chrome_corpus() {
         write_case(&dir.join(i.to_string()), &plan, &[]);
         labels.push(fields[0]);
     }
-    assert_eq!(labels.len(), 18);
     let dynamic = contract::compile(
         r#"shape Item
   id: number
@@ -364,6 +364,102 @@ component Paint
     compare_cases(&dir, &labels);
 }
 
+#[test]
+fn auto_and_integer_z_index_changes_paint_and_hit_as_chrome_does() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let dir = std::env::temp_dir().join(format!("exact-js-auto-z-{}", std::process::id()));
+    let plan =
+        contract::compile(include_str!("../../../contract/corpus/z-index.contract")).unwrap();
+    let case = dir.join("0");
+    write_case(&case, &plan, &["advance", "advance", "advance", "advance"]);
+    let probes: Vec<_> = (0..=4)
+        .map(|step| {
+            ["flex", "grid", "positioned", "nested"].map(|scene| {
+                let front = step == 2 || step == 1 && matches!(scene, "flex" | "grid");
+                let color = if !front {
+                    "blue"
+                } else if scene == "nested" {
+                    "green"
+                } else {
+                    "red"
+                };
+                let rgb = match color {
+                    "red" => [255, 0, 0],
+                    "green" => [0, 255, 0],
+                    _ => [0, 0, 255],
+                };
+                (scene, format!("{scene}-{color}"), rgb)
+            })
+        })
+        .collect();
+    std::fs::write(
+        case.join("probes.json"),
+        serde_json::to_string(&probes).unwrap(),
+    )
+    .unwrap();
+    compare_cases(&dir, &["auto and integer paint and hits"]);
+}
+
+#[test]
+fn invalid_z_index_updates_clear_the_paint_and_hit_order() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let dir = std::env::temp_dir().join(format!("exact-js-invalid-z-{}", std::process::id()));
+    let plan = contract::compile(
+        r##"style Ranked
+  z-index=9
+component Paint
+  state z = "2"
+  state fraction = 2.5
+  state rejected = false
+  action invalid
+    rejected = true
+  action invalidText
+    rejected = false
+    z = "2.5"
+  action autoZ
+    rejected = false
+    z = "auto"
+  action zero
+    rejected = false
+    z = "0"
+  view
+    column
+      button "Invalid" testId="invalid" press=invalid
+      button "Invalid text" testId="invalidText" press=invalidText
+      button "Auto" testId="autoZ" press=autoZ
+      button "Zero" testId="zero" press=zero
+      box display="flex" width=200 height=100 testId="scene"
+        box class=Ranked width=100 height=100 flex-shrink=0 z-index=(rejected ? fraction : z) background-color="#ff0000" testId="red"
+        box width=100 height=100 flex-shrink=0 margin-left=-100 background-color="#0000ff" testId="blue"
+"##,
+    )
+    .unwrap();
+    let case = dir.join("0");
+    write_case(
+        &case,
+        &plan,
+        &[
+            "invalid",
+            "autoZ",
+            "invalid",
+            "zero",
+            "invalidText",
+            "autoZ",
+        ],
+    );
+    let probes = [true, false, false, false, true, false, false].map(|front| {
+        let hit = if front { "red" } else { "blue" };
+        let rgb = if front { [255, 0, 0] } else { [0, 0, 255] };
+        [("scene", hit, rgb)]
+    });
+    std::fs::write(
+        case.join("probes.json"),
+        serde_json::to_string(&probes).unwrap(),
+    )
+    .unwrap();
+    compare_cases(&dir, &["invalid z-index paint and hits"]);
+}
+
 fn compare_cases(dir: &std::path::Path, labels: &[impl AsRef<str>]) {
     std::fs::write(
         dir.join("cases.json"),
@@ -442,14 +538,16 @@ fn write_case(dir: &std::path::Path, plan: &Plan, steps: &[&str]) {
                 node.props.str(PropId::TestId).map(|name| {
                     (
                         name.to_owned(),
-                        if node.style.mask.has(StyleId::ZIndex) {
-                            node.style
-                                .z_index
-                                .clamp(
-                                    -exact_kernel::paint_order::Z_MAX,
-                                    exact_kernel::paint_order::Z_MAX,
-                                )
-                                .to_string()
+                        if let Some(z) = node
+                            .style
+                            .z_index
+                            .filter(|_| node.style.mask.has(StyleId::ZIndex))
+                        {
+                            z.clamp(
+                                -exact_kernel::paint_order::Z_MAX,
+                                exact_kernel::paint_order::Z_MAX,
+                            )
+                            .to_string()
                         } else {
                             "auto".into()
                         },

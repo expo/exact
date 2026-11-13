@@ -10,6 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// A non-template icon's file under the app's `assets/`, as on the web.
+pub(crate) fn file_icon(source: &str) -> Option<&str> {
+    let icon = exact_kernel::Icon::parse(source.strip_prefix("symbol:")?)?;
+    (icon.path.is_empty() && !icon.svg.is_empty()).then_some(icon.svg)
+}
+
+/// Symbols drawn from a path, without loading a picture.
+pub(crate) fn is_symbol(source: &str) -> bool {
+    source.starts_with("symbol:") && file_icon(source).is_none()
+}
+
 #[cfg(test)]
 #[path = "image/allocation_tests.rs"]
 mod allocation_tests;
@@ -410,12 +421,17 @@ impl Images {
                 (node.frame.width - left - right - border[1] - border[3]).max(0.) * scale,
                 (node.frame.height - top - bottom - border[0] - border[2]).max(0.) * scale,
             );
+            if file_icon(source).is_some() {
+                if let Some(size) = crate::paint::button::image_size(kernel, &node) {
+                    view.desired = (size * scale, size * scale);
+                }
+            }
             view.fit = plain_box(node.style).then_some(node.style.object_fit);
             view.object_fit = node.style.object_fit;
             // LLP 1011 §3: a symbol is a font-relative box no file fills (the
             // paint walk strokes a portable role's path into it, `symbol`),
             // never a file request and never the previously accepted raster.
-            if source.starts_with("symbol:") {
+            if is_symbol(source) {
                 if let Some((request, _)) = view.request.take() {
                     self.backend.cancel(request);
                 }
@@ -888,8 +904,9 @@ impl Images {
         // A package's picture is answered through the host's turn, not the
         // workers: nothing here to wait on.
         self.views.values().any(|v| {
-            (!self.boot_visible_only || v.visible && !v.errored && v.symbol_size.is_none())
+            (!self.boot_visible_only || v.visible && !v.errored)
                 && !v.source.is_empty()
+                && !is_symbol(&v.source)
                 && !self.package.serves(&v.source)
                 && match v
                     .source_id
@@ -948,6 +965,7 @@ impl Images {
             // holds nothing back.
             if self.views.values().all(|v| {
                 v.source.is_empty()
+                    || is_symbol(&v.source)
                     || self.package.serves(&v.source)
                     || remote::is_remote(&v.source)
                     || matches!(
@@ -982,12 +1000,9 @@ impl Images {
         let live: Vec<_> = live
             .into_iter()
             .filter(|id| {
-                kernel.node(*id).is_some_and(|n| {
-                    !n.props
-                        .str(PropId::ImageSource)
-                        .unwrap_or("")
-                        .starts_with("symbol:")
-                })
+                kernel
+                    .node(*id)
+                    .is_some_and(|n| !is_symbol(n.props.str(PropId::ImageSource).unwrap_or("")))
             })
             .collect();
         self.sync_visible(kernel, &live, scale, |_| false);

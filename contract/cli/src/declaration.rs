@@ -11,6 +11,7 @@ use contract_syntax::{
 use serde_json::{Map, Value};
 use std::path::Path;
 
+mod implementation;
 mod json;
 mod permissions;
 
@@ -20,7 +21,13 @@ use json::{is_json, json_holds};
 type Refusal = (&'static str, String);
 
 /// Read `text`, the declaration at `path`, as unit `source_id`.
-pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refusal> {
+pub(crate) fn read(
+    path: &Path,
+    text: &str,
+    source_id: u32,
+    origin: &crate::resolve::Origin,
+    consulted: &mut Vec<std::path::PathBuf>,
+) -> Result<File, Refusal> {
     let span = Span {
         line: 1,
         col: 0,
@@ -45,7 +52,7 @@ pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refu
                 .as_str()
                 .ok_or_else(|| refuse("an interface has a `name`".into()))?;
             let dir = path.parent().unwrap_or(Path::new("."));
-            let implementations = endorsed(dir).map_err(refuse)?;
+            let implementations = implementation::endorsed(dir).map_err(refuse)?;
             for (subpath, implementation) in &implementations {
                 let names: Vec<UseName> = object(&implementation["shapes"])
                     .keys()
@@ -98,13 +105,8 @@ pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refu
             }
         }
         "implementation" => {
-            // Its platform-only names (D2) are read when one is first
-            // declared and imported; stage 0 has none.
-            if json["names"].as_array().is_some_and(|names| !names.is_empty()) {
-                return Err(refuse(
-                    "an implementation's own sources and sends are not read yet (LLP 1133.001 D2)".into(),
-                ));
-            }
+            implementation::read(path, &json, origin, consulted, span, &mut file)
+                .map_err(refuse)?;
         }
         other => {
             return Err(refuse(format!(
@@ -146,34 +148,6 @@ fn groups(json: &Value, file: &File) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// The implementations an interface's own package carries, by subpath, from
-/// its `package.json` `exports` (LLP 1133.001 D1: `./apple`, `./android`).
-fn endorsed(dir: &Path) -> Result<Vec<(String, Value)>, String> {
-    let manifest = dir.join("package.json");
-    let text =
-        std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let json: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("{}: not JSON: {e}", manifest.display()))?;
-    let mut out = Vec::new();
-    for (key, target) in object(&json["exports"]) {
-        let (Some(subpath), Some(target)) = (key.strip_prefix("./"), target.as_str()) else {
-            continue;
-        };
-        if target != format!("./{subpath}/exact.json") {
-            continue;
-        }
-        let at = dir.join(subpath).join("exact.json");
-        let text = std::fs::read_to_string(&at).map_err(|e| format!("{}: {e}", at.display()))?;
-        let implementation: Value =
-            serde_json::from_str(&text).map_err(|e| format!("{}: not JSON: {e}", at.display()))?;
-        if implementation["kind"] == "implementation" {
-            out.push((subpath.to_owned(), implementation));
-        }
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
 }
 
 /// Each shape, its fields in name order: `serde_json` here keeps no key

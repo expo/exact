@@ -21,7 +21,7 @@ use super::super::{DataSource, Runner};
 use super::{Decision, Json, ModulesRow, Route};
 use crate::request::{Reply, Request};
 use serde_json::json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 impl<D: DataSource> Runner<D> {
     /// The host's implementations answer `real` as in production, and
@@ -81,6 +81,28 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    /// A provider reports its physical name; every active declaration of
+    /// that name watches its own qualified topic.
+    pub(in crate::runner) fn declaration_topics(&self, topics: Vec<String>) -> Vec<String> {
+        let mut out = topics.clone();
+        for topic in topics {
+            for row in &self.plan.modules {
+                if self.route(row) != Route::Substitute
+                    && self.substitute(row)["owner"].is_string()
+                    && topic
+                        == format!(
+                            "{}.{}",
+                            self.plan.str(row.extension),
+                            self.plan.str(row.declared)
+                        )
+                {
+                    out.push(self.key(row));
+                }
+            }
+        }
+        out
+    }
+
     /// Each synchronous form's answer, by `extension.syncName`, into the
     /// native slot.
     pub(in crate::runner) fn publish_sync(&self) {
@@ -91,8 +113,12 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .filter(|m| !self.plan.str(m.sync).is_empty())
         {
+            let owner = self.substitute(row)["owner"]
+                .as_str()
+                .map(|s| format!("#{s}"))
+                .unwrap_or_default();
             let key = format!(
-                "{}.{}",
+                "{}.{}{owner}",
                 self.plan.str(row.extension),
                 self.plan.str(row.sync)
             );
@@ -187,6 +213,9 @@ impl<D: DataSource> Runner<D> {
             .map(|(option, member)| (option.as_str(), member))
             .unwrap_or((self.plan.str(row.declared), row));
         let mut body = json!({ "extension": self.plan.str(implementation.extension), verb: name, "args": args });
+        if let Some(owner) = self.substitute(implementation)["owner"].as_str() {
+            body["owner"] = json!(owner);
+        }
         if self.route(implementation) == Route::Agent {
             if let Some(preferred) = self.extensions.preferred.get(&self.key(implementation)) {
                 body["preferred"] = preferred.clone();
@@ -251,7 +280,11 @@ impl<D: DataSource> Runner<D> {
             v["send"].as_str(),
             v["request"].as_u64(),
         ) {
-            (self.extensions.sent).insert(ticket, (format!("{extension}.{send}"), n));
+            let owner = v["owner"]
+                .as_str()
+                .map(|s| format!("#{s}"))
+                .unwrap_or_default();
+            (self.extensions.sent).insert(ticket, (format!("{extension}.{send}{owner}"), n));
         }
     }
 
@@ -305,7 +338,20 @@ impl<D: DataSource> Runner<D> {
         };
         let prefix = format!("{extension}.");
         let values: serde_json::Map<String, Json> = (self.extensions.preferred.iter())
-            .filter_map(|(k, v)| Some((k.strip_prefix(&prefix)?.to_owned(), v.clone())))
+            .filter_map(|(k, v)| {
+                let name = k.strip_prefix(&prefix)?;
+                let name = if name.contains('#') {
+                    let row = self
+                        .plan
+                        .modules
+                        .iter()
+                        .find(|m| self.key(m) == *k && self.route(m) == Route::Agent)?;
+                    self.plan.str(row.declared)
+                } else {
+                    name
+                };
+                Some((name.to_owned(), v.clone()))
+            })
             .collect();
         // And the state of each permission it declares, which its answers
         // follow (LLP 1133.019 §10: under `limited`, only the selection).
@@ -387,32 +433,63 @@ impl<D: DataSource> Runner<D> {
     /// reader's new arguments before it hears the old ones are gone. A
     /// group data code asks for is released only with the whole name.
     pub(in crate::runner) fn release_idle(&mut self) {
-        let live: Vec<String> = self.extensions.live.iter().cloned().collect();
+        let mut live: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for key in &self.extensions.live {
+            let row = self.plan.modules.iter().find(|m| self.key(m) == *key);
+            let provider = match row {
+                Some(row) if self.route(row) != Route::Substitute => {
+                    format!("bound:{}", key.split('#').next().unwrap_or(key))
+                }
+                _ => format!("substitute:{key}"),
+            };
+            live.entry(provider).or_default().push(key.clone());
+        }
         let mut released: Vec<Json> = Vec::new();
-        for key in live {
+        for keys in live.into_values() {
+            let key = &keys[0];
             let Some((extension, name)) = key.split_once('.') else {
                 continue;
             };
-            if !self.read_by_any(&key) {
-                self.extensions.live.remove(&key);
-                self.extensions.readers.remove(&key);
-                self.extensions.groups.remove(&key);
+            if !keys.iter().any(|key| self.read_by_any(key)) {
+                for key in &keys {
+                    self.extensions.live.remove(key);
+                    self.extensions.readers.remove(key);
+                    self.extensions.groups.remove(key);
+                }
                 self.log(format!("release {key}: no reader is left"));
                 released.push(json!({ "extension": extension, "release": name }));
                 continue;
             }
-            if self.asking(&key) {
+            if keys.iter().any(|key| self.asking(key)) {
                 continue;
             }
-            let resources = &self.resources;
-            let readers = self.extensions.readers.entry(key.clone()).or_default();
-            readers.retain(|i, _| {
-                (resources.get(*i)).is_some_and(|row| row.state.as_ref().is_some_and(|s| !s.asleep))
-            });
-            let current: BTreeSet<String> = readers.values().cloned().collect();
-            let told = self.extensions.groups.entry(key.clone()).or_default();
+            let mut current = BTreeSet::new();
+            let mut told = BTreeSet::new();
+            for key in &keys {
+                let wanted = self.read_by_any(key);
+                let resources = &self.resources;
+                let readers = self.extensions.readers.entry(key.clone()).or_default();
+                readers.retain(|i, _| {
+                    wanted
+                        && (resources.get(*i))
+                            .is_some_and(|row| row.state.as_ref().is_some_and(|s| !s.asleep))
+                });
+                current.extend(readers.values().cloned());
+                told.extend(
+                    self.extensions
+                        .groups
+                        .get(key)
+                        .into_iter()
+                        .flatten()
+                        .cloned(),
+                );
+            }
             let gone: Vec<String> = told.difference(&current).cloned().collect();
-            told.retain(|g| current.contains(g));
+            for key in &keys {
+                if let Some(groups) = self.extensions.groups.get_mut(key) {
+                    groups.retain(|g| current.contains(g));
+                }
+            }
             for group in gone {
                 self.log(format!("release {key} {group}: no reader asks with it"));
                 let args: Json = serde_json::from_str(&group).unwrap_or_default();
@@ -420,7 +497,7 @@ impl<D: DataSource> Runner<D> {
             }
         }
         let handler = self.native_slot().handler();
-        for body in released {
+        for mut body in released {
             let key = format!(
                 "{}.{}",
                 body["extension"].as_str().unwrap_or_default(),
@@ -437,6 +514,14 @@ impl<D: DataSource> Runner<D> {
                 }
                 _ => {
                     if let Some(handler) = &handler {
+                        if let Some((name, owner)) = body["release"]
+                            .as_str()
+                            .and_then(|s| s.split_once('#'))
+                            .map(|(n, o)| (n.to_owned(), o.to_owned()))
+                        {
+                            body["release"] = json!(name);
+                            body["owner"] = json!(owner);
+                        }
                         handler(body.to_string().into_bytes(), Reply::new(|_| {}));
                     }
                 }

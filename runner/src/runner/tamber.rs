@@ -246,7 +246,7 @@ impl<D: DataSource> Tamber<'_, D> {
         (root, at.unwrap_or(root))
     }
 
-    /// Length `text` (px, `rem`, `em`, a text style, the hairline, cells) in points
+    /// Length `text` (px, font/viewport units, a text style, the hairline, cells) in points
     /// at `place`.
     fn points(&self, text: &str, place: Place) -> Option<f64> {
         // The terminal's column holds cells (`1ch`, `2lh`): their px (round
@@ -258,7 +258,9 @@ impl<D: DataSource> Tamber<'_, D> {
         match exact_kernel::style::relative::parse(text) {
             Some((unit, n)) => {
                 let device = self.runner.kernel().device_pixel();
-                Some(f64::from(unit.basis(root, reference, device) * n))
+                Some(f64::from(
+                    unit.basis(root, reference, device, &self.runner.kernel().env()) * n,
+                ))
             }
             None => exact_num::parse_f64(text.trim().trim_end_matches("px")).ok(),
         }

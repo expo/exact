@@ -131,6 +131,7 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     exact_painted::app::show_neutral_look();
     // Initialize the shared header defaults while the first theme is bound.
     headers::route_header_colors_follow_each_sessions_theme();
+    symbols::file_icons_draw_in_a_linux_menu_row();
     symbols::route_bar_symbols();
     buttons::popover_sources_and_sheet_word_clips_match_the_browser();
     buttons::symbols_use_the_neutral_metrics_in_layout_and_paint();

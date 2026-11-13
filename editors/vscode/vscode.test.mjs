@@ -60,3 +60,13 @@ test('a view repeats with `for`, which is a control keyword and indents; the ret
   assert.ok(indents.test(line('for')));
   assert.ok(!indents.test(line('each')));
 });
+
+test('Enter indents after every opener whose body is a block, and not after a line that is whole', () => {
+  const { indentationRules } = JSON.parse(readFileSync(resolve(import.meta.dir, 'language-configuration.json'), 'utf8'));
+  const indents = new RegExp(indentationRules.increaseIndentPattern);
+  for (const opener of ['theme', 'params', 'parts', 'members Composer', 'perf', 'sequence intro when open key=step', 'sequence spin mount',
+    'test "boots"', 'test "boots" on web', 'test "boots" on web, macos', '  test "boots" on ios // the phone', 'component Row'])
+    assert.ok(indents.test(opener), opener);
+  for (const whole of ['theme.accent', 'params x', 'members "./more.contract"', 'test "boots" on', 'expect perf layout <= 3', 'text "parts"'])
+    assert.ok(!indents.test(whole), whole);
+});

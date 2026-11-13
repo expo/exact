@@ -85,6 +85,6 @@
     "offSide": true
   },
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(?:(?:component|shape|style|keyframes|routes|action|task|when|if|else|for|match|case|provide)\\b.*|(?:props|inject|view)\\s*|(?:font|test)\\s+\"[^\"\\\\]+\"\\s*)(?://.*)?$"
+    "increaseIndentPattern": "^\\s*(?:(?:component|shape|style|keyframes|routes|action|task|sequence|when|if|else|for|match|case|provide)\\b.*|(?:props|inject|view|theme|params|parts|perf)\\s*|members\\s+[A-Za-z_]\\w*\\s*|font\\s+\"[^\"\\\\]+\"\\s*|test\\s+\"[^\"\\\\]+\"(?:\\s+on\\s+[a-z]+(?:\\s*,\\s*[a-z]+)*)?\\s*)(?://.*)?$"
   }
 }

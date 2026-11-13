@@ -117,6 +117,7 @@ fn unlinked() -> InstanceError {
 }
 
 pub(crate) mod errors;
+use errors::invalid;
 pub use errors::InstanceError;
 
 /// One realized node.
@@ -1289,13 +1290,6 @@ impl NodeInst {
         collection::work::retire_node(u, &self);
         u.ops.push(Op::DestroyView { id: self.view });
     }
-}
-
-/// The journal line for a value a row refused.
-fn invalid(view: ViewId, row: &str, value: &Value) -> String {
-    let mut shown = String::new();
-    crate::agent::untyped_json(value, &mut shown);
-    format!("view {view}: invalid {row} value {shown}; unset")
 }
 
 /// A face's colour that is no colour (LLP 1045.000 D2), as written; `then`

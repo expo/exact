@@ -497,6 +497,19 @@ fn the_retention_build_says_what_the_whole_build_does() {
         );
         assert!(!whole.1.is_empty(), "{tag}: a synthetic expression");
         assert_eq!((second.retention, second.candidates), whole, "{tag}");
+        let diagnostic = |result: Result<(), contract::CompileError>| {
+            result.map_err(|e| (e.id, e.message, e.span, e.file))
+        };
+        let mut kept = second.kept;
+        assert_eq!(
+            diagnostic(
+                contract::check_path_reusing(&root, &mut kept, contract::Stop::Refusal)
+                    .first
+                    .map_or(Ok(()), Err)
+            ),
+            diagnostic(contract::compile_path(&root).map(|_| ())),
+            "{tag}: reused lowering"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

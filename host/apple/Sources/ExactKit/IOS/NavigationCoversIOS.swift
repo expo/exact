@@ -299,6 +299,21 @@ extension NavigationHost {
         }
         deliveringCovers = true
         defer { deliveringCovers = false }
+        // A stack change held for a lifted header (`liftHeld`) is given to
+        // UIKit by the sync of the runtime's answer to its cover. The session
+        // applies answers in the order asked, a slice in flight first: the
+        // hold ends just before this answer, and what it did not sync (an
+        // answer that moved nothing) syncs after it. An answer applied here
+        // can lift another header, whose own delivery finds this one running.
+        let idle = { [weak self] (work: @escaping () -> Void) in
+            guard let session = self?.presenter.session else { return work() }
+            session.whenIdle(bound: true, work, cancelled: { self?.liftHeld = false })
+        }
+        let held = liftHeld
+        if held { idle { [weak self] in self?.liftHeld = false } }
+        defer {
+            if held || liftHeld { idle { [weak self] in self?.liftHeld = false; self?.liftAnswered() } }
+        }
         var toldInsets = localInsets.wanted
         for _ in 0..<8 {
             toldInsets = localInsets.wanted

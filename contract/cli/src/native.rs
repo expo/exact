@@ -17,6 +17,7 @@ use std::path::Path;
 
 mod packages;
 mod slot;
+pub(crate) use packages::implementation_imports;
 pub use packages::{bound, plan_packages, rust_packages, write_desktop_packages, Bound};
 pub use slot::{native_slot, NativeSelection, NativeSlot};
 
