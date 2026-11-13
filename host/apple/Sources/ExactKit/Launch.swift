@@ -252,8 +252,8 @@ public final class ExactLaunch: NSObject {
 
     private var firstWorldPresentation: Double?
 
-    /// Keep an early compositor notice until the tree presents: the world's
-    /// first frame must neither be lost nor dated before the app's first pixel.
+    /// Keep the first gpu_on_presented notice until the tree presents, so the
+    /// present → world → interactive marks cannot date the world before first pixel.
     public func worldPresented() {
         guard launchSession != nil, firstWorldPresentation == nil else { return }
         firstWorldPresentation = CACurrentMediaTime()
