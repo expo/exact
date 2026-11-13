@@ -330,6 +330,12 @@ class Natives(
 
     /** Op 28 seen while ingesting a stream: make or update the element; [row] draws it (0: not in a row). */
     fun ensure(id: Int, kind: Int, w: Int, h: Int, props: String, row: Int, fullWindow: Boolean = false) {
+        // A top-level WebView cannot enforce an iframe's sandbox (LLP 1020 D2).
+        if (kind == 1 && !JSONObject(props).isNull("sandbox")) {
+            elements[id]?.let { release(it, reuse = false) }
+            android.util.Log.w("exact", "iframe $id: sandbox is unsupported on Android")
+            return
+        }
         val json = if (kind == 2) JSONObject(props) else null
         val module = json?.optString("module")
         val generation = json?.optInt("generation") ?: 0
@@ -516,7 +522,7 @@ class Natives(
         5 -> hatched?.invoke(id, context)?.also { (it.parent as? android.view.ViewGroup)?.removeView(it) }
         3 -> if (buffered && !refused) View(context) else TextureView(context).apply { isOpaque = false }
         0 -> videoPool.removeLastOrNull() ?: TextureView(context).apply { isOpaque = false }
-        1 -> webPool.removeLastOrNull()?.apply { onResume() } ?: WebView(context).apply {
+        1 -> webPool.removeLastOrNull()?.apply { settings.javaScriptEnabled = true; onResume() } ?: WebView(context).apply {
             settings.javaScriptEnabled = true
             // A guest's navigations stay in its frame, as in a browser's; a file only under the asset root.
             webViewClient = object : WebViewClient() {
@@ -803,18 +809,18 @@ class Natives(
         e.dirty = true
     }
 
-    private fun release(e: Element) {
+    private fun release(e: Element, reuse: Boolean = true) {
         elements.remove(e.id)
         nodes = null
         if (e.parked) { waiting--; e.node.discardDisplayList(); return }
         byView.remove(e.view)
         if (e.kind == 3) { if (e.buffers) { if (e.asked != 0L) Exact.detachBuffers(e.id); e.wrapped.clear() } else unwindow(e) }
-        retire(e)
+        retire(e, reuse)
         e.node.discardDisplayList()
     }
 
     /** [e]'s view is kept for the next element of its kind, or goes. */
-    private fun retire(e: Element) {
+    private fun retire(e: Element, reuse: Boolean = true) {
         e.eventBinding++
         if (pooled(e.kind)) held--
         val module = e.module?.let { modules[it] }
@@ -832,18 +838,25 @@ class Natives(
             e.playing = false; e.inView = false; e.stale = false; e.video = null
         } else if (e.kind == 2 && module != null && (pool[e.module!!]?.size ?: 0) < modulePool && module.reset(e.view)) {
             pool.getOrPut(e.module!!) { ArrayList() }.add(e.view)
-        } else if (e.kind == 1 && webPool.size < WEB_POOL && webs) {
-            webPool.add((e.view as WebView).apply { onPause() })
+        } else if (e.kind == 1 && reuse && webPool.size < WEB_POOL && webs) {
+            webPool.add((e.view as WebView).apply {
+                // onPause alone keeps JavaScript running; a lent view must hold no active guest.
+                stopLoading()
+                settings.javaScriptEnabled = false
+                settings.allowFileAccess = false
+                loadUrl("about:blank")
+                onPause()
+            })
         } else {
             module?.destroy(e.view)
-            (e.view as? WebView)?.destroy()
             removeView(e.view)
+            (e.view as? WebView)?.destroy()
         }
     }
 
     fun destroyAll() {
         for (e in elements.values.toList()) release(e)
-        for (w in webPool) { w.destroy(); removeView(w) }
+        for (w in webPool) { removeView(w); w.destroy() }
         webPool.clear()
         for (v in videoPool) { players.remove(v)?.release(); removeView(v) }
         videoPool.clear(); sources.clear(); sizes.clear()

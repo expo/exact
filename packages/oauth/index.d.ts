@@ -140,7 +140,9 @@ export interface OAuthProvider {
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
   /** Forgets the session, then asks the provider to revoke it. */
   signOut(store: OAuthStore): Promise<OAuthResult>;
-  /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`. */
+  /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
+   *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or
+   *  `session_changed` when the person has signed in again since it was sent. */
   fetch(store: OAuthStore, url: string, init?: RequestInit): Promise<Response>;
   /** As `fetch`, then the parsed JSON body; any status that is not 2xx throws `OAuthError`. */
   json(store: OAuthStore, url: string, init?: RequestInit): Promise<unknown>;

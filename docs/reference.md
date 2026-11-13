@@ -86,7 +86,11 @@ backslash traversal, alternate-stream and reserved-device forms are refused.
 
 Snapback4 consumers use release **0.4.33**: the CLI is pinned in `bun.lock`;
 Cargo pins the device and its client to the matching release source commit
-`3653cae823145170df3e720f5e321bd1b5b4d79d`. `snapback4/` is one client for an
+`3653cae823145170df3e720f5e321bd1b5b4d79d`. The root `package.json` overrides
+the undici 0.4.33 pins with 8.12.2, the version 0.4.43 pins, for the eight
+advisories on 8.11.2 (among them
+[GHSA-qrxm-fqhp-jwvm](https://github.com/nodejs/undici/security/advisories/GHSA-qrxm-fqhp-jwvm));
+a pin at 0.4.43 or later drops the override. `snapback4/` is one client for an
 app's Rust and TypeScript on every host ([its README](../snapback4/README.md)):
 the protocol in Rust without I/O, the native device, the web's wasm, and the
 TypeScript driver an app mounts with `typescript.sources`. The client is its
@@ -341,7 +345,9 @@ app's bundle identity: its name in the menu bar, its Dock tile, and the
 document types Finder's Open With reads. `install` also writes a shim named by
 the manifest's `app.command` into the first of `~/.local/bin`, `/usr/local/bin`,
 `~/bin` that is already on `PATH` (`EXACT_BIN_DIR` overrides), and prints the
-line to add when none is.
+line to add when none is. It replaces only this app's own: a bundle with
+another bundle identifier, a command it did not write, or a link at either
+path is refused, and nothing is changed. `exact uninstall` leaves them too.
 
 A standalone macOS app treats `kill -TERM <pid>` as an orderly quit: its
 `beforeunload` handlers can cancel, pending storage gets the same five-second
@@ -1595,7 +1601,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
 | `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
-| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts |
+| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Outside a drive the web writes it to the browser's console too, and an Android development build to logcat under the tag `exact-app` (`adb logcat -s exact-app`). An Android release build and the other native hosts keep it for `logs` alone |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
 under one domain (`https://*.example.com`), or a whole scheme, written as CSP

@@ -1,11 +1,44 @@
 import { hostFixtureFile, wasmSource, glueDeclarations } from './tests/glue-fixture.mjs';
-// @ref LLP 1043.000 §3 D7/D8 — pure glue tests, beside existing bun:test glue tests.
+// @ref LLP 1043.000 §3 D7/D8 — browser flow and its optional walker.
 import { test, expect } from 'bun:test';
 import { baselineIn, fragmentBaseline, fragmentDiff, framePhases, fontStyle, forgetTextBoxEdges, measurementCache, textBoxCut } from './textflow-glue.js';
 import { render } from '../../scripts/agent.mjs';
 import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
 import { timerWake, createTimerScheduler } from './timer-glue.js';
 import { fileURLToPath } from 'node:url';
+import { buildFlow } from '../web-js/module.mjs';
+import { readFileSync } from 'node:fs';
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
+
+test('the optional textflow walker stays below 96 KiB and preserves fractional geometry', async () => {
+  const bytes = readFileSync(await buildFlow());
+  // Compress the leaf separately, as scripts/metrics.mjs measures shipped files.
+  const brotli = brotliCompressSync(bytes, { params: {
+    [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: bytes.length,
+  } }).length;
+  console.log(`textflow.wasm: ${bytes.length} raw, ${gzipSync(bytes, { level: 9 }).length} gzip-9, ${brotli} brotli-11 bytes (on demand)`);
+  expect(bytes.length).toBeLessThanOrEqual(96 * 1024);
+  const { instance: { exports: wasm } } = await WebAssembly.instantiate(bytes);
+  const request = (op, input) => {
+    const ptr = wasm.textflow_in(input.length);
+    new Uint8Array(wasm.memory.buffer, ptr, input.length).set(input);
+    const len = wasm.textflow_request(op, 1, input.length);
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, wasm.textflow_out(), len)));
+  };
+  const source = new Uint8Array(13);
+  source.set(new TextEncoder().encode('a'), 12);
+  expect(request(0, source).utf16_len).toBe(1);
+  expect(request(1, new Uint8Array(new Float32Array([0, 0.1]).buffer))).toEqual({ prepared: true });
+  const geometry = new ArrayBuffer(24), view = new DataView(geometry);
+  view.setFloat32(0, 100, true);
+  view.setFloat32(4, 0.1, true);
+  view.setFloat32(8, 1, true);
+  const result = request(2, new Uint8Array(geometry));
+  expect(result.line_height).toBe(0.1);
+  expect(result.height).toBe(0.1);
+  expect(result.fragments[0]).toMatchObject({ start: 0, end: 1, width: 0.1, available: 100 });
+  expect(result.complete).toBe(true);
+}, 60000);
 
 const { unavailable: browserUnavailable } = chromium();
 const browserTest = need('chrome', browserUnavailable);

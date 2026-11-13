@@ -7,9 +7,12 @@
 // - An option the call omits stays the browser's own (D2); one it writes is
 //   passed as written.
 // - `accuracy` is `unknown`: the web says nothing of approximate location (D8).
-// - One `watchPosition` registration serves every reader; each new fix
-//   announces `geolocation.watchPosition`, so readers are asked again, and
-//   `release` clears it when the last reader goes (D5).
+// - One `watchPosition` registration serves every reader with the same
+//   options, and each set of options has its own, so the browser holds each
+//   reader to its own accuracy, timeout and cached-fix age (D2). Each new fix
+//   announces `geolocation.watchPosition`, so readers are asked again;
+//   `releaseArgs` clears a registration when no reader asks with its options,
+//   and `release` every one when the last reader goes (D5).
 // - `requestPreciseLocation` is `NotSupportedError` on the web (D10).
 // - The state is live: `PermissionStatus`'s change, and, since WebKit sends
 //   none, a look again when the page returns to the foreground (where the
@@ -42,7 +45,10 @@ export function implementation({ changed }) {
   const geo = typeof navigator === 'object' ? navigator.geolocation : undefined;
   // Queried afresh each time: WebKit's `PermissionStatus` keeps the state it was made with.
   const query = () => navigator.permissions.query({ name: 'geolocation' });
-  let permission = null, watch = null, last = null, waiting = [], said = null;
+  let permission = null, said = null;
+  // By options, as `options` writes them: the browser's watch id, its last answer, and the reads awaiting one.
+  const watches = new Map();
+  const clear = key => { const w = watches.get(key); if (w) { geo.clearWatch(w.id); watches.delete(key); } };
   const again = () => query().then(p => { if (p.state !== said) changed('geolocation.geolocationStatus'); }, () => {});
   if (typeof addEventListener === 'function') {
     addEventListener('focus', again);
@@ -65,22 +71,26 @@ export function implementation({ changed }) {
     },
     watchPosition(args) {
       if (!geo) return Promise.resolve({ error: 'NotSupportedError' });
-      if (watch == null) {
-        const deliver = v => { last = v; for (const w of waiting.splice(0)) w(v); changed('geolocation.watchPosition'); };
-        watch = geo.watchPosition(p => deliver(position(p)), e => deliver(failure(e)), options(args));
+      const asked = options(args), key = JSON.stringify(asked);
+      let w = watches.get(key);
+      if (!w) {
+        w = { id: null, last: null, waiting: [] };
+        const deliver = v => { w.last = v; for (const answer of w.waiting.splice(0)) answer(v); changed('geolocation.watchPosition'); };
+        watches.set(key, w);
+        w.id = geo.watchPosition(p => deliver(position(p)), e => deliver(failure(e)), asked);
       }
-      return last ? Promise.resolve(last) : new Promise(w => waiting.push(w));
+      return w.last ? Promise.resolve(w.last) : new Promise(answer => w.waiting.push(answer));
     },
     async requestPreciseLocation() {
       return { error: 'NotSupportedError' };
     },
+    /** No reader asks `source` with `args` any longer: its registration goes. */
+    releaseArgs(source, args) {
+      if (source === 'watchPosition') clear(JSON.stringify(options(args)));
+    },
     /** The last reader of `source` is gone: stop what it started. */
     release(source) {
-      if (source === 'watchPosition' && watch != null) {
-        geo.clearWatch(watch);
-        watch = null;
-        last = null;
-      }
+      if (source === 'watchPosition') for (const key of [...watches.keys()]) clear(key);
     },
   };
 }

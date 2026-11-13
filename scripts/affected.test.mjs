@@ -409,6 +409,40 @@ test("the lane's steps read the dists they are given by variable, and no other s
   } finally { done(); }
 });
 
+test("the lane selects the web module drives for their fixtures and shared implementation", async () => {
+  const { checks, laneSelection } = await import('./async.mjs');
+  const repo = new Repo(), graph = new Graph(repo);
+  const catalogue = suites(repo).filter(s => s.kind === 'drive');
+  const both = ['drive:module-seams', 'drive:notifications-web'];
+  expect(catalogue.map(s => s.id).sort()).toEqual(both);
+  const picked = file => select(graph, [file], catalogue).map(s => s.suite.id).sort();
+  // The compiler's reference to the differential corpus conservatively includes all of contract/.
+  for (const file of ['contract/cli/tests/bell/seams.mjs', 'contract/cli/tests/bell/web/index.js', 'contract/cli/tests/bell/app/panel.contract']) {
+    expect(picked(file), file).toEqual(both);
+  }
+  for (const file of ['packages/notifications/test/drive.mjs', 'packages/notifications/web/index.js', 'packages/notifications/test/fixture/app.contract']) {
+    expect(picked(file), file).toEqual(['drive:notifications-web']);
+  }
+  for (const file of ['contract/cli/src/modules.rs', 'runner/src/runner/modules/declared.rs', 'js/bake/src/typescript.mjs', 'host/web-js/rt.js', 'scripts/exact.mjs', 'scripts/agent.mjs']) {
+    expect(picked(file), file).toEqual(both);
+  }
+  for (const file of ['docs/testing.md', 'host/apple/Sources/ExactKit/Mac/CaptureMac.swift']) expect(picked(file), file).toEqual([]);
+  for (const [file, names] of [
+    ['contract/cli/tests/bell/app/app.contract', ['module-seams', 'notifications-web']],
+    ['packages/notifications/exact.json', ['notifications-web']],
+    ['host/web-js/rt.js', ['module-seams', 'notifications-web']],
+    ['docs/testing.md', []],
+  ]) {
+    const selection = laneSelection([file], { root: repo.root, repo });
+    const steps = checks('new', 'old', { ...selection, lane: [] });
+    expect(steps.filter(([name]) => ['module-seams', 'notifications-web'].includes(name)).map(([name]) => name), file).toEqual(names);
+  }
+  expect(commands(catalogue.map(suite => ({ suite })))).toEqual([
+    ['bun', 'contract/cli/tests/bell/seams.mjs'],
+    ['bun', 'packages/notifications/test/drive.mjs', 'web'],
+  ]);
+}, 120_000);
+
 test("the lane runs the iOS classes a commit's test files reach, and every class before `--only`", async () => {
   const { laneSelection } = await import('./async.mjs');
   const test = 'host/apple/tests/ExactKitTests/A.swift';

@@ -29,7 +29,7 @@ const STATED = {
     setAppGrantSet: 'g => g', overlaying: '{ on: false }', inOverlay: 'api => new Error(api)' },
   'admission-data.js': { tsGrantSet: '{}' },
   // The build points ts-data.js's `__FETCH_MODULE__` here, from which it imports `fetch`.
-  'ts-fetch.js': { fetch: '() => {}', answering: '{ call: null, untraced: new Set() }', files: '{ appId: null }', activeCall: '() => answering.call',
+  'ts-fetch.js': { fetch: '() => {}', answering: '{ call: null, untraced: new Set(), ordinary: (start) => start() }', files: '{ appId: null }', activeCall: '() => answering.call',
     SOCKET_AND_FETCH: "'a mutation cannot both send on a socket and fetch'" },
   'names.js': { sourceTypes: '{}' },
 };

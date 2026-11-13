@@ -68,6 +68,13 @@ export function implementation({ changed }) {
     if (!c) return { error: { error: 'InvalidStateError', message: 'no such connection' } };
     return { c };
   };
+  // A closed or unplugged handle controls nothing: its `SerialPort` may since have been opened again as another
+  // connection, which would take its writes and signals.
+  const live = args => {
+    const r = connection(args);
+    if (r.error || (r.c.open && !r.c.unplugged)) return r;
+    return { error: { error: 'InvalidStateError', message: 'the connection is closed' } };
+  };
 
   return {
     serialStatus() {
@@ -115,14 +122,14 @@ export function implementation({ changed }) {
       return { open: c.open && connected, connected, options: c.options };
     },
     async setSignals(args) {
-      const { c, error } = connection(args);
+      const { c, error } = live(args);
       if (error) return error;
       const signals = {};
       for (const k of ['dataTerminalReady', 'requestToSend', 'break']) if (args[k] != null) signals[k] = args[k];
       try { await c.port.setSignals(signals); return null; } catch (e) { return failure(e); }
     },
     async getSignals(args) {
-      const { c, error } = connection(args);
+      const { c, error } = live(args);
       if (error) return error;
       try { return await c.port.getSignals(); } catch (e) { return failure(e); }
     },
@@ -139,11 +146,13 @@ export function implementation({ changed }) {
       return { data: b64(bytes), errors, done, position: c.position };
     },
     async write(args) {
-      const { c, error } = connection(args);
+      const { c, error } = live(args);
       if (error) return error;
-      // Writes go out in order: each waits for the one before it.
+      // Writes go out in order: each waits for the one before it. One still waiting when the connection closes is
+      // aborted, as closing a port aborts its writable's queued chunks (Web Serial's close()).
       const bytes = unb64(args.data ?? '');
       const done = c.writer.then(async () => {
+        if (!c.open) throw new DOMException('the connection closed', 'AbortError');
         const writer = c.port.writable.getWriter();
         try { await writer.write(bytes); } finally { writer.releaseLock(); }
       });
@@ -153,6 +162,8 @@ export function implementation({ changed }) {
     async close(args) {
       const { c, error } = connection(args);
       if (error) return error;
+      // An unplugged connection still closes; a closed one is done, and its port may be another connection's.
+      if (!c.open) return { error: 'InvalidStateError', message: 'the connection is closed' };
       c.open = false;
       c.wake?.();
       try { await c.reader?.cancel(); } catch { /* the port went away */ }

@@ -683,7 +683,7 @@ writeFileSync(resolve(gen, 'grant-admission.js'), admitsNothing ? emptyGrantAdmi
 const admission = readFileSync(resolve(here, 'admission.js'), 'utf8');
 const stubbed = [
   ["import { faultMessage, takeFault } from '../web/faults.js';", "const takeFault = () => false, faultMessage = () => '';"],
-  ["import { redirectFor, reachRefusal } from '../web/address-space.js';", 'const redirectFor = (origin, redirect) => redirect, reachRefusal = () => null;'],
+  ["import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';", "const redirectFor = (origin, redirect) => redirect, reachRefusal = () => null, UNATTRIBUTED = 'unattributed';"],
 ].reduce((text, [line, stub]) => {
   if (!admission.includes(line)) throw new Error(`host/web-js/admission.js: build.mjs replaces a line it no longer has: ${line}`);
   return admitsNothing ? text.replace(line, stub) : text;

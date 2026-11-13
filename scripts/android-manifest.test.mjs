@@ -188,6 +188,22 @@ test("payments' callbacks service is exported only to Play services' binder, wit
   refuses({ metadata: [{ name: 'com.google.android.geo.API_KEY', value: 'k' }] }, 'API_KEY');
 });
 
+test('a meta-data is only a listed name with its value, both strings', () => {
+  const pay = 'com.google.android.gms.wallet.api.enabled';
+  const refuses = (metadata, what) => assert.throws(() => manifestFragment(impl({ metadata })), (e) => e.message.includes(what) && e.message.includes("alarms's Android implementation"));
+  refuses([{ name: 'review.unknown' }], 'without a string name and value');
+  refuses([{ name: 'review.unknown', value: 'true' }], 'review.unknown');
+  refuses([{ value: 'true' }], 'without a string name and value');
+  refuses([{ name: pay }], 'without a string name and value');
+  refuses([{ name: pay, value: true }], 'without a string name and value');
+  refuses([{ name: pay, value: 'false' }], 'not on the list');
+  refuses([{ name: 'a"/><provider android:name="x', value: 'true' }], 'not on the list');
+  refuses([{ name: '__proto__', value: 'true' }], 'not on the list');
+  refuses([null], 'without a string name and value');
+  refuses([7], 'without a string name and value');
+  assert.match(manifestFragment(impl({ metadata: [{ name: pay, value: 'true' }] })), /<meta-data android:name="com\.google\.android\.gms\.wallet\.api\.enabled" android:value="true" \/>/);
+});
+
 test('app and package Maven coordinates share validation and refuse conflicting versions by owner', async () => {
   const { mavenCoordinates } = await import('./agent-android.mjs');
   const dir = resolve(tmpdir(), 'maps');

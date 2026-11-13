@@ -248,8 +248,9 @@ function stream(input, init, redirect, protocols) {
   const later = !!call?.ticket && !call.turn && !!call.flight && answers(call);
   if (!call?.turn && !later) return Promise.reject(new Error('fetch() with exactStream outside an answer: a stream starts in its answer\'s own turns (its source, its code after an `await` in an async function, its timer), before the answer gives its value or is let go'));
   if (call.stream) return Promise.reject(new Error('an answer streams one request'));
-  // Checked and opened by ts-stream.js, which only a streaming module loads.
-  call.stream = { input, init, redirect, protocols };
+  // Checked and opened by ts-stream.js, which only a streaming module loads. It goes out with the origin of the
+  // answer that asked it (LLP 1133.036 D6), taken now: the stream opens after this turn.
+  call.stream = { input, init, redirect, protocols, origin: call.origin };
   if (later) try { call.late(); } catch (e) { call.stream = null; return Promise.reject(e); }
   return new Promise(() => {});
 }

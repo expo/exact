@@ -77,13 +77,21 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
     if (r.media?.state === 'paused') r.media.resume();
     announce();
   };
-  /** Write what the browser delivers (bytes, or a Blob), in order; the first slice replaces any file there. */
+  /** Write what the browser delivers (bytes, or a Blob), in order; the first slice replaces any file there. The first
+   * failure stops the recorder, and nothing after it is written: the file would have a hole. */
   const write = (r, data) => {
     r.writing = r.writing.then(async () => {
+      if (r.failure) return;
       const bytes = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
       await (r.size ? files.append(r.path, bytes) : files.write(r.path, bytes));
       r.size += bytes.byteLength;
-    }).catch(e => { if (!r.failed) { r.failed = true; say(`${r.path}: not written: ${e.message}`); } });
+    }).catch(e => {
+      if (r.failure) return;
+      const name = typeof e?.name === 'string' && /.Error$/.test(e.name) ? e.name : 'UnknownError';
+      r.failure = { error: name, message: `${r.path} was not written: ${e?.message ?? e}` };
+      say(r.failure.message);
+      finish(r, 'error', r.failure.message);
+    });
     return r.writing;
   };
   /** Stop `r` for `reason` and finish its file; its result is sticky (D1). */
@@ -101,6 +109,13 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       }
       await r.writing;
       r.unsubscribe?.();
+      // A take whose file was not all written is no result: the stop answers the failure, and the state says it.
+      if (r.failure) {
+        r.reason = 'error'; r.error = r.failure.message;
+        say(`${r.id}: stopped (error), ${r.path} incomplete`);
+        announce();
+        return r.failure;
+      }
       r.result = { path: r.path, mimeType: r.mimeType, duration: r.recorded, size: r.size };
       say(`${r.id}: stopped (${reason}), ${r.path}, ${r.size} bytes`);
       announce();

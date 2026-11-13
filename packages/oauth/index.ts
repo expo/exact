@@ -159,7 +159,9 @@ export interface OAuthProvider {
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
   /** Forgets the session, then asks the provider to revoke it. */
   signOut(store: OAuthStore): Promise<OAuthResult>;
-  /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`. */
+  /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
+   *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or
+   *  `session_changed` when the person has signed in again since it was sent. */
   fetch(store: OAuthStore, url: string, init?: RequestInit): Promise<Response>;
   /** As `fetch`, then the parsed JSON body; any status that is not 2xx throws `OAuthError`. */
   json(store: OAuthStore, url: string, init?: RequestInit): Promise<unknown>;
@@ -205,6 +207,9 @@ interface Kept {
   subject?: string;
   /** The client the session was signed in for. */
   client?: string;
+  /** This sign-in's own random name, which its refreshes keep: a request sent
+   *  with its token is sent again only while it is the session kept. */
+  login?: string;
   tokenEndpoint?: string;
   revocationEndpoint?: string;
   ended?: string;
@@ -449,6 +454,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
         // tokens are checked against that one's claims, its `nonce` included.
         if (!kept.refreshToken && held?.refreshToken && same) Object.assign(kept, { refreshToken: held.refreshToken, first: held.first });
       }
+      kept.login = random(16);
       store.set(config.key, JSON.stringify(kept));
       note(async () => ({ type: 'signed-in', token: await print(kept.refreshToken) }));
       return { ok: true, code: '', error: '', retryable: false, status: 0 };
@@ -474,8 +480,10 @@ export function oauth(config: OAuthConfig): OAuthProvider {
 
   const renew = async (store: OAuthStore, seen: Kept): Promise<Kept> => {
     const now = read(store);
-    // Another caller refreshed, or the person signed out or in, meanwhile.
+    // The person signed out or in meanwhile: `seen`'s request is not sent again as another sign-in's.
     if (!now?.accessToken) throw signedOutError(now);
+    if (now.login !== seen.login) throw sessionChangedError();
+    // Another caller refreshed meanwhile.
     if (now.refreshToken !== seen.refreshToken || now.accessToken !== seen.accessToken) return now;
     const sent = now.refreshToken;
     if (!sent) {
@@ -529,6 +537,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     const after = read(store);
     if (after?.refreshToken !== sent) {
       if (!after?.accessToken) throw signedOutError(after);
+      if (after.login !== seen.login) throw sessionChangedError();
       return after;
     }
     // An ID token the reply carries, an unchanged one too, is checked before
@@ -878,6 +887,7 @@ function keep(reply: TokenReply, before: Kept | null, meta: Metadata | null, con
     scopes,
     subject: before?.subject ?? '',
     client: before?.client,
+    login: before?.login,
     tokenEndpoint: before?.tokenEndpoint ?? meta?.token,
     revocationEndpoint: before?.revocationEndpoint ?? meta?.revocation,
   };
@@ -969,6 +979,11 @@ function describe(reply: TokenReply): string {
 
 function signedOutError(kept: Kept | null): OAuthError {
   return new OAuthError('signed_out', kept?.ended ?? 'Not signed in.', 0, false, true);
+}
+
+// A request's sign-in was replaced by another while it was out. The person is signed in, so not `signedOut`.
+function sessionChangedError(): OAuthError {
+  return new OAuthError('session_changed', 'The person signed in again while the request was out, so it was not sent again.');
 }
 
 // A fetch the grants refuse says which grant line to add.

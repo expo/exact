@@ -82,7 +82,10 @@ impl Painter {
             ),
             NodeType::WebView => (
                 NativeKind::WebView,
-                serde_json::json!({ "src": p.str(PropId::Src) }),
+                serde_json::json!({
+                    "src": p.str(PropId::Src),
+                    "sandbox": p.str(PropId::Sandbox),
+                }),
             ),
             NodeType::NativeView => (
                 NativeKind::Module,

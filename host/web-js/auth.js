@@ -165,7 +165,7 @@ export function install(grants, target) {
     Glue.arm({ ticket }, {
       agent: false, log: say, active: t => Live.some(x => x.ticket === t),
       call: req => {
-        if (req.op === "arm") return req.popup === false ? (report = [428, "popup blocked"], { settled: true }) : { present: { url: s.url, callback: s.callback } };
+        if (req.op === "arm") return req.popup === false ? (report = [428, "popup blocked"], { settled: true }) : { present: { url: s.url, callback: s.callback, state: s.state } };
         if (req.op === "done") { const why = req.url != null ? accept(s, req.url) : null; report = req.url != null ? (why ? [502, why] : [200, req.url]) : [req.status, req.message ?? ""]; }
         return {};
       },

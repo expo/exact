@@ -51,7 +51,7 @@ test('the lane requires coverage and gives its web tests this commit\'s builds',
   const names = Object.keys(steps);
   expect(names.indexOf('prepare')).toBeLessThan(names.indexOf('test'));
   expect(names.indexOf('prepare')).toBeLessThan(names.indexOf('glue'));
-  for (const name of ['test', 'glue', 'web-build-test', 'web-ax-test']) expect(steps[name][2]).toContain('EXACT_REQUIRED=1');
+  for (const name of ['test', 'glue', 'web-build-test', 'web-ax-test', 'module-seams', 'notifications-web']) expect(steps[name][2]).toContain('EXACT_REQUIRED=1');
   const glue = steps.glue[2].join(' ');
   for (const v of ['EXACT_WEB_DIST=', 'EXACT_WEB_JS_DIST=', 'EXACT_NO_GPU_WASM_DIST=', 'EXACT_NO_GPU_JS_DIST=', 'EXACT_MOTION_DIST=']) expect(glue).toContain(v);
   expect(steps.prepare[2][1]).toContain('EXACT_WEB_LINK=all');

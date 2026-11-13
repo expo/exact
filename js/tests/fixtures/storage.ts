@@ -150,6 +150,20 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     } catch(error:any) { return {text:error.message}; }
   }
   if (op === "placeholder") return {text: ""};
+  if (op === "doc-file-codes") {
+    const out: string[] = [];
+    for (const path of [value, value + "/child"]) {
+      for (const step of [
+        () => storage.fs.readdir(path),
+        () => storage.fs.mkdir(path),
+        () => storage.fs.rm(path),
+      ]) {
+        try { await step(); out.push("allowed"); }
+        catch (error: any) { out.push(error.kind + " " + error.code); }
+      }
+    }
+    return {text: out.join(" ")};
+  }
   if (op === "doc-link") {
     const steps = [
       () => storage.fs.readFile(value),

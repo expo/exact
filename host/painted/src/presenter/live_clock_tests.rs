@@ -107,6 +107,53 @@ fn ticks(p: &Presenter<NoData>) -> f64 {
 }
 
 #[test]
+fn reader_turns_leave_frozen_timers_for_an_explicit_clock_operation() {
+    let plan = crate::test_plan(TICKER);
+    for live in [false, true] {
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            NoData,
+            (80., 40.),
+            1.,
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        p.set_live_clock(Some(Rc::new(|| 1000.)));
+        // Take over at the deadline before the display has delivered the timer.
+        p.set_live_clock(None);
+        p.tick(1000.);
+        if live {
+            p.set_live_clock(Some(Rc::new(|| 1000.)));
+        }
+        assert_eq!(p.host().runner().now_ms(), 1000.);
+        assert_eq!(p.timer_due_ms(), Some(1000.));
+        assert_eq!(ticks(&p), 0.);
+
+        for op in ["state", "held", "state", "held"] {
+            let reply = crate::agent::handle(&mut p, &format!(r#"{{"op":"{op}"}}"#));
+            let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            assert!(reply.get("error").is_none(), "{reply}");
+            p.repaint();
+            assert!(p.reader_clock(1000., live).is_none());
+            assert_eq!(ticks(&p), if live { 1. } else { 0. }, "{op}");
+            assert_eq!(p.host().now(), 1000.);
+            assert_eq!(p.timer_due_ms(), Some(if live { 2000. } else { 1000. }));
+            assert_eq!(p.frame().width(), 80);
+            assert!(!p.dirty());
+        }
+        if !live {
+            let reply = crate::agent::handle(&mut p, r#"{"op":"clock","to":1000}"#);
+            let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            assert!(reply.get("error").is_none(), "{reply}");
+            assert_eq!(ticks(&p), 1.);
+            assert_eq!(p.timer_due_ms(), Some(2000.));
+        }
+    }
+}
+
+#[test]
 fn the_display_clock_reaches_every_host_until_a_driver_takes_time() {
     let plan = crate::test_plan(TICKER);
     let (mut p, _) = Presenter::boot_with(

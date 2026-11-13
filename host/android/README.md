@@ -23,6 +23,9 @@ minSdk the app's manifest's `host.android.minimumOS` gives: 31 (Android 12) with
 and 11", below). targetSdk 36, compileSdk 37.2, AGP 9.4.1, Kotlin 2.4.10, `arm64-v8a` only. Views, with no Compose,
 AppCompat or Material library.
 
+An `iframe` with `sandbox`, including `sandbox=""`, is refused before a WebView is created or navigated. The log
+names `iframe <id>: sandbox is unsupported on Android`. Adding `sandbox` destroys the frame's existing WebView.
+
 ## Where it came from
 
 The benchmark lane wrote it outside this repository. These are the files of
@@ -196,8 +199,11 @@ reading each, in each of four sessions, never more than 1 MB apart.
 
 `x_log_journal=1` at launch (exact2's `EXACT_LOG_JOURNAL`, `host/painted/src/canvas/journal.rs`) writes the app's
 journal to logcat as the host comes to hold each line, with the milliseconds since boot began: that is how the times
-above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Without it nothing is read or
-written.
+above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Like every launch extra, only a
+development build reads it.
+
+A development build always writes the data module's `console` lines to logcat under the tag `exact-app` (`adb logcat
+-s exact-app`); a release build does not.
 
 The published v5 Hermes bundle has ICU Unicode support but no `Intl` (LLP 1107 §4.1).
 An Intl-enabled bundle with receipt-bound English ICU data enables Ibex's

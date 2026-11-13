@@ -285,3 +285,44 @@ fn a_new_cohort_reuses_the_files_an_old_one_fetched() {
         );
     }
 }
+
+/// An asset index at the origin's root URL with a query and no path is the
+/// index at `/?index=1`: its relative card resolves under `/`.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn an_index_at_an_authority_and_a_query_resolves_its_cards() {
+    let base = Temp::new("reuse-root-index");
+    let mut client = launch(&base, "abc");
+    let index = serde_json::to_vec(&serde_json::json!({"assets": [
+        {"name": "asset.bin", "url": "asset.bin", "sha256": sha256_hex(b"one"), "bytes": 3},
+    ]}))
+    .unwrap();
+    let head = serde_json::json!({
+        "exact": 1, "app": {"id": "com.exact.t"},
+        "plan": {"url": "./app.plan", "sha256": sha256_hex(b"plan v2"), "bytes": 7},
+        "assets": {"url": format!("{CLIENT_ORIGIN}?index=1"), "sha256": sha256_hex(&index), "bytes": index.len(), "count": 1},
+        "stream": {"channel": "prod", "compatibilityId": "abc", "seq": 1},
+    });
+    let files = [
+        (
+            format!("{CLIENT_ORIGIN}/.exact/prod/abc/exact.json"),
+            serde_json::to_vec(&head).unwrap(),
+        ),
+        (format!("{CLIENT_ORIGIN}/?index=1"), index),
+        (
+            format!("{CLIENT_ORIGIN}/.exact/prod/abc/app.plan"),
+            b"plan v2".to_vec(),
+        ),
+        (format!("{CLIENT_ORIGIN}/asset.bin"), b"one".to_vec()),
+    ];
+    assert_eq!(
+        summary(check(&mut client, &files)),
+        expect(
+            "staged seq 1",
+            &["exact.json", "?index=1", "app.plan", "asset.bin"]
+        )
+    );
+}

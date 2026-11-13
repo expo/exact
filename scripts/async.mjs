@@ -7,7 +7,8 @@
  * `#[ignore = "async lane: …"]`, every web host unit test found by one glob
  * and the script capture fixtures,
  * the web host's app-building document test in its own step, the web JS target's conformance run
- * (`host/web-js/conform.mjs --strict`), the separate game workspace and in-repo game tests,
+ * (`host/web-js/conform.mjs --strict`), the module seam and notifications web drives,
+ * the separate game workspace and in-repo game tests,
  * the UIKit XCTests on a simulator and the tvOS and watchOS compiles (`build.mjs
  * --tvos --no-install`, `--watchos --no-install`), the SVG and motion parity smokes' Linux legs, the
  * Contract semantics (`semantics/README.md`) as four checks — the Lean proofs,
@@ -153,16 +154,21 @@ export function laneSelection(changed, { root = WT, full = false, repo } = {}) {
     webAx: WEB_AX.some(file => ids.has(`bun:${file.slice(2)}`)),
     conform: WEB_APPS.filter(app => ids.has(`conform:${app}`)),
     parity: PARITY.filter(smoke => ids.has(`parity:${smoke}`)),
+    moduleSeams: ids.has('drive:module-seams'), notificationsWeb: ids.has('drive:notifications-web'),
     ios: ids.has('xctest:ios'), iosOnly, touch: ids.has('touch:ios'), tvos: ids.has('compile:tvos'), watchos: ids.has('compile:watchos'),
   };
 }
 const WEB_AX = ['./host/web/tests/accessibility-tree.test.mjs', './host/web/tests/presence-preload.test.mjs', './host/web/tests/zero-viewport.test.mjs'];
 /** Every suite (a full run), as `laneSelection` gives it; `glue` is computed when it is not given. */
 export function everything(root = WT, glue) {
-  return { full: true, ids: [], cargo: [], game: true, glue: glue ?? glueTests(root), webBuild: true, webAx: true, conform: WEB_APPS, parity: PARITY, ios: true, iosOnly: null, touch: true, tvos: true, watchos: true };
+  return { full: true, ids: [], cargo: [], game: true, glue: glue ?? glueTests(root), webBuild: true, webAx: true,
+    conform: WEB_APPS, parity: PARITY, moduleSeams: true, notificationsWeb: true,
+    ios: true, iosOnly: null, touch: true, tvos: true, watchos: true };
 }
 /** No suite: what runs whatever changed. */
-export const nothing = () => ({ full: false, ids: [], cargo: [], game: false, glue: [], webBuild: false, webAx: false, conform: [], parity: [], ios: false, iosOnly: null, touch: false, tvos: false, watchos: false, lane: [] });
+export const nothing = () => ({ full: false, ids: [], cargo: [], game: false, glue: [], webBuild: false, webAx: false,
+  conform: [], parity: [], moduleSeams: false, notificationsWeb: false,
+  ios: false, iosOnly: null, touch: false, tvos: false, watchos: false, lane: [] });
 /** The checks a selection can leave out: a full run's that no suite's selection runs. */
 export const gated = () => {
   const names = selection => new Set(checks('', null, selection).map(([name]) => name));
@@ -237,6 +243,10 @@ export function checks(sha, since, selection = {}) {
     // The web build's JS target against the wasm runner, step by step (LLP
     // 1071 §4; Charlie, 2026-09-28): minutes and a network, so never blocking.
     ...when(conform.length, [['conform', 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--build', '--linux', '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--out', resolve(STATE_DIR, 'conform')]]]),
+    // These drives build their own external fixtures and launch the pinned Chromium (notifications needs its full
+    // build). Missing build tools or browsers fail the step; neither drive skips an unavailable prerequisite.
+    ...when(selection.moduleSeams, [['module-seams', 'env', [...required, 'bun', 'contract/cli/tests/bell/seams.mjs']]]),
+    ...when(selection.notificationsWeb, [['notifications-web', 'env', [...required, 'bun', 'packages/notifications/test/drive.mjs', 'web']]]),
     // `tree --ax` against Chrome's own tree (LLP 1080.002 §3), and the wasm
     // host's presence preload and zero-viewport recovery, over this commit's
     // Caltrain dists; a missing dist fails it.

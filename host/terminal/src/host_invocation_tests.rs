@@ -163,3 +163,50 @@ fn an_open_is_answered_at_the_named_element() {
         Some(&exact_plan::Value::from("opened failed "))
     );
 }
+
+/// A URL whose characters straddle a scheme's length is refused, not a
+/// panic, and Unicode after an allowed scheme is handed on.
+#[test]
+fn a_unicode_url_is_checked_without_slicing_a_character() {
+    let source = r#"component App
+  state heard = ""
+  action burst
+    openURL("💥💥", "opened")
+  action answered(value: string)
+    heard = heard + value + " "
+  view
+    column
+      input id="opened" display="none" change=answered
+      text "x"
+"#;
+    let mut host =
+        Host::boot(contract::compile(source).unwrap(), (), Mode::Inline, 40, 10).unwrap();
+    host.act("burst");
+    assert_eq!(
+        host.runner.slot("heard"),
+        Some(&exact_plan::Value::from("failed "))
+    );
+    // Each prefix length, 4 to 8 bytes, ends inside a character.
+    for refused in [
+        "é💥",
+        "💥é",
+        "a💥💥",
+        "ab💥💥",
+        "abc💥💥",
+        "htt💥",
+        "mail💥x",
+        "te💥",
+    ] {
+        assert!(!host.open_url(refused), "{refused}");
+    }
+    let handed = [
+        "https://例え.jp/パス",
+        "HTTP://é.example/",
+        "mailto:名前@example.jp",
+        "tel:☎",
+    ];
+    for url in handed {
+        assert!(host.open_url(url), "{url}");
+    }
+    assert_eq!(host.outbound, handed);
+}
