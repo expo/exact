@@ -1139,7 +1139,16 @@ final class FrameSamplerTests: XCTestCase {
         let url = try session.saveTrace().get()
         defer { try? FileManager.default.removeItem(at: url) }
         let trace = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        for key in ["identity", "proxies", "plan", "journal", "frames", "perf", "hatches"] { XCTAssertNotNil(trace[key], key) }
+        for key in ["identity", "proxies", "plan", "journal", "frames", "perf", "hatches", "tree", "state", "layout", "observation"] { XCTAssertNotNil(trace[key], key) }
+        let observation = try XCTUnwrap(trace["observation"] as? [String: Any])
+        XCTAssertEqual(observation["clockChanged"] as? Bool, false)
+        XCTAssertEqual(observation["clockMode"] as? String, session.clock == nil ? "real" : "virtual")
+        XCTAssertEqual(observation["settlingReads"] as? [String], [])
+        let reads = try XCTUnwrap(observation["reads"] as? [String: [String: String]])
+        for name in ["tree", "state", "layout", "journal", "perf"] { XCTAssertEqual(reads[name]?["class"], "passive") }
+        XCTAssertNotNil((trace["tree"] as? [String: Any])?["nodes"])
+        XCTAssertNotNil((trace["state"] as? [String: Any])?["slots"])
+        XCTAssertNotNil((trace["layout"] as? [String: Any])?["viewport"])
         let hatches = try XCTUnwrap(trace["hatches"] as? [String: [String: Any]])
         XCTAssertEqual(((hatches["perf"]?["counters"] as? [String: Any])?["module"] as? [String: Int])?["swipes"], 3)
         XCTAssertEqual((((hatches["state"]?["scopes"] as? [String: Any])?["module"] as? [String: Any])?["counters"] as? [String: Int])?["swipes"], 3)

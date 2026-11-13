@@ -1,6 +1,7 @@
 # The agent cannot attach to an app on real time
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A signalled snapshot of a normally launched development app includes tree, state, layout and stamps; --live launches on real time. A bounded perf frames live read of an arbitrary already-running process is deliberately not built: no new carrier, per the maintainer’s approved panel decision.
 **Systems:** scripts/agent.mjs, scripts/agent-launch.mjs, host/apple/Sources/ExactKit/Agent.swift
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -33,10 +34,20 @@ it made.
 A read-only attach (`tree`, `state`, `layout`, `logs`, `perf frames live`) to a running
 development build that leaves its clock alone, reached as `trace --pid` reaches one.
 
-## Decision needed
+## Qualification
 
-The existing live carrier requires launch-time opt-in; a normal development
-process exposes no carrier for these reads. Read-only attachment requires a
-decision about how that process admits a client, selects a session and limits
-operations (LLP 1012 §8; LLP 1142 D8). Frame capture itself is no longer the
-reported defect. This issue remains open for attachment.
+A normally launched macOS development Caltrain process returned two signalled
+snapshots with 282 tree nodes, state and mounted layout, stayed alive after each,
+and advanced its clock from 497 ms to 1826 ms. Both files report real clock, normal
+scheduling, real storage, no substitutions and passive reads. The --live drive
+accepts native taps and typing and reports its chosen scratch store and substitutions.
+FrameSamplerTests passes 35 tests; the driver and help suites pass 68.
+
+With `--live` and `EXACT_STORE=real`, the secret and preference stores are real;
+app files use the configured scratch tree and are unavailable when none is configured.
+State, trace and live-frame observations report the app-file policy from the same
+Rust decision that supplies its roots. Both live configurations are covered on macOS.
+
+A bounded `perf frames live` read of an arbitrary already-running process is
+deliberately not built. The maintainer’s approved panel decision admits no new
+carrier; `--live` launches a process rather than attaching that observation to one.

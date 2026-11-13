@@ -140,6 +140,13 @@ export async function main(argv, injected = {}) {
     console.error(`agent: no host \`${host}\`; name one of ${DRIVEN_HOSTS.join(', ')}`);
     return 2;
   }
+  if (flags.live) {
+    if (!['macos', 'mac'].includes(host) || flags.test)
+      throw new Error('--live requires a macOS drive without --test');
+    if (flags.timing && flags.timing !== 'platform')
+      throw new Error('--live keeps the platform clock; --timing agent is incompatible');
+    flags.timing = 'platform';
+  }
   const browser = flags.browser ?? (host === 'web' ? process.env.EXACT_WEB_BROWSER : undefined),
     help = argv.includes('--help') || argv.includes('-h'); // help before any work
   if (host && flags.test && !help) {
@@ -226,7 +233,7 @@ export async function main(argv, injected = {}) {
   if (!host || !ops.length) {
     console.error(
       [
-        'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
+        'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--live] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
         '  desktop carriers open 420x900 unless --size names another viewport; a target is a testId, a view id, or a view\'s exact label or text (`tap "Sky off"`); tap and type scroll a target out of view into it first; web defaults to chrome; EXACT_WEB_BROWSER selects the same option. Install the other engines outside the repo: bunx playwright@1.64.1 install firefox webkit',
         '  ' +
           [
@@ -344,6 +351,7 @@ export async function main(argv, injected = {}) {
         browser,
         ax: ops.some(line => /^\s*tree\s+--ax(?:\s|$)/.test(line)),
         env: {
+          ...(flags.live ? { EXACT_AGENT: 'live' } : {}),
           ...(fresh ? { EXACT_AGENT_STORAGE_FRESH: '1' } : {}),
           ...(flags.login ? { EXACT_LOGIN_LAUNCH: flags.login } : {}),
         },

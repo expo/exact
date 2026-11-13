@@ -667,7 +667,7 @@ extension ExactSession {
                                        "bootWall": ((Date().timeIntervalSince1970 - (CACurrentMediaTime() - ExactEnv.t0)) * 1000).rounded(),
                                        "pid": Int(ProcessInfo.processInfo.processIdentifier), "session": label,
                                        "savedAt": (Date().timeIntervalSince1970 * 1000).rounded(), "hostBuild": hostBuild]
-        let trace: [String: Any] = [
+        var trace: [String: Any] = [
             "traceEvents": events,
             "identity": identity,
             "proxies": ["period": "target: the sampler's own display link, targetTimestamp − timestamp",
@@ -681,6 +681,7 @@ extension ExactSession {
             // The hatches (LLP 1075.003.000.001 §3.3), read in this same turn, so the sections agree.
             "hatches": ["state": presenter.elements.observation(hatchDiagnostics), "perf": hatchPerf()],
         ]
+        trace.merge(traceSnapshot()) { _, snapshot in snapshot }
         do {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("trace-\(stamp).json")
@@ -843,15 +844,11 @@ extension Agent {
         let start = CACurrentMediaTime(), from = session.now(), before = sampler.observedCount
         let observation = FrameObservation(ms: ms) { [self] reason in
             sampler.endObservation()
-            let storageSubstituted = ExactEnv.environment["EXACT_AGENT"] != nil && ExactEnv.environment["EXACT_STORE"] != "real"
             var result = sampler.reply(late: request["late"] as? Int ?? 20, all: request["records"] as? Bool == true)
-            result["live"] = ["ms": (CACurrentMediaTime() - start) * 1000, "from": from, "to": session.now(),
-                              "clockMode": session.clock == nil ? "real" : "virtual", "clockChanged": false,
-                              "execution": ExactEnv.agentMode ? "agent" : "normal",
-                              "scheduling": ExactEnv.agentMode ? "agent" : "normal",
-                              "performanceClaim": !ExactEnv.agentMode && !storageSubstituted && session.clock == nil,
-                              "inputPath": "unknown", "observation": sampler.observation(from: (start - ExactEnv.t0) * 1000, before: before),
-                              "substitutions": ExactEnv.agentMode ? ["timers", "collection-fill-scheduling", "scroll-velocity", "wheel-routing", "device-facts", "capabilities"] : storageSubstituted ? ["storage", "secret-presence"] : []] as [String: Any]
+            result["live"] = session.executionObservation().merging([
+                "ms": (CACurrentMediaTime() - start) * 1000, "from": from, "to": session.now(),
+                "inputPath": "unknown", "observation": sampler.observation(from: (start - ExactEnv.t0) * 1000, before: before)
+            ]) { _, observed in observed }
             if let reason { result["error"] = session.state == .destroyed ? "session destroyed during live observation" : reason }
             completed(result)
         }
