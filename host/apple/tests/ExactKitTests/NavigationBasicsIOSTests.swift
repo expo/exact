@@ -895,7 +895,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let footer = box(sheet, y: 506, height: 60)
         XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a footer under it keeps the cover")
         footer.removeFromSuperview()
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "nor does a scroller that ends short of its parent")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "nor does a scroller that ends more than the cover short of its parent")
         scroller.frame.size.height = 506
         scroller.style["overflow_y"] = nil
         scroller.style["overflow_x"] = .string("scroll")
@@ -910,6 +910,14 @@ final class NavigationBasicsIOSTests: XCTestCase {
         sheet.frame.size.height = 566
         scroller.frame.size.height = 506
         XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller)
+        // Unpadded, a scroller a `max-height` holds short keeps the edge while its end lies within the cover, however
+        // far each box down to it stops short of its parent's bottom
+        for (child, end, owns) in [(CGFloat(600), CGFloat(580), true), (600, 560, false), (590, 580, true), (580, 560, false)] {
+            sheet.frame.size.height = child
+            scroller.frame.size.height = end - 60
+            XCTAssertEqual(NavigationHost.bottomScroller(in: route, cover: 34) === scroller, owns, "a scroller ending at \(end) in a child \(child) tall")
+        }
+        sheet.frame.size.height = 566
         // The component's column ends in a row filling it: a side column
         // beside the scroller reaches the edge too.
         scroller.removeFromSuperview()
