@@ -47,6 +47,23 @@
     }
     if (written !== "1" && global.console) global.console.error(String(line));
   }
+  // The bake answers on an engine without some of Intl's constructors, where `new Intl.Collator()` says only
+  // "undefined cannot be used as a constructor" (expo/exact#447). At bake such an error names the ones missing.
+  // Nothing is installed: Intl is frozen by then, and an answer that tests for one must still see it absent.
+  var INTL_CONSTRUCTORS = ["Collator", "PluralRules", "RelativeTimeFormat", "ListFormat", "Segmenter", "DisplayNames"];
+  function bakeIntl(e) {
+    try {
+      if (!(e instanceof TypeError) || !/cannot be used as a constructor|is not a function/.test(String(e.message))) return e;
+      var intl = global.Intl;
+      if (!intl || host(12, "bake", "") !== "1") return e;
+      var missing = INTL_CONSTRUCTORS.filter(function (name) { return typeof intl[name] !== "function"; });
+      if (!missing.length) return e;
+      e.message += " (the bake's engine has no Intl." + missing.join(", Intl.") + ": if the answer uses one of them," +
+        (missing.indexOf("Collator") >= 0 ? " compare strings with a.localeCompare(b), which the bake has, or" : "") +
+        " compute it where the app runs, not in an answer the build bakes)";
+    } catch (_) {}
+    return e;
+  }
   function errorText(e) {
     try {
       return e && typeof e === "object" && e.message !== undefined ? String(e.message) : String(e);
@@ -585,7 +602,7 @@
       });
       if (moduleWide && inFlight) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true });
       if (call.status === "done") handSocketOps(call);
-      return reply(call, call.status === "done" ? ok(call.value, call.epoch !== gcEpoch()) : fail(call.error));
+      return reply(call, call.status === "done" ? ok(call.value, call.epoch !== gcEpoch()) : fail(bakeIntl(call.error)));
     }
     // Its own timers (time.js `timers`): the earliest is due on the runner's clock.
     var due = timers.wait(call),
@@ -684,30 +701,8 @@
     r = f(args, store, storage);
     return r && typeof r.then === "function" ? r.then(text) : text(r);
   }
-  // The bake answers on an engine without these Intl constructors, where `new Intl.Collator()` said only "undefined
-  // cannot be used as a constructor" (expo/exact#447). At bake, and only there (a host's engine may have them), each
-  // missing one throws a TypeError naming it; installed at the first answer, where the door says whether it bakes.
-  var bakeIntlChecked = false;
-  function bakeIntl() {
-    bakeIntlChecked = true;
-    var intl = global.Intl;
-    if (!intl || host(12, "bake", "") !== "1") return;
-    ["Collator", "PluralRules", "RelativeTimeFormat", "ListFormat", "Segmenter", "DisplayNames"].forEach(function (name) {
-      if (typeof intl[name] === "function") return;
-      var missing = function () {
-        throw new TypeError(
-          "Intl." + name + " is not available while the build bakes an answer: the bake's engine has none" +
-            (name === "Collator"
-              ? ". Compare with a.localeCompare(b), which the bake has"
-              : ". Compute it where the app runs, not in an answer the build bakes")
-        );
-      };
-      try { Object.defineProperty(intl, name, { value: missing, writable: true, configurable: true }); } catch (e) {}
-    });
-  }
   global.__exact_call = function (source, argsJson, mutation) {
     initializing = false;
-    if (!bakeIntlChecked) bakeIntl();
     var call = {
       id: nextCall++,
       status: "pending",
