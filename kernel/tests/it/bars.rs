@@ -894,3 +894,32 @@ fn a_root_tab_with_rel_search_is_the_search_tab() {
     assert!(bars::rel_has("noopener Search", "search"));
     assert!(!bars::rel_has("searching", "search"));
 }
+
+#[test]
+fn a_linked_panel_inside_the_tablist_belongs_to_the_root() {
+    const LIST: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "tablist")];
+    const TAB: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel"),
+    ];
+    const PANEL: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel"),
+    ];
+    let kernel = kernel(view(
+        1,
+        vec![Node(
+            2,
+            NodeType::View,
+            LIST,
+            vec![
+                Node(3, NodeType::Pressable, TAB, vec![]),
+                Node(4, NodeType::View, PANEL, vec![view(5, vec![])]),
+            ],
+        )],
+    ));
+    let tabs = kernel.root_tabs(1).unwrap();
+    assert_eq!(tabs.tablist, 2);
+    assert_eq!(tabs.tabs, [3]);
+    assert_eq!(tabs.panels, [4]);
+}

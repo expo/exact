@@ -61,6 +61,60 @@ final class AddressedTapIOSTests: XCTestCase {
         return (session, Agent(session: session), { defer { pressed = [] }; return pressed })
     }
 
+    func testAContextMenuBackdropUnderTheKeyboardRefusesARealTouch() throws {
+        let session = ExactApp.shared.makeSession(label: "context-backdrop")
+        self.session = session
+        let p = session.presenter, agent = Agent(session: session)
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a context-menu backdrop needs UIKit's window scene")
+        }
+        let window = UIWindow(windowScene: scene)
+        self.window = window
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        window.rootViewController = UIViewController()
+        let view = ExactView(session: session)
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_FIELDLESS_PLAN"])
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
+        view.frame = window.bounds
+        window.rootViewController?.view.addSubview(view)
+        window.makeKeyAndVisible()
+        view.layoutIfNeeded()
+        p.apply(wireBatch([
+            ["op": "create", "id": 100, "kind": "view", "props": ["interactiveWidget": "overlays-content"]],
+            ["op": "create", "id": 101, "kind": "button", "props": ["contextPopover": "actions"]],
+            ["op": "create", "id": 102, "kind": "view", "props": ["id": "actions", "popover": "auto"]],
+            ["op": "create", "id": 103, "kind": "button", "handlers": ["press"]],
+            ["op": "children", "id": 102, "ids": [103]],
+            ["op": "children", "id": 100, "ids": [101, 102]], ["op": "roots", "ids": [100]],
+            ["op": "frame", "id": 100, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 101, "x": 20, "y": 80, "w": 200, "h": 44],
+        ]))
+        let source = try XCTUnwrap(p.views[101])
+        let interaction = try XCTUnwrap(source.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let configuration = try XCTUnwrap(p.menus.context.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
+        p.menus.context.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        defer { p.menus.context.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
+        // Aim against UIKit's backdrop class with controlled keyboard geometry;
+        // an app-window hit test cannot see the keyboard's separate window.
+        let backdropType = try XCTUnwrap(NSClassFromString("_UIContextMenuPlatterTransitionView") as? UIView.Type)
+        let backdrop = backdropType.init(frame: window.bounds)
+        window.addSubview(backdrop)
+        setKeyboard(p, top: 460)
+        XCTAssertEqual(p.keyboardPolicy, "overlays-content")
+        XCTAssertEqual(p.viewport.contentInset.bottom, 0)
+        let covered = agent.aim(["id": 100, "aim": ["at": [200.0, 600.0]]])
+        XCTAssertNil(covered["aim"], "a backdrop behind the keyboard cannot receive a real touch")
+        XCTAssertTrue((covered["error"] as? String ?? "").contains("software keyboard"), "\(covered)")
+        let clear = agent.aim(["id": 100, "aim": ["at": [200.0, 300.0]]])
+        XCTAssertNil(clear["error"], "\(clear)")
+        XCTAssertEqual((clear["aim"] as? [String: Any])?["native"] as? [String: String],
+                       ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
+        setKeyboard(p, top: nil)
+        let uncovered = agent.aim(["id": 100, "aim": ["at": [200.0, 600.0]]])
+        XCTAssertNil(uncovered["error"], "\(uncovered)")
+        XCTAssertNotNil(uncovered["aim"])
+    }
+
     func testANamedDateTapAimsAtItsCompactControlInsideAWiderBox() throws {
         let (session, agent, _) = rows(), p = session.presenter
         p.apply(wireBatch([

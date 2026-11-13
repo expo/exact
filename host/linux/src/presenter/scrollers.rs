@@ -100,9 +100,30 @@ const X: i32 = 1;
 const Y: i32 = 2;
 const NODE: i32 = 4;
 const BARLESS: i32 = 8;
+/// Bits 6 and 7: what a drag of it does to the keyboard, its authored
+/// `keyboardDismissMode`; unsaid, Android's: nothing (LLP 1115.001 D12).
+const DISMISS_ON_DRAG: i32 = 64;
+const DISMISS_INTERACTIVE: i32 = 128;
+/// Bits 4 and 5: it hears `refresh`, and its `refreshing` is true: the
+/// reader's pull to refresh (`scroll_drag.rs`).
+const REFRESH: i32 = 16;
+const REFRESHING: i32 = 32;
 
 fn scrolls(o: Overflow) -> bool {
     matches!(o, Overflow::Scroll | Overflow::Auto)
+}
+
+/// The axes a `touch-action` gives to the platform's panning, horizontal
+/// and vertical: `auto` and `manipulation` both, else those it names.
+fn gives(action: exact_kernel::TouchAction) -> (bool, bool) {
+    let action = action.pans().name();
+    let names = |axis: &[&str]| {
+        matches!(action, "auto" | "manipulation") || axis.iter().any(|a| action.contains(a))
+    };
+    (
+        names(&["pan-x", "pan-left", "pan-right"]),
+        names(&["pan-y", "pan-up", "pan-down"]),
+    )
 }
 
 impl<D: DataSource> Presenter<D> {
@@ -128,16 +149,7 @@ impl<D: DataSource> Presenter<D> {
         if id == PAGE {
             return Some(self.page_scroller());
         }
-        let kernel = self.host.kernel();
-        let node = kernel.node(id)?;
-        let bounds = self.display.bounds(kernel, id).unwrap_or_else(|| {
-            self.brush.scroll_bounds(
-                kernel,
-                self.host.content_region(),
-                &node,
-                limits.get(&id).copied(),
-            )
-        });
+        let bounds = self.scroll_bounds_of(id, limits)?;
         let (ox, oy) = bounds.axes;
         if !scrolls(ox) && !scrolls(oy) {
             return None;
@@ -156,6 +168,38 @@ impl<D: DataSource> Presenter<D> {
             port: [0.0; 4],
             node: self.brush.row_groups().iter().any(|g| g.0 == id),
         })
+    }
+
+    /// How far node `id` scrolls and on which axes, as painted or laid out.
+    fn scroll_bounds_of(
+        &self,
+        id: ViewId,
+        limits: &BTreeMap<ViewId, f32>,
+    ) -> Option<crate::paint::ScrollBounds> {
+        let kernel = self.host.kernel();
+        let node = kernel.node(id)?;
+        Some(self.display.bounds(kernel, id).unwrap_or_else(|| {
+            self.brush.scroll_bounds(
+                kernel,
+                self.host.content_region(),
+                &node,
+                limits.get(&id).copied(),
+            )
+        }))
+    }
+
+    /// Whether scroller `id` hears `refresh` and scrolls up and down by its
+    /// overflow, whether or not it has anywhere to go: a pull takes it, short
+    /// or empty, as UIKit's scroll view with a refresh control always bounces
+    /// vertically.
+    fn pulls_to_refresh(&self, id: ViewId, limits: &BTreeMap<ViewId, f32>) -> bool {
+        self.host
+            .runner()
+            .handlers_of(id)
+            .contains(&EventKind::Refresh)
+            && self
+                .scroll_bounds_of(id, limits)
+                .is_some_and(|b| scrolls(b.axes.1))
     }
 
     /// The scrollers under a point of the viewport, innermost first, and
@@ -185,6 +229,7 @@ impl<D: DataSource> Presenter<D> {
                     .flatten()
             });
             if let Some(mut s) = self.scroller(id, &limits) {
+                s.axes.1 |= self.pulls_to_refresh(id, &limits);
                 s.axes = (s.axes.0 && open.0, s.axes.1 && open.1);
                 open = (open.0 && !cut.0, open.1 && !cut.1);
                 if s.axes.0 || s.axes.1 {
@@ -201,9 +246,27 @@ impl<D: DataSource> Presenter<D> {
         if page.axes.0 || page.axes.1 {
             chain.push(page);
         }
+        let mut claims = self.claims_at(hit);
+        // A sheet's scrim takes every drag; on the sheet, a drag up or down
+        // that no scroller of its own takes moves it (`stage/touch.rs`).
+        match self.stage_claims(x, y) {
+            Some(false) => {
+                return Under {
+                    chain: Vec::new(),
+                    claims: (true, true),
+                    field: None,
+                }
+            }
+            Some(true) => {
+                let route = self.top_sheet().map(|(id, _)| id);
+                chain.retain(|s| s.id != PAGE && route.is_some_and(|r| self.is_inside(s.id, r)));
+                claims.1 |= !chain.iter().any(|s| s.axes.1);
+            }
+            None => {}
+        }
         Under {
             chain,
-            claims: self.claims_at(hit),
+            claims,
             field: self.hosted_at(hit),
         }
     }
@@ -218,7 +281,7 @@ impl<D: DataSource> Presenter<D> {
         if !self.input_live(key) {
             return (false, false);
         }
-        let mut claims = (false, false);
+        let mut claims = self.touch_kept(key);
         for candidate in self.candidates(key) {
             let (x, y) = match candidate {
                 Candidate::Arrange(_) | Candidate::Height { .. } => (false, true),
@@ -226,23 +289,39 @@ impl<D: DataSource> Presenter<D> {
                 Candidate::Transform(_) | Candidate::Group(_) => (true, true),
                 // A `pan` hears what its `touch-action` does not give to
                 // scrolling, as a browser cancels a pointer it pans with.
-                Candidate::Pan(key) => {
-                    let action = kernel
-                        .node_by_key(key)
-                        .map_or("auto", |n| n.style.touch_action.pans().name());
-                    let gives = |axis: &[&str]| {
-                        matches!(action, "auto" | "manipulation")
-                            || axis.iter().any(|a| action.contains(a))
-                    };
-                    (
-                        !gives(&["pan-x", "pan-left", "pan-right"]),
-                        !gives(&["pan-y", "pan-up", "pan-down"]),
-                    )
-                }
+                Candidate::Pan(key) => kernel.node_by_key(key).map_or((false, false), |n| {
+                    let gives = gives(n.style.touch_action);
+                    (!gives.0, !gives.1)
+                }),
             };
             claims = (claims.0 || x, claims.1 || y);
         }
         claims
+    }
+
+    /// The axes a finger on `hit` keeps from the platform's panning: those
+    /// the `touch-action` of some node from `hit` out to its nearest scroll
+    /// container, inclusive, does not give to it (Pointer Events 3, §11
+    /// "Determining supported touch behavior"). A browser pans along none
+    /// of them and so cancels no pointer for a move along one: the page goes
+    /// on hearing it.
+    pub(super) fn touch_kept(&self, hit: exact_kernel::NodeKey) -> (bool, bool) {
+        let kernel = self.host.kernel();
+        let mut kept = (false, false);
+        let mut at = kernel.node_by_key(hit);
+        while let Some(node) = at {
+            let gives = gives(node.style.touch_action);
+            kept = (kept.0 || !gives.0, kept.1 || !gives.1);
+            // A scroll container is a box whose overflow is not `visible`
+            // or `clip` (CSS Overflow 3 §3).
+            let (x, y) = crate::paint::effective_overflow(&node);
+            let contains = |o: Overflow| !matches!(o, Overflow::Visible | Overflow::Clip);
+            if contains(x) || contains(y) {
+                break;
+            }
+            at = node.parent.and_then(|id| kernel.node(id));
+        }
+        kept
     }
 
     /// Scroll `id` to `to`, clamped to its travel on the axes it scrolls
@@ -268,7 +347,7 @@ impl<D: DataSource> Presenter<D> {
         })
     }
 
-    fn scroll_to_completion(
+    pub(super) fn scroll_to_completion(
         &mut self,
         id: ViewId,
         to: (f32, f32),
@@ -314,6 +393,7 @@ impl<D: DataSource> Presenter<D> {
             self.scroll_end_input(id, s.offset, completion);
             self.collection_scroll_input(id, s.offset);
         }
+        self.scroll_timelines();
         self.dirty = true;
         if let Some(error) = self.refresh_transform_geometry() {
             self.host.log(error);
@@ -438,10 +518,13 @@ impl<D: DataSource> Presenter<D> {
     /// hosted text field the touch is for (0: none; LLP 1115.001 D8), and
     /// eleven words a scroller: id, flags (bit 0 it takes a sideways drag
     /// from here, bit 1 one up or down, bit 2 it has rows the reader can
-    /// move, bit 3 no scrollbar), revision, then as float bits its offset
+    /// move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its
+    /// `refreshing` is true, bit 6 a drag of it puts the keyboard away and
+    /// bit 7 the keyboard follows that drag), revision, then as float bits its offset
     /// (x, y), its farthest offset (x, y) and its port (x, y, width, height). The reader is told
     /// of each from now on ([`Presenter::reader_scrollers`]).
     pub fn reader_under(&mut self, x: f32, y: f32, scale: f32) -> Vec<i32> {
+        self.scroll_end_release_all();
         let under = self.scrollers_at(x / scale, y / scale);
         let mut out = vec![
             i32::from(under.claims.0) | i32::from(under.claims.1) << 1,
@@ -504,13 +587,42 @@ impl<D: DataSource> Presenter<D> {
         } else {
             Some(s.id)
         };
-        let barless = id
-            .and_then(|id| self.host.kernel().node(id))
+        let node = id.and_then(|id| self.host.kernel().node(id));
+        let barless = node
+            .as_ref()
             .is_some_and(|n| n.style.scrollbar_width == exact_kernel::ScrollbarWidth::None);
+        let dismiss = match node
+            .as_ref()
+            .filter(|_| s.id != PAGE)
+            .and_then(|n| n.props.str(exact_kernel::PropId::KeyboardDismissMode))
+        {
+            Some("on-drag") => DISMISS_ON_DRAG,
+            Some("interactive") => DISMISS_INTERACTIVE,
+            _ => 0,
+        };
+        let refresh = if s.id == PAGE
+            || !self
+                .host
+                .runner()
+                .handlers_of(s.id)
+                .contains(&EventKind::Refresh)
+        {
+            0
+        } else if node
+            .as_ref()
+            .and_then(|n| n.props.bool(exact_kernel::PropId::Refreshing))
+            == Some(true)
+        {
+            REFRESH | REFRESHING
+        } else {
+            REFRESH
+        };
         (if s.axes.0 { X } else { 0 })
             | (if s.axes.1 { Y } else { 0 })
             | (if s.node { NODE } else { 0 })
             | (if barless { BARLESS } else { 0 })
+            | dismiss
+            | refresh
     }
 }
 

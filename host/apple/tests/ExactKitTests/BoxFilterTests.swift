@@ -7,6 +7,7 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactSurfaces
 
 final class BoxFilterTests: XCTestCase {
     private var p: Presenter!
@@ -58,11 +59,16 @@ final class BoxFilterTests: XCTestCase {
     }
 
     private func filter() throws -> BatchValue {
-        // Identity colour matrix, with a subregion covering the whole box.
-        let matrix: [Double] = [1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0]
+        ["p": .array(try program().map(BatchValue.number))]
+    }
+
+    /// A colour matrix scaling red by `red` (identity by default), with a
+    /// subregion covering the whole box.
+    private func program(red: Double = 1) throws -> [Double] {
+        let matrix: [Double] = [red,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0]
         let program: [Double] = [0,0,0,0,1, 5,-1,-3,0,0,10000,10000,0] + matrix
         guard SvgFilterGPU.runs(program.map(Float.init)) else { throw missing("metal", "no GPU filter path") }
-        return ["p": .array(program.map(BatchValue.number))]
+        return program
     }
 
     /// `drop-shadow(dx dy σ rgba)` as `box_filter` encodes it: the region
@@ -226,12 +232,17 @@ final class BoxFilterTests: XCTestCase {
         p.touched(3)
         p.boxFilters.render()
         XCTAssertFalse(p.boxFilters.drawing, "a batch that touched nothing in it draws nothing")
+        p.touched(2)
+        p.boxFilters.render()
+        XCTAssertFalse(p.boxFilters.drawing, "nor does one that touched it and changed nothing it draws")
         box.frame.origin = CGPoint(x: 10, y: 20)
         p.boxFilters.render()
         XCTAssertFalse(p.boxFilters.drawing)
         XCTAssertTrue(try picture(box) === first)
         let moved: CALayer? = box.layer
         XCTAssertEqual(box.boxFilter?.picture.position, moved?.position, "a box that moved is followed")
+        let inner: CALayer? = p.views[2]?.layer
+        inner?.backgroundColor = CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
         p.touched(2)
         p.boxFilters.render()
         XCTAssertTrue(p.boxFilters.drawing, "a change inside it draws it again, off the main thread")
@@ -244,6 +255,301 @@ final class BoxFilterTests: XCTestCase {
         p.boxFilters.render()
         settle()
         XCTAssertFalse(try picture(box) === second, "so does a new size")
+    }
+
+    // A box's own motion, opacity and `filter` draw nothing of its subtree
+    // again; anything else that changed in the subtree since its last
+    // drawing, an op's or not, is drawn when a batch next touches the box.
+    // The batches below that change a box's `filter` alone stand for a
+    // scroll-linked filter, which sends one every frame.
+
+    /// `ops` applied as one batch, and every picture it asks for drawn and
+    /// landed (on the Mac a view has its layer from its first display, and
+    /// the next batch pictures it).
+    private func show(_ ops: [[String: Any]]) {
+        p.apply(wireBatch(ops))
+        #if os(macOS)
+        window.displayIfNeeded()
+        p.apply(wireBatch([]))
+        #endif
+        settle()
+    }
+
+    /// A batch changing box `id`'s `filter` alone (`style`: the rest of its
+    /// style): its last unfiltered drawing after.
+    private func refilter(_ id: UInt32, _ style: [String: Any] = [:], red: Double) throws -> CGImage {
+        var style = style
+        style["filter"] = ["p": try program(red: red)]
+        show([["op": "style", "id": id, "style": style]])
+        return try XCTUnwrap(p.views[id]?.boxFilter?.lastDrawing)
+    }
+
+    private func drawing(_ id: UInt32) throws -> CGImage { try XCTUnwrap(p.views[id]?.boxFilter?.lastDrawing) }
+
+    private func bytes(_ image: CGImage) throws -> Data { try XCTUnwrap(image.dataProvider?.data as Data?) }
+
+    /// Filtered box 1 at (10, 10), `size` points square, holding box 2
+    /// (`inner`'s kind and style) filling it, inside root view 3.
+    private func card(_ style: [String: Any] = [:], inner kind: String = "view", _ inner: [String: Any] = [:],
+                      props: [String: String] = [:], size: Double = 40) throws {
+        var style = style
+        style["filter"] = ["p": try program()]
+        show([
+            ["op": "create", "id": 3, "kind": "view"],
+            ["op": "create", "id": 1, "kind": "view", "style": style],
+            ["op": "create", "id": 2, "kind": kind, "style": inner, "props": props],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 3, "ids": [1]], ["op": "roots", "ids": [3]],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 0.0, "w": 200.0, "h": 200.0],
+            ["op": "frame", "id": 1, "x": 10.0, "y": 10.0, "w": size, "h": size],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": size, "h": size],
+        ])
+    }
+
+    func testTheBoxsOwnMotionOpacityAndFilterDrawNothingOfItsSubtreeAgain() throws {
+        let red: [String: Any] = ["background_color": [255, 0, 0, 255]]
+        try card(red)
+        let box = try XCTUnwrap(p.views[1]), first = try drawing(1)
+        show([
+            ["op": "present", "id": 1, "property": "translate", "x": 40.0, "y": 0.0, "w": 0.0, "h": 0.0],
+            ["op": "present", "id": 1, "property": "scale", "x": 0.8, "y": 0.0, "w": 0.0, "h": 0.0],
+            ["op": "present", "id": 1, "property": "rotate", "x": 10.0, "y": 0.0, "w": 0.0, "h": 0.0],
+            ["op": "present", "id": 1, "property": "opacity", "x": 0.4, "y": 0.0, "w": 0.0, "h": 0.0],
+        ])
+        XCTAssertTrue(try drawing(1) === first, "its own motion and opacity draw nothing")
+        let shown = try XCTUnwrap(box.boxFilter?.picture), moved: CALayer = try XCTUnwrap(box.layer)
+        XCTAssertFalse(CATransform3DIsIdentity(shown.transform), "the picture moved")
+        XCTAssertTrue(CATransform3DEqualToTransform(shown.transform, moved.transform), "where the box went")
+        XCTAssertEqual(shown.opacity, 0.4, accuracy: 0.001)
+
+        XCTAssertTrue(try refilter(1, red, red: 0.5) === first, "nor does a new chain")
+        let chained = try pixel(picture(box), x: 20, y: 20)
+        XCTAssertEqual(chained[1...], [0, 0, 255], "the new chain over the last drawing")
+        XCTAssertTrue((126...129).contains(chained[0]), "red halved: \(chained)")
+
+        show([["op": "style", "id": 2, "style": ["background_color": [0, 255, 0, 255]]]])
+        XCTAssertFalse(try drawing(1) === first, "a change inside it draws it again")
+        XCTAssertEqual(try pixel(picture(box), x: 20, y: 20), [0, 255, 0, 255])
+    }
+
+    /// An animated image's frames change with no batch: each shows in the
+    /// picture the next time the box's chain changes. The agent's clock
+    /// picks the frame (`AnimatedRasters`).
+    func testAnAnimatedImagesNewFrameIsDrawnWhenTheChainNextChanges() throws {
+        try card(inner: "image")
+        let image = try XCTUnwrap(p.views[2])
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, "com.compuserve.gif" as CFString, 2, nil))
+        CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        for color in [CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1), CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1)] {
+            let ctx = try XCTUnwrap(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            ctx.setFillColor(color)
+            ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(ctx.makeImage()),
+                [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.1]] as CFDictionary)
+        }
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let session = ExactApp.shared.makeSession(label: "box-filter-animated")
+        session.clock = 0
+        p.session = session
+        let loader = RasterLoader(), resolver = AssetResolver(root: FileManager.default.temporaryDirectory)
+        defer { loader.shutdown(); image.raster = nil; p.session = nil; session.destroy() }
+        image.loadGeneration = 1
+        XCTAssertTrue(loader.load(image, source: "data:image/gif;base64," + (data as Data).base64EncodedString(), resolver: resolver))
+        let end = Date(timeIntervalSinceNow: 20)
+        while image.raster == nil && Date() < end { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02)) }
+        XCTAssertNotNil(image.raster)
+        AnimatedRasters.shared.attach(image)
+        var red = 1.0
+        for (clock, rgb) in [(50.0, [255, 0, 0]), (150, [0, 0, 255]), (250, [255, 0, 0]), (350, [0, 0, 255])] as [(Double, [UInt8])] {
+            session.clock = clock
+            AnimatedRasters.shared.evaluate()
+            #if os(macOS)
+            image.layer?.displayIfNeeded() // a Mac image view takes its frame as its layer displays
+            #endif
+            red = red == 1 ? 0.99 : 1
+            XCTAssertEqual(try pixel(refilter(1, red: red), x: 20, y: 20), rgb + [255], "the frame at \(clock) ms")
+        }
+    }
+
+    /// A recorded canvas (an animating one, off the GPU) draws each frame
+    /// from its lists, which no layer property holds: each frame shows in the
+    /// picture the next time the box's chain changes. (A canvas node's Metal
+    /// layer leaves its tree with no inputs, so it is drawn every time.)
+    func testARecordedCanvasesNewFrameIsDrawnWhenTheChainNextChanges() throws {
+        ExactSurfaces.install()
+        try card(inner: "canvas")
+        let parent: CALayer = try XCTUnwrap(p.views[2]?.layer), host = Canvas2DHost()
+        host.place(2, in: CGRect(x: 0, y: 0, width: 40, height: 40), radii: [])
+        func list(_ rgb: [Double]) -> Data {
+            var d = Data()
+            func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+            func f64(_ v: Double) { withUnsafeBytes(of: v.bitPattern.littleEndian) { d.append(contentsOf: $0) } }
+            u32(0x4432_4345); u32(1)
+            for (op, n) in [(Canvas2DOp.fillColor, rgb + [1]), (.fillRect, [0, 0, 40, 40])] {
+                u32(op.rawValue); u32(UInt32(n.count)); n.forEach(f64)
+            }
+            return d
+        }
+        func frame(_ rgb: [Double], fresh: Bool = false) {
+            host.apply(2, ["lifetime": 1, "generation": 0, "fresh": fresh, "w": 80, "h": 80, "scale": 2.0,
+                           "stretch": false, "animating": true, "lists": [list(rgb)]], layer: parent)
+            host.waitForReplays(timeout: 5)
+        }
+        frame([255, 0, 0], fresh: true)
+        for _ in 0..<3 { frame([255, 0, 0]) }
+        let canvas = try XCTUnwrap(parent.sublayers?.first { $0.sublayers?.contains { $0 is Canvas2DRecordLayer } == true })
+        XCTAssertNil(canvas.contents, "recorded, not a bitmap")
+        XCTAssertEqual(try pixel(refilter(1, red: 0.99), x: 20, y: 20), [255, 0, 0, 255])
+        for (rgb, red) in [([0.0, 0, 255], 1.0), ([0, 255, 0], 0.99), ([255, 0, 0], 1)] {
+            frame(rgb)
+            XCTAssertEqual(try pixel(refilter(1, red: red), x: 20, y: 20), rgb.map { UInt8($0) } + [255], "the canvas's frame")
+        }
+    }
+
+    /// A layer that draws through its own `draw(in:)` draws from state no
+    /// layer property holds: what it draws now is drawn whenever a batch
+    /// touches the box, also before Core Animation has displayed it.
+    func testALayerThatDrawsItselfIsDrawnAgain() throws {
+        final class Painted: CALayer {
+            var color = CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+            override func draw(in ctx: CGContext) { ctx.setFillColor(color); ctx.fill(bounds) }
+        }
+        try card()
+        let painted = Painted()
+        painted.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
+        try XCTUnwrap(p.views[1]?.layer).addSublayer(painted)
+        painted.setNeedsDisplay()
+        func batch(_ red: Double) throws {
+            p.apply(wireBatch([["op": "style", "id": 1, "style": ["filter": ["p": try program(red: red)]]]]))
+        }
+        try batch(0.99)
+        XCTAssertEqual(try pixel(drawing(1), x: 20, y: 20), [255, 0, 0, 255])
+        painted.color = CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1)
+        painted.setNeedsDisplay()
+        try batch(1)
+        XCTAssertEqual(try pixel(drawing(1), x: 20, y: 20), [0, 0, 255, 255], "what it draws now, in the same turn")
+        settle()
+        XCTAssertEqual(try pixel(picture(XCTUnwrap(p.views[1])), x: 20, y: 20), [0, 0, 255, 255])
+    }
+
+    /// A box in a layout-size transition draws a dashed border through a
+    /// closure, which no layer property holds: a new colour shows, also when
+    /// it comes before Core Animation has displayed the surface.
+    func testADrawnSurfacesNewColourIsDrawn() throws {
+        func dashed(_ rgba: [Double], red: Double) throws -> [String: Any] {
+            ["border_width": 4, "border_style_top": "dashed", "border_style_right": "dashed", "border_style_bottom": "dashed",
+             "border_style_left": "dashed", "border_color_top": rgba, "filter": ["p": try program(red: red)]]
+        }
+        try card(dashed([255, 0, 0, 255], red: 1))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "x": 0.0, "y": 0.0, "w": -2.0, "h": 0.0]]))
+        XCTAssertNotNil(p.views[1]?.surface, "a surface draws the box")
+        p.apply(wireBatch([["op": "style", "id": 1, "style": try dashed([0, 0, 255, 255], red: 0.99)]]))
+        show([])
+        let image = try drawing(1), w = image.width, h = image.height
+        let ctx = try XCTUnwrap(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = UnsafeBufferPointer(start: try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self), count: w * h * 4)
+        let red = stride(from: 0, to: px.count, by: 4).filter { px[$0] > 200 && px[$0 + 2] < 50 }.count
+        let blue = stride(from: 0, to: px.count, by: 4).filter { px[$0 + 2] > 200 && px[$0] < 50 }.count
+        XCTAssertEqual(red, 0, "no red border left")
+        XCTAssertGreaterThan(blue, 0, "the border's new colour")
+    }
+
+    /// Typing and an input method's marked text in a field change its
+    /// pixels with no batch: each is drawn the next time the box's chain changes.
+    func testTypingAndMarkedTextInAFieldAreDrawnWhenTheChainNextChanges() throws {
+        try card(inner: "input", props: ["value": "hello"], size: 120)
+        let node = try XCTUnwrap(p.views[2])
+        #if os(macOS)
+        let field = try XCTUnwrap(node.field)
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        let type = { (text: String) in editor.insertText(text, replacementRange: editor.selectedRange()) }
+        let mark = { (text: String) in
+            editor.setMarkedText(text, selectedRange: NSRange(location: (text as NSString).length, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        #else
+        let field = try XCTUnwrap(node.field)
+        window.makeKeyAndVisible()
+        XCTAssertTrue(field.becomeFirstResponder())
+        let type = { (text: String) in field.insertText(text); node.fieldChanged() }
+        let mark = { (text: String) in
+            field.setMarkedText(text, selectedRange: NSRange(location: (text as NSString).length, length: 0)); node.fieldChanged()
+        }
+        #endif
+        let focused = try refilter(1, red: 0.99)
+        type(" world")
+        let typed = try refilter(1, red: 1)
+        XCTAssertNotEqual(try bytes(typed), try bytes(focused), "the words typed")
+        mark("にほん")
+        let marked = try refilter(1, red: 0.99)
+        XCTAssertNotEqual(try bytes(marked), try bytes(typed), "the marked text")
+    }
+
+    /// A text area scrolls its own text with no batch: the scrolled text
+    /// is drawn the next time the box's chain changes.
+    func testATextAreasOwnScrollIsDrawnWhenTheChainNextChanges() throws {
+        let lines = (1...60).map(String.init).joined(separator: "\n")
+        try card(inner: "textarea", props: ["value": lines], size: 120)
+        let node = try XCTUnwrap(p.views[2])
+        let top = try refilter(1, red: 0.99)
+        #if os(macOS)
+        let scroll = try XCTUnwrap(node.textAreaScroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 300))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        #else
+        try XCTUnwrap(node.textArea).contentOffset = CGPoint(x: 0, y: 300)
+        #endif
+        let scrolled = try refilter(1, red: 1)
+        XCTAssertNotEqual(try bytes(scrolled), try bytes(top), "the text scrolled")
+    }
+
+    /// A `background-attachment: fixed` gradient on a filtered box in a
+    /// scroller, or on a box in it, is re-aimed as the scroller scrolls,
+    /// with no batch: the gradient where it now meets the box is drawn the
+    /// next time the box's chain changes, as a scroll-linked filter's does
+    /// every frame. (The Mac re-aims a fixed gradient when its own box
+    /// paints, which a filtered box does every batch, and not yet as an
+    /// inner scroller moves: `NodeView.fixedGradientPort`.)
+    func testAFixedGradientUnderAScrollLinkedFilterIsDrawnWhenTheChainNextChanges() throws {
+        let gradient: [String: Any] = ["background_image": ["linear": 180, "stops": [0, 255, 0, 0, 255, 1, 0, 0, 255, 255]],
+                                       "background_attachment": "fixed"]
+        #if os(macOS)
+        let placements = [true]
+        #else
+        let placements = [true, false]
+        #endif
+        for own in placements {
+            show([
+                ["op": "create", "id": 3, "kind": "view", "style": ["overflow_y": "scroll"]],
+                ["op": "create", "id": 1, "kind": "view", "style": (own ? gradient : [:]).merging(["filter": ["p": try program()]]) { $1 }],
+                ["op": "create", "id": 2, "kind": "view", "style": own ? [:] : gradient],
+                ["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 3, "ids": [1]], ["op": "roots", "ids": [3]],
+                ["op": "frame", "id": 3, "x": 0.0, "y": 0.0, "w": 200.0, "h": 200.0],
+                ["op": "content", "id": 3, "w": 200.0, "h": 1000.0],
+                ["op": "frame", "id": 1, "x": 0.0, "y": 100.0, "w": 40.0, "h": 40.0],
+                ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 20.0, "h": 40.0],
+            ])
+            let style = own ? gradient : [:]
+            let top = try refilter(1, style, red: 0.99)
+            let scroller = try XCTUnwrap(p.views[3])
+            #if os(macOS)
+            let scroll = try XCTUnwrap(scroller.scroll)
+            scroll.contentView.scroll(to: CGPoint(x: 0, y: 100))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            #else
+            try XCTUnwrap(scroller.scroll).contentOffset = CGPoint(x: 0, y: 100)
+            #endif
+            let scrolled = try refilter(1, style, red: 1)
+            XCTAssertFalse(scrolled === top, "drawn again, on \(own ? "the box" : "a box in it")")
+            XCTAssertLessThan(try pixel(scrolled, x: 10, y: 20)[2], try pixel(top, x: 10, y: 20)[2],
+                              "scrolled up the viewport's gradient, less blue")
+            show([["op": "destroy", "id": 2], ["op": "destroy", "id": 1], ["op": "destroy", "id": 3], ["op": "roots", "ids": []]])
+        }
     }
 
     func testAnImageDecodeUpdatesItsFilteredAncestorWithoutABatch() throws {

@@ -71,7 +71,7 @@ test "Return adds and keeps typing; Done puts the keyboard away"
 - **`focus=` and `blur=`** say when a field is being edited: here the bar shows Done meanwhile.
 - **Search** lives in the bar: `contract vocab search`. Native iOS Back commits its edit and blur before removing the route.
 - Put live results above the editor.
-- **On scroll,** a drag on a `list` or `scroll` that reaches the keyboard pulls it down (a flick
-  that just reaches it ends in a frame, as in UIKit); `keyboardDismissMode="on-drag"` puts it
-  away as the drag starts, `"none"` keeps it up and a background tap still dismisses it.
+- **On scroll,** an iOS drag on a `list` or `scroll` that reaches the keyboard pulls it down;
+  Android's leaves it. `keyboardDismissMode`: `"on-drag"` puts it away as the drag starts,
+  `"interactive"` pulls it down on both, `"none"` keeps it up.
   Composer: [chat thread](chat-thread.md).

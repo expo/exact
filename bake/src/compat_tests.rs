@@ -226,6 +226,7 @@ fn list_scroll_offset_requires_a_new_binary_cohort() {
             let shape = match *name {
                 "share" => "3",
                 "stopSounds" => "1",
+                "setSounds" => "5",
                 "playSounds" => "1:4|5|6",
                 "playSound" => "6",
                 "sendMIDI" => "3",
@@ -502,6 +503,19 @@ fn the_id_is_stable_and_moves_only_with_identity() {
     std::fs::write(dir.join("data/src/lib.rs"), "pub struct App; // moved\n").unwrap();
     let moved = id(&dir, "ios");
     assert_ne!(with_icon, moved, "a data crate edit moves it");
+    // A target branch is accepted, and an edit to an arm this target never
+    // compiles moves its id all the same (LLP 1030 D3a, amended 2026-11-12).
+    let branch = |n: u32| {
+        format!("pub struct App;\n#[cfg(target_os = \"macos\")]\npub const N: u32 = {n};\n#[cfg(not(target_os = \"macos\"))]\npub const N: u32 = 0;\n")
+    };
+    std::fs::write(dir.join("data/src/lib.rs"), branch(7)).unwrap();
+    let mac_arm = id(&dir, "ios");
+    std::fs::write(dir.join("data/src/lib.rs"), branch(8)).unwrap();
+    assert_ne!(
+        mac_arm,
+        id(&dir, "ios"),
+        "an edit to the macOS arm moves the iOS id"
+    );
     // A `data/` of TypeScript modules is no crate: its edits are not identity.
     std::fs::remove_file(dir.join("data/Cargo.toml")).unwrap();
     let typescript = id(&dir, "ios");

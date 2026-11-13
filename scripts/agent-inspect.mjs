@@ -502,9 +502,9 @@ export async function readTrack(s, cursor = trackCursors.get(s)) {
 export async function perfOp(s, args, line, step) {
   if (args[0] === 'frames') {
     if (args[1] === 'health') {
-      const source = ['app', 'scroll'].includes(args[2]) ? args[2] : undefined;
+      const source = ['app', 'scroll', 'window'].includes(args[2]) ? args[2] : undefined;
       const end = source ? 3 : 2;
-      if (args.length !== end && args[end] !== 'during') throw new MalformedOperation('perf frames health [app|scroll] [during "<op>" …]');
+      if (args.length !== end && args[end] !== 'during') throw new MalformedOperation('perf frames health [app|scroll|window] [during "<op>" …]');
       const read = cursor => s.op({ op: 'perf', frames: true, health: true, ...(source ? { source } : {}), ...(cursor ? { cursor } : {}) });
       let before;
       try { before = await read(); }
@@ -522,7 +522,7 @@ export async function perfOp(s, args, line, step) {
       return read(before.cursor);
     }
     if (args[1] === 'report') {
-      if (args.length > 3 || (args[2] !== undefined && !['app', 'scroll'].includes(args[2]))) throw new MalformedOperation('perf frames report [app|scroll]');
+      if (args.length > 3 || (args[2] !== undefined && !['app', 'scroll', 'window'].includes(args[2]))) throw new MalformedOperation('perf frames report [app|scroll|window]');
       return s.op({ op: 'perf', frames: true, report: true, ...(args[2] ? { source: args[2] } : {}) });
     }
     if (args[1] === 'track') {
@@ -559,7 +559,10 @@ export async function perfOp(s, args, line, step) {
           (action !== 'start' && args.length !== 3) || !Number.isInteger(durationMs) || durationMs < 1 || durationMs > 120000) {
         throw new MalformedOperation('perf frames capture start [1–120000 ms] | stop | clear');
       }
-      return s.op({ op: 'perf', frames: true, capture: action, ...(action === 'start' ? { durationMs } : {}) });
+      const reply = await s.op({ op: 'perf', frames: true, capture: action, ...(action === 'start' ? { durationMs } : {}) });
+      // Android's lease lends the display the clock; once it is returned, the driver's goes on from where it stands.
+      if (s.host === 'android' && Number.isFinite(reply.clock)) s.now = reply.clock;
+      return reply;
     }
     const at = word => { const i = args.indexOf(word); return i < 0 ? undefined : Number(args[i + 1]); };
     const live = at('live'), late = at('late');
@@ -575,6 +578,25 @@ export async function perfOp(s, args, line, step) {
         await new Promise(resolve => setTimeout(resolve, live));
         return await s.op({ op: 'perf', frames: true, health: true, cursor: before.cursor });
       } finally { await s.op({ op: 'perf', frames: true, capture: 'stop' }); }
+    }
+    if (live !== undefined && s.host === 'android') {
+      // Android's capture lease lends the display the clock (LLP 1079.000 §7.1), so the window's frames are real ones:
+      // the baseline is read once it is lent, and the lease ends with the window, giving the driver its clock back.
+      if (live > 30000 || late !== undefined || args.length !== 3 || args[1] !== 'live') throw new MalformedOperation('perf frames live <1–30000 ms> on Android; use report for hitch detail');
+      const capture = await s.op({ op: 'perf', frames: true, capture: 'start', durationMs: live + 5000 });
+      if (!capture.capture) return capture;
+      try {
+        // Both sources over the same window: Exact's turns, and the window's frames beside them.
+        const read = (source, cursor) => s.op({ op: 'perf', frames: true, health: true, source, ...(cursor ? { cursor } : {}) });
+        const before = await read('app'), window = await read('window');
+        if (before.error || !before.available) return before;
+        await new Promise(resolve => setTimeout(resolve, live));
+        const after = await read('app', before.cursor);
+        return window.cursor ? { ...after, windowFrames: await read('window', window.cursor) } : after;
+      } finally {
+        const stopped = await s.op({ op: 'perf', frames: true, capture: 'stop' });
+        if (Number.isFinite(stopped.clock)) s.now = stopped.clock;
+      }
     }
     return s.perf(null, { frames: true, late, ...(live !== undefined ? { live } : {}) });
   }
@@ -950,7 +972,8 @@ export function renderTrace(t) {
 /** Quantiles are bounds from finalized populations; frame rates from callbacks never certify presentation. */
 export function renderFrameHealthMetrics(report) {
   if (report.error) return `frame health unavailable: ${report.error} · ${report.reason ?? 'read a fresh baseline'}`;
-  if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 4000) throw new Error('Frame health metrics exceed the 4 KB limit. Request a fresh snapshot with a matching Exact reader.');
+  // Each source's reply has its own budget: Android's live window carries the window's frames beside it.
+  if (Buffer.byteLength(JSON.stringify({ ...report, windowFrames: undefined }), 'utf8') > 4000) throw new Error('Frame health metrics exceed the 4 KB limit. Request a fresh snapshot with a matching Exact reader.');
   const frames = report.frames ?? {}, work = report.work ?? {}, window = report.window ?? {};
   const bounds = value => Array.isArray(value) && value.length === 2 ? `${(Number(value[0]) / 1e6).toFixed(2)}–${value[1] == null ? '∞' : (Number(value[1]) / 1e6).toFixed(2)} ms` : 'unknown';
   const { policy, cadence, target, contentLatency } = report.assessments ?? {};
@@ -967,10 +990,18 @@ export function renderFrameHealthMetrics(report) {
     `generation ${window.generation ?? '?'} · ${window.kind ?? '?'} · intervals finalized ${window.intervalFromNs ?? '?'}..${window.intervalThroughNs ?? '?'} ns · work finalized ${window.workFromNs ?? '?'}..${window.workThroughNs ?? '?'} ns`,
     `callbacks ${frames.callbacks ?? '?'} · held ${frames.held ?? '?'} · frame intervals ${frames.intervals ?? '?'} · ${frames.perSecond == null ? 'rate unknown' : `${frames.perSecond.toFixed(2)} FPS`} · missed ${frames.missedFrames ?? '?'} of ${frames.requestedSlots ?? '?'} requested slots`,
     `frame time median ${bounds(frames.medianBoundsNs)} · p99 ${bounds(frames.p99BoundsNs)} · pacing changes ${frames.pacingChanges ?? '?'} · schedule changes ${frames.cadenceChanges ?? '?'}`,
-    `work records ${work.records ?? '?'} · late ${work.late ?? `unknown${work.latenessUnknown ? ` (${work.latenessUnknown})` : ''}`} · in flight ${work.pending ?? '?'}, overdue ${work.overdue ?? 'unknown'} · median ${bounds(work.medianBoundsNs)} · p99 ${bounds(work.p99BoundsNs)} · maximum ${bounds(work.maximumBoundsNs)}`,
-    `coverage ${JSON.stringify(report.coverage ?? {})}`,
-    'Bounds include the lower value and exclude the upper value. A frame is a callback that started frame work, timed from the display link; presentation, Core Animation commits, input latency and GPU execution remain unmeasured, so a proxy pass covers callbacks and Exact\'s own work only.'].join('\n');
+    `work records ${work.records ?? '?'} · late ${work.late ?? `unknown${work.latenessUnknown ? ` (${work.latenessUnknown})` : ''}`} · in flight ${work.pending ?? '?'}, overdue ${work.overdue ?? 'unknown'}${work.lost > 0 ? `, lost ${work.lost}` : ''} · median ${bounds(work.medianBoundsNs)} · p99 ${bounds(work.p99BoundsNs)} · maximum ${bounds(work.maximumBoundsNs)}`,
+    `coverage ${JSON.stringify(report.coverage ?? {})}${report.droppedReports > 0 ? ` · ${report.droppedReports} reports lost before they were read` : ''}`,
+    `Bounds include the lower value and exclude the upper value. ${FRAME_SOURCES[report.source] ?? FRAME_SOURCES.apple}`,
+    ...(report.windowFrames ? ['', renderFrameHealthMetrics(report.windowFrames)] : [])].join('\n');
 }
+
+/** What a frame is, and what stays unmeasured, by source (LLP 1079.000 §6.1, §6.2). */
+const FRAME_SOURCES = {
+  apple: 'A frame is a callback that started frame work, timed from the display link; presentation, Core Animation commits, input latency and GPU execution remain unmeasured, so a proxy pass covers callbacks and Exact\'s own work only.',
+  'exact-app-choreographer': 'A frame is a Choreographer turn on exact2\'s thread, timed from its vsync until the main thread ingested what it published; presentation, RenderThread, input latency and GPU execution remain unmeasured, so a proxy pass covers turns and Exact\'s own work only.',
+  'android-frame-metrics': 'A frame is one the window drew, from its intended vsync for its FrameMetrics total duration, against its deadline; the window says nothing when it idles, so frame times and cadence are unknown, and presentation and SurfaceViews remain unmeasured.',
+};
 
 /** Exact's frame clock's users, from bit 40 of a screen's row (`FrameClock.Order`) */
 const SCREEN_ASKERS = ["the session's clock", "a list's offset correction", 'a navigation reveal', 'the scroll pump', 'heavy leaves', 'a live SVG filter', 'a resize grip'];

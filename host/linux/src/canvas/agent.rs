@@ -24,6 +24,11 @@
 //!   A reply that lands between them still commits when the reader's turn
 //!   finds it, where the stdio carrier commits it with the next request.
 //!
+//! A frame capture's lease (`perf frames capture start`, `perf frames
+//! live`) lends the clock to the display until it ends ([`lend`]): its
+//! frames are measured as they come (LLP 1079.000 §7.1, `canvas/frames.rs`),
+//! and a request that would take the clock back is refused meanwhile.
+//!
 //! What the reader plays by itself is outside that clock: a layer it
 //! animates (a drive launches with `lower=0`, so the engine samples
 //! every one), a fling, the keyboard's slide. A `screenshot` is not
@@ -35,14 +40,61 @@
 //! answers no request whatever its shell attaches.
 
 use super::{CanvasHost, FINISHED};
-use exact_runner::agent::{error, field_str};
+use exact_runner::agent::{error, field_bool, field_str};
 use exact_runner::DataSource;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// A driver has asked: the host's turns run at the runner's clock.
 static DRIVEN: AtomicBool = AtomicBool::new(false);
 /// A driver's launch: the runner's clock from the boot, before any request.
 static SEEK: AtomicBool = AtomicBool::new(false);
+
+/// A frame capture's lease lent the display the clock ([`lend`]), and how far
+/// the display's wall is ahead of the runner's clock where it took over
+/// (milliseconds, as `f64` bits).
+static LENT: AtomicBool = AtomicBool::new(false);
+static OFFSET: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the display holds a lent clock.
+pub(crate) fn lent() -> bool {
+    LENT.load(Ordering::Relaxed)
+}
+
+/// The display's wall less the runner's clock where a lease took over: the
+/// host's turns run at the wall less this, so time goes on from where the
+/// driver left it. Zero while nothing is lent.
+pub(super) fn offset() -> f64 {
+    if lent() {
+        f64::from_bits(OFFSET.load(Ordering::Relaxed))
+    } else {
+        0.0
+    }
+}
+
+/// A capture lease starts: the display owns time until [`unlend`], from the
+/// runner's clock as it stands (no timer fires for the time the driver never
+/// moved). A launch the display already times lends nothing.
+pub(super) fn lend<D: DataSource>(
+    p: &mut crate::presenter::Presenter<D>,
+    started: std::time::Instant,
+) {
+    if lent() || clock(p).is_none() {
+        return;
+    }
+    let offset = started.elapsed().as_secs_f64() * 1000.0 - p.host().now();
+    OFFSET.store(offset.to_bits(), Ordering::Relaxed);
+    LENT.store(true, Ordering::Relaxed);
+    p.set_live_clock(Some(std::rc::Rc::new(move || {
+        started.elapsed().as_secs_f64() * 1000.0 - offset
+    })));
+}
+
+/// The lease ended: the driver's clock again, where the display left it.
+pub(super) fn unlend<D: DataSource>(p: &mut crate::presenter::Presenter<D>) {
+    if LENT.swap(false, Ordering::Relaxed) {
+        p.set_live_clock(None);
+    }
+}
 
 /// Whether a driver drives the reader (its first request has come).
 pub(crate) fn driven() -> bool {
@@ -73,7 +125,7 @@ pub(crate) fn own_time<D: DataSource + Default>(
 /// run at the driver's clock steps, as virtual frames, not once per display
 /// refresh at an unmoved time.
 pub(super) fn clock<D: DataSource>(p: &crate::presenter::Presenter<D>) -> Option<f64> {
-    (driven() || SEEK.load(Ordering::Relaxed)).then(|| p.host().now())
+    ((driven() || SEEK.load(Ordering::Relaxed)) && !lent()).then(|| p.host().now())
 }
 
 /// A recording finished over `older`, which the reader never took. With a
@@ -118,6 +170,16 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
             Some("screenshot") => {
                 return error("the reader's picture is the device's: the carrier takes it")
+            }
+            Some("perf") => {
+                if let Some(reply) = self.frames_request(line) {
+                    return reply;
+                }
+            }
+            // An input's landing takes nothing from a lent clock; any other clock request would take it back.
+            Some("clock") if lent() && !field_bool(line, "land") => {
+                return serde_json::json!({"error": "Live frame capture holds the display's clock. Stop it with perf frames capture stop before using clock, held-clock or virtual-film operations.",
+                    "code": "frame-health-clock-takeover"}).to_string();
             }
             _ => {}
         }

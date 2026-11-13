@@ -291,6 +291,7 @@ mod tests {
             restore_input: false,
             restore_bytes: None,
             restore_logged: false,
+            uploaded: None,
         };
         p.surfaces.canvases.insert(canvas, surface(1, "world"));
         p.boxes();

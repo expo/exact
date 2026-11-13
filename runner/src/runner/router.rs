@@ -115,6 +115,19 @@ pub fn routing(plan: &Plan) -> Result<Option<Box<dyn Routing>>, RunnerError> {
     Ok(RouterContext::from_plan(plan)?.map(|r| Box::new(r) as Box<dyn Routing>))
 }
 
+/// Whether a launch at `location` lands on a route, asked before boot so a
+/// command line refuses a location before anything starts (LLP 1101.003
+/// D3): a declared pattern matches it, or the table declares `notfound`.
+/// A plan with no router has one location, `/`, with any query.
+pub fn launch_matches(plan: &Plan, location: &str) -> Result<bool, RunnerError> {
+    match RouterContext::from_plan(plan)? {
+        Some(router) => {
+            Ok(router.matches_pattern(location) || router.table.routes.iter().any(|r| r.notfound))
+        }
+        None => Ok(exact_route::canonical(location).split(['?', '#']).next() == Some("/")),
+    }
+}
+
 /// The checked table and shape metadata shared by the runner's VM evaluations.
 /// Constructed by boot from the plan; no additional declaration authority.
 pub struct RouterContext {

@@ -223,10 +223,12 @@ pub fn create_headless(name: &str) -> u32 {
     with(|m| m.create_headless(name)).flatten().unwrap_or(0)
 }
 
-/// Drop the device and every canvas; [`load`] may run again. A thread that
-/// loaded a module must not leave it for thread-local teardown: wgpu's own
-/// thread-locals may already be gone by then, and dropping a device without
-/// them aborts the process (found by the first test to load one off the main thread).
+/// Join acquisition workers and drop the device and every canvas; [`load`] may
+/// run again. The host must keep the library loaded until this returns.
+///
+/// A thread that loaded a module must not leave it for thread-local teardown:
+/// wgpu's own thread-locals may already be gone by then, and dropping a device
+/// without them aborts the process.
 pub fn unload() {
     let module = MODULE.with(|m| m.borrow_mut().take());
     drop(module);
@@ -541,6 +543,11 @@ pub fn wants_input(id: u32) -> bool {
     with(|m| m.wants_input(id)).unwrap_or(false)
 }
 
+/// Whether a canvas reads gamepads.
+pub fn wants_pads(id: u32) -> bool {
+    with(|m| m.wants_pads(id)).unwrap_or(false)
+}
+
 /// Present between CPU UI layers without reading the game back.
 /// # Safety
 /// The HWND remains live until `window_detach`; slices contain premultiplied RGBA.
@@ -787,7 +794,7 @@ macro_rules! module {
             len
         }
 
-        /// Release all instances and module TLS before unloading the library.
+        /// Join acquisition workers and release instances and TLS before unloading the library.
         #[no_mangle]
         pub extern "C" fn gpu_unload() { $crate::native::unload(); }
 
@@ -1038,6 +1045,9 @@ macro_rules! module {
         /// Whether a canvas wants raw input.
         #[no_mangle]
         pub extern "C" fn gpu_wants_input(id: u32) -> u32 { u32::from($crate::native::wants_input(id)) }
+        /// Whether a canvas reads gamepads: 1 or 0.
+        #[no_mangle]
+        pub extern "C" fn gpu_wants_pads(id: u32) -> u32 { u32::from($crate::native::wants_pads(id)) }
         /// Instance policy: bit 0 promises alpha one, bit 1 requests SDR.
         #[no_mangle]
         pub extern "C" fn gpu_presentation_flags(id: u32) -> u32 { $crate::native::presentation_flags(id) }

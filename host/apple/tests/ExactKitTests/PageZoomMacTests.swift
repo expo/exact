@@ -12,7 +12,8 @@ final class PageZoomMacTests: XCTestCase {
     override func tearDown() { window?.close(); window = nil }
 
     /// The viewport's width as the page reads it, a 100px box, a paragraph,
-    /// and buttons that set the page zoom.
+    /// buttons that set the page zoom, and an SVG pattern, which is drawn as
+    /// pixels.
     private static let plan: Result<Data, Error> = Result {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -33,6 +34,11 @@ final class PageZoomMacTests: XCTestCase {
               text "A paragraph of text" testId="para" font-size=14
               button "Zoom" testId="zoom" press=zoom
               button "Refused" testId="refused" press=refused(0)
+              svg testId="dots" width=60 height=24 viewBox="0 0 60 24"
+                defs
+                  pattern id="dots" patternUnits="userSpaceOnUse" width=6 height=6
+                    circle cx=3 cy=3 r=2 fill="#0f172a"
+                rect width=60 height=24 fill="url(#dots)"
 
         """
         try source.write(to: dir.appendingPathComponent("app.contract"), atomically: true, encoding: .utf8)
@@ -89,6 +95,45 @@ final class PageZoomMacTests: XCTestCase {
         // Clamped to Chromium's limits.
         session.pageZoom = 9
         XCTAssertEqual(session.pageZoom, 5)
+    }
+
+    /// An SVG's pictures (here a pattern's tile) are drawn at the page's
+    /// device pixels, which AppKit does not put in the layer's
+    /// `contentsScale`, and drawn again when the zoom changes.
+    func testAnSvgPictureIsDrawnAtThePageZoomsPixels() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "page-zoom-svg")
+        defer { session.destroy() }
+        let shown = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        shown.isReleasedWhenClosed = false
+        window = shown
+        let view = ExactView(session: session)
+        shown.contentView = view
+        XCTAssertNil(session.boot(plan: try Self.plan.get(), size: CGSize(width: 400, height: 300)).error)
+        shown.makeKeyAndOrderFront(nil)
+        view.layoutSubtreeIfNeeded()
+        let svg = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "dots" })
+        // Device pixels per unit of the widest picture in the scene.
+        func pictureScale() throws -> CGFloat {
+            var widest: (pixels: Int, units: CGFloat) = (0, 0)
+            func walk(_ layer: CALayer) {
+                if let contents = layer.contents, CFGetTypeID(contents as CFTypeRef) == CGImage.typeID, layer.bounds.width > widest.units {
+                    widest = ((contents as! CGImage).width, layer.bounds.width)
+                }
+                layer.sublayers?.forEach(walk)
+            }
+            walk(try XCTUnwrap(svg.layer))
+            XCTAssertGreaterThan(widest.units, 0, "the pattern is a picture")
+            return CGFloat(widest.pixels) / max(widest.units, 1)
+        }
+        let backing = shown.backingScaleFactor
+        XCTAssertEqual(try pictureScale(), backing, accuracy: 0.1)
+        session.pageZoom = 3
+        view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(svg.pixelScale ?? 0, backing * 3, accuracy: 0.001)
+        XCTAssertEqual(try pictureScale(), backing * 3, accuracy: 0.1, "the tile at the zoom's pixels, not stretched")
+        session.pageZoom = 1
+        XCTAssertEqual(try pictureScale(), backing, accuracy: 0.1)
     }
 }
 #endif

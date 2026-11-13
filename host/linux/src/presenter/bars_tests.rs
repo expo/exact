@@ -295,24 +295,25 @@ fn shelfs_library_is_a_top_app_bar_and_a_navigation_bar() {
 #[test]
 fn shelfs_add_form_and_its_other_tabs() {
     let (mut p, _) = barred(SHELF);
-    // The add form, presented: its Back control is a leading item and Save
-    // a trailing one, with no Up arrow. Its header is the bar, so the
-    // library's heading no longer shows through it.
+    // The add form, presented, is a sheet (`stage.rs`): its header stays in
+    // it as written, and the library's bar is drawn under the scrim.
     assert!(tap(&mut p, "add-book").unwrap().contains("\"bar\":\"top\""));
-    let add = top(&mut p);
-    assert_eq!(add.title, "New Book");
-    assert!(!add.up);
-    assert_eq!(titles(&add.leading), [("Cancel", None)]);
-    assert_eq!(titles(&add.trailing), [("Save", None)]);
+    let open = p.host().now() + 1000.;
+    p.tick(open);
+    let _ = p.frame();
+    assert!(p.top_sheet().is_some());
+    assert_eq!(top(&mut p).title, "Library");
     let kernel = p.host().kernel();
     let form = kernel.find_by_id("add-form")[0];
     let form = kernel.node_by_key(form).unwrap().id;
     let form = p.rect_of(form).unwrap();
+    let (_, sheet) = p.top_sheet().unwrap();
     assert!(
-        near(form.1, 64.0),
-        "the form starts under the bar: {form:?}"
+        form.1 > sheet.1 + SHEET_HANDLE,
+        "the form is in the sheet: {form:?}"
     );
-    touch(&mut p, TOP, Some("add-cancel"));
+    tap(&mut p, "add-cancel").unwrap();
+    assert!(p.top_sheet().is_none());
     assert_eq!(top(&mut p).title, "Library");
     // Stats and Discover, each chosen in the navigation bar.
     touch(&mut p, BOTTOM, Some("tab-stats"));
@@ -389,7 +390,13 @@ fn a_modal_route_blocks_the_shell_tab_bar_until_dismissed() {
         tap(&mut p, "open").unwrap();
         touch(&mut p, BOTTOM, Some("tab-other"));
         let modal = presentation != "push";
-        assert_eq!(top(&mut p).title, if modal { "Detail" } else { "Other" });
+        // Under a sheet the bar is the page's, under its scrim.
+        let title = match presentation {
+            "modal" => "Home",
+            "fullscreen" => "Detail",
+            _ => "Other",
+        };
+        assert_eq!(top(&mut p).title, title);
         if !modal {
             touch(&mut p, BOTTOM, Some("tab-home"));
         } else {
@@ -561,6 +568,7 @@ fn the_largest_font_scale_clips_neither_bar() {
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert_eq!(p.set_device(&device), None);
     assert_eq!(p.fit_window(), None);
@@ -665,6 +673,7 @@ fn tv() -> Device {
         tv: true,
         touch_slop: 0.0,
         dates: String::new(),
+        format_locale: String::new(),
     }
 }
 
@@ -989,4 +998,123 @@ fn a_reload_at_the_same_epoch_reads_the_bars_again() {
     assert_eq!(p.host().kernel().epoch(), epoch, "the case: the same epoch");
     assert_eq!(text(&p, "home-title"), "Start");
     assert_eq!(top(&mut p).title, "Start");
+}
+
+/// A tabpanel the root's tablist holds: the navigation bar stands for the
+/// tabs, and the panel's routes stay in the page, shown and pressed.
+#[test]
+fn a_panel_inside_the_tablist_stays_in_the_page() {
+    let (mut p, _) = barred(
+        r#"component App
+  state selected = "home"
+  action push
+    selected = "detail"
+  action back
+    selected = "home"
+  view
+    main navigationKey=selected navigationBack="back" width="100%" height="100%"
+      row role="tablist" testId="tabs"
+        button role="tab" aria-controls="panel" testId="tab"
+          text "Home"
+        column role="tabpanel" id="panel" flex=1
+          column navigationKey="home" testId="home"
+            header
+              text "Home" role="heading"
+            button press=push testId="push"
+              text "Open"
+          column navigationKey="detail" testId="detail"
+            header
+              button id="back" press=back testId="back"
+                text "Back"
+              text "Detail" role="heading"
+            text "Body" testId="body"
+"#,
+    );
+    assert!(p.bar_plans().1.is_some(), "a navigation bar");
+    let tab = id(&p, "tab");
+    assert!(p.rect_of(tab).is_none(), "the tab is the bar's");
+    let push = id(&p, "push");
+    assert_eq!(p.host().route_visibility(push), (false, false));
+    assert!(p.rect_of(push).is_some(), "the home route paints");
+    tap(&mut p, "push").unwrap();
+    let body = id(&p, "body");
+    assert_eq!(p.host().route_visibility(body), (false, false));
+    assert!(p.rect_of(body).is_some(), "the pushed route paints");
+    assert!(p.system_back(0.0));
+    p.run_commands(|| Nothing);
+    assert_eq!(p.host().route_visibility(push), (false, false));
+}
+
+/// A finger on a bar's target ripples in its state layer's shape (LLP
+/// 1115.001 D9): nothing at the touch's instant, the wave at rest after
+/// 450 ms, the bar told again at each new instant while it moves, and the
+/// bar as it was once the wave has left after the lift.
+#[test]
+fn a_bars_target_ripples_and_is_told_at_each_instant() {
+    let (mut p, pictures) = barred(APP);
+    p.reader_bars(1.0).expect("the bars are told");
+    let last = |pictures: &Rc<RefCell<Vec<Pixmap>>>| pictures.borrow().last().unwrap().clone();
+    let rest = last(&pictures);
+    let other = id(&p, "tab-other");
+    let (_, bottom) = p.bars();
+    let target = *(bottom.unwrap().targets.iter())
+        .find(|t| t.what == What::Tab(other))
+        .unwrap();
+    let (x, y, w, h) = target.rect;
+    p.clock(1000.);
+    p.bar_event(BOTTOM, 0, x + w / 2.0, y + h / 2.0, 1000.);
+    p.reader_bars(1.0).expect("pressed");
+    assert_eq!(
+        last(&pictures).data(),
+        rest.data(),
+        "nothing at the touch's instant"
+    );
+    assert!(p.needs_animation_frame(), "the ripple owes frames");
+    assert_eq!(p.reader_bars(1.0), None, "the same instant is told once");
+    p.clock(1500.);
+    p.reader_bars(1.0).expect("a new instant");
+    assert_ne!(last(&pictures).data(), rest.data(), "the wave at rest");
+    assert!(!p.needs_animation_frame(), "held at rest, nothing moves");
+    // Lifted outside the target: it chooses nothing, and the wave leaves.
+    p.bar_event(BOTTOM, 2, 1.0, 1.0, 1500.);
+    p.bar_event(BOTTOM, 1, 1.0, 1.0, 1500.);
+    assert!(p.needs_animation_frame());
+    p.clock(1700.);
+    p.reader_bars(1.0).expect("leaving");
+    p.clock(1900.);
+    p.reader_bars(1.0).expect("gone");
+    assert_eq!(last(&pictures).data(), rest.data(), "the bar as it was");
+    assert!(!p.needs_animation_frame());
+    assert_eq!(p.reader_bars(1.0), None);
+}
+
+/// A bar measured again while a finger holds one of its targets (here the
+/// window turns) has other targets: the held one's ripple goes with it, and
+/// the lift that follows leaves nothing pressed.
+#[test]
+fn a_bar_measured_again_while_held_lets_its_ripple_go() {
+    let (mut p, _) = barred(APP);
+    p.reader_bars(1.0).expect("the bars are told");
+    let other = id(&p, "tab-other");
+    let (_, bottom) = p.bars();
+    let target = *(bottom.unwrap().targets.iter())
+        .find(|t| t.what == What::Tab(other))
+        .unwrap();
+    let (x, y, w, h) = target.rect;
+    p.clock(1000.);
+    p.bar_event(BOTTOM, 0, x + w / 2.0, y + h / 2.0, 1000.);
+    p.reader_bars(1.0).expect("pressed");
+    assert!(p.bars.ripple.is_some());
+    let turned = Window {
+        size: (916.0, 412.0),
+        ..WINDOW
+    };
+    assert_eq!(p.set_window(turned), None);
+    p.reader_bars(1.0).expect("measured again");
+    assert!(p.bars.ripple.is_none(), "the held target's ripple is gone");
+    p.bar_event(BOTTOM, 1, x + w / 2.0, y + h / 2.0, 1100.);
+    p.clock(3000.);
+    p.reader_bars(1.0);
+    assert!(p.bars.ripple.is_none() && p.bars.pressed.is_none());
+    assert!(!p.needs_animation_frame());
 }

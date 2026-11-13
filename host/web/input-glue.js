@@ -2,11 +2,12 @@ import { viewChildren, viewParent } from './navigation.js';
 // Input-only glue: loaded after the baked first pixel, independently of data readiness.
 import "./prompt-glue.js"; // a prompt's Return
 import "./alert-message.js"; // a grouped alert's message box
+const hearsPress = el => (el.exactHandlers ?? el.dataset?.exactOn?.split(" "))?.includes("press") === true;
 /** An element whose `press` the keyboard reaches only through its tabindex:
  * not one the browser activates itself (the wasm host's handler list, or the
  * JS target's `data-exact-on`). */
 const pressesByKey = el => !el.matches("button, a[href], input, select, textarea, summary")
-  && (el.exactHandlers ?? el.dataset.exactOn?.split(" "))?.includes("press") === true;
+  && hearsPress(el);
 const shortcutKeys = new Set(["Enter", "Tab", "Escape", "Backspace", "Delete", "Insert", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 /** A shortcut's key when `e.key` is one character outside ASCII and the Latin script (ㅠ on KeyB under Korean 2-Set,
  * Russian, Greek): what its physical key (`code`) types on a US layout, with Shift, as web apps match (the macOS host
@@ -100,7 +101,28 @@ function roveArrow(root, event) {
   if (next !== el) { if (!menu) rove(all, next); next.focus(); }
   return true;
 }
-export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null }) {
+export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null, pick = null }) {
+  // A press stops bubbling at its nearest handler; otherwise the click reaches the root.
+  // Append the default there so the handler's updates and showPicker run first.
+  // A successful showPicker consumes the activation, even for another input.
+  // The JS executor may hold the press's commit for a view transition (shared.js):
+  // the choice waits for it, and the input is checked again.
+  let pickerActivations = 0;
+  (globalThis.exact ??= {}).pickerOpened = () => pickerActivations++;
+  if (agentMode && pick) root.addEventListener("click", event => {
+    const el = event.target;
+    if (!(el instanceof HTMLInputElement) || el.type !== "file") return;
+    const activation = pickerActivations;
+    const after = event.composedPath().find(n => n === root || hearsPress(n));
+    const usable = () => ready() && el.isConnected && !retiredViews.has(el) && [...views.values()].includes(el)
+      && el.type === "file" && !el.matches(":disabled") && !inertAncestor(el) && el.getClientRects().length > 0
+      && !["hidden", "collapse"].includes(getComputedStyle(el).visibility);
+    after.addEventListener("click", e => {
+      if (e !== event || e.defaultPrevented || !usable()) return;
+      e.preventDefault();
+      (globalThis.exact.afterCommit ?? (run => run()))(() => { if (pickerActivations === activation && usable()) pick(el); });
+    }, { once: true });
+  }, true);
   // @ref LLP 1005 §Events — a pointer's down goes along the event's own path,
   // innermost first, to each node's `exactPointerDown` (`pointer` below), from
   // this one listener at the root's capture, before any element's: a
@@ -582,8 +604,9 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     if (state != null && !["active", "hover", "focus-visible"].includes(state)) return { error: "holdState is active, hover, focus-visible or null", malformed: true };
     letGo("replaced");
     if (state == null) return { held: null };
-    // `active`: the innermost node with a press handler, as a real press's (theme2's 07:48); none there is `gone`.
-    const node = state === "active" ? el?.closest?.("[data-exact-on~=press]") : el;
+    // `active`: the innermost node with a press handler or a view's link, as a real press's (theme2's 07:48; LLP 1121 D8);
+    // none there is `gone`.
+    const node = state === "active" ? el?.closest?.("[data-exact-on~=press],a[data-view][href]") : el;
     if (!node?.isConnected || !root.contains(node) || node.closest("[data-exiting]")) return { reason: "gone", error: state === "active" ? "no press there: the node presses nothing, nor does any around it" : "the node is not on the page" };
     if (node.closest(DISABLED)) return { reason: "disabled", error: "a disabled node holds no state" };
     held = { el: node, asked: el, state, dropped };
@@ -863,14 +886,11 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     }
     if (!press || !holds(e.target, press.el)) return;
     press.box = boxOf(press.el);
-    if (!press.delay) showHeld(press, stillUnder(press));
+    if (!press.delay) showPress(press.el, stillUnder(press));
   }, { capture: true, passive: true });
   const inside = (p, e) => { const [l, t, r, b] = p.box; return e.clientX >= l && e.clientX <= r && e.clientY >= t && e.clientY <= b; };
   // Whether the finger, where it last was, is over the target as the page last moved it.
   const stillUnder = p => inside(p, { clientX: p.at[0], clientY: p.at[1] });
-  // Only mark a mouse-held link without a `press` handler: it dims unless it declares feedback, in which case
-  // it shows nothing (LLP 1121's `lower-state-dead` lint). Buttons and touch presses show authored feedback.
-  const showHeld = (p, down, now = false) => p.dimOnly ? markPressed(p.el, down, now) : showPress(p.el, down, now);
   // Play the haptic when feedback appears, where `navigator.vibrate` is available (LLP 1077 D14)
   const begin = p => {
     // Discard delayed feedback if the target became unavailable before its timer fired
@@ -880,7 +900,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       }
       return false;
     }
-    showHeld(p, true);
+    showPress(p.el, true);
     if (p.haptic) {
       navigator.vibrate?.(p.haptic);
     }
@@ -892,14 +912,14 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const p = lifts.get(el);
     lifts.delete(el);
     clearTimeout(p.lift);
-    if (press?.el !== el || press.delay) showHeld(p, false, now);
+    if (press?.el !== el || press.delay) showPress(p.el, false, now);
   };
   // `lifted`: the pointer came up inside the box, so a tap still waiting out the delay shows its press now.
   const release = (now = false, lifted = false) => {
     const p = press;
     press = null;
     if (!p) return;
-    if (!p.delay) return showHeld(p, false, now);
+    if (!p.delay) return showPress(p.el, false, now);
     clearTimeout(p.delay);
     if (!lifted) return;
     if (!begin(p)) {
@@ -927,7 +947,6 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const p = press = {
       el, id: e.pointerId, box: boxOf(el), at: [e.clientX, e.clientY], touch,
       haptic: haptic && haptic !== "none" ? (haptic === "selection" ? 5 : 12) : 0,
-      dimOnly: !touch && el.matches('a:not([data-exact-on~=press])'),
     };
     // The delay over, the press shows if its target is still under the finger: the page may have moved it away.
     if (scroll.delay) p.delay = setTimeout(() => { if (press !== p) return; p.delay = 0; if (stillUnder(p)) begin(p); }, TOUCH_DELAY);
@@ -940,7 +959,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     press.at = [e.clientX, e.clientY];
     // Inside the delay the browser decides: a scroll cancels the touch, a tap lifts it.
     if (press.delay) return;
-    showHeld(press, inside(press, e));
+    showPress(press.el, inside(press, e));
   }, true);
   // A touch belongs to the target it began on, as UIKit hit-tests a touch once: lifted outside that target's box as it
   // stands now (the app may have moved it from under the finger), it presses nothing, though the browser aims its

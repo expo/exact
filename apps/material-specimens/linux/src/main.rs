@@ -187,6 +187,7 @@ fn draw(
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     if let Some(e) = p.set_device(&device) {
         return Err(format!("device: {e}"));

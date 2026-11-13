@@ -205,7 +205,7 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         origin: None,
         activate: "next-launch".into(),
         target: String::new(),
-        embedded: Value::Null,
+        embedded: json!({"version":"2.3.4","buildNumber":"56"}),
         reach: Value::Null,
         painter: None,
         game: false,
@@ -220,6 +220,8 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         &Default::default(),
     )
     .unwrap();
+    assert_eq!(compat.embedded["version"], "2.3.4");
+    assert_eq!(compat.embedded["buildNumber"], "56");
     let result = crate::bun()
         .args([
             "--eval",
@@ -920,8 +922,12 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
 #[test]
 fn a_production_sequence_is_bound_to_a_signed_matching_complete_bundle() {
     let (mut compat, receipt, plan) = signed_fixture();
+    compat.embedded["version"] = json!("2.3.4");
+    compat.embedded["buildNumber"] = json!("56");
     apply_release(&mut compat, &serde_json::to_vec(&receipt).unwrap(), &plan).unwrap();
     assert_eq!(compat.embedded["seq"], 1);
+    assert_eq!(compat.embedded["version"], "2.3.4");
+    assert_eq!(compat.embedded["buildNumber"], "56");
     assert_eq!(compat.embedded["genesis"], false);
     assert_eq!(compat.embedded["entryDigest"].as_str().unwrap().len(), 64);
     let baked = Baked::from_compat(&compat.to_json(), &plan).unwrap();

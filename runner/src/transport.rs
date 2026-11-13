@@ -190,6 +190,17 @@ struct Hit {
     step: usize,
 }
 
+impl Hit {
+    /// A window's order: by time, then track, then step.
+    fn order(a: &Hit, b: &Hit) -> std::cmp::Ordering {
+        // As transport.js compares them: `-0` is `0`.
+        a.at.partial_cmp(&b.at)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.track.cmp(&b.track))
+            .then(a.step.cmp(&b.step))
+    }
+}
+
 /// How a fill treats an output before the time it runs at (the module's
 /// rule for `offset`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -436,13 +447,7 @@ impl Play {
                 k += 1.0;
             }
         }
-        out.sort_by(|a, b| {
-            // As transport.js compares them: `-0` is `0`.
-            a.at.partial_cmp(&b.at)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.track.cmp(&b.track))
-                .then(a.step.cmp(&b.step))
-        });
+        out.sort_by(Hit::order);
         out
     }
 
@@ -603,6 +608,9 @@ pub struct Transport {
     /// Where the last fill stopped, by beat (a tempo edit moves its time):
     /// the hits before this beat, and the first `.1` at it, were issued.
     issued: (f64, usize),
+    /// A tempo edit's time and the segment before it, for the fill that
+    /// follows (`fill`).
+    cut: Option<(f64, Segment)>,
     /// Notes the value read could not send were journaled.
     unsent_told: bool,
     refill_due: f64,
@@ -651,6 +659,7 @@ impl Transport {
             issued_to: 0.0,
             skip: 0,
             issued: (f64::NEG_INFINITY, 0),
+            cut: None,
             unsent_told: false,
             refill_due: f64::INFINITY,
             phase_due: f64::INFINITY,
@@ -928,6 +937,7 @@ impl Transport {
                 beat: seg.beat_at(t),
                 bpm: play.bpm,
             });
+            self.cut = Some((t, seg));
         } else {
             log.push(format!("sequence {name} edited"));
         }
@@ -1102,6 +1112,7 @@ impl Transport {
         how: Fill,
         log: &mut Vec<String>,
     ) {
+        let cut = self.cut.take();
         let (Some(seg), Some(i)) = (self.segments.back().copied(), self.owner) else {
             return;
         };
@@ -1161,6 +1172,22 @@ impl Transport {
         } else {
             self.hits(&play, from, to)
         };
+        // A tempo edit at `t` took back the steps whose time under the
+        // segment before it is at or after `t` (`Cut::At`). The new segment
+        // rounds differently: it can time one of those just before `t` (lost)
+        // or a step that stayed at `t` (played twice). So what is issued again
+        // is what was taken back, none before `t`; a millisecond is far wider
+        // than the rounding.
+        if let Some((t, old)) = cut {
+            hits.retain(|h| h.at < t || old.time(h.beat) >= t);
+            let taken = play.hits(&seg, t - 1.0, t).into_iter();
+            hits.extend(
+                taken
+                    .filter(|h| old.time(h.beat) >= t)
+                    .map(|h| Hit { at: t, ..h }),
+            );
+            hits.sort_by(Hit::order);
+        }
         // When beat `b` of a hit at `at` falls: in the hit's own segment, or a
         // later one the beat reaches (a note's end past a tempo edit), never
         // across a restart, whose beat goes back. Following a clock, in its

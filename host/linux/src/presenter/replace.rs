@@ -21,6 +21,8 @@ impl<D: DataSource> Presenter<D> {
             ahead,
             scroll,
             scroll_end,
+            wheel_free,
+            snap_rested,
             page,
             focus_out,
             autofocus_from,
@@ -55,6 +57,7 @@ impl<D: DataSource> Presenter<D> {
             field_select_tasks,
             field_change_tasks,
             bars,
+            stage,
             // The tree's, made anew by the calls below.
             surfaces: _,
             brush: _,
@@ -152,6 +155,10 @@ impl<D: DataSource> Presenter<D> {
         *ahead = None;
         scroll.clear();
         *scroll_end = Default::default();
+        // Kept by view id, as where a wheel left a scroller and the area it
+        // last rested on.
+        wheel_free.clear();
+        snap_rested.clear();
         *page = (0.0, 0.0);
         focus_out.clear();
         *autofocus_from = None;
@@ -190,6 +197,8 @@ impl<D: DataSource> Presenter<D> {
         field_select_tasks.clear();
         field_change_tasks.clear();
         bars.replaced();
+        // Sheets, a crossing and a preview are the old tree's routes.
+        *stage = Default::default();
         self.read_ranges();
         self.give_clock();
         self.modules_replaced();

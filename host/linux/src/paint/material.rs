@@ -38,6 +38,16 @@ fn opacity(index: usize) -> f32 {
     metrics::number_in(index, Column::Material).expect("a Material row")
 }
 
+/// The pressed state's opacity, which a ripple shows (`ripple.rs`).
+pub(crate) fn pressed_opacity() -> f32 {
+    opacity(metric::STATE_PRESSED_OPACITY)
+}
+
+/// A hover's state layer's opacity.
+pub(crate) fn hover_opacity() -> f32 {
+    opacity(metric::STATE_HOVER_OPACITY)
+}
+
 /// The container's height.
 pub(crate) fn height() -> f32 {
     dp(metric::FIELD_HEIGHT)
@@ -274,18 +284,17 @@ impl super::Painter {
         // `ContainerColor`, not the token's `onSurface` at 4 %), and the
         // indicator `onSurface` at 38 %.
         self.backend.fill(&shape, look::role("Field", dark), ts);
-        let layer = match (
-            off,
-            (self.feedback.0, self.presses(node.id).then_some(node.id)),
-        ) {
-            (true, _) => 0.0,
-            (_, (_, Some(id))) if opens && id == node.id => opacity(metric::STATE_PRESSED_OPACITY),
-            (_, (Some(id), _)) if id == node.id => opacity(metric::STATE_HOVER_OPACITY),
-            _ => 0.0,
-        };
-        if layer > 0.0 {
-            let state = look::fade(look::role("CanvasText", dark), layer);
+        // Hovered, the state layer; pressed, where a press opens something,
+        // the ripple. A text field shows no press, as Compose's does not.
+        if self.feedback.0 == Some(node.id) && !off {
+            let state = look::fade(
+                look::role("CanvasText", dark),
+                opacity(metric::STATE_HOVER_OPACITY),
+            );
             self.backend.fill(&shape, state, ts);
+        }
+        if opens && !off {
+            self.ripple(node, &shape, look::role("CanvasText", dark), ts);
         }
         let (thin, thick) = (
             dp(metric::FIELD_INDICATOR),

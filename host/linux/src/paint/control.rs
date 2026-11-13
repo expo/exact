@@ -243,6 +243,27 @@ impl super::Painter {
         self.ringless == Some(node.id) || ringless(node)
     }
 
+    /// Fields and native controls ring their chrome; links ring their text
+    /// fragments. Other focus targets, including a route's heading or its
+    /// container (LLP 1115.000 D4.2), ring their outer box after its own clip.
+    pub(super) fn node_ring(
+        &mut self,
+        walk: &super::Walk<'_, '_>,
+        node: &NodeRef<'_>,
+        outer: &Shape,
+        ts: Transform,
+    ) {
+        if walk.scene.focus != Some(node.id)
+            || matches!(node.node_type, NodeType::Control | NodeType::TextInput)
+            || node.props.str(PropId::Href).is_some()
+            || self.unringed(node)
+            || node.props.bool(PropId::Disabled) == Some(true)
+        {
+            return;
+        }
+        self.field_ring(outer, ring(node, self.dark), ts);
+    }
+
     /// Native text field chrome; text uses the kernel's published content rect.
     pub(super) fn text_field_chrome(
         &mut self,

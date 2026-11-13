@@ -96,6 +96,29 @@ fn settle(h: &mut Host<Data>, drops: &Rc<Cell<usize>>) -> usize {
     turns
 }
 #[test]
+fn a_region_carries_the_paragraphs_indent_and_hyphenation_settings() {
+    for (hyphens, code) in [
+        ("", 0),
+        ("hyphens=\"manual\"", 0),
+        ("hyphens=\"none\"", 1),
+        ("hyphens=\"auto\"", 2),
+    ] {
+        let (h, _, _) = fixture_in(
+            registration(),
+            &format!("text-indent=32 {hyphens} direction=\"rtl\" white-space=\"pre-wrap\""),
+        )
+        .unwrap();
+        let (id, _) = h.pending_region_request().unwrap();
+        let wire: serde_json::Value =
+            serde_json::from_str(&h.region_request_json(id).unwrap()).unwrap();
+        assert_eq!(wire["textIndent"], 32);
+        assert_eq!(wire["hyphens"], code, "{hyphens}");
+        assert_eq!(wire["direction"], 1);
+        assert_eq!(wire["whiteSpace"], 1);
+        assert_eq!(wire["language"], h.runner().resolved_locale());
+    }
+}
+#[test]
 fn first_layout_uses_real_pending_and_never_calls_foreign_giant() {
     let (mut h, batch, calls) = fixture(registration()).unwrap();
     assert!(batch.contains("\"op\":\"region\""), "{batch}");

@@ -155,7 +155,10 @@ A `use` names one of three things:
   `package.json` `exports` maps `.` (and any subpaths) to `.contract` files;
   without `exports`, `index.contract`. A local library is a dependency too:
   `"@me/ui": "file:../ui"` in the app's `package.json`, or a Bun workspace.
-  A package's own relative uses stay inside the package.
+  A build installs a `file:` package again (`bun install --frozen-lockfile`)
+  when its directory no longer matches what `node_modules` holds, so an edit
+  to it reaches the next build. A package's own relative uses stay inside the
+  package.
 
 A library is Contract only: components, shapes, functions, styles, keyframes and
 timelines. It cannot own resources or carry TypeScript; its components take data
@@ -453,8 +456,9 @@ none of it.
 A virtualized list has exactly one direct `for`, whose body has one flow root.
 A vertical list needs a real height bound (`height`, `max-height`, or growing
 `flex` in a bounded parent). A horizontal one needs a literal `display="flex"` and
-a literal positive `height`, takes `estimated-item-width`, and refuses a nonzero
-`gap` and `justify-content` other than `flex-start`. Padding along the list's
+a positive `height` in points, literal or computed, takes `estimated-item-width`
+(literal or computed) and CSS's `gap` between its cards, and refuses
+`justify-content` other than `flex-start`. Padding along the list's
 axis is room before the first row and after the last, as in CSS: a length or an
 `env()` inset, not a percentage. On iOS a list's pull-to-refresh spinner draws
 below its `padding-top`, so a header laid over that padding does not hide it. A
@@ -1419,16 +1423,27 @@ nothing from it. On iOS every viewport unit (`vw`, `vh`, `vmin`, `vmax` and thei
 `s`/`l`/`d` kin) is the window's in every sheet (`vmin` and `vmax` its
 smaller and larger side), as CSS's `vh` is the viewport's and never a
 dialog's, so `height: 50vh` is half the screen at any sheet height
-and `min-height: 100vh` opens the sheet at its tallest. A route that scrolls itself is measured by what it scrolls,
-laid out in the sheet, so give its rows `flex-shrink: 0`. On a window narrower
-than 900 pixels the web's sheet opens at the height iOS opens it at, its foot on
+and `min-height: 100vh` opens the sheet at its tallest. A scrolling route is
+measured the same way; its rows can keep the default `flex-shrink: 1`. On a window
+narrower than 900 pixels the web's sheet opens at the height iOS opens it at, its foot on
 the window's, and stays there: it has no grabber and is not dragged between
 heights. A route pushed inside it stays in it at that height, as in UIKit's
 sheet. It is the tallest sheet in a window under 480 pixels tall (UIKit's compact
 height), and on a touch screen while a text field in it has the focus, as UIKit
 raises a sheet over the keyboard. A wider window shows the card it always does.
-macOS and Linux show a modal route as authored and ignore the detent
+Android shows a modal route as Material's bottom sheet at these heights (`large`
+the window below the status bar, `medium` half that; `fit-content` rests at
+`medium`), dragged between them or down to dismiss, over a scrim
+(`host/android/README.md`). macOS and desktop Linux ignore the detent
 (LLP 1075.003 §9.11, LLP 1115.000 D4.8).
+
+A route pushed while a sheet is on top is shown inside that sheet, which keeps the
+detents of the route that opened it, and Back returns to the route before it in
+the sheet. iOS and macOS show it in the sheet's own navigation stack, the web and
+Android lay it out in the sheet's box, and desktop Linux in the box the sheet's
+own route was laid out in. On Android a drag down or a tap on the scrim closes the
+sheet with what was pushed inside it. A route pushed over a `fullscreen` route is
+a page of its own.
 
 `path("item", value)` checks the route and encodes its parameters. Always build
 locations with it: a template literal as a location is refused and a string
@@ -1545,6 +1560,15 @@ yet.
 `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines
 (`-exact-drag-timeline`, `animation-timeline`, `animation-range`, `timeline-scope`) are
 declared extensions with bounded behavior, not arbitrary layout animation.
+
+A value that follows a scroll is CSS's scroll-driven animation, not a `scroll` action
+that writes state (one round trip behind the scroll). `scroll-timeline` on a scroller
+names its offset; `view-timeline` on any node names that node crossing its nearest
+scroller; `animation-timeline` names either, or is `scroll()` or `view()`, and
+`animation-range` takes lengths, percentages and the view ranges (`cover`, `contain`,
+`entry`, `exit`, `entry-crossing`, `exit-crossing`). Every host moves the consumer in the
+scroll's own frame, and the web leaves it to the browser
+([agents' guide](contract-for-agents.md#motion-that-follows-a-scroll)).
 
 For direct manipulation, `pan`, `panrelease`, `heightrelease`,
 `transformgeometry`/`transformrelease`, and `reorderdrop` supply measured payloads.

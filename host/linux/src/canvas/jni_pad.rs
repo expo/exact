@@ -6,7 +6,8 @@
 macro_rules! canvas_jni_pad {
     () => {
         /// A gamepad's state (LLP 1127.003 D2): `values` its 17 standard
-        /// buttons, then its 4 axes.
+        /// buttons, then its 4 axes. `at` is the event's `eventTime`
+        /// (uptimeMillis), 0 for a send no event caused.
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_pad(
             env: *mut $crate::canvas::jni_sys::JNIEnv,
@@ -14,6 +15,7 @@ macro_rules! canvas_jni_pad {
             index: $crate::canvas::jni_sys::jint,
             connected: $crate::canvas::jni_sys::jboolean,
             values: $crate::canvas::jni_sys::jfloatArray,
+            at: $crate::canvas::jni_sys::jlong,
         ) {
             let mut v = [0f32; 21];
             if ((**env).GetArrayLength.expect("jni"))(env, values) != 21 {
@@ -29,6 +31,7 @@ macro_rules! canvas_jni_pad {
                     connected == $crate::canvas::jni_sys::JNI_TRUE,
                     buttons,
                     axes,
+                    at,
                 )
             });
         }

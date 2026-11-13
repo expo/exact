@@ -49,6 +49,11 @@ final class RegionTextSource: Sendable {
     let direction: Int
     let lineClamp: Int
     let overflowWrap: Int
+    let textIndent: CGFloat
+    let hyphens: Int
+    let language: String
+    let hyphenated: Bool
+    let emergencyBreaks: [Int]
     /// CSS `text-wrap-style: balance` (`Spec.balance`).
     let balance: Bool
     /// CSS `white-space` (`Spec.whiteSpace`): what of a line's trailing spaces
@@ -95,6 +100,8 @@ final class RegionTextSource: Sendable {
         let base = spec.strut ?? spec.runs.first
         strut = base.map(font); strutExplicit = base?.lineHeight != nil
         align = spec.align; direction = spec.direction; lineClamp = spec.lineClamp; overflowWrap = spec.overflowWrap
+        textIndent = spec.textIndent; hyphens = spec.hyphens; language = spec.language
+        hyphenated = !spec.source.inserted.isEmpty; emergencyBreaks = spec.emergencyBreaks
         textBox = (spec.textBoxTrim, spec.textBoxOver, spec.textBoxUnder)
         balance = spec.balance
         whiteSpace = spec.whiteSpace
@@ -110,6 +117,12 @@ final class RegionTextSource: Sendable {
 
     /// A baseline on the device pixels its line box was rounded to.
     func painted(_ baseline: CGFloat) -> CGFloat { (baseline * lineScale).rounded() / lineScale }
+
+    var insets: LineInsets {
+        var value = LineInsets()
+        value.textIndent = textIndent; value.rtl = direction == 1
+        return value
+    }
 
     static func capture(_ spec: Spec, engine: TextEngine) -> RegionTextSource {
         RegionTextSource(spec, engine: engine)

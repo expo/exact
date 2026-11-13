@@ -128,16 +128,50 @@ impl<D: DataSource> Bridge<D> {
 }
 
 impl<D: DataSource> Bridge<D> {
-    /// Document safe-area insets and row-major segment rectangles, in CSS pixels.
+    /// Document safe-area insets, row-major segment rectangles and the
+    /// keyboard's overlap, in CSS pixels: `[insets, rectangles, keyboard]`.
     pub fn viewport_geometry(&mut self, len: usize) -> u32 {
-        let Ok((insets, rects)) = serde_json::from_slice::<([f32; 4], Vec<[f32; 4]>)>(
-            &self.input[..len.min(self.input.len())],
-        ) else {
-            return self.refuse("viewport geometry: expected [insets, rectangles]");
+        let Some(geometry) = self.page_geometry(len) else {
+            return self.refuse("viewport geometry: expected [insets, rectangles, keyboard]");
         };
         let out = self.host.as_mut().map_or_else(
             || exact_runner::agent::error("viewport geometry: not booted"),
-            |host| host.viewport_geometry(insets, rects),
+            |host| host.viewport_geometry(geometry),
+        );
+        self.emit(out)
+    }
+
+    pub(crate) fn page_geometry(&self, len: usize) -> Option<crate::host::PageGeometry> {
+        serde_json::from_slice(&self.input[..len.min(self.input.len())]).ok()
+    }
+
+    /// [`Bridge::resize`] with the page's geometry, `len` bytes of the input
+    /// buffer as [`Bridge::viewport_geometry`] reads them (none for 0), in
+    /// the size's commit (LLP 1039 D9): a rotation's insets never pair with
+    /// the size before it.
+    pub fn resize_with(
+        &mut self,
+        width: f64,
+        height: f64,
+        preferences: u32,
+        now_ms: f64,
+        len: usize,
+    ) -> u32 {
+        let geometry = (len > 0).then(|| self.page_geometry(len));
+        if geometry.as_ref().is_some_and(Option::is_none) {
+            return self.refuse("viewport geometry: expected [insets, rectangles, keyboard]");
+        }
+        self.set_preferences(preferences);
+        let viewport = exact_runner::Viewport {
+            width,
+            height,
+            preferences: self.preferences,
+            fold: self.fold,
+            ..exact_runner::Viewport::default()
+        };
+        let out = self.host.as_mut().map_or_else(
+            || exact_runner::agent::error("not booted"),
+            |h| h.resize_with(viewport, now_ms, geometry.flatten()),
         );
         self.emit(out)
     }

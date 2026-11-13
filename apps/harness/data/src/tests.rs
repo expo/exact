@@ -182,6 +182,19 @@ fn drive(h: &mut Harness, choice: &str) -> Vec<Entry> {
     }
 }
 
+/// Wait for the running turn to end: an interrupted one ends when its
+/// thread has left.
+fn idle(h: &Harness) {
+    let start = Instant::now();
+    while h.shared.lock().busy() {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the turn never ended"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 fn kinds(entries: &[Entry]) -> Vec<&str> {
     entries.iter().map(|e| e.kind.as_str()).collect()
 }
@@ -304,8 +317,8 @@ fn an_interrupt_settles_what_was_busy() {
         std::thread::sleep(Duration::from_millis(2));
     }
     assert!(send(&mut h, "interrupt", &[]));
+    idle(&h);
     let s = h.shared.lock();
-    assert!(!s.busy());
     assert!(s.approval.id.is_empty());
     let last = s.entries.last().unwrap();
     assert_eq!(last.kind, "tool");
@@ -754,6 +767,11 @@ fn prompts_queue_while_a_turn_runs() {
         std::thread::sleep(Duration::from_millis(2));
     }
     assert!(send(&mut h, "interrupt", &[]));
+    let start = Instant::now();
+    while h.shared.lock().queue.len() > 1 {
+        assert!(start.elapsed() < Duration::from_secs(10), "never resumed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
     {
         let s = h.shared.lock();
         assert!(s.busy(), "the queued prompt started");
@@ -902,4 +920,126 @@ fn paced_stress_waits_for_each_batch_to_retire_and_stops_at_clear() {
         cleared,
         "paced work ran on into the new transcript"
     );
+}
+
+/// A launch's `--prompt` is model input as written (LLP 1101.003 D4): a
+/// leading `/` is not a slash command, an absolute path not a command
+/// either.
+#[test]
+fn submit_prompt_asks_the_model_literally() {
+    for prompt in ["/model x", "/tmp/a.md: explain"] {
+        let mut h = mock();
+        let model = h.shared.lock().model.clone();
+        assert!(send(&mut h, "submitPrompt", &[prompt]));
+        let entries = drive(&mut h, "yes");
+        assert_eq!(h.shared.lock().model, model, "{prompt}: no model change");
+        let user = entries.iter().find(|e| e.kind == "user").unwrap();
+        assert_eq!(user.blocks[0].lines[0].text(), prompt);
+        assert!(entries.iter().any(|e| e.kind == "assistant"), "{prompt}");
+        assert!(!h.shared.lock().failed);
+    }
+    let mut h = mock();
+    assert!(!send(&mut h, "submitPrompt", &["  "]));
+}
+
+/// An error entry fails the session until the next turn starts (LLP
+/// 1101.003 D8): the screen's head says 503 while it holds.
+#[test]
+fn a_failed_route_fails_the_session_until_a_turn_starts() {
+    let mut h = Harness::with_options(Options::offline(None));
+    // A model no provider serves: `providers::route` refuses it.
+    h.shared.lock().model = "nowhere".into();
+    assert!(send(&mut h, "submitPrompt", &["hi"]));
+    {
+        let s = h.shared.lock();
+        assert!(!s.busy(), "no turn starts without a route");
+        assert_eq!(s.entries.last().unwrap().kind, "error");
+        assert!(s.failed);
+    }
+    assert!(Session::from_value(&h.session()).unwrap().failed);
+    providers::mock::FAST.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(send(&mut h, "setModel", &["mock"]));
+    assert!(send(&mut h, "submitPrompt", &["hello"]));
+    assert!(!h.shared.lock().failed, "a turn started");
+    drive(&mut h, "yes");
+    assert!(!Session::from_value(&h.session()).unwrap().failed);
+}
+
+/// Under `update == "none"` nobody can answer an approval: the tool is
+/// refused, the turn stops with an error entry, and the session has failed
+/// (LLP 1101.003 D8).
+#[test]
+fn an_unattended_run_refuses_an_approval() {
+    let mut h = mock();
+    let mut store = Store::new("", []);
+    h.answer(
+        &mut store,
+        "session",
+        &[Value::str("inline"), Value::str("none")],
+    )
+    .unwrap();
+    assert!(send(&mut h, "submitPrompt", &["hi"]));
+    let entries = drive(&mut h, "yes");
+    let tool = entries.iter().rev().find(|e| e.kind == "tool").unwrap();
+    assert_eq!(tool.status, "denied");
+    assert_eq!(entries.last().unwrap().kind, "error");
+    let s = h.shared.lock();
+    assert!(s.failed);
+    assert!(s.approval.id.is_empty());
+    assert!(!s.entries.iter().any(|e| e.busy));
+    drop(s);
+    // Attended again, the same tool waits for its answer.
+    h.answer(
+        &mut store,
+        "session",
+        &[Value::str("inline"), Value::str("fast")],
+    )
+    .unwrap();
+    assert!(send(&mut h, "submitPrompt", &["hi"]));
+    let start = Instant::now();
+    while h.shared.lock().approval.tool != "bash" {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(send(&mut h, "interrupt", &[]));
+    idle(&h);
+}
+
+/// The session is busy from the moment a prompt is taken, before the model
+/// has said anything (the mock's silent start), so the live column holds a
+/// run from the command line (LLP 1101.003 §3).
+#[test]
+fn a_turn_is_busy_before_its_first_word() {
+    let mut h = mock();
+    assert!(send(&mut h, "submitPrompt", &["hello"]));
+    assert!(Session::from_value(&h.session()).unwrap().busy);
+    assert!(send(&mut h, "interrupt", &[]));
+    idle(&h);
+}
+
+/// An interrupt leaves the turn running until its thread has left, so a
+/// host's shutdown wait covers the tool it stops; unattended, the queue is
+/// not started after it (LLP 1101.003 §3). The turn here has no thread:
+/// the test leaves in its place.
+#[test]
+fn an_interrupt_holds_the_turn_until_its_thread_leaves() {
+    let h = Harness::with_options(Options::offline(None));
+    let turn = state::Turn {
+        id: 1,
+        cancel: Default::default(),
+        model: "mock".into(),
+    };
+    {
+        let mut s = h.shared.lock();
+        s.turn = Some(turn.clone());
+        s.unattended = true;
+        s.queue.push_back("next".into());
+    }
+    assert!(agent::interrupt(&h.shared));
+    assert!(turn.cancelled());
+    assert!(h.shared.lock().busy(), "the thread has not left");
+    agent::release(&h.shared, &turn);
+    let s = h.shared.lock();
+    assert!(!s.busy());
+    assert_eq!(Vec::from(s.queue.clone()), ["next"], "not started");
 }

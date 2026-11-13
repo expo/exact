@@ -145,6 +145,10 @@ impl Module {
             self.error = format!("readback: {} bytes for {} pixels", out.len(), len / 4);
             return None;
         }
+        // The host composes these untagged RGBA8 bytes as sRGB, even when
+        // this surface normally draws into a Display P3 swapchain.
+        let presentation_space = target::granted(inst.config.as_ref());
+        inst.surface.color_space_granted(ColorSpace::Srgb);
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
         if inst.readback.as_ref().is_none_or(|r| {
             r.texture.width() != width
@@ -167,6 +171,9 @@ impl Module {
         gpu.queue.submit([encoder.finish()]);
         inst.surface.submitted();
         let result = target.read(gpu, &mut out[..len]);
+        if presentation_space != ColorSpace::Srgb {
+            inst.surface.color_space_granted(presentation_space);
+        }
         inst.drain();
         if let Some(SurfaceError(e)) = inst.surface.take_error() {
             self.error = e;

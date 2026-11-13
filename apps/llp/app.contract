@@ -38,7 +38,7 @@ theme
   warnEdge="light-dark(#f5c6c0, #5d302a)" // its border
   warnInk="light-dark(#8a1c12, #f0a89c)" // its text
 
-use Run, Cell, Block, Runs, SchemeButton from "@exact/reading"
+use Run, Cell, Block, Runs, ColumnSizer, SchemeButton from "@exact/reading"
 
 shape Entry
   id: string
@@ -336,16 +336,20 @@ component Blocks
               if block.kind == "rule"
                 view width="100%" height=1 background-color="edge" margin-top=22 margin-bottom=22 testId=`block-${block.id}`
               else
-                if block.kind == "table-row"
-                  row width="100%" border-bottom-style="solid" border-bottom-width=1 border-color="edge" testId=`block-${block.id}`
-                    for c in block.cells key=c.id
-                      view flex=1 padding=8
-                        if block.header
-                          text color="strongInk" line-height="20px"
-                            Runs(runs=c.runs, size=13, weight=700)
-                        else
-                          text color="ink" line-height="20px"
-                            Runs(runs=c.runs, size=13, weight=400)
+                if block.kind == "table"
+                  view width="100%" testId=`block-${block.id}`
+                    scroll testId=`table-${block.id}` width="100%" overflow-x="auto" overflow-y="hidden"
+                      for g in block.tableGroups key=g.id
+                        view display="grid" grid-template-columns=`repeat(${block.depth}, minmax(min-content, auto))`
+                          for s in block.tableSizers key=s.id
+                            ColumnSizer(sizer=s, cells=block.cells, size=13)
+                          for c, i in block.cells.slice(g.start, g.end) key=c.id
+                            if g.start + i < block.depth
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color="edge" color="strongInk" line-height="20px"
+                                Runs(runs=c.runs, size=13, weight=700)
+                            else
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color="edge" color="ink" line-height="20px"
+                                Runs(runs=c.runs, size=13, weight=400)
                 else
                   if block.kind == "image"
                     column width="100%" padding-top=10 padding-bottom=10 gap=6 testId=`block-${block.id}` align-items=(block.align == "center" ? "center" : block.align == "right" ? "flex-end" : "stretch")

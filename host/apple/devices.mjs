@@ -845,6 +845,16 @@ export function macIdentity() {
   return m ? m[1] : null;
 }
 
+/** This Mac's Provisioning UDID, which a Mac development profile names; on Apple silicon it is not the hardware UUID. */
+export function macHardwareID(readOut = (command, args) => read(command, args).stdout ?? '') {
+  try {
+    const hardware = JSON.parse(readOut('system_profiler', ['SPHardwareDataType', '-json']));
+    const id = hardware.SPHardwareDataType?.find(row => row.provisioning_UDID)?.provisioning_UDID;
+    if (id) return id;
+  } catch { /* Older system_profiler versions may supply only IOPlatformUUID. */ }
+  return /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(readOut('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']))?.[1] ?? null;
+}
+
 /** Every orientation: an iPad app supports them all, as its multitasking requires. Without this key iPad reads
  * the iPhone's. */
 export const IPAD_ORIENTATIONS = ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight'];

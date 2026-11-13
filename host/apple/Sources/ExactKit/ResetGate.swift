@@ -70,6 +70,7 @@ enum ResetGate {
         "pan(_:dx:dy:now:)": "a pan on the old tree",
         "panRelease(_:vx:vy:now:)": "a pan released as its view goes",
         "scrolled(_:left:top:)": "an old scroller's offset as its view goes",
+        "timelineScrolled(_:left:top:)": "an old scroller's timelines as its view goes; the new tree's layout places its own",
         "canvasDrawAsync(done:)": "a draw of the old tree's canvases; the new tree's draw on mount",
         "intrinsics(_:)": "the old views' sizes; the new tree's views measure and report their own",
         "focus(_:now:)": "focus a teardown gives back (a dismissed sheet's) lands on the old tree",

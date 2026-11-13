@@ -44,23 +44,25 @@ build:
           path: target/android/app/outputs/bundle/release/app-release.aab
 ```
 
-Accept SDK licenses only after reviewing them. The image may already have
-these packages. The setup check names missing packages and compiler paths.
+Accept SDK licenses only after reviewing them. The setup check names
+missing packages and compiler paths.
 Gradle uses Exact's settings repositories even if a worker init script adds
-project repositories; no replacement Gradle home is required for that case.
+project repositories.
 
 `EXACT_VERSION` becomes `versionName`; the resolved number becomes
 `versionCode`. A bundle requires all four signing inputs and bakes
 production update trust (LLP 1030.003 D6, D8). Android uses the Linux bake:
 set `deploy.store.linux` to `"0"` for a binary without Exact updates;
 `deploy.store.android` does not disable the bake's update checks. Otherwise,
-supply the update signing keys and `EXACT_UPDATE_RECEIPT` (or genesis for a new stream).
+supply the update signing keys and `EXACT_UPDATE_RECEIPT` (or genesis for a new stream);
+the build checks this first.
 For an APK, set `EXACT_UPDATE_TRUST=production` and use
 `android --release --no-install --json`; its path is
 `target/android/app/outputs/apk/release/app-release.apk`. Neither command
 contacts adb. JSON reports the artifact path; logs go to stderr.
 
 Run `bunx eas build --platform android --profile exact --non-interactive`
-after the account, credentials and build counter are ready. A real EAS
-worker, upload and Play submission remain unverified. The publisher owns
-the Play record, upload key and submission credentials.
+after the account, credentials and build counter are ready. EAS workers
+have built the APK and a bundle signed with an EAS-managed upload key this
+way; an upload, Play submission and device start have not been run. The
+publisher owns the Play record, upload key and submission credentials.

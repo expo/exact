@@ -872,6 +872,10 @@ impl Painter {
                 label
             }
         };
+        // Material's press (D9), in the content's colour; a segment draws its own.
+        if material_segment.is_none() && !disabled {
+            self.ripple(node, &shape, ink, ts);
+        }
         let layout = face_layout(
             &mut self.text.borrow_mut(),
             face,

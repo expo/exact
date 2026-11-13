@@ -273,21 +273,33 @@ impl super::Device {
                 options.setLanguageVersion(self.shared.private_caps.msl_version);
 
                 // https://developer.apple.com/documentation/metal/mtlcompileoptions/preserveinvariance
-                if available!(macos = 11.0, ios = 13.0, tvos = 14.0, visionos = 1.0) {
+                let invariance = available!(macos = 11.0, ios = 13.0, tvos = 14.0, visionos = 1.0);
+                if invariance {
                     options.setPreserveInvariance(true);
                 }
 
-                let library = self
-                    .shared
-                    .device
-                    .newLibraryWithSource_options_error(
-                        &NSString::from_str(&source),
-                        Some(&options),
-                    )
-                    .map_err(|err| {
-                        log::debug!("Naga generated shader:\n{source}");
-                        crate::PipelineError::Linkage(stage_bit, format!("Metal: {err}"))
-                    })?;
+                // EXACT (EXACT-PATCHES.md, 16): a library the build compiled
+                // from this very source, else the source, recorded for the next build.
+                let version = self.shared.private_caps.msl_version;
+                let key = super::shipped::key(&source, version, invariance);
+                let library = match super::shipped::shipped(&self.shared.device, &key) {
+                    Some(library) => library,
+                    None => {
+                        let library = self
+                            .shared
+                            .device
+                            .newLibraryWithSource_options_error(
+                                &NSString::from_str(&source),
+                                Some(&options),
+                            )
+                            .map_err(|err| {
+                                log::debug!("Naga generated shader:\n{source}");
+                                crate::PipelineError::Linkage(stage_bit, format!("Metal: {err}"))
+                            })?;
+                        super::shipped::record(&key, &source, version, invariance);
+                        library
+                    }
+                };
 
                 let ep_index = module
                     .entry_points

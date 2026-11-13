@@ -1087,7 +1087,7 @@ test('a device build takes the App Clip\'s profile for its own App ID, of the ap
 
 test('device.push signs one aps-environment by the signing, beside an activity that takes pushes, and never a clip\'s or an extension\'s (LLP 1133.004 §9 P2)', async () => {
   const {entitlements, tvReach} = await import('../host/apple/build.mjs');
-  const {macProfileRows} = await import('../host/apple/presence.mjs');
+  const {macProvisioning} = await import('../host/apple/presence.mjs');
   const app = {id:'com.exact.test',displayName:'Test',manifest:{host:{ios:{}}}};
   const reach = {entitlements:['aps-environment'], tvOmits:['aps-environment']};
   const value = (plist) => [...plist.matchAll(/<key>aps-environment<\/key><string>(\w+)<\/string>/g)].map(m => m[1]);
@@ -1100,8 +1100,9 @@ test('device.push signs one aps-environment by the signing, beside an activity t
   assert.doesNotMatch(entitlements({...both, id:`${app.id}.widgets`, widgetAppId:app.id}, 'TEAM', true, reach), /aps-environment/, 'the extension');
   assert.doesNotMatch(entitlements(app, null, true, tvReach(reach), {simulator:true}), /aps-environment/, 'tvOS');
   const said = [];
-  assert.doesNotThrow(() => macProfileRows(app, 'device.notifications n\ndevice.push', { release: true, log: (l) => said.push(l) }), 'a Mac release is not refused');
-  assert.deepEqual(said, []);
+  const mac = {inputs:{grantCeiling:'device.notifications n\ndevice.push'}, reach:{profileEntitlements:['com.apple.developer.aps-environment']}};
+  assert.equal(macProvisioning(app, mac, { release: true, find: () => null, log: (l) => said.push(l) }), null, 'a Mac release without a profile is not refused');
+  assert.match(said[0], /^device\.push: this build signs no com\.apple\.developer\.aps-environment/);
 });
 
 test('a profile allows aps-environment only with the value the build signs under it, for the grant as for an activity (LLP 1133.004 §9 P2)', async () => {

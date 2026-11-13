@@ -1,0 +1,21 @@
+keyframes follow
+  to translate="-1000px 0px"
+
+keyframes slide
+  from translate="0px 0px"
+  to translate="100px 0px"
+
+// ScrollTimelineTests (LLP 1057.003 D5): a names track that follows its
+// sibling columns' sideways scroll (#114), and a card that slides by its own
+// progress through its list (#225).
+component App
+  view
+    column width=300 timeline-scope="--cols"
+      row testId="names" overflow="hidden" width=200 height=20 flex-shrink=0
+        row testId="track" width=800 height=20 flex-shrink=0 animation="follow 1s linear both" animation-timeline="--cols" animation-range="0px 1000px"
+      row testId="cols" overflow-x="auto" overflow-y="hidden" width=200 height=40 flex-shrink=0 scroll-timeline="--cols x"
+        view width=800 height=40 flex-shrink=0
+      column testId="list" overflow-y="auto" width=200 height=100 flex-shrink=0
+        view height=150 flex-shrink=0
+        view testId="card" height=50 flex-shrink=0 view-timeline-name="--card" animation="slide 1s linear both" animation-timeline="--card"
+        view height=300 flex-shrink=0

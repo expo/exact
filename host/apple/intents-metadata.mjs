@@ -1,5 +1,10 @@
 // App Intents schema 1, compared with Xcode's compile-time extractor. This
-// consumes Swift's constants, including its mangled names, for ExactIntents.
+// consumes Swift's constants, including its mangled names, for ExactIntents,
+// and for a widget extension's module (ExactWidgets, or the alarm's): its
+// WidgetConfigurationIntents and their String AppEnum parameters.
+// The widget shapes are compared with Xcode 26.4.1's extractor (SDK 26) by
+// intents-metadata.test.mjs, for iOS and watchOS.
+let prefix = 'ExactIntents.';
 const localized = key => ({ alternatives: [], key });
 const availability = () => ({ LNPlatformNameWildcard: { introducedVersion: '*' } });
 const visibility = () => ({ assistantOnly: false, isDiscoverable: true });
@@ -9,22 +14,38 @@ const fail = message => { throw new Error(`host/apple: intents metadata: ${messa
 const property = (type, name) => type.properties?.find(p => p.label === name && p.isStatic === 'true');
 const raw = value => value?.valueKind === 'RawLiteral' && typeof value.value === 'string' ? value.value : fail('expected a constant string');
 const argument = (value, label) => value?.value?.arguments?.find(a => a.label === label);
-const simple = type => type.typeName.slice('ExactIntents.'.length);
+const simple = type => type.typeName.slice(prefix.length);
 const conforms = (type, name) => type.conformances?.includes(`AppIntents.${name}`);
 const identity = type => ({ fullyQualifiedTypeName: type.typeName, mangledTypeName: type.mangledTypeName,
   mangledTypeNameByBundleIdentifier: {}, effectiveBundleIdentifiers: [], availabilityAnnotations: availability(),
   requiredCapabilities: [], typeSpecificMetadata: [], visibilityMetadata: visibility() });
 
-function parameter(p, entities) {
+// What a WidgetConfigurationIntent's action changes in an AppIntent's.
+const WIDGET_PROTOCOL = 'com.apple.link.systemProtocol.WidgetConfiguration';
+
+function parameter(p, entities, enums = {}) {
   const optional = /^Swift.Optional<(.+)>$/.exec(p.type), type = optional?.[1] ?? p.type;
   const id = { 'Swift.String': 0, 'Swift.Bool': 1, 'Swift.Int': 2, 'Swift.Double': 7 }[type];
-  const entity = type.startsWith('ExactIntents.') ? entities[type.slice('ExactIntents.'.length)] : null;
+  const own = type.startsWith(prefix) ? type.slice(prefix.length) : null;
+  const entity = own ? entities[own] : null, enumeration = own ? enums[own] : null;
+  if (enumeration) {
+    if (p.valueKind !== 'InitCall' || p.value?.type !== `AppIntents.IntentParameter<${p.type}>`) fail(`missing parameter constants for ${p.label}`);
+    // widgets.mjs gives every row a default (the manifest's, or its first value); Xcode records its raw value.
+    const fallback = argument(p, 'default'), rawDefault = fallback?.valueKind === 'Enum' ? enumeration.rawValues[fallback.value?.name] : undefined;
+    if (rawDefault == null) fail(`invalid default for ${p.label}`);
+    return { capabilities: 1, dynamicOptionsSupport: 0, inputConnectionBehavior: 0, isInput: false, isOptional: !!optional,
+      name: p.label, resolvableInputTypes: [], title: localized(raw(argument(p, 'title'))),
+      typeSpecificMetadata: ['LNValueTypeSpecificMetadataKeyDefaultValue', { string: { wrapper: rawDefault } }],
+      valueType: { linkEnumeration: { wrapper: { identifier: own } } } };
+  }
   if (id == null && !entity) fail(`unsupported parameter type ${p.type}`);
   if (p.valueKind !== 'InitCall' || p.value?.type !== `AppIntents.IntentParameter<${p.type}>`) fail(`missing parameter constants for ${p.label}`);
   const inputTypes = entity ? [] : type === 'Swift.String' ? [primitive(0), { array: { wrapper: { capabilities: 3, memberValueType: primitive(2) } } }, primitive(2)]
     : (type === 'Swift.Bool' ? [1] : type === 'Swift.Double' ? [2, 0, 7] : optional ? [7, 0, 2] : [0, 2, 7]).map(primitive);
+  const description = argument(p, 'description'), described = description && description.valueKind !== 'NilLiteral';
   return { capabilities: 0, dynamicOptionsSupport: entity ? 2 : 0, inputConnectionBehavior: 0, isInput: false, isOptional: !!optional,
-    name: p.label, resolvableInputTypes: inputTypes.map(valueType => ({ kindValue: 0, valueType })),
+    name: p.label, ...(described ? { parameterDescription: localized(raw(description)) } : {}),
+    resolvableInputTypes: inputTypes.map(valueType => ({ kindValue: 0, valueType })),
     title: localized(raw(argument(p, 'title'))), typeSpecificMetadata: [], valueType: entity ? entityValue(entity.typeName) : primitive(id) };
 }
 
@@ -44,16 +65,31 @@ function shortcutPhrase(value, action) {
 }
 
 /** Only the Swift shapes intentsSource emits are accepted; unknown shapes fail the build. */
-export function intentsMetadata(types, sdkMajor = 27) {
+export function intentsMetadata(types, sdkMajor = 27, { module = 'ExactIntents' } = {}) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(module)) fail(`invalid module name ${module}`);
+  prefix = `${module}.`;
   if (!Array.isArray(types)) fail('expected Swift constant values');
   if (![26, 27].includes(sdkMajor)) fail(`unqualified SDK generation ${sdkMajor}`);
   const names = new Set();
   for (const type of types) {
-    if (!type.typeName?.startsWith('ExactIntents.') || !type.mangledTypeName || names.has(type.typeName)) fail('invalid or duplicate Swift type');
+    if (!type.typeName?.startsWith(prefix) || !type.mangledTypeName || names.has(type.typeName)) fail('invalid or duplicate Swift type');
     names.add(type.typeName);
-    if (!['AppIntent', 'AppEntity', 'EntityStringQuery', 'AppShortcutsProvider'].some(name => conforms(type, name))) fail(`unsupported conformer ${type.typeName}`);
+    if (!['AppIntent', 'AppEntity', 'EntityStringQuery', 'AppShortcutsProvider', 'AppEnum'].some(name => conforms(type, name))) fail(`unsupported conformer ${type.typeName}`);
   }
-  const entities = {}, queries = {}, actions = {}, autoShortcuts = [];
+  const entities = {}, queries = {}, actions = {}, autoShortcuts = [], enums = {};
+  // A String AppEnum (widgets.mjs's configuration rows): its cases by raw value, each with its constant title.
+  for (const type of types.filter(type => conforms(type, 'AppEnum'))) {
+    const rawType = type.associatedTypeAliases?.find(a => a.typeAliasName === 'RawValue')?.substitutedTypeName;
+    if (type.kind !== 'enum' || rawType !== 'Swift.String' || !type.cases?.length) fail(`unsupported AppEnum ${type.typeName}`);
+    const shown = property(type, 'caseDisplayRepresentations');
+    if (shown?.valueKind !== 'Dictionary') fail(`missing case titles for ${type.typeName}`);
+    const titles = new Map(shown.value.map(({ key, value }) => [key?.valueKind === 'Enum' ? key.value?.name : fail(`invalid case title key for ${type.typeName}`), raw(value)]));
+    if (titles.size !== type.cases.length || type.cases.some(c => !titles.has(c.name) || typeof c.rawValue !== 'string')) fail(`incomplete case titles for ${type.typeName}`);
+    const { requiredCapabilities, typeSpecificMetadata, ...common } = identity(type);
+    enums[simple(type)] = { ...common, identifier: simple(type), displayTypeName: localized(raw(property(type, 'typeDisplayRepresentation'))),
+      cases: type.cases.map(c => ({ identifier: c.rawValue, displayRepresentation: { title: localized(titles.get(c.name)) } })),
+      assistantDefinedSchemas: [], isSystem: false, rawValues: Object.fromEntries(type.cases.map(c => [c.name, c.rawValue])) };
+  }
   for (const type of types.filter(type => conforms(type, 'AppEntity'))) {
     const query = property(type, 'defaultQuery')?.type;
     if (!types.some(t => t.typeName === query && conforms(t, 'EntityStringQuery'))) fail(`missing entity query for ${type.typeName}`);
@@ -73,17 +109,19 @@ export function intentsMetadata(types, sdkMajor = 27) {
     const open = conforms(type, 'OpenIntent'), policy = property(type, 'authenticationPolicy');
     const auth = policy ? { alwaysAllowed: 0, requiresAuthentication: 1, requiresLocalDeviceAuthentication: 2 }[policy.value?.name] : 0;
     if (auth == null || (policy && policy.valueKind !== 'Enum')) fail(`unsupported authentication policy for ${type.typeName}`);
-    const parameters = (type.properties ?? []).filter(p => p.isStatic === 'false' && p.isComputed === 'true' && !p.label.startsWith('$') && p.valueKind === 'InitCall' && p.value?.type?.startsWith('AppIntents.IntentParameter<')).map(p => parameter(p, entities));
+    const widget = conforms(type, 'WidgetConfigurationIntent');
+    const parameters = (type.properties ?? []).filter(p => p.isStatic === 'false' && p.isComputed === 'true' && !p.label.startsWith('$') && p.valueKind === 'InitCall' && p.value?.type?.startsWith('AppIntents.IntentParameter<')).map(p => parameter(p, entities, widget ? enums : {}));
     // Every emitted @Parameter has one backing wrapper; none may be lost.
     if (parameters.length !== (type.properties ?? []).filter(p => p.isComputed === 'false' && p.label.startsWith('_') && p.value?.type?.startsWith('AppIntents.IntentParameter<')).length) fail(`incomplete parameters for ${type.typeName}`);
-    const system = open ? ['com.apple.link.systemProtocol.OpenEntity'] : [];
-    const systemMetadata = open ? [...system, { empty: {} }] : [];
+    const system = open ? ['com.apple.link.systemProtocol.OpenEntity'] : widget ? [WIDGET_PROTOCOL] : [];
+    const systemMetadata = system.length ? [...system, { empty: {} }] : [];
     const description = property(type, 'description');
     actions[simple(type)] = { ...identity(type), identifier: simple(type), mangledTypeNameV2: type.mangledTypeName, mangledTypeNameByBundleIdentifierV2: {},
       title: localized(raw(property(type, 'title'))), ...(description ? { descriptionMetadata: { descriptionText: localized(raw(description)), searchKeywords: [] } } : {}),
-      assistantDefinedSchemaTraits: [], assistantDefinedSchemas: [], authenticationPolicy: auth, isAuthPolExplicit: !!policy, isDiscoverable: true,
-      openAppWhenRun: open, outputFlags: 0, parameters, presentationStyle: 0, supportedModes: open ? 2 : 1,
+      assistantDefinedSchemaTraits: [], assistantDefinedSchemas: [], authenticationPolicy: auth, isAuthPolExplicit: !!policy, isDiscoverable: !widget,
+      openAppWhenRun: open, outputFlags: widget ? 8 : 0, parameters, presentationStyle: 0, supportedModes: open ? 2 : 1,
       systemProtocols: system, systemProtocolMetadata: systemMetadata, systemProtocolMetadataV2: systemMetadata };
+    if (widget && open) fail(`unsupported widget OpenIntent ${type.typeName}`);
     if (open) {
       const entity = entities[parameters[0]?.valueType?.entity?.wrapper?.typeName];
       if (!entity || parameters.length !== 1 || parameters[0].name !== 'target') fail(`unsupported OpenIntent ${type.typeName}`);
@@ -99,13 +137,14 @@ export function intentsMetadata(types, sdkMajor = 27) {
     for (const member of builder.value.members) {
       const value = member.element;
       if (member.kind !== 'buildExpression' || value?.valueKind !== 'InitCall' || value.value?.type !== 'AppIntents.AppShortcut') fail('unsupported shortcut expression');
-      const intent = argument(value, 'intent')?.type?.slice('ExactIntents.'.length), phrases = argument(value, 'phrases');
+      const intent = argument(value, 'intent')?.type?.slice(prefix.length), phrases = argument(value, 'phrases');
       if (!actions[intent] || phrases?.valueKind !== 'Array') fail('invalid shortcut intent or phrases');
       autoShortcuts.push({ actionIdentifier: intent, availabilityAnnotations: availability(), phraseTemplates: phrases.value.map(p => shortcutPhrase(p, actions[intent])),
         shortTitle: localized(raw(argument(value, 'shortTitle'))), systemImageName: raw(argument(value, 'systemImageName')) });
     }
   }
   return { actions, assistantEntities: [], assistantIntentNegativePhrases: [], assistantIntents: [],
-    ...(providers.length ? { autoShortcutProviderMangledName: providers[0].mangledTypeName } : {}), autoShortcuts, entities, enums: [],
+    ...(providers.length ? { autoShortcutProviderMangledName: providers[0].mangledTypeName } : {}), autoShortcuts, entities,
+    enums: Object.values(enums).map(({ rawValues, ...e }) => e),
     generator: { name: 'exact', version: '1' }, negativePhrases: [], queries, shortcutTileColor: 14, version: 1 };
 }

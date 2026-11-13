@@ -142,7 +142,9 @@ function fileHash(path) {
  * source: a plan's sources are checked by shape. A binary records it
  * (`EXACT_NATIVE_SOURCE`, `Swappable::with_native`) and every Rust receipt
  * carries it, so a module built from what the binary already compiled runs
- * natively. Paths are relative to the workspace: checkouts agree. */
+ * natively. It covers every arm of a `cfg(target_*)` branch, which the wasm
+ * module's digest would not (LLP 1030 D3a, amended 2026-11-12). Paths are
+ * relative to the workspace: checkouts agree. */
 let compiler = null;
 export function nativeSource(app, env = developmentBuildEnv()) {
   if (!app.manifest || !rustPackage(app)) return null;

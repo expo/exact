@@ -97,6 +97,13 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
 let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
 const activationRequired = new WeakSet(), activated = new WeakSet();
 const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
+// A sheet's frame (`sheetFrame`, below), which the projection writes once a host hands it over: the wasm host's glue
+// for every plan, the JS target's compiler only for a plan that can present a sheet (LLP 1047.002 D1). A plan that
+// cannot has no route in a sheet, so there is nothing to write.
+let framing = null;
+export const useSheets = (frame) => {
+  framing = frame;
+};
 // @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
 // `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
 // word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
@@ -131,6 +138,25 @@ function selectedDetent(route) {
   }
   return chosen;
 }
+/** The frame of `routes[index]`: its own detent, or its sheet's when it was pushed inside one; written only where it
+ * changed. `shownIn` is the sheet each route shows in (`sheetAt`), `inUse` the sheets something shown is in. */
+export function sheetFrame(routes, index, shownIn, inUse) {
+  const route = routes[index], at = shownIn[index], pushed = at >= 0 && at !== index;
+  // A sheet nothing shown is in forgets its detent, so its next presentation chooses it again.
+  if (at === index && !inUse.has(index)) {
+    sheetDetents.delete(route);
+  }
+  const chosen = inUse.has(at) ? selectedDetent(routes[at]) : null;
+  if (route.hasAttribute("data-exact-in-sheet") !== pushed) {
+    route.toggleAttribute("data-exact-in-sheet", pushed);
+  }
+  if ((route.getAttribute("data-exact-detent") ?? null) !== (chosen?.kind ?? null)) {
+    chosen?.kind ? route.setAttribute("data-exact-detent", chosen.kind) : route.removeAttribute("data-exact-detent");
+  }
+  if (route.style.getPropertyValue("--exact-sheet-detent") !== (chosen?.css ?? "")) {
+    route.style.setProperty("--exact-sheet-detent", chosen?.css ?? "");
+  }
+}
 // The route a route shows in as a sheet: itself, or the sheet it was pushed over, since a push inside a sheet stays in
 // it at its height, as a UINavigationController's in a presented sheet does; -1 for none (a full-screen route or the
 // stack's root ends the search).
@@ -143,19 +169,6 @@ const sheetAt = (routes, i) => {
   }
   return -1;
 };
-// A route's sheet frame: its own detent, or its sheet's when it was pushed inside one; written only where it changed.
-function sheetFrame(route, host, pushed) {
-  const chosen = host ? selectedDetent(host) : null;
-  if (route.hasAttribute("data-exact-in-sheet") !== pushed) {
-    route.toggleAttribute("data-exact-in-sheet", pushed);
-  }
-  if ((route.getAttribute("data-exact-detent") ?? null) !== (chosen?.kind ?? null)) {
-    chosen?.kind ? route.setAttribute("data-exact-detent", chosen.kind) : route.removeAttribute("data-exact-detent");
-  }
-  if (route.style.getPropertyValue("--exact-sheet-detent") !== (chosen?.css ?? "")) {
-    route.style.setProperty("--exact-sheet-detent", chosen?.css ?? "");
-  }
-}
 export const overPage = (route) => {
   const p = route?.getAttribute("navigationPresentation");
   if (p !== "fullscreen") {
@@ -652,7 +665,7 @@ function commit(op) {
     globalThis.exact?.fragment?.forget(cursor);
   }
 }
-function popped({ j, state, url }) {
+function popped({ j, state, url, ua }) {
   const entry = written[j];
   const owned = entry && state?.exact === j && state.id === entry.id && state.url === entry.url;
   const target = owned ? entry.url : url;
@@ -663,7 +676,7 @@ function popped({ j, state, url }) {
   // control pressed (disabled, or closedby="none", refuses), else the runner's `back` from the visit the entry left (LLP 1115 D5), however routes are keyed. Any other entry unheard (Forward, or more than one away) is the runner's own `go` there (LLP 1115.000 D4.3). An entry given to `navigate` at the URL already shown, which this page did not write or which holds the visit shown, is accepted though nothing changed: a `replace` can give the only entry a reload wrote the URL of the one beneath it, and refusing would hold Back there. An earlier visit at that URL is still refused: accepting it would leave the visits after it on the stack.
   const step = owned && j === cursor - 1 && entry.id !== written[cursor]?.id, beneath = step && selected > 0 && routes[selected - 1].getAttribute("navigationKey") === String(entry.id);
   let back = beneath && !!backControl(nav), own = false, why = null;
-  pop = {};
+  pop = { ua };
   try {
     if (back) {
       why = pressBack(nav);
@@ -736,10 +749,10 @@ const settled = () => {
 export const navigation = {
   personScrolls: 0,
   // the person's scrolls (`byPerson`) from the page's start: one after a navigation asked a fragment's scroll cancels it (fragment.js, LLP 1153 D5)
-  /** A Back or Forward being dispatched (`popped`): its commit must land before `popped` judges it, so a tree update that
-  * would wait for a view transition (shared.js) runs at once instead; its flight is forgone. */
+  /** The Back or Forward being dispatched (`popped`), else null: `ua` when the browser animated it (`hasUAVisualTransition`).
+  * A commit made then mirrors its router at once, before a view transition may defer its tree update (router.js `traversal`). */
   get traversing() {
-    return pop !== null;
+    return pop;
   },
   /** `dispatch(location)` is false when no `navigate` handler heard it; `back(id)` is the runner's own `back` from visit `id`, `goTo(location)` its own `go`. */
   connect(hostRoot, dispatch, journal, back = null, goTo = null, matchesRoute = () => false, waitForActivation = false) {
@@ -798,7 +811,8 @@ export const navigation = {
       queue.push({
         j,
         state: event.state,
-        url: launchLocation()
+        url: launchLocation(),
+        ua: event.hasUAVisualTransition
       });
       if (echo !== null) {
         const pending = echo;
@@ -820,9 +834,10 @@ export const navigation = {
         return;
       }
       // The innermost shown sheet's Back: its named control, else the app bar's way, as iOS's swipe down (`goBack`).
+      // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
       for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
-        const route = selectedRoute(nav);
-        if (!["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation")) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
+        const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
+        if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
           continue;
         }
         event.preventDefault();
@@ -919,13 +934,14 @@ export const navigation = {
     }
     return new Promise((resolve) => {
       const timer = setTimeout(finish, 1e3);
+      // Once the traversal's tree update has run, which a view transition defers (shared.js `afterCommit`).
       function finish() {
         clearTimeout(timer);
         waiters.delete(finish);
-        resolve({
+        (globalThis.exact?.afterCommit ?? ((run) => run()))(() => resolve({
           history: delta,
           delivery: "platform"
-        });
+        }));
       }
       waiters.add(finish);
       history.go(delta);
@@ -1020,7 +1036,7 @@ export const navigation = {
         const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r) && sheetAt(routes, i) < 0) : -1;
         // The sheet each route shows in, and the sheets something shown is in.
         const shownIn = routes.map((r, i) => sheetAt(routes, i));
-        const inUse = new Set(shownIn.filter((s, i) => s >= 0 && (i === selected || live && i === 0 || modal && (i >= beneath && i < presented || split > 0 && i === 0))));
+        const inUse = framing && new Set(shownIn.filter((s, i) => s >= 0 && (i === selected || live && i === 0 || modal && (i >= beneath && i < presented || split > 0 && i === 0))));
         for (const [index, route] of routes.entries()) {
           const active = index === selected || live && index === 0;
           if (!active && route.contains(document.activeElement)) {
@@ -1036,11 +1052,7 @@ export const navigation = {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");
           }
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
-          // A sheet nothing shown is in forgets its detent, so its next presentation chooses it again.
-          if (shownIn[index] === index && !inUse.has(index)) {
-            sheetDetents.delete(route);
-          }
-          sheetFrame(route, inUse.has(shownIn[index]) ? routes[shownIn[index]] : null, shownIn[index] >= 0 && shownIn[index] !== index);
+          framing?.(routes, index, shownIn, inUse);
           appBarBack(nav, routes, index, split > 0, active || covered);
           if (stack === at && index === selected) {
             freshPath(route);

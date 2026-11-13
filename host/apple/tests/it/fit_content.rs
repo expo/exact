@@ -1,11 +1,59 @@
 //! LLP 1075.003 §9.11: a route whose `navigationDetent` names `fit-content`
-//! carries its content's extent, which the sheet's detent reads. The extent
-//! follows the rows, not the box the sheet gives the route.
+//! carries a natural height for the detent alongside its scroll extent.
+//! The natural height follows the rows, not the box the sheet gives the route.
 
 use crate::host::{count, view, NoData};
 use exact_apple::Host;
 use exact_kernel::{HostCover, MonospaceMeasurer};
 use exact_runner::Event;
+
+#[test]
+fn a_scrolling_fit_content_route_measures_shrinkable_rows_alone() {
+    let plan = contract::compile(
+        r#"component Menu
+  state rows = [0, 1]
+  action more
+    rows = rows.concat([rows.length])
+  view
+    column width="100%" height="100%" position="relative"
+      column testId="sheet" navigationDetent="fit-content large" overflow-y="auto" position="absolute" inset=0 display="flex" flex-direction="column" padding=16
+        button testId="more" press=more height=44
+          text "More"
+        for i in rows key=i
+          row height=44
+"#,
+    )
+    .unwrap();
+    let (mut host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        100.0,
+    )
+    .unwrap();
+    let sheet = view(&host, "sheet");
+    let check = |batch: &str, natural: f64| {
+        let json: serde_json::Value = serde_json::from_str(batch).unwrap();
+        let content = json["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|op| op["op"] == "content" && op["id"] == sheet)
+            .expect("the route publishes its content");
+        assert_eq!(content["fitHeight"].as_f64(), Some(natural), "{batch}");
+        assert!(content["h"].as_f64().unwrap() < natural, "{batch}");
+    };
+    check(&first, 164.0);
+    check(&host.resize(390.0, 80.0), 164.0);
+    let grown = host.dispatch_at(view(&host, "more"), Event::Press, 0.0);
+    check(&grown, 208.0);
+    check(
+        &host.set_covers(&[(sheet, Some(HostCover::Edges([0.0, 0.0, 34.0, 0.0])))]),
+        208.0,
+    );
+    check(&host.resize(390.0, 120.0), 208.0);
+}
 
 /// The `content` ops for `id`, in order.
 fn heights(batch: &str, id: u32) -> Vec<f32> {
@@ -15,7 +63,7 @@ fn heights(batch: &str, id: u32) -> Vec<f32> {
         .map(|(at, _)| {
             let rest = &batch[at..];
             let h = &rest[rest.find("\"h\":").unwrap() + 4..];
-            h[..h.find('}').unwrap()].parse().unwrap()
+            h.split([',', '}']).next().unwrap().parse().unwrap()
         })
         .collect()
 }
@@ -101,8 +149,8 @@ fn an_empty_route_measures_its_padding_and_a_scrolling_one_its_scroll_extent() {
     );
     let scrolls = view(&host, "scrolls");
     let covered = host.set_covers(&[(scrolls, Some(HostCover::Edges([0.0, 0.0, 34.0, 0.0])))]);
-    // Its scroller needs the bottom cover in that extent; the sheet takes it
-    // off again (`ModalIOS.swift`), UIKit adding the band itself.
+    // Its scroller needs the bottom cover in that extent. The independent
+    // detent height leaves it out, since UIKit adds the band itself.
     assert_eq!(heights(&covered, scrolls), [16.0 + 500.0 + 16.0 + 34.0]);
     // One that only clips is measured as one that does not: no cover.
     let clips = view(&host, "clips");

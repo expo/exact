@@ -31,7 +31,8 @@ test.skipIf(process.platform !== 'darwin')('portable App Intents metadata matche
   try {
     const params = [['book', 'string'], ['page', 'number'], ['title', 'string'], ['enabled', 'bool'], ['fraction', 'number'],
       ['note', 'option<string>'], ['count', 'option<number>'], ['favorite', 'option<bool>'], ['rating', 'option<number>'], ['related', 'option<string>']];
-    const fields = { book: { entity: 'book' }, page: { type: 'integer' }, count: { type: 'integer' }, related: { entity: 'book' } };
+    const fields = { book: { entity: 'book', description: 'The book you read.' }, page: { type: 'integer', description: 'The page you reached.' }, count: { type: 'integer' },
+      related: { entity: 'book' }, title: { description: 'A “title”.' } };
     const faces = [
       { signature: { name: 'logPages', description: 'Record “reading” progress.', parameters: params, consequence: 'writes' },
         face: { title: 'Log Pages', parameters: fields, apple: { phrases: ['Log ${book} in ${applicationName}'] } } },
@@ -75,7 +76,8 @@ test.skipIf(process.platform !== 'darwin')('portable App Intents metadata matche
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test('the metadata pass runs the processor and toolchain of the Xcode xcrun selects', () => {
+// Linux writes the metadata with the portable emitter and runs no processor.
+test.skipIf(process.platform === 'linux')('the metadata pass runs the processor and toolchain of the Xcode xcrun selects', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-intents-tool-'));
   const toolchain = '/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
   const ran = [];

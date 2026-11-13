@@ -212,10 +212,13 @@ section binds (`rules/RULES.md`, "Agents").
 - The terminal host (LLP 1101): `cargo build --profile host-dev -p harness-terminal`,
   then `./target/host-dev/harness` runs the coding harness in this terminal (inline;
   `--fullscreen` for the alternate screen), or `exact-terminal <entry.contract>` any
-  terminal entry. With operations it runs headless (`--size 80x24 type prompt "hi" key
-  Enter until "…" print`); headless, the frames go into a terminal emulator (`vt100`)
-  and `print`, `screenshot` read its screen (`print --all` the scrollback, `document`
-  the whole laid-out document). Develop it in `host-dev`: a debug build lays out a long
+  terminal entry. After `--drive` it runs the operations headless (`--size 80x24 --drive
+  type prompt "hi" key Enter until "…" print`); headless, the frames go into a terminal
+  emulator (`vt100`) and `print`, `screenshot` read its screen (`print --all` the
+  scrollback, `document` the whole laid-out document). With `--print`, `--json`, or a
+  pipe on stdin or stdout, an entry runs once and exits (LLP 1101.003: `harness --print
+  --prompt "…"`, `exact-terminal apps/todo/terminal.contract --json /done`); the other
+  words are its location (`--help`). Develop it in `host-dev`: a debug build lays out a long
   document hundreds of times slower. `exact-terminal` is in `default-members`
   (`tests/it/screen.rs` drives inline mode through the emulator); `harness-data` is not,
   so when you touch the harness run `cargo test -p harness-data`.

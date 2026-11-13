@@ -55,6 +55,19 @@ fn mirror(r: &Runner<NoData>) -> serde_json::Value {
 }
 
 #[test]
+fn the_binary_version_reaches_the_view_and_delivery_mirror() {
+    let mut r = boot("shape Build\n  version: string\n  buildNumber: string\ncomponent App\n  resource build = exactDelivery() as shape Build\n  view\n    text `${build.version} (${build.buildNumber})` testId=\"version\"\n");
+    assert_eq!(text_of(&r, "version").as_deref(), Some(" ()"));
+    assert_eq!(mirror(&r)["version"], "");
+    assert_eq!(mirror(&r)["buildNumber"], "");
+    r.set_delivery_from_compat(r#"{"embedded":{"version":"2.3.4","buildNumber":"56"}}"#)
+        .unwrap();
+    assert_eq!(text_of(&r, "version").as_deref(), Some("2.3.4 (56)"));
+    assert_eq!(mirror(&r)["version"], "2.3.4");
+    assert_eq!(mirror(&r)["buildNumber"], "56");
+}
+
+#[test]
 fn a_baked_plan_shows_the_embedded_answer_with_no_host_in_sight() {
     let r = boot(&corpus());
     assert_eq!(text_of(&r, "delivery-stream").as_deref(), Some("embedded"));
@@ -65,7 +78,7 @@ fn a_baked_plan_shows_the_embedded_answer_with_no_host_in_sight() {
         mirror(&r),
         serde_json::from_str::<serde_json::Value>(
             "{\"stream\":\"embedded\",\"seq\":0,\"embeddedSeq\":0,\"staged\":false,\
-         \"sunset\":\"\",\"interpreted\":[],\"compatibilityId\":\"\",\"L\":\"A\",\
+         \"sunset\":\"\",\"interpreted\":[],\"compatibilityId\":\"\",\"version\":\"\",\"buildNumber\":\"\",\"L\":\"A\",\
          \"E\":[\"native\"]}"
         )
         .unwrap()
@@ -86,6 +99,7 @@ fn a_hosts_facts_re_answer_the_resource_in_one_commit_and_the_agent_sees_them() 
             compatibility_id: "9f1c0a2b".into(),
             store: 'A',
             executors: vec!["hermes".into(), "native".into()],
+            ..Delivery::default()
         })
         .unwrap()
         .expect("the resource is declared, so its answer changed");
@@ -103,7 +117,7 @@ fn a_hosts_facts_re_answer_the_resource_in_one_commit_and_the_agent_sees_them() 
         serde_json::from_str::<serde_json::Value>(
             "{\"stream\":\"prod/abc\",\"seq\":44,\"embeddedSeq\":7,\"staged\":true,\
          \"sunset\":\"This build stops receiving updates in March\",\
-         \"interpreted\":[\"profile\"],\"compatibilityId\":\"9f1c0a2b\",\"L\":\"A\",\
+         \"interpreted\":[\"profile\"],\"compatibilityId\":\"9f1c0a2b\",\"version\":\"\",\"buildNumber\":\"\",\"L\":\"A\",\
          \"E\":[\"hermes\",\"native\"]}"
         )
         .unwrap()

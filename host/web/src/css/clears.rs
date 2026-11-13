@@ -13,6 +13,11 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         | ContentTransition | ScrollEdgeEffect | HoverEffect | SmartInvert | AnimationTrigger => {
             return false
         }
+        // The name and the drag code's copy of it (css.rs).
+        ScrollTimelineName => {
+            out.push_str("scroll-timeline-name:unset;--exact-scroll-timeline:unset;")
+        }
+        ViewTimelineName => out.push_str("view-timeline-name:unset;--exact-view-timeline:unset;"),
         // `scale` remains the feedback product; an unset own factor is one.
         Scale if press => out.push_str("--exact-scale:1;"),
         AccentColor => out.push_str("accent-color:unset;--exact-accent:unset;"),

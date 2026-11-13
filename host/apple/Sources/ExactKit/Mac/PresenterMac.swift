@@ -1247,6 +1247,7 @@ package final class Presenter {
             }
         }
         regridMoved()
+        NodeView.inkPlaced(reparented.compactMap { views[$0] })
         if !flights.isEmpty { flightsBatchApplied() }
         tables.sync(batch)
         navigation.sync(batch, reparented: reparented)
@@ -1270,6 +1271,7 @@ package final class Presenter {
             if !collections.owns(node.id) { node.restoreScrollPosition() }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
             node.applyPendingScroll()
+            node.resnap()
         }
         pendingScrolls.removeAll()
         segments.sync()

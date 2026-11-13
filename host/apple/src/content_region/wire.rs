@@ -95,7 +95,12 @@ fn propagated(kernel: &Kernel, leaf: &exact_kernel::NodeRef<'_>, owner: ViewId, 
         }
     }
 }
-pub(super) fn request(kernel: &Kernel, p: &Pending, known: u64) -> Result<String, String> {
+pub(super) fn request(
+    kernel: &Kernel,
+    p: &Pending,
+    known: u64,
+    language: &str,
+) -> Result<String, String> {
     let node = kernel
         .node_by_key(p.request.stamp().owner())
         .ok_or("removed paragraph")?;
@@ -136,6 +141,15 @@ pub(super) fn request(kernel: &Kernel, p: &Pending, known: u64) -> Result<String
             exact_kernel::OverflowWrap::BreakWord => 1,
             exact_kernel::OverflowWrap::Anywhere => 2,
         };
+        let _ = write!(
+            out,
+            ",\"textIndent\":{},\"hyphens\":{},\"direction\":{},\"whiteSpace\":{},\"language\":",
+            r.paragraph.text_indent,
+            crate::measure::c_hyphens(r.paragraph.hyphens),
+            r.paragraph.direction as u8,
+            r.paragraph.white_space as u8,
+        );
+        quote(language, &mut out);
         // CSS `text-box`, as an ordinary paragraph's request carries it
         let _ = write!(
             out,

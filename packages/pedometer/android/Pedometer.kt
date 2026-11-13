@@ -2,11 +2,11 @@
 // with the step counter between reads, else the step counter alone. Under the agent the runner's declared substitute
 // answers and nothing here runs.
 //
-// - The Recording API records steps for an app that is not running, "for up to 10 days" (D12). The first granted
-//   request subscribes to `TYPE_STEP_COUNT_DELTA`; each answer is its total from the group's boundary to now (one
-//   bucket), plus the step counter's increase since that read while the app is in the foreground, so the line moves
-//   step by step. `since` is the latest of `start`, a new subscription's start and ten days back: no read is issued from
-//   before what the API keeps. If the wall clock moves behind that boundary, the held total or sensor answers until
+// - The Recording API records steps for an app that is not running, "for up to 10 days" (D12). Each process's first
+//   granted request subscribes to `TYPE_STEP_COUNT_DELTA`; each answer is its total from the group's boundary to now
+//   (one bucket), plus the step counter's increase since that read while the app is in the foreground, so the line
+//   moves step by step. `since` is the latest of `start`, this install's first subscription's start and ten days back:
+//   no read is issued from before what the API keeps. If the wall clock moves behind that boundary, the held total or sensor answers until
 //   the clock catches up.
 // - Without Play services at `LOCAL_RECORDING_CLIENT_MIN_VERSION_CODE`, the step counter alone counts while the app
 //   is in the foreground; each return from the background starts a new zero, so `since` moves and the answer never
@@ -53,7 +53,7 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
     } catch (e: Throwable) { null }
     private val main = Handler(Looper.getMainLooper())
     private val counts = HashMap<String, Count>()
-    private val subscription = Subscription()
+    private val subscription = Subscription(java.io.File(context.application.noBackupFilesDir, "exact-pedometer-subscribed"))
     private var listening = false
     private var shown = true
 
@@ -92,24 +92,24 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** Check the process's first granted request for a subscription that Play services kept. */
+    /** Subscribe at the process's first granted request. `LocalRecordingClient` lists no subscriptions, and a read
+     * without one answers no steps rather than failing, so neither says whether Play services kept one: the module
+     * subscribes each process, as Google's Recording API sample does at each launch, and bounds every read by the
+     * start this install first subscribed at, which it stores. */
     private fun subscribe() {
         val client = recording ?: return
         if (context.permission(PERMISSION).state != "granted" || !subscription.begin()) return
-        val failed: (Exception) -> Unit = { e ->
+        client.subscribe(LocalDataType.TYPE_STEP_COUNT_DELTA).addOnSuccessListener {
+            val recorded = subscription.stored()
+            val start = subscription.complete(recorded, System.currentTimeMillis().toDouble())
+            if (recorded == null) {
+                subscription.store(start)
+                context.log("pedometer: recording subscribed")
+            }
+        }.addOnFailureListener { e ->
             subscription.failed()
             context.log("pedometer: recording subscription failed: ${e.message}")
         }
-        client.listSubscriptions().addOnSuccessListener { types ->
-            if (types.contains(LocalDataType.TYPE_STEP_COUNT_DELTA)) {
-                subscription.complete(existing = true, epoch = System.currentTimeMillis().toDouble())
-            } else {
-                client.subscribe(LocalDataType.TYPE_STEP_COUNT_DELTA).addOnSuccessListener {
-                    subscription.complete(existing = false, epoch = System.currentTimeMillis().toDouble())
-                    context.log("pedometer: recording subscribed")
-                }.addOnFailureListener { failed(it) }
-            }
-        }.addOnFailureListener { failed(it) }
     }
 
     private fun read(args: JSONObject, reply: (JSONObject) -> Unit) {
@@ -126,7 +126,8 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
         listen()
         val client = recording ?: return reply(answer(count.sensor(now), "sensor"))
         if (!count.due(context.now())) return reply(answer(count.between(now), "recording"))
-        val range = count.range(subscription.since, now) ?: return reply(
+        // Until the subscription is made (or while a clock correction leaves its start ahead), the counter answers.
+        val range = subscription.range(count, now) ?: return reply(
             if (count.hasRecording) answer(count.between(now), "recording") else answer(count.sensor(now), "sensor")
         )
         val request = LocalDataReadRequest.Builder().aggregate(LocalDataType.TYPE_STEP_COUNT_DELTA)

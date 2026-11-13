@@ -56,10 +56,11 @@ import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes
 import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
+import { bundleShaderLibraries } from './shader-libraries.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
-import { associatedDomains, entitlementValue, grantEntitlements, macPresence, macPasskeys, macProfileRows, merchantEntitlement, signInEntitlement } from './presence.mjs';
+import { associatedDomains, entitlementValue, grantEntitlements, macSigning, merchantEntitlement, signInEntitlement } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
 import { backgroundKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
@@ -392,6 +393,12 @@ export function writeUsageStrings(reach, dir) {
   }
 }
 
+/** The version inputs shared by the bundle and its baked delivery facts. */
+export const bundleVersion = () => ({
+  CFBundleVersion: process.env.EXACT_BUILD_NUMBER ?? '1',
+  CFBundleShortVersionString: process.env.EXACT_VERSION ?? '0.1.0',
+});
+
 /** The iOS `Info.plist` from the manifest (LLP 1030 D2: one declaration; `build.mjs` consumes what it generates). The dev client's local-networking permission is `host.ios.localNetworking` (a string: the prompt); the store-required version numbers are counters bake owns, not authored. */
 export const infoPlist = (app, device = false, { executable = appleExecutableName(app), id = app.id, name = app.displayName, development = null, icon = {}, distribution = null, distributed = false, reach = null, tv = false, clip = false } = {}) => {
   const ios = app.manifest.host?.ios ?? {};
@@ -403,8 +410,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
     CFBundleName: name,
     CFBundleDisplayName: name,
     CFBundlePackageType: 'APPL',
-    CFBundleVersion: '1',
-    CFBundleShortVersionString: '0.1.0',
+    ...bundleVersion(),
     CFBundleSupportedPlatforms: [tv ? (device ? 'AppleTVOS' : 'AppleTVSimulator') : device ? 'iPhoneOS' : 'iPhoneSimulator'],
     DTPlatformName: tv ? (device ? 'appletvos' : 'appletvsimulator') : device ? 'iphoneos' : 'iphonesimulator',
     MinimumOSVersion: ios.minimumOS ?? '17.0',
@@ -452,8 +458,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
  * numbers App Store Connect requires to rise). */
 export function distributionKeys(sdkName = 'iphoneos') {
   return {
-    CFBundleVersion: process.env.EXACT_BUILD_NUMBER ?? '1',
-    CFBundleShortVersionString: process.env.EXACT_VERSION ?? '0.1.0',
+    ...bundleVersion(),
     ...distributionToolchain(sdkName),
     // A device requirement: a simulator bundle on an Intel Mac is x86_64.
     ...(sdkName.endsWith('simulator') ? {} : { UIRequiredDeviceCapabilities: ['arm64'] }),
@@ -500,8 +505,7 @@ export const macInfoPlist = (app, { development = null, icon = {}, reach = null,
   CFBundleName: app.displayName,
   CFBundleDisplayName: app.displayName,
   CFBundlePackageType: 'APPL',
-  CFBundleVersion: '1',
-  CFBundleShortVersionString: '0.1.0',
+  ...bundleVersion(),
   LSMinimumSystemVersion: app.manifest.host?.macos?.minimumOS ?? '14.0',
   NSHighResolutionCapable: true,
   ...usageKeys(reach), // usage strings for the devices the app's grants name (LLP 1069.008)
@@ -626,7 +630,7 @@ async function main(args, lockHeld = false) {
     prof = widgets ? entryProfiles({ app, udid: ph?.udid, phoneName: ph?.name, required }).app : profile(ph?.udid, app.id, required, { phoneName: ph?.name });
     return identity(prof.team);
   })() : ios ? '-' : (distribution ? process.env.EXACT_DEVELOPER_ID : null) ?? macIdentity();
-  const macWidgets = !ios && widgets ? macWidgetSigning(app, sha1, { distribution }) : null;
+  let macWidgets = !ios && widgets ? macWidgetSigning(app, sha1, { distribution }) : null;
   if (!ios && widgets && !macWidgets) sha1 = null;
   if (!ios) widgets = !!macWidgets;
   const dylib = `lib${gpuCrate.replace(/-/g, '_')}.dylib`;
@@ -751,6 +755,8 @@ async function main(args, lockHeld = false) {
     EXACT_WIDGET_GALLERY: gallery ? '1' : '0',
     EXACT_APPLE_LINK: link, EXACT_UPDATE_TRUST: cargoEnv.EXACT_UPDATE_TRUST ?? 'development', // LLP 1047.001 D4 (link.mjs); a production build compiles no inspect mode (Package.swift)
     ...(tv ? { TVOS_DEPLOYMENT_TARGET: compiled.ios } : ios ? { IPHONEOS_DEPLOYMENT_TARGET: compiled.ios } : { MACOSX_DEPLOYMENT_TARGET: targets.macos }),
+    // Package.swift's `platforms` entry, which is what SwiftPM compiles each target for (not --triple's OS version).
+    ...(ios || tv ? { EXACT_IOS_DEPLOYMENT: compiled.ios } : {}),
     EXACT_LIB_DIR: libDir,
     EXACT_LIB: crate.replace(/-/g, '_'),
     EXACT_APP_COMPOSITION: composition,
@@ -882,6 +888,8 @@ async function main(args, lockHeld = false) {
     copyAppleStaticTrees(app.dir, capture, [['assets', 'assets'], ['deck', 'deck']]);
     copyAppleStaticTrees(resolve(cargoEnv.EXACT_BAKE_OUTPUT, `${ios ? 'ios' : 'macos'}-${target}.entries`), capture, [['plans', 'plans'], ['typescript', 'typescript'], ['activities', 'activities']]);
     copyShaders(app, resolve(capture, 'shaders'));
+    // The MSL development runs recorded, compiled for this SDK (shader-libraries.mjs).
+    bundleShaderLibraries(app, sdkName, capture, gpuArtifacts);
     if (buildReceipt.rust) copyStaticTreeIfPresent(buildReceipt.rust, resolve(capture, 'rust'));
     verifyBakeFiles(buildReceipt.compat, bakedPlan, listAssets(capture, true, ['typescript']));
     placeAppleArtifact(capture, paths.capture);
@@ -891,9 +899,11 @@ async function main(args, lockHeld = false) {
   const bakedCompat = buildReceipt.compat;
   // What this Apple destination derives from the grants: the bake's, less what tvOS has not.
   const appleReach = modulePlist(app, tv ? tvReach(bakedCompat.reach) : bakedCompat.reach, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions, buildReceipt.graph.contractSources);
-  if (!ios) macPresence(app, bakedCompat.inputs?.grantCeiling, { release: production || distribution, distribution }); // LLP 1133.010 D7
-  if (!ios) macPasskeys(app, bakedCompat.inputs?.grantCeiling, { release: production || distribution }); // LLP 1133.011 D6
-  if (!ios) macProfileRows(app, bakedCompat.inputs?.grantCeiling, { release: production || distribution }); // LLP 1133.028 D17
+  // What only a macOS provisioning profile authorizes (LLP 1133.010 D7), resolved with the widgets' signing: one
+  // profile, one team, the identity of that team.
+  const signing = ios ? null : macSigning(app, bakedCompat, { current: sha1, widgets: macWidgets, release: production || distribution, distribution });
+  const provisioning = signing?.provisioning ?? null;
+  if (signing) { sha1 = signing.sha1; macWidgets = signing.widgets; }
   const level = bakedCompat.inputs?.store?.L;
   if (!['0', 'A'].includes(level)) throw new Error(`host/apple: unsupported baked store level ${level}`);
   const composition = level === '0' ? 'embedded' : 'updating';
@@ -1320,7 +1330,7 @@ async function main(args, lockHeld = false) {
 
   const bundleTools = {runApple,appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements, appClip};
   if (!ios) {
-    const bundlePath = assembleMac({intents, shared, library, serviceDylibs, macWidgets, triple: moduleTripleFor(app, ios, device, tv), appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, bundleTools);
+    const bundlePath = assembleMac({intents, shared, library, serviceDylibs, macWidgets, provisioning, triple: moduleTripleFor(app, ios, device, tv), appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, bundleTools);
     publishProducts();
     release();
     rmSync(webBuildDir, { recursive: true, force: true });

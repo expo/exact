@@ -298,6 +298,7 @@ public final class ExactView: NSView {
         super.viewDidChangeBackingProperties()
         session.controlTextChanged()
         fit()
+        session.presenter.svg.rescale(clock: session.clock)
     }
 
     /// The page zoom moved (ZoomMac.swift): the viewport is another size in
@@ -305,6 +306,7 @@ public final class ExactView: NSView {
     func zoomChanged() {
         fit()
         syncInsets()
+        session.presenter.svg.rescale(clock: session.clock)
     }
 
     public override func viewWillMove(toWindow newWindow: NSWindow?) {

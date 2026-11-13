@@ -4,6 +4,7 @@ import { test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { cargoBakeInputs } from './cargo-dep-info.mjs';
+import { cargoDiagnosticFilter, cargoDiagnosticsCommand } from './cargo-check.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
@@ -623,16 +624,63 @@ test.each([null, 'intermediate', 'output/intermediate'])('rustc unit dep-info ac
   } finally { rmSync(root, {recursive:true, force:true}); }
 }, 60_000);
 
+test('Cargo diagnostics retain unrelated text across chunks and shared patch help blocks', () => {
+  const patch = path => `warning: patch \`wgpu-hal v30.0.1 (${path})\` was not used in the crate graph`;
+  const exact = patch(realpathSync(resolve(import.meta.dir, '../vendor/wgpu-hal')));
+  const author = patch('/app/patches/wgpu-hal');
+  const help = [
+    'help: Check that the patched package version and available features are compatible',
+    '      with the dependency requirements. If the patch has a different version from',
+    '      what is locked in the Cargo.lock file, run `cargo update` to use the new',
+    '      version. This may also occur with an optional dependency that is not enabled.',
+  ].join('\r\n');
+  const kept = `warning: app warning\r\nerror: café failed\r\n      its context\r\npartial output`;
+  const output = `${exact}\r\n${author}\r\n${help}\r\n\x1b[33m${exact}\x1b[0m\r\n${help}\r\n${kept}`;
+  for (const size of [1, 7, output.length]) {
+    let said = '';
+    const filter = cargoDiagnosticFilter(text => { said += text; });
+    for (let i = 0; i < output.length; i += size) filter.write(output.slice(i, i + size));
+    filter.end();
+    assert.equal(said, `${author}\r\n${help}\r\n${kept}`);
+  }
+});
+
+test('the Cargo diagnostic relay preserves exit status, stdout and the build environment', () => {
+  mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
+  const dir = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/cargo-relay-'))));
+  const env = { ...process.env, RUSTUP_AUTO_INSTALL: '0' };
+  delete env.RUSTUP_TOOLCHAIN;
+  try {
+    writeFileSync(resolve(dir, '.env'), 'RUSTUP_TOOLCHAIN=exact-relay-must-not-load\n');
+    const options = { cwd: dir, env, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' };
+    const args = ['--version'];
+    assert.deepEqual(cargoDiagnosticsCommand('rustc', args, options), ['rustc', args, options]);
+    const piped = { ...options, stdio: ['ignore', 'pipe', 'pipe'] };
+    assert.deepEqual(cargoDiagnosticsCommand('cargo', args, piped), ['cargo', args, piped]);
+    const run = args => spawnSync(...cargoDiagnosticsCommand('cargo', args, options));
+    const version = run(args);
+    assert.equal(version.status, 0);
+    assert.match(version.stdout, /^cargo \d+\./);
+    const refused = run(['--exact-invalid-option']);
+    assert.equal(refused.status, 1);
+    assert.equal(refused.stdout, '');
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
 test.each([false, true])('ordinary buildBake with split directories=%s streams progress and retains product receipts', async split => {
-  const dir = pinned(realpathSync(mkdtempSync(resolve(tmpdir(), 'r14-no-lock-'))));
+  mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
+  const dir = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/r14-no-lock-'))));
   const write = (name, text) => { mkdirSync(dirname(resolve(dir,name)), {recursive:true}); writeFileSync(resolve(dir,name),text); };
   try {
     const target = bakeTarget('linux'), id = 'com.exact.plain';
-    write('Cargo.toml', '[workspace]\nmembers=["linux"]\nresolver="2"\n');
+    write('Cargo.toml', `[workspace]\nmembers=["linux"]\nresolver="2"\n[patch.crates-io]\nwgpu-hal={path=${JSON.stringify(resolve(import.meta.dir, '../vendor/wgpu-hal'))}}\n${split ? 'parley={path="patches/parley"}\n' : ''}`);
+    write('patches/parley/Cargo.toml', '[package]\nname="parley"\nversion="0.11.1"\nedition="2021"\n');
+    write('patches/parley/src/lib.rs', '');
     write('linux/Cargo.toml', '[package]\nname="plain-linux"\nversion="0.1.0"\nedition="2021"\n');
     write('linux/src/main.rs', 'fn main() { let unused = 1; }');
     write('app.contract', 'component App\n  view\n    text "plain"\n');
     write('linux/build.rs', `fn main() {
+      println!("cargo:warning=application build warning");
       let release = std::path::Path::new(${JSON.stringify(resolve(dir,'progress-received'))});
       let started = std::time::Instant::now();
       while !release.exists() {
@@ -666,9 +714,23 @@ test.each([false, true])('ordinary buildBake with split directories=%s streams p
     assert.equal(built.code,0,built.stderr);
     assert.ok(existsSync(resolve(dir,'progress-received')));
     assert.equal((built.stderr.match(/warning: unused variable/g)??[]).length,1,built.stderr);
+    const diagnostics = stderr => {
+      assert.doesNotMatch(stderr, /warning: patch `wgpu-hal .*was not used in the crate graph/);
+      if (split) assert.match(stderr, /warning: patch `parley .*patches[/\\]parley.*was not used in the crate graph/);
+      else assert.doesNotMatch(stderr, /warning: patch /);
+      assert.equal((stderr.match(/Check that the patched package version/g) ?? []).length, split ? 1 : 0, stderr);
+      assert.match(stderr, /application build warning/);
+      assert.match(stderr, /warning: unused variable/);
+      assert.match(stderr, /Finished `dev` profile/);
+    };
+    diagnostics(built.stderr);
     const receipt = JSON.parse(built.stdout);
     assert.ok(receipt.products.some(p=>basename(p.path) === `plain-linux${process.platform === 'win32' ? '.exe' : ''}`));
     assert.ok(existsSync(resolve(dir,'Cargo.lock')));
+    const warm = await bake();
+    assert.equal(warm.code, 0, warm.stderr);
+    diagnostics(warm.stderr);
+    assert.deepEqual(JSON.parse(warm.stdout).products, receipt.products);
     const receiptPath=resolve(dir,'bakes',`linux-${target}.build.json`), before=readFileSync(receiptPath,'utf8');
     write('linux/src/main.rs','fn main() { let broken: u32 = "wrong type"; }');
     const refused = await bake();

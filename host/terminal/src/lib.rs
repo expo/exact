@@ -24,9 +24,11 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+mod argv;
 pub mod cli;
 mod collection;
 pub mod color;
+mod ending;
 pub mod grid;
 pub mod host;
 pub mod image;
@@ -34,6 +36,7 @@ mod keys;
 pub mod measure;
 pub mod paint;
 pub mod pointer;
+mod print;
 mod requests;
 pub mod term;
 pub mod vt;

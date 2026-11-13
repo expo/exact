@@ -44,6 +44,7 @@ mod reads;
 mod sized;
 mod style;
 mod symbols;
+mod timelines;
 
 use std::process::ExitCode;
 

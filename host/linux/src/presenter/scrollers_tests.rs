@@ -174,6 +174,34 @@ fn scrollbar_policy_reaches_both_reader_messages_and_live_updates() {
 }
 
 #[test]
+fn a_scrollers_keyboard_dismissal_is_its_authored_mode_and_unsaid_nothing() {
+    for (said, bits) in [
+        ("", 0),
+        (r#" keyboardDismissMode="none""#, 0),
+        (r#" keyboardDismissMode="on-drag""#, 64),
+        (r#" keyboardDismissMode="interactive""#, 128),
+    ] {
+        let source = PAGE_OF_SCROLLERS.replace(
+            r#"testId="inner" width=400"#,
+            &format!(r#"testId="inner"{said} width=400"#),
+        );
+        let mut p = boot(&source);
+        let (inner, page) = (id(&p, "inner"), id(&p, "page"));
+        let words = p.reader_under(200., 240., 1.);
+        let flags = |id: ViewId| {
+            words[3..]
+                .chunks_exact(11)
+                .find(|e| e[0] == id as i32)
+                .unwrap()[1]
+        };
+        assert_eq!(flags(inner) & 192, bits, "{said}");
+        assert_eq!(flags(page) & 192, 0, "the page around it says nothing");
+        let words = p.reader_scrollers(&[], 1.).unwrap();
+        assert_eq!(told(&words, inner).0 & 192, bits, "{said}");
+    }
+}
+
+#[test]
 fn the_page_indicator_follows_the_root_scrollbar_policy() {
     for (width, child_width, flag) in [("none", "auto", 8), ("auto", "none", 0)] {
         let mut p = boot(&format!(
@@ -353,6 +381,90 @@ fn the_presenters_own_gestures_claim_their_axes() {
     assert_eq!(claims(&pan("pan-y"), 200., 50.), (true, false));
     assert_eq!(claims(&pan("pan-x"), 200., 50.), (false, true));
     assert_eq!(claims(&pan("auto"), 200., 50.), (false, false));
+    // Any node's `touch-action` keeps its axes, from the one hit out to the
+    // nearest scroll container (Pointer Events 3, §11), not past it.
+    let kept = |action: &str| format!(r#"box touch-action="{action}" width=400 height=100"#);
+    assert_eq!(claims(&kept("none"), 200., 50.), (true, true));
+    assert_eq!(claims(&kept("pan-y"), 200., 50.), (true, false));
+    let inside = r#"box touch-action="none" width=400 height=100
+        box width=400 height=100"#;
+    assert_eq!(claims(inside, 200., 50.), (true, true), "an ancestor's");
+    let beyond = r#"box touch-action="none" width=400 height=100
+        scroll width=400 height=100
+          box width=400 height=300"#;
+    assert_eq!(claims(beyond, 200., 50.), (false, false), "past a scroller");
+}
+
+/// A finger dragged on a node whose `touch-action` keeps the axis stays the
+/// page's past the slop: its moves and its lift reach the node, as a
+/// browser pans none of it. Where the axis is the platform's, the finger
+/// leaves the page for the platform's pan.
+#[test]
+fn a_finger_on_a_node_that_keeps_its_axis_stays_the_pages() {
+    for (action, stays) in [
+        ("none", true),
+        ("pan-x", true),
+        ("auto", false),
+        ("pan-y", false),
+    ] {
+        let mut p = boot(&format!(
+            r#"component App
+  state moves = 0
+  state ups = 0
+  action down(e: PointerEvent)
+    moves = 0
+  action move(e: PointerEvent)
+    moves = moves + 1
+  action up(e: PointerEvent)
+    ups = ups + 1
+  view
+    column width=400 height=400
+      box pointerdown=down pointermove=move pointerup=up touch-action="{action}" width=200 height=300
+      text `${{moves}} ${{ups}}` testId="log" height=20
+"#
+        ));
+        p.set_pointer_kind(PointerKind::Touch);
+        p.pointer_down(100., 50., 1.).unwrap();
+        p.pointer_move(100., 150., 2.).unwrap();
+        assert_eq!(p.contact_position().is_some(), stays, "{action}");
+        if stays {
+            // A turn sideways keeps what the first move past the slop
+            // decided, as the reader keeps whose the drag is: pan-x's too.
+            p.pointer_move(195., 70., 3.).unwrap();
+            assert!(p.contact_position().is_some(), "{action} turned");
+            p.pointer_up(195., 70., 4.).unwrap();
+            settle(&mut p);
+            assert_eq!(log(&p), "2 1", "{action}");
+        }
+    }
+}
+
+/// The `touch-action` a finger lands on is the one it keeps: a pointerdown
+/// that gives the axis to the platform afterwards leaves the finger the page's.
+#[test]
+fn a_finger_keeps_the_touch_action_it_landed_on() {
+    let mut p = boot(
+        r#"component App
+  state free = false
+  state ups = 0
+  action down(e: PointerEvent)
+    free = true
+  action up(e: PointerEvent)
+    ups = ups + 1
+  view
+    column width=400 height=400
+      box pointerdown=down pointerup=up touch-action=(free ? "auto" : "none") width=200 height=300
+      text `${ups}` testId="log" height=20
+"#,
+    );
+    p.set_pointer_kind(PointerKind::Touch);
+    p.pointer_down(100., 50., 1.).unwrap();
+    settle(&mut p);
+    p.pointer_move(100., 150., 2.).unwrap();
+    assert!(p.contact_position().is_some());
+    p.pointer_up(100., 150., 3.).unwrap();
+    settle(&mut p);
+    assert_eq!(log(&p), "1");
 }
 
 /// The fixture a phone is driven with (`apps/unsaid`, its page to scroll):

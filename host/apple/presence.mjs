@@ -1,12 +1,14 @@
-// Locked secrets on a Mac (LLP 1133.010 D7). A Mac keeps a locked secret only
-// in the data-protection keychain, whose access groups come from the app's
-// code-signing entitlements, which a provisioning profile must authorize
-// (TN3137). It never falls back to the login keychain, whose access model
-// has no presence check. Signing a Mac build with such a profile is not
-// built, since no Mac it was built on had one: a build says it keeps no
-// locked secret, and why, and a release build whose grants say a name must
-// be locked is refused.
-import { installedProfiles, decodeProfile, profilesFor, byExpiry, signedEnvironment } from './devices.mjs';
+// What a Mac build signs that only a provisioning profile authorizes (Apple
+// TN3125; LLP 1133.010 D7): the device rows' Mac entitlements (push, App
+// Attest, the Declared Age Range), the keychain group a locked secret is kept
+// in (a Mac keeps one only in the data-protection keychain, whose access
+// groups the signature names, TN3137), and a passkey's associated domains.
+// The build picks a macOS profile for the app that allows them all, signs
+// with that profile's team's identity and embeds it. With none, a
+// development build signs none of them and says what each feature then
+// reports; a release build with a line it cannot keep is refused.
+import { installedProfiles, decodeProfile, profilesFor, byExpiry, signedEnvironment, allowsEntitlement, profileMisfit, macHardwareID, METHODS, identity } from './devices.mjs';
+import { widgetSigningTeam, macWidgetProfiles } from './widgets.mjs';
 
 const POLICIES = ['user-presence', 'biometry-any', 'biometry-current-set', 'device-credential'];
 
@@ -17,32 +19,137 @@ export function presenceLines(ceiling = '') {
     .map((w) => ({ name: w[1], optional: w[3] === 'optional' }));
 }
 
-/** A macOS profile for `app` that grants its keychain group (`<prefix>.<id>`, or the team's `<prefix>.*`), the
- * newest; EXACT_MAC_PROFILE names one. Development profiles for a development build, distribution ones otherwise. */
-export function macPresenceProfile(app, { distribution = false, installed = installedProfiles(),
-  named = process.env.EXACT_MAC_PROFILE ? decodeProfile(process.env.EXACT_MAC_PROFILE) : null } = {}) {
-  const fits = (p) => p.platforms?.includes('OSX') && p.dev === !distribution && p.expires > new Date() && profilesFor(app.id, [p]).length > 0
-    && (p.keychain.includes(`${p.prefix}.${app.id}`) || p.keychain.includes(`${p.prefix}.*`));
-  return (named ? [named] : installed).filter(fits).sort(byExpiry)[0] ?? null;
-}
+const KEYCHAIN = 'keychain-access-groups', DOMAINS = 'com.apple.developer.associated-domains';
+/** Each device row's Mac profile entitlement (`reach.profileEntitlements`, runner/src/device.rs): its line, what the
+ * app reports while it is not signed, and whether a release without it is refused. A Mac release without push ships,
+ * reporting it unavailable, as Android and the web do (LLP 1133.004 §9 P7); the other two are refused (LLP 1133.028
+ * D17). */
+const ROW_EFFECTS = {
+  'com.apple.developer.aps-environment': ['device.push', 'pushPermissionState().available is false and subscribePush fails NotSupportedError', false],
+  'com.apple.developer.devicecheck.appattest-environment': ['device.attestation', 'attestationStatus().available is false and attest fails NotSupportedError', true],
+  'com.apple.developer.declared-age-range': ['device.age-range', 'ageRangeStatus().available is false and requestAgeRange fails NotSupportedError', true],
+};
 
-/** What a macOS build of `app` says of its presence lines, or refuses: a release build with a name that must be
- * locked and no profile is refused (`grant-needs-profile`), so nothing ships that cannot keep what it grants. */
-export function macPresence(app, ceiling, { release = false, distribution = false, log = console.log, find = macPresenceProfile } = {}) {
-  const lines = presenceLines(ceiling);
-  if (!lines.length) return;
-  const mandatory = lines.filter((l) => !l.optional).map((l) => `secret.keep ${l.name}`);
-  const profile = find(app, { distribution });
-  const effect = `localAuthStatus().presenceSecrets is false${mandatory.length ? `, a set of ${mandatory.join(', ')} throws NotSupportedError` : ''}${mandatory.length < lines.length ? ', an optional name stays plain and protect() rejects' : ''}`;
-  const why = profile
-    ? `the macOS profile "${profile.name}" (team ${profile.team}) grants ${app.id}'s keychain group, and signing a Mac build with it is not built yet`
-    : `no macOS provisioning profile for ${app.id} grants keychain-access-groups; install a development one with Keychain Sharing, or name one with EXACT_MAC_PROFILE`;
-  if (release && mandatory.length) {
-    throw new Error(`grant-needs-profile: ${mandatory.join(', ')} must be kept locked, and a Mac keeps a locked secret only in the data-protection keychain, which a provisioning profile authorizes (LLP 1133.010 D7): ${why}. Or write \`optional\` on the line.`);
+/** What a macOS build needs a profile for, from its bake (`compat`): `{ entitlement, lines, effect, mandatory }`
+ * each, where a mandatory one refuses a release that cannot sign it. */
+export function macProfileNeeds(compat) {
+  const ceiling = compat?.inputs?.grantCeiling ?? '', needs = [];
+  for (const name of compat?.reach?.profileEntitlements ?? []) {
+    const [lines, effect, mandatory] = ROW_EFFECTS[name] ?? [name, `${name} is not signed`, true];
+    needs.push({ entitlement: name, lines, effect, mandatory });
   }
-  log(`Locked secrets: this build keeps none, since ${why} (LLP 1133.010 D7): ${effect}.`);
+  const kept = presenceLines(ceiling);
+  if (kept.length) {
+    const mandatory = kept.filter((l) => !l.optional).map((l) => `secret.keep ${l.name}`);
+    needs.push({ entitlement: KEYCHAIN, lines: kept.map((l) => `secret.keep ${l.name}`).join(', '), mandatory: mandatory.length > 0,
+      effect: `localAuthStatus().presenceSecrets is false${mandatory.length ? `, a set of ${mandatory.join(', ')} throws NotSupportedError` : ''}${mandatory.length < kept.length ? ', an optional name stays plain and protect() rejects' : ''}` });
+  }
+  const passkeys = passkeyLines(ceiling);
+  if (passkeys.length) needs.push({ entitlement: DOMAINS, lines: passkeys.map((rp) => `auth.passkey ${rp}`).join(', '), mandatory: true,
+    effect: 'getClientCapabilities().available is false and create and get fail NotSupportedError' });
+  return needs;
 }
 
+/** Whether macOS profile `p` allows `name` for `app`: the keychain group as `<prefix>.<id>` or the team's
+ * `<prefix>.*`, push's environment as the build signs it under `p`, and any other key by name. */
+export function macAllows(p, app, name) {
+  if (name === KEYCHAIN) return p.keychain.includes(`${p.prefix}.${app.id}`) || p.keychain.includes(`${p.prefix}.*`);
+  if (name === 'com.apple.developer.aps-environment') return allowsEntitlement(p, 'aps-environment');
+  return p.entitlements.includes(name);
+}
+
+/** The macOS profile a build of `app` signs `required` under: for its id or the team's wildcard, unexpired, of the
+ * build's `method` (`development`, naming this Mac; `developerid`; `appstore`), allowing all of `required`; the
+ * longest-lived. EXACT_MAC_PROFILE names one, which must fit: a refusal says why it does not. Null when none fits. */
+export function macProfile(app, required, { method = 'development', installed = installedProfiles(),
+  named = process.env.EXACT_MAC_PROFILE ? decodeProfile(process.env.EXACT_MAC_PROFILE) : null, udid } = {}) {
+  const mac = (p) => p.platforms?.includes('OSX');
+  const lacking = (p) => required.filter((name) => !macAllows(p, app, name));
+  const misfit = (p) => !mac(p) ? `is for ${p.platforms?.join(', ') || 'another platform'}, not macOS`
+    : !profilesFor(app.id, [p]).length ? `is for ${p.appId}, not ${app.id}`
+    : p.method !== method ? `is ${METHODS[p.method]}, not ${METHODS[method]}`
+    : profileMisfit(p, method === 'development' ? (udid ??= macHardwareID()) : null)?.replace('this phone', 'this Mac')
+    ?? (lacking(p).length ? `does not allow ${lacking(p).join(', ')}` : null);
+  if (named) {
+    const why = misfit(named);
+    if (why) throw new Error(`host/apple: EXACT_MAC_PROFILE (${named.name}) ${why}`);
+    return named;
+  }
+  return installed.filter((p) => mac(p) && !misfit(p)).sort(byExpiry)[0] ?? null;
+}
+
+/** The entitlements `profile` signs `app` with for `needs`: its application identifier and team, each row's (an
+ * environment as the profile signs it, LLP 1133.028 D15 item 1), the app's own keychain group, and the bake's
+ * associated domains. */
+export function macProfileEntitlements(app, profile, needs, compat) {
+  const out = { 'com.apple.application-identifier': `${profile.prefix}.${app.id}`, 'com.apple.developer.team-identifier': profile.team };
+  for (const { entitlement } of needs) {
+    if (entitlement === KEYCHAIN) out[KEYCHAIN] = [`${profile.prefix}.${app.id}`];
+    else if (entitlement === DOMAINS) out[DOMAINS] = associatedDomains(compat?.reach?.auth, profile.dev);
+    else out[entitlement] = entitlement.endsWith('-environment') ? signedEnvironment(profile.dev) : true;
+  }
+  return out;
+}
+
+/** The provisioning a macOS build of `app` signs with (LLP 1133.010 D7): `{ profile, entitlements }`, or null where
+ * nothing needs a profile or none fits. Without one, a development build says what it leaves unsigned and what the
+ * app then reports, and a release (`release`) with a mandatory need is refused (`grant-needs-profile`). `method` is
+ * the profile's kind: `development`, or `developerid` for a Developer ID release. `reason`: why no profile can sign,
+ * where it is not that none fits. */
+export function macProvisioning(app, compat, { release = false, method = 'development', log = console.log, find = macProfile, reason = null, beside = '' } = {}) {
+  const needs = macProfileNeeds(compat);
+  if (!needs.length) return null;
+  const required = [...new Set(needs.map((n) => n.entitlement))];
+  const profile = reason ? null : find(app, required, { method });
+  if (profile) {
+    log(`macOS profile: "${profile.name}" (team ${profile.team}, ${METHODS[profile.method]}) signs ${required.join(', ')} for ${needs.map((n) => n.lines).join(', ')}.`);
+    return { profile, entitlements: macProfileEntitlements(app, profile, needs, compat) };
+  }
+  const why = reason ?? `no ${METHODS[method]} macOS provisioning profile on this Mac for ${app.id}${method === 'development' ? ' that names this Mac' : ''} allows ${required.join(', ')}${beside}; in the Apple Developer portal, enable those capabilities for the App ID ${app.id}, make a ${METHODS[method]} macOS profile for it${method === 'development' ? ' that includes this Mac' : ''} and install it, or name one with EXACT_MAC_PROFILE (LLP 1133.010 D7)`;
+  const refused = needs.filter((n) => n.mandatory);
+  if (release && refused.length) throw new Error(`grant-needs-profile: ${refused.map((n) => n.lines).join(', ')}: ${why}.${refused.some((n) => n.entitlement === KEYCHAIN) ? ' Or write `optional` on each secret.keep line.' : ''}`);
+  for (const n of needs) log(`${n.lines}: this build signs no ${n.entitlement}, since ${why}: ${n.effect}.`);
+  return null;
+}
+
+/** The team of the signing identity `sha1`, as its certificate says, for the build's kind (Apple Development, or
+ * Developer ID Application for `distribution`); null when it is not one. */
+const certificateTeam = (sha1, distribution) => { try { return widgetSigningTeam(sha1, { distribution }); } catch { return null; } };
+
+/** The identity that signs under `profile`: one of the profile's team, or the system refuses the entitlements at
+ * launch. A development build takes the team's Apple Development identity (`find`; EXACT_IDENTITY names one, whose
+ * certificate must be of that kind and team); a Developer ID build keeps `current` (EXACT_DEVELOPER_ID), refused when
+ * it is another team's. */
+export function macProfileIdentity(profile, current, { distribution = false, find = identity, teamOf = certificateTeam } = {}) {
+  const sha1 = distribution ? current : find(profile.team);
+  if (!sha1 || sha1 === '-' || teamOf(sha1, distribution) !== profile.team) {
+    throw new Error(distribution
+      ? `host/apple: the Developer ID profile "${profile.name}" is team ${profile.team}'s; sign with that team's Developer ID Application identity (EXACT_DEVELOPER_ID=<sha1>)`
+      : `host/apple: the macOS profile "${profile.name}" is team ${profile.team}'s, and ${sha1} is not that team's Apple Development identity; name one with EXACT_IDENTITY=<sha1> (security find-identity -v -p codesigning)`);
+  }
+  return sha1;
+}
+
+/** How a macOS build of `app` signs, once its bake (`compat`) says what its grants need, resolved together:
+ * `{ provisioning, widgets, sha1 }`. With Mac widgets (`widgets`, from `macWidgetSigning`, of the identity `current`'s
+ * team) one profile serves both: it is chosen among the widgets' profiles that also allow the grants' needs, and the
+ * identity stays `current`, so the widgets' App Group and the profile are one team's. Without widgets the profile's
+ * team's identity signs (`macProfileIdentity`). An ad hoc development build (EXACT_IDENTITY=-) signs no profile's
+ * entitlements. */
+export function macSigning(app, compat, { current, widgets = null, release = false, distribution = false, log = console.log,
+  find = macProfile, widgetProfiles = macWidgetProfiles, identityFor = macProfileIdentity, adHoc = !distribution && current === '-' } = {}) {
+  let pair = null;
+  const together = (a, required) => {
+    pair = widgetProfiles({ app: a, team: widgets.team, distribution, log, also: (p) => required.every((name) => macAllows(p, a, name)) });
+    return pair?.app ?? null;
+  };
+  const reason = adHoc ? 'this build is signed ad hoc (EXACT_IDENTITY=-), and no profile\'s entitlements hold under an ad hoc signature (LLP 1133.010 D7)' : null;
+  const provisioning = macProvisioning(app, compat, { release, method: distribution ? 'developerid' : 'development', log, reason,
+    beside: widgets ? `, with the Mac widgets' App Group and shared Keychain group for team ${widgets.team} (one profile signs both)` : '', find: widgets ? together : find });
+  if (!provisioning) return { provisioning, widgets, sha1: current };
+  if (widgets) return { provisioning, widgets: { ...widgets, profiles: pair }, sha1: current };
+  return { provisioning, widgets, sha1: identityFor(provisioning.profile, current, { distribution }) };
+}
 /** The RP IDs a Mac needs an associated domain for: every `auth.passkey` line but `localhost`, which only the web admits. */
 export function passkeyLines(ceiling = '') {
   return String(ceiling).split('\n').map((line) => line.trim().split(/\s+/))
@@ -81,37 +188,6 @@ export function entitlementValue(name, debuggable) {
  * extension, which reads no token (LLP 1133.004 §9 P2). The signature and the profile check both read this. */
 export function grantEntitlements(app, names = []) {
   return app.clipParent || app.widgetAppId ? names.filter((name) => name !== 'aps-environment') : names;
-}
-
-/** The device rows whose entitlement a Mac takes only with a provisioning profile (LLP 1133.028 D17): App Attest's
- * environment and the Declared Age Range. */
-const MAC_PROFILE_ROWS = { attestation: 'attestationStatus().available is false and attest fails NotSupportedError',
-  'age-range': 'ageRangeStatus().available is false and requestAgeRange fails NotSupportedError' };
-
-/** What a macOS build of `app` says of those rows, or refuses: a development build signs neither entitlement, and a
- * release build granting either is refused (`grant-needs-profile`), as a passkey line is. */
-export function macProfileRows(app, ceiling, { release = false, log = console.log } = {}) {
-  const rows = String(ceiling).split('\n').map((line) => line.trim().split(/\s+/)[0])
-    .filter((w) => w?.startsWith('device.') && MAC_PROFILE_ROWS[w.slice(7)]).map((w) => w.slice(7));
-  if (!rows.length) return;
-  const lines = rows.map((r) => `device.${r}`).join(', ');
-  const one = rows.length === 1;
-  const why = `${one ? 'its entitlement needs' : 'their entitlements need'} a macOS provisioning profile for ${app.id}, and signing a Mac build with one is not built yet (LLP 1133.010 D7)`;
-  if (release) throw new Error(`grant-needs-profile: ${lines}: ${why}.`);
-  log(`${lines}: this build signs ${one ? 'no entitlement for it' : 'neither entitlement'}, since ${why}: ${rows.map((r) => MAC_PROFILE_ROWS[r]).join('; ')} outside the agent.`);
-}
-
-/** What a macOS build of `app` says of its passkey lines, or refuses (LLP 1133.011 D6): `webcredentials:` is a
- * restricted entitlement on macOS, which only a provisioning profile authorizes (TN3125), and signing a Mac build
- * with one is not built. So the build signs no associated domain, its ceremonies fail `NotSupportedError`, and a
- * release build with a passkey line is refused (`grant-needs-profile`). */
-export function macPasskeys(app, ceiling, { release = false, log = console.log } = {}) {
-  const ids = passkeyLines(ceiling);
-  if (!ids.length) return;
-  const lines = ids.map((rp) => `auth.passkey ${rp}`).join(', ');
-  const why = `the Associated Domains entitlement needs a macOS provisioning profile for ${app.id}, and signing a Mac build with one is not built yet (LLP 1133.010 D7)`;
-  if (release) throw new Error(`grant-needs-profile: ${lines}: ${why}.`);
-  log(`Passkeys: this build signs no associated domain, since ${why}: getClientCapabilities().available is false and create and get fail NotSupportedError.`);
 }
 
 /** @ref LLP 1133.034 D13 — the `payment.apple-pay` grants' merchant IDs, where they can be signed: on a simulator, or

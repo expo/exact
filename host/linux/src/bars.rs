@@ -13,9 +13,14 @@
 //!   search field or a tablist keeps those in the page under the bar: then
 //!   only what the bar shows of it (the heading, its buttons, whatever else
 //!   holds neither) is taken out;
-//! - the tablist the navigation bar replaces, likewise;
+//! - the tablist the navigation bar replaces, likewise: one that holds the
+//!   root's tabpanels keeps them in the page;
 //! - each route is inset by the room its bars take: the top bar's at its
-//!   top edge, the navigation bar's at its bottom.
+//!   top edge, the navigation bar's at its bottom;
+//! - a route the shell shows in a sheet (a `modal` one, or one pushed
+//!   inside it, LLP 1115.001 D10) has no bar: its header stays in the page,
+//!   and it is inset by the sheet's drag handle at its top and the system's
+//!   bar under the sheet's foot (`presenter/stage.rs`).
 //!
 //! The room is the shell's to say ([`Host::set_bar_room`]: it depends on
 //! the window, the system's insets and the keyboard, which the presenter
@@ -23,7 +28,7 @@
 //! and nothing is covered: desktop Linux and a headless run paint the
 //! authored header and tablist as they always did.
 use super::Host;
-use crate::navigation::RouteBar;
+use crate::navigation::{sheet_of, Presented, RouteBar};
 use exact_kernel::{
     Appearance, Bar, Display, HeaderShape, HostCover, Kernel, PropId, StyleId, ViewId,
 };
@@ -48,8 +53,15 @@ fn within(kernel: &Kernel, node: ViewId, ancestor: ViewId) -> bool {
 /// bar), every part of it that holds neither.
 fn lifted(kernel: &Kernel, shape: &HeaderShape<ViewId>) -> Vec<ViewId> {
     let kept: Vec<ViewId> = shape.search.into_iter().chain(shape.segments).collect();
-    if kept.is_empty() {
-        return vec![shape.header];
+    covered(kernel, shape.header, &kept)
+}
+
+/// The nodes that cover `node` but for `kept`, which stay in the page: the
+/// node itself, or, where it holds any of them, every part of it that
+/// holds none.
+fn covered(kernel: &Kernel, node: ViewId, kept: &[ViewId]) -> Vec<ViewId> {
+    if !kept.iter().any(|k| within(kernel, *k, node)) {
+        return vec![node];
     }
     fn walk(kernel: &Kernel, node: ViewId, kept: &[ViewId], out: &mut Vec<ViewId>) {
         for child in kernel.node(node).map(|n| n.children()).unwrap_or_default() {
@@ -63,7 +75,7 @@ fn lifted(kernel: &Kernel, shape: &HeaderShape<ViewId>) -> Vec<ViewId> {
         }
     }
     let mut out = Vec::new();
-    walk(kernel, shape.header, &kept, &mut out);
+    walk(kernel, node, kept, &mut out);
     out
 }
 
@@ -82,10 +94,11 @@ impl<D: DataSource> Host<D> {
     }
 
     /// The room a shell's bars take of a route (the top bar from its top
-    /// edge, the navigation bar from its bottom; points), or `None` for a
-    /// shell with no bars. The tree is projected again and, where what the
-    /// bars cover changed, laid out: whether it was.
-    pub fn set_bar_room(&mut self, room: Option<(f32, f32)>) -> Result<bool, String> {
+    /// edge, the navigation bar from its bottom, and the system's bar under
+    /// a sheet's foot; points), or `None` for a shell with no bars. The tree
+    /// is projected again and, where what the bars cover changed, laid out:
+    /// whether it was.
+    pub fn set_bar_room(&mut self, room: Option<(f32, f32, f32)>) -> Result<bool, String> {
         if self.navigation.bars.room == room {
             return Ok(false);
         }
@@ -135,7 +148,7 @@ impl<D: DataSource> Host<D> {
             );
         }
         let (mut routes, mut tabs, mut stacks) = (Vec::new(), None, Vec::new());
-        if let (Some(root), Some((above, below))) = (root, room) {
+        if let (Some(root), Some((above, below, foot))) = (root, room) {
             let back = kernel
                 .node(root)
                 .and_then(|n| n.props.str(PropId::NavigationBack))
@@ -153,14 +166,30 @@ impl<D: DataSource> Host<D> {
                 })
             });
             let below = if found.is_some() { below } else { 0.0 };
+            // A tablist may hold the root's panels: those, and their
+            // routes, stay in the page.
             if let Some(tabs) = &found {
-                wanted.insert(tabs.tablist, HostCover::Whole);
+                for id in covered(kernel, tabs.tablist, &tabs.panels) {
+                    wanted.insert(id, HostCover::Whole);
+                }
             }
             for stack in &all {
+                let kinds: Vec<Presented> = (stack.iter())
+                    .map(|r| {
+                        kernel
+                            .node(*r)
+                            .map_or(Presented::Pushed, |n| Presented::of(&n))
+                    })
+                    .collect();
                 for (index, route) in stack.iter().enumerate() {
                     let Some(node) = kernel.node(*route) else {
                         continue;
                     };
+                    if sheet_of(&kinds, index).is_some() {
+                        let cover = [crate::presenter::SHEET_HANDLE, 0.0, foot, 0.0];
+                        wanted.insert(*route, HostCover::Edges(cover));
+                        continue;
+                    }
                     // A presented route starts a stack of its own (LLP
                     // 1035.001 D4): it is not pushed, and its Back control
                     // is an item of its bar.

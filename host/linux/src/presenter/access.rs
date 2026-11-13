@@ -812,6 +812,21 @@ impl<D: DataSource> Presenter<D> {
     /// title as a heading, the trailing buttons. And the pane: the route
     /// and its title.
     fn access_top(&mut self, b: &mut Build) -> (i32, String) {
+        // Under a sheet the bars are the page's, inert: the sheet is the
+        // pane, titled by its first heading (LLP 1115.001 D13).
+        if let Some((route, _)) = self.top_sheet() {
+            let kernel = self.host.kernel();
+            let role = |props: &exact_kernel::PropList| {
+                props.str(PropId::AccessibilityRole) == Some("heading")
+            };
+            let title = (kernel
+                .preorder_where(&[route], |_, props| role(props))
+                .first())
+            .and_then(|heading| kernel.bar_text(*heading))
+            .or_else(|| kernel.node(route).and_then(|n| self.access_label(&n)))
+            .unwrap_or_default();
+            return (identity(kernel, route), title);
+        }
         let (top, _) = self.bar_plans();
         let Some(plan) = top.cloned() else {
             return (0, String::new());
@@ -854,6 +869,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// The navigation bar's nodes: the bar, and its destinations in it.
     fn access_bottom(&mut self, b: &mut Build) {
+        if self.sheet_open() {
+            return;
+        }
         let (_, bottom) = self.bar_plans();
         let Some(plan) = bottom.cloned() else { return };
         let (_, bar) = self.bars();

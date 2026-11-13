@@ -7,7 +7,10 @@
 // identity change, a `MutationResponse` and then a `Transition` to every
 // session whose results the mutation changed. Convex's HTTP API answers too
 // (`POST /api/query`, `/api/mutation`, `/api/action`), so a test can write as
-// another client would. It checks no token's signature and runs no Convex
+// another client would. As Convex does, it answers a mutation a client has
+// sent before (its session id and request id) with its first answer, for as
+// long as that client lives: a `Connect` whose `connectionCount` is 0 is a
+// new one. It checks no token's signature and runs no Convex
 // code: the app's real functions are proven against Convex itself.
 //
 // An app's server.ts:
@@ -32,7 +35,7 @@ export interface Functions {
 }
 
 type Version = { querySet: number; identity: number; ts: string };
-type Session = Caller & { version: Version; queries: Map<number, { udfPath: string; args: Json; last: string }>; send: (message: object) => void; close: (code?: number, reason?: string) => void; idle: ReturnType<typeof setInterval> | undefined };
+type Session = Caller & { client: string; version: Version; queries: Map<number, { udfPath: string; args: Json; last: string }>; send: (message: object) => void; close: (code?: number, reason?: string) => void; idle: ReturnType<typeof setInterval> | undefined };
 type Outcome = { ok: true; value: Json } | { ok: false; message: string };
 
 /** A timestamp as the wire has it: a u64, little-endian, in base64. */
@@ -59,6 +62,8 @@ const canonical = (path: string) => path.replace(/\.js:/, ':');
 
 export function serve({ port, queries, mutations = {}, actions = {}, http }: Functions) {
   const sessions = new Set<Session>();
+  /** What each client's mutations were answered, by its session id and request id. */
+  const answered = new Map<string, Map<number, string>>();
   let clock = 1;
   const call = (handler: Handler | undefined, udfPath: string, args: Json, caller: Caller): Outcome => {
     try {
@@ -102,7 +107,7 @@ export function serve({ port, queries, mutations = {}, actions = {}, http }: Fun
     hostname: '127.0.0.1', port,
     async fetch(request, bun) {
       const { pathname } = new URL(request.url);
-      if (pathname.endsWith('/sync') && bun.upgrade(request, { data: { identity: null, version: { querySet: 0, identity: 0, ts: wireTs(0) }, queries: new Map(), send: () => {}, close: () => {}, idle: undefined } })) return undefined;
+      if (pathname.endsWith('/sync') && bun.upgrade(request, { data: { identity: null, client: '', version: { querySet: 0, identity: 0, ts: wireTs(0) }, queries: new Map(), send: () => {}, close: () => {}, idle: undefined } })) return undefined;
       const kind = /^\/api\/(query|mutation|action)$/.exec(pathname)?.[1] as 'query' | 'mutation' | 'action' | undefined;
       if (kind && request.method === 'POST') return withCors(await api(kind, request));
       const own = await http?.(request);
@@ -133,13 +138,23 @@ export function serve({ port, queries, mutations = {}, actions = {}, http }: Fun
             else if (s.queries.delete(mod.queryId)) removed.push(mod.queryId);
           }
           transition(s, { querySet: m.newVersion, ts: wireTs(clock) }, added, removed);
+        } else if (m.type === 'Connect') {
+          s.client = String(m.sessionId);
+          if (m.connectionCount === 0) answered.delete(s.client);
         } else if (m.type === 'Mutation' || m.type === 'Action') {
           const kind = m.type === 'Mutation' ? 'MutationResponse' : 'ActionResponse';
+          const seen = m.type === 'Mutation' ? answered.get(s.client) ?? answered.set(s.client, new Map()).get(s.client)! : undefined;
+          // The answer as it was sent: a handler may change the value it returned.
+          const first = seen?.get(m.requestId);
+          if (first !== undefined) return s.send(JSON.parse(first));
           const outcome = call((m.type === 'Mutation' ? mutations : actions)[canonical(m.udfPath)], m.udfPath, m.args[0] ?? {}, s);
-          if (!outcome.ok) return s.send({ type: kind, requestId: m.requestId, success: false, result: outcome.message, logLines: [] });
-          const ts = wireTs(++clock);
-          s.send({ type: kind, requestId: m.requestId, success: true, result: outcome.value, logLines: [], ...(m.type === 'Mutation' ? { ts } : {}) });
-          wrote(ts, s);
+          const ts = outcome.ok ? wireTs(++clock) : undefined;
+          const response = outcome.ok
+            ? { type: kind, requestId: m.requestId, success: true, result: outcome.value, logLines: [], ...(m.type === 'Mutation' ? { ts } : {}) }
+            : { type: kind, requestId: m.requestId, success: false, result: outcome.message, logLines: [] };
+          seen?.set(m.requestId, JSON.stringify(response));
+          s.send(response);
+          if (ts !== undefined) wrote(ts, s);
         } else if (m.type === 'Authenticate') {
           // Convex closes the socket on an identity version it is not at (recorded), and refuses a token it cannot read.
           if (m.baseVersion !== s.version.identity) return s.close(1011, 'InternalServerError');

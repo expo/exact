@@ -14,17 +14,54 @@ pub struct Runbook {
 
 impl Default for Runbook {
     fn default() -> Self {
-        let source = include_str!("../../runbook.md");
-        let parsed = markdown_parse::parse(source, &str::to_owned);
         Self {
-            curated: Value::record(vec![
-                Value::str("Outside, together"),
-                Value::Number(source.len() as f64),
-                markdown_parse::value::blocks(&parsed),
-            ]),
+            curated: document(include_str!("../../runbook.md")),
             stress: Source::default(),
         }
     }
+}
+
+fn document(source: &str) -> Value {
+    let parsed = markdown_parse::parse(source, &str::to_owned);
+    Value::record(vec![
+        Value::str(&parsed.title),
+        Value::Number(source.len() as f64),
+        markdown_parse::value::into_blocks_with_tables(parsed),
+    ])
+}
+
+#[test]
+fn runbook_tables_keep_the_header_and_styled_cells_in_one_block() {
+    fn fields(value: &Value) -> &[Value] {
+        match value {
+            Value::Record(fields) | Value::List(fields) => fields,
+            _ => panic!("record or list"),
+        }
+    }
+    fn run(cell: &Value) -> &[Value] {
+        fields(&fields(&fields(cell)[1])[0])
+    }
+    let Value::Record(book) = document(
+        "# Runbook\n\n| LongUnbreakableHeader | B |\n| --- | --- |\n| **ready** | `code` |\n| [link](#next) | uneven content |\n\n## Next\n",
+    ) else {
+        panic!("runbook record")
+    };
+    let Value::List(blocks) = &book[2] else {
+        panic!("blocks")
+    };
+    assert_eq!(blocks.len(), 3);
+    let Value::Record(table) = &blocks[1] else {
+        panic!("table block")
+    };
+    assert_eq!(table[1], Value::str("table"));
+    assert_eq!(table[2], Value::Number(2.));
+    let Value::List(cells) = &table[8] else {
+        panic!("cells")
+    };
+    assert_eq!(cells.len(), 6);
+    assert_eq!(run(&cells[2])[2], Value::Number(700.));
+    assert_eq!(run(&cells[3])[4], Value::Bool(true));
+    assert_eq!(run(&cells[4])[5], Value::str("#next"));
 }
 
 fn args(values: &[Value]) -> Result<Option<Vec<Value>>, DataError> {

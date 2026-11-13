@@ -175,6 +175,28 @@ fn prefix(source: &str, line: &B) -> Prefix {
     p
 }
 
+/// The opener and closer of a code span that shows `content` as it is, with
+/// at least `ticks` backticks (LLP 1045 D2). The styler strips one space from
+/// each end of content that is not all spaces when both ends are spaces, so
+/// content that begins or ends with a backtick, or with spaces at both ends,
+/// is padded with one space on each side. `padded` keeps padding the author
+/// wrote wherever it still strips.
+fn code_span(content: &str, ticks: usize, padded: bool) -> (String, String) {
+    let longest = content.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let ticks = "`".repeat(ticks.max(longest + 1));
+    let spaces = content.bytes().all(|c| c == b' ');
+    let pad = !spaces
+        && (padded
+            || content.starts_with('`')
+            || content.ends_with('`')
+            || (content.starts_with(' ') && content.ends_with(' ')));
+    if pad {
+        (format!("{ticks} "), format!(" {ticks}"))
+    } else {
+        (ticks.clone(), ticks)
+    }
+}
+
 fn inline(source: &str, sel: B, kind: u8, marker: &str) -> Draft {
     let analysis = analyze(source, None);
     let inside = analysis
@@ -217,11 +239,13 @@ fn inline(source: &str, sel: B, kind: u8, marker: &str) -> Draft {
         let lead = piece.len() - piece.trim_start().len();
         let text = piece.trim();
         if !text.is_empty() {
-            reps.push((at + lead..at + lead, marker.to_string()));
-            reps.push((
-                at + lead + text.len()..at + lead + text.len(),
-                marker.to_string(),
-            ));
+            let (open, close) = if kind == CODE {
+                code_span(text, marker.len(), false)
+            } else {
+                (marker.to_string(), marker.to_string())
+            };
+            reps.push((at + lead..at + lead, open));
+            reps.push((at + lead + text.len()..at + lead + text.len(), close));
         }
     }
     let selection = match (reps.first(), reps.last()) {
@@ -533,6 +557,14 @@ fn link_label(text: &str) -> String {
     out
 }
 
+/// One half of a code span cut by a block break. Cutting only shortens the
+/// backtick runs inside, so the span's own delimiter still closes each half.
+fn code_half(source: &str, c: &Construct, content: &str) -> (String, String) {
+    let open = &source[c.outer.start..c.inner.start];
+    let ticks = open.trim_end_matches(' ').len();
+    code_span(content, ticks, open.len() > ticks)
+}
+
 /// Close and reopen the constructs a block break would otherwise cut apart.
 fn split_inline(source: &str, sel: &B, text: String, constructs: &[Construct]) -> Draft {
     let mut active: Vec<_> = constructs
@@ -568,7 +600,16 @@ fn split_inline(source: &str, sel: &B, text: String, constructs: &[Construct]) -
             }
             .max(left_at);
             left_at = at;
-            reps.push((at..at, source[c.inner.end..c.outer.end].to_string()));
+            let close = if c.kind == CODE {
+                let (open, close) = code_half(source, c, left);
+                if open != source[c.outer.start..c.inner.start] {
+                    reps.push((c.outer.start..c.inner.start, open));
+                }
+                close
+            } else {
+                source[c.inner.end..c.outer.end].to_string()
+            };
+            reps.push((at..at, close));
         }
     }
     reps.push((sel.clone(), text));
@@ -592,7 +633,16 @@ fn split_inline(source: &str, sel: &B, text: String, constructs: &[Construct]) -
             }
             .min(right_at);
             right_at = at;
-            openers.push((at..at, source[c.outer.start..c.inner.start].to_string()));
+            let open = if c.kind == CODE {
+                let (open, close) = code_half(source, c, right);
+                if close != source[c.inner.end..c.outer.end] {
+                    reps.push((c.inner.end..c.outer.end, close));
+                }
+                open
+            } else {
+                source[c.outer.start..c.inner.start].to_string()
+            };
+            openers.push((at..at, open));
         }
     }
     reps.extend(openers.into_iter().rev());

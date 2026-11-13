@@ -6,8 +6,8 @@ import { widgetArguments, validateWidget } from './agent-widget.mjs';
 import { missingValue } from './help.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -262,11 +262,39 @@ export async function exclusiveNativeStore({ host, device, appId, storage }, lau
   } catch (error) { await unlock(); throw error; }
 }
 
+/** Only ESRCH on this host proves an owner stale. Chrome itself handles a
+ * stale SingletonLock; the driver also records shells and Windows browsers.
+ * An empty record is a spawn whose driver died before recording its PID: the
+ * SingletonLock, read next, says whether that browser lives. */
+function refuseBrowserOwner(profile, lock, readOwner) {
+  const source = basename(lock);
+  const refuse = why => { throw new Error(`Chrome profile ${profile}: ${why} (${lock}); close its browser or use another store name`); };
+  let owner;
+  try { owner = readOwner(lock); }
+  catch (error) {
+    if (error.code === 'ENOENT') return;
+    refuse(`cannot read ${source}: ${error.code}`);
+  }
+  if (owner === '') return;
+  const match = /^(.+)-([1-9][0-9]*)$/.exec(owner), pid = Number(match?.[2]);
+  if (!match || match[0] !== owner || pid > 2147483647) refuse(`malformed ${source} ${JSON.stringify(owner)}`);
+  if (match[1] !== hostname()) refuse(`${source} names Chrome ${pid} on another host ${JSON.stringify(match[1])}; its owner cannot be verified here`);
+  try { process.kill(pid, 0); }
+  catch (error) {
+    if (error.code === 'ESRCH') return;
+    refuse(`cannot verify Chrome ${pid}: ${error.code}`);
+  }
+  refuse(`Chrome ${pid} still owns this profile`);
+}
+
 /** Own a named Chrome profile before resetting it, including when two drives
- * choose different page ports. The OS releases the lock if the driver dies. */
+ * choose different page ports. The browser record survives driver death and
+ * profile reset, and a browser that would not close; a spawn interrupted
+ * before its PID is recorded leaves an empty one. */
 export async function exclusiveWebStore(options, launch) {
-  if (options.storage === undefined || options.browser !== 'chrome' || options.reuse) return launch();
+  if (options.storage === undefined || options.browser !== 'chrome') return launch(options);
   const app = resolveApp(options.app), store = driveStore(app, options.storage, options.env);
+  const owner = resolve(store.base + '-locks', options.storage, 'browser-owner');
   mkdirSync(store.base, {recursive: true});
   let release, acquired;
   const ready = new Promise(resolve => { acquired = resolve; });
@@ -275,12 +303,27 @@ export async function exclusiveWebStore(options, launch) {
   try { await Promise.race([ready, holding]); }
   catch (error) { throw new Error(`--storage ${options.storage}: profile lock failed (${error.message}); close any drive of this store or use another name`); }
   const unlock = async () => { release(); await holding; };
+  let recording = false, started = false;
   try {
-    const carrier = await launch(), close = carrier.close.bind(carrier);
+    refuseBrowserOwner(store.profile, owner, path => readFileSync(path, 'utf8'));
+    refuseBrowserOwner(store.profile, resolve(store.profile, 'SingletonLock'), readlinkSync);
+    const carrier = await launch({...options, beforeSpawn: () => {
+      writeFileSync(owner, '');
+      recording = true;
+    }, onProcess: child => {
+      started = true;
+      writeFileSync(owner, `${hostname()}-${child.pid}`);
+      options.onProcess?.(child);
+    }}), close = carrier.close.bind(carrier);
     let closed;
-    carrier.close = () => closed ??= (async () => { await close(); await unlock(); })();
+    carrier.close = () => closed ??= (async () => {
+      try { await close(); rmSync(owner, {force: true}); } finally { await unlock(); }
+    })();
     return carrier;
-  } catch (error) { await unlock(); throw error; }
+  } catch (error) {
+    if (recording && !started) rmSync(owner, {force: true});
+    await unlock(); throw error;
+  }
 }
 
 /** The one port a web drive's page is served on, `--port <n>` else `EXACT_PORT`, or null for the default (a free port;

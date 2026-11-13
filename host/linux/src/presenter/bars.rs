@@ -38,8 +38,9 @@ use super::top::SurfacePainter;
 use super::*;
 
 mod look;
+use crate::paint::ripple::Ripple;
 pub use look::{Bottom, Button, Tab, Target, Top, What};
-use look::{Inputs, Layout};
+use look::{Inputs, Layout, Lit};
 
 /// The top app bar, as the shell names it.
 pub const TOP: i32 = 1;
@@ -66,6 +67,9 @@ struct Seen {
     colors: [[u8; 4]; 8],
 }
 
+/// A bar's picture and its frame in the window.
+pub(super) type BarPicture = (std::rc::Rc<crate::paint::tape::Tape>, crate::paint::Rect4);
+
 /// What the presenter keeps of its shell's bars.
 #[derive(Default)]
 pub(super) struct State {
@@ -81,13 +85,18 @@ pub(super) struct State {
     bottom: Option<Shown<Bottom>>,
     /// The target a finger holds: the bar, and its place among the targets.
     pressed: Option<(i32, usize)>,
+    /// The ripple of the last target a finger held (LLP 1115.001 D9), and
+    /// the clock the shell was last told it at.
+    ripple: Option<(i32, usize, Ripple)>,
+    rippled: Option<f64>,
     /// The target a TV remote's focus is on, lit as a held one is (LLP
     /// 1115.001.003 D4): the bar, and its place among the targets.
     focused: Option<(i32, usize)>,
     /// Moved on whenever a bar's picture or frame changes.
     revision: u32,
-    /// The revision the shell was last told.
-    told: Option<u32>,
+    /// The revision the shell was last told, and whether the bars were then
+    /// the stage's (`stage.rs`).
+    told: Option<(u32, bool)>,
 }
 
 impl State {
@@ -99,6 +108,7 @@ impl State {
         self.scroller = None;
         self.pressed = None;
         self.focused = None;
+        self.ripple = None;
     }
 }
 
@@ -181,19 +191,33 @@ impl<D: DataSource> Presenter<D> {
         let above = (safe[0] + look::top_height() - frame[1]).max(0.0);
         let nav = look::nav_height(self.bar_font_scale());
         let below = (frame[1] + frame[3] - (window.1 - safe[2] - nav)).max(0.0);
-        match self.host.set_bar_room(Some((above, below))) {
+        // A sheet's foot reaches under the system's bar (`stage.rs`).
+        let foot = (frame[1] + frame[3] - (window.1 - safe[2])).max(0.0);
+        match self.host.set_bar_room(Some((above, below, foot))) {
             Ok(true) => self.after_commit(),
             Ok(false) => None,
             Err(e) => Some(e),
         }
     }
 
-    /// The route that shows: the one of the root's that is neither hidden
-    /// nor inert.
-    fn bar_route(&self) -> Option<ViewId> {
+    /// The route whose bar shows: the one of the root's that is neither
+    /// hidden nor inert, or, under a sheet, the page the sheet covers, whose
+    /// bar is drawn under the scrim.
+    pub(super) fn bar_route(&self) -> Option<ViewId> {
         let bars = self.host.bars();
         let live = |id: &ViewId| self.host.route_visibility(*id) == (false, false);
-        bars.stacks.iter().flatten().copied().find(live)
+        let route = bars.stacks.iter().flatten().copied().find(live);
+        if !self.sheet_open() {
+            return route;
+        }
+        let stack = bars
+            .stacks
+            .iter()
+            .find(|s| route.is_some_and(|r| s.contains(&r)))?;
+        let barred = |id: &ViewId| bars.routes.iter().any(|r| r.route == *id);
+        (stack.iter().copied())
+            .filter(|id| !self.host.route_visibility(*id).0)
+            .find(barred)
     }
 
     /// A route's content scroller (LLP 1115.000 D11.1, the iOS host's
@@ -400,9 +424,11 @@ impl<D: DataSource> Presenter<D> {
         }
         (self.bars.read, self.bars.seen) = (Some(read), Some(seen));
         if changed {
-            // A target measured again is another target: nothing is held.
+            // A target measured again is another target: nothing is held,
+            // and the ripple of the one that was goes with it.
             self.bars.pressed = None;
             self.bars.focused = None;
+            self.bars.ripple = None;
             self.bars.revision += 1;
         }
     }
@@ -421,6 +447,23 @@ impl<D: DataSource> Presenter<D> {
             texts: s.layout.texts(),
         });
         (top, bottom)
+    }
+
+    /// Each bar's picture, recorded for the stage to draw in the page, and
+    /// its frame in the window.
+    pub(super) fn bar_pictures(&mut self) -> (Option<BarPicture>, Option<BarPicture>) {
+        self.sync_bars();
+        let text = self.text.clone();
+        let picture = |layout: &Layout| {
+            crate::paint::stage::picture(|backend| {
+                layout.paint(backend, &mut text.borrow_mut(), None)
+            })
+        };
+        let rect = |f: [f32; 4]| (f[0], f[1], f[2], f[3]);
+        (
+            (self.bars.top.as_ref()).map(|s| (picture(&s.layout), rect(s.frame))),
+            (self.bars.bottom.as_ref()).map(|s| (picture(&s.layout), rect(s.frame))),
+        )
     }
 
     /// Moved on whenever a bar's picture or frame changes.
@@ -456,13 +499,25 @@ impl<D: DataSource> Presenter<D> {
         self.bars.painter.as_ref()?;
         self.sync_bars();
         self.sync_bar_focus();
-        if self.bars.told == Some(self.bars.revision) {
+        self.ripple_bars();
+        // While the stage draws them in the page, the shell shows none.
+        let staged = self.stage_draws_bars();
+        if self.bars.told == Some((self.bars.revision, staged)) {
             return None;
         }
-        self.bars.told = Some(self.bars.revision);
+        self.bars.told = Some((self.bars.revision, staged));
+        if staged {
+            return Some(vec![0]);
+        }
         let text = self.text.clone();
-        let pressed = self.bars.pressed.or(self.bars.focused);
-        let lit = |which: i32| pressed.filter(|p| p.0 == which).map(|p| p.1);
+        let (now, still) = self.bar_clock();
+        let (ripple, focused) = (self.bars.ripple, self.bars.focused);
+        let lit = |which: i32| -> Option<Lit> {
+            match ripple.filter(|r| r.0 == which) {
+                Some((_, index, r)) => Some((index, Some((r, now, still)))),
+                None => focused.filter(|f| f.0 == which).map(|f| (f.1, None)),
+            }
+        };
         let px = |v: f32| (v * scale).round() as i32;
         let painter = self.bars.painter.as_mut()?;
         let mut out = vec![0];
@@ -492,6 +547,49 @@ impl<D: DataSource> Presenter<D> {
             out.extend(stream.iter().map(|word| *word as i32));
         }
         Some(out)
+    }
+
+    /// The host's clock, and whether motion is removed, for a bar's ripple.
+    fn bar_clock(&self) -> (f64, bool) {
+        let still = self.host.runner().viewport().preferences.reduced_motion;
+        (self.host.now(), still)
+    }
+
+    /// A bar's ripple moves on: its picture is made again at each new
+    /// instant of the clock while it moves, once more at rest, and once
+    /// gone without it.
+    fn ripple_bars(&mut self) {
+        let (now, still) = self.bar_clock();
+        let Some((_, _, ripple)) = self.bars.ripple else {
+            return;
+        };
+        let told = self.bars.rippled;
+        if ripple.gone(now, still) {
+            self.bars.ripple = None;
+            self.bars.revision += 1;
+        } else if told != Some(now)
+            && (ripple.moving(now, still) || told.is_none_or(|t| ripple.moving(t, still)))
+        {
+            self.bars.rippled = Some(now);
+            self.bars.revision += 1;
+        }
+    }
+
+    /// Whether a bar's ripple owes a frame: it moves, or is to be taken away.
+    pub(super) fn bars_ripple_moving(&self) -> bool {
+        let (now, still) = self.bar_clock();
+        (self.bars.ripple).is_some_and(|(_, _, r)| r.moving(now, still) || r.gone(now, still))
+    }
+
+    /// The agent's clock: a bar's held ripple is at rest, a released one gone.
+    pub(super) fn land_bar_ripple(&mut self) {
+        let now = self.host.now();
+        if let Some((_, _, ripple)) = &mut self.bars.ripple {
+            if !ripple.land(now) {
+                self.bars.ripple = None;
+            }
+            self.bars.revision += 1;
+        }
     }
 
     /// The tab's route to scroll to its top when its destination is tapped
@@ -553,6 +651,10 @@ impl<D: DataSource> Presenter<D> {
     /// the bar's own top left. A target is lit while a finger holds it and
     /// chosen when the finger lifts in it; a finger that leaves it lets go.
     pub fn bar_event(&mut self, which: i32, action: i32, x: f32, y: f32, now_ms: f64) {
+        // Under a sheet the bars are the page's, under its scrim, and inert.
+        if self.sheet_open() {
+            return;
+        }
         self.sync_bars();
         let at = match which {
             TOP => self.bars.top.as_ref().map(|s| &s.layout),
@@ -562,7 +664,17 @@ impl<D: DataSource> Presenter<D> {
         .and_then(|layout| {
             let index = layout.target_at(x, y)?;
             let target = layout.targets[index];
-            target.enabled.then_some((index, target.what))
+            target
+                .enabled
+                .then_some((index, target.what, target.held_at(x, y)))
+        });
+        let at = at.map(|(index, what, point)| {
+            if action == 0 {
+                let now = now_ms.max(self.host.now());
+                self.bars.ripple = Some((which, index, Ripple::new(Some(point), now)));
+                self.bars.rippled = None;
+            }
+            (index, what)
         });
         let held = self.bars.pressed.filter(|p| p.0 == which).map(|p| p.1);
         let before = self.bars.pressed;
@@ -578,6 +690,12 @@ impl<D: DataSource> Presenter<D> {
             _ => self.bars.pressed = None,
         }
         if self.bars.pressed != before {
+            if self.bars.pressed.is_none() {
+                let now = now_ms.max(self.host.now());
+                if let Some((_, _, ripple)) = &mut self.bars.ripple {
+                    ripple.release(now, false);
+                }
+            }
             self.bars.revision += 1;
             self.executor.notify();
         }
@@ -637,6 +755,9 @@ impl<D: DataSource> Presenter<D> {
     /// node, with its box in the page's coordinates. The Up arrow has no
     /// node; Back does what it does.
     pub(super) fn bar_stops(&mut self) -> Vec<(ViewId, Rect4)> {
+        if self.sheet_open() {
+            return Vec::new();
+        }
         self.sync_bars();
         let page = self.page_origin();
         let mut stops = Vec::new();
@@ -674,6 +795,10 @@ impl<D: DataSource> Presenter<D> {
     /// The agent's `tap` on a node a bar stands for: its target is chosen,
     /// as a finger lifting in it chooses it. `None` for any other node.
     pub(super) fn bar_tap(&mut self, id: ViewId) -> Option<Result<String, String>> {
+        // Under a sheet's scrim the bars are the page's, and as inert.
+        if self.sheet_open() {
+            return None;
+        }
         self.sync_bars();
         let (which, target) = self.bar_target(id)?;
         let name = if which == TOP { "top" } else { "bottom" };

@@ -5,7 +5,7 @@
 
 use exact_plan::Value;
 use exact_runner::DataSource;
-use harness_data::shapes::{Ack, ContractValue, Entry, Session};
+use harness_data::shapes::{Ack, ContractValue, LogEntry as Entry, Session};
 use harness_data::{Harness, Options};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -228,9 +228,20 @@ fn an_interrupt_stops_a_stalled_stream_at_once() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(ack(&mut h, "interrupt", &[]));
-    let s = session(&mut h);
-    assert!(!s.busy);
-    assert_eq!(texts(s.entries.last().unwrap()), "Start[interrupted]");
+    assert_eq!(
+        texts(session(&mut h).entries.last().unwrap()),
+        "Start[interrupted]"
+    );
+    // The turn ends when its thread leaves, which does not wait for the
+    // blocked body reader.
+    let left = Instant::now();
+    while session(&mut h).busy {
+        assert!(
+            left.elapsed() < Duration::from_secs(1),
+            "the turn never ended"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     // The work stopped, not only the entry: the body reader's thread ends
     // within a read slice though the server never sends another byte.
     let stopped = Instant::now();

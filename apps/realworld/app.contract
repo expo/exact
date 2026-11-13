@@ -83,6 +83,9 @@ shape Follow
   username: string
   following: bool
 
+theme
+  accentInk="light-dark(#ffffff, #000000)"
+
 style Container
   width="100%" max-width=1140 margin-left="auto" margin-right="auto" padding-left=15 padding-right=15 box-sizing="border-box"
 style NavLink
@@ -92,7 +95,7 @@ style Btn
 style BtnSm
   padding-top=4 padding-bottom=4 padding-left=8 padding-right=8 border-radius=6 border-style="solid" border-width=1 font-size=14 line-height=1.25
 style BtnLg
-  padding-top=12 padding-bottom=12 padding-left=24 padding-right=24 border-radius=10 border-style="solid" border-width=1 font-size=20 line-height=1.25 background-color="AccentColor" border-color="AccentColor" color="AccentColorText" align-self="flex-end"
+  padding-top=12 padding-bottom=12 padding-left=24 padding-right=24 border-radius=10 border-style="solid" border-width=1 font-size=20 line-height=1.25 background-color="AccentColor" border-color="AccentColor" color="accentInk" align-self="flex-end"
 style Field
   width="100%" box-sizing="border-box" padding-top=8 padding-bottom=8 padding-left=12 padding-right=12 font-size=16 line-height=1.25 color="FieldText" background-color="Field" border-style="solid" border-width=1 border-color="-exact-separator" border-radius=8 margin-bottom=16
 style FieldLg
@@ -443,7 +446,7 @@ component Heart
       class=BtnSm
       margin-left="auto"
       border-color="AccentColor"
-      color=(on ? "AccentColorText": "AccentColor")
+      color=(on ? "accentInk": "AccentColor")
       background-color=(on ? "AccentColor": "-exact-background")
       testId=`favorite-${slug}`
       text `♥ ${n}`
@@ -934,7 +937,7 @@ component ArticleActions
           button press=favorite(post.slug, not post.favorited, post.favoritesCount)
             class=BtnSm
             border-color="AccentColor"
-            color=(post.favorited ? "AccentColorText": "AccentColor")
+            color=(post.favorited ? "accentInk": "AccentColor")
             background-color=(post.favorited ? "AccentColor": "-exact-background")
             testId="favorite"
             text `♥ ${post.favorited ? "Unfavorite" : "Favorite"} Article (${post.favoritesCount})`
@@ -1061,7 +1064,7 @@ component ArticlePage
                       class=BtnSm
                       border-color="AccentColor"
                       background-color="AccentColor"
-                      color="AccentColorText"
+                      color="accentInk"
                       font-weight=700
                       testId="post-comment"
                       text "Post Comment"

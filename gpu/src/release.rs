@@ -8,12 +8,13 @@
 //! resource"), and wgpu-hal's Vulkan swapchain refuses to be destroyed while
 //! a drawable still holds its semaphores.
 //!
-//! Nothing here waits for the compositor. A canvas's acquisition thread may
+//! Releasing a canvas never waits for the compositor. Its acquisition thread may
 //! be inside `vkAcquireNextImageKHR` for an image Android's compositor
 //! releases only after the window's `surfaceDestroyed` returns, and that
 //! callback waits for this ([`Module::detach`]). The thread is hung up on
 //! ([`crate::acquire::Acquire::retire`]); it ends when its acquisition does,
 //! and the module drops its surface here once it has ([`Module::reap`]).
+//! Final module shutdown joins every thread before the host can unload its code.
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use crate::acquire::Retired;
@@ -81,12 +82,10 @@ impl Module {
         }
     }
 
-    /// Wait for every retired acquisition thread to end: a window attached
-    /// again may be the one a retired swapchain is still connected to, and
-    /// Android refuses a second (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`). The
-    /// window is not going (it is being attached), so its compositor
-    /// releases what the thread waits for.
-    #[cfg(target_os = "android")]
+    /// Wait for every retired acquisition thread before unloading its code.
+    /// Android also joins before attaching a window again: a retired swapchain
+    /// may still own it (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`). At attach the
+    /// window is not going, so its compositor releases what the thread waits for.
     pub(crate) fn join_retired(&mut self) {
         for retired in self.retired.drain(..) {
             retired.join();
@@ -102,9 +101,7 @@ impl Drop for Module {
         for inst in self.instances.values_mut() {
             self.retired.extend(inst.release());
         }
-        // A thread still acquiring keeps its surface and drops it when its
-        // acquisition ends; nothing else uses this device by then.
-        self.reap();
+        self.join_retired();
     }
 }
 

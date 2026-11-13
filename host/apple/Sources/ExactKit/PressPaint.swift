@@ -299,10 +299,24 @@ extension NodeView {
     /// they take it in place of: its press's while that is down (or its
     /// release waiting), else that of a look that holds.
     private var lent: (ink: BatchValue, inherited: BatchValue?)? {
-        if pressPaint.down || pressPaint.releaseHeld, let ink = Self.pressOverlay(style)["text_color"] {
-            return (ink, pressPaint.rest["text_color"] ?? nil)
-        }
+        if let ink = pressInk { return (ink, pressPaint.rest["text_color"] ?? nil) }
         return pressPaint.lookInk.map { ($0, pressPaint.lookBase?["text_color"]) }
+    }
+
+    /// Its press's colour while that is down (or its release waiting).
+    private var pressInk: BatchValue? {
+        pressPaint.down || pressPaint.releaseHeld ? Self.pressOverlay(style)["text_color"] : nil
+    }
+
+    /// The views a batch placed take the colour a node above lends now (a
+    /// look's or a press's), as the views already there do: each lender inks
+    /// its subtree again, once.
+    static func inkPlaced(_ views: some Sequence<NodeView>) {
+        var lenders = Set<ObjectIdentifier>()
+        for view in views where !view.wrote("text_color") {
+            guard let lender = view.liveLender(), lenders.insert(ObjectIdentifier(lender)).inserted else { continue }
+            lender.inkAgain()
+        }
     }
 
     /// A style that removed this press's colour can expose an ancestor's
@@ -328,13 +342,9 @@ extension NodeView {
     /// one shows; the release lends the look's (`inkPress`).
     private func inkLooks() {
         let ink = pressPaint.lookInk
-        guard ink != pressPaint.lookInkLent else { return }
-        if pressPaint.down || pressPaint.releaseHeld, Self.pressOverlay(style)["text_color"] != nil { return }
+        guard ink != pressPaint.lookInkLent, pressInk == nil else { return }
         pressPaint.lookInkLent = ink
-        if let ink {
-            inkBelow(self, ink: ink, inherited: pressPaint.lookBase?["text_color"] ?? nil)
-            return
-        }
+        if ink != nil { inkAgain(); return }
         endInk(below: self, by: self)
         pressPaint.inked.removeAll { $0.view !== self }
         liveLender()?.inkAgain()

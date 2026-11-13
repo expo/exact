@@ -34,7 +34,9 @@ pub(crate) use android::{device_pending as gpu_device_pending, prepare as prepar
 pub(crate) mod apple;
 #[path = "surface_controls.rs"]
 pub(crate) mod controls;
+mod period;
 mod pixels;
+mod placed;
 mod shaders;
 mod size;
 #[cfg(windows)]
@@ -45,7 +47,8 @@ type Read = unsafe extern "C" fn(u32) -> u32;
 type Text = unsafe extern "C" fn(u32, *const u8, usize) -> u32;
 
 struct Abi {
-    // Symbols never outlive this library; unload TLS before dlclose.
+    // Symbols never outlive this library; gpu_unload joins acquisition workers
+    // and drops thread-local state before dlclose.
     library: Library,
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
@@ -393,6 +396,8 @@ struct Canvas {
     restore_input: bool,
     restore_bytes: Option<Vec<u8>>,
     restore_logged: bool,
+    /// The picture of its children last given to it (`gpu_texture`), which dies with it.
+    uploaded: Option<std::sync::Arc<tiny_skia::Pixmap>>,
 }
 impl Canvas {
     fn finish_restore(&mut self, error: Option<String>, state: Option<&Value>) -> Option<String> {
@@ -478,6 +483,7 @@ pub(crate) struct Surfaces {
     windows: BTreeMap<u32, android::Window>,
     #[cfg(any(target_os = "android", test))]
     fingers: fingers::Fingers,
+    pub(crate) haptics: crate::surface_haptics::Haptics,
 }
 /// Posts held per surface name until a canvas of that name is live; past it a
 /// post is dropped and logged. The same bound and rule on every host.
@@ -600,6 +606,7 @@ impl Surfaces {
                             self.error = Some("headless recovery did not report no device".into());
                         }
                     }
+                    period::give(&abi);
                     self.abis.insert(artifact, abi);
                 }
                 Err(e) => {
@@ -675,6 +682,7 @@ impl Surfaces {
                         restore_input: false,
                         restore_bytes: None,
                         restore_logged: false,
+                        uploaded: None,
                     },
                 );
             }
@@ -810,8 +818,7 @@ impl Surfaces {
             if let Some(bytes) = abi.read(b"gpu_messages", c.id) {
                 if let Ok(messages) = serde_json::from_slice::<Vec<String>>(&bytes) {
                     for message in messages {
-                        // Headless Linux has no audio session or lifecycle to deliver.
-                        if message == "exact:audio" {
+                        if message == "exact:audio" || self.haptics.take(view, &message) {
                             continue;
                         }
                         self.error = self.error.take().or(host.dispatch_at(
@@ -894,7 +901,9 @@ impl Surfaces {
                 }
                 if let Some(bytes) = abi.read(b"gpu_messages", id) {
                     if let Ok(messages) = serde_json::from_slice::<Vec<String>>(&bytes) {
-                        for message in messages.into_iter().filter(|m| m != "exact:audio") {
+                        for message in messages.into_iter().filter(|m| {
+                            m != "exact:audio" && !m.starts_with(crate::surface_haptics::PREFIX)
+                        }) {
                             self.error = self.error.take().or(host.dispatch_at(
                                 view,
                                 Event::Message(message),
@@ -928,98 +937,6 @@ impl Surfaces {
             }
         }
         changed
-    }
-    pub(crate) fn placements<D: DataSource>(
-        &self,
-        host: &Host<D>,
-    ) -> BTreeMap<u32, crate::placement::Placement> {
-        use crate::placement::Placement;
-        let mut result = BTreeMap::new();
-        for (&view, canvas) in &self.canvases {
-            let (Some(node), Some(abi)) =
-                (host.kernel().node(view), self.abis.get(&canvas.artifact))
-            else {
-                continue;
-            };
-            if unsafe { abi.symbol::<Read>(b"gpu_children_mode")(canvas.id) } != 3 {
-                continue;
-            }
-            let children = node.children();
-            for (i, id) in children.iter().enumerate() {
-                let Some(child) = host.kernel().node(*id) else {
-                    continue;
-                };
-                let f = child.frame;
-                let name = child.props.str(exact_kernel::PropId::TestId).unwrap_or("");
-                unsafe {
-                    abi.symbol::<unsafe extern "C" fn(
-                        u32,
-                        u32,
-                        *const u8,
-                        usize,
-                        f32,
-                        f32,
-                        f32,
-                        f32,
-                        u32,
-                        u32,
-                        *const u8,
-                        usize,
-                    ) -> u32>(b"gpu_child_view")(
-                        canvas.id,
-                        i as u32,
-                        name.as_ptr(),
-                        name.len(),
-                        f.x - node.frame.x,
-                        f.y - node.frame.y,
-                        f.width,
-                        f.height,
-                        0,
-                        0,
-                        std::ptr::null(),
-                        0,
-                    );
-                }
-            }
-            unsafe {
-                abi.symbol::<unsafe extern "C" fn(u32, u32) -> u32>(b"gpu_children_count")(
-                    canvas.id,
-                    children.len() as u32,
-                );
-            }
-            // The no-device executor computes the same placements at the committed
-            // viewport/clock, without trying to render a GPU frame.
-            abi.agent(canvas.id,&json!({"op":"state","now":host.now(),"width":node.frame.width,"height":node.frame.height}));
-            for (i, id) in children.iter().enumerate() {
-                let mut h = [0.; 16];
-                let code = unsafe {
-                    abi.symbol::<unsafe extern "C" fn(u32, u32, *mut f32, usize) -> u32>(
-                        b"gpu_placement",
-                    )(canvas.id, i as u32, h.as_mut_ptr(), h.len())
-                };
-                match code {
-                    1 => {
-                        result.insert(
-                            *id,
-                            Placement::Visible {
-                                h: h[..9].try_into().unwrap(),
-                                depth: h[9],
-                                clip_depth: [
-                                    h[10..13].try_into().unwrap(),
-                                    h[13..16].try_into().unwrap(),
-                                ],
-                                canvas: view,
-                            },
-                        );
-                    }
-                    2 => {
-                        result.insert(*id, Placement::Hidden);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        result
     }
 
     /// `postMessage(text, name)`: one message event for the live canvas of that
@@ -1490,8 +1407,6 @@ mod tests;
 #[path = "surface_controls_tests.rs"]
 mod control_tests;
 
-#[path = "surfaces/retire.rs"]
 mod retire;
-#[path = "surfaces/tier.rs"]
 mod tier;
 use tier::agent_tier;

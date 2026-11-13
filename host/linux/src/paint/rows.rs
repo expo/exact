@@ -6,11 +6,11 @@
 //! of unchanged rows walks none of them.
 //!
 //! A row is invalid once anything in it changes: a commit touching,
-//! creating or destroying a node in it, a presentation value, a press, a
-//! picture arriving, a layout publishing something new beside a frame that
-//! stayed (a resolved padding, a scroll extent). A layout change that moves
-//! a node only makes the row suspect: kept while every node sits where it
-//! sat relative to the row.
+//! creating or destroying a node in it, a presentation value, a press, focus
+//! or ring suppression, a picture arriving, a layout publishing something
+//! new beside a frame that stayed (a resolved padding, a scroll extent). A
+//! layout change that moves a node only makes the row suspect: kept while
+//! every node sits where it sat relative to the row.
 use super::*;
 use exact_ink::counters::{self, Counter};
 use exact_kernel::id::{IdMap, IdSet};
@@ -94,6 +94,9 @@ struct Row {
 /// to and the transform it was drawn in.
 type Slot = (ViewId, Rect4, Shape, Transform);
 
+/// The row state [`Painter::rows_pause`] set aside.
+pub(super) struct Paused(Option<Capture>, bool);
+
 /// A row being recorded.
 #[derive(Default)]
 struct Capture {
@@ -117,6 +120,8 @@ pub(super) struct Rows {
     freed: Vec<u32>,
     /// Viewport width, scale and appearance the kept rows were drawn at.
     world: Option<(u32, u32, bool)>,
+    /// The last paint's focused node and whether its ring was suppressed.
+    focus: Option<(NodeKey, bool)>,
     /// `EXACT_ROWS=0` turns rows off, for comparison.
     off: Option<bool>,
     /// This walk's scrollers with rows: each one's id and the range of the
@@ -175,6 +180,10 @@ impl Painter {
     /// Before a frame: drop the rows the host's changes reach.
     pub(crate) fn rows_dirty(&mut self, kernel: &Kernel, dirty: Dirty) {
         self.numerals.committed = dirty.committed;
+        self.invalidate_rows(kernel, dirty);
+    }
+
+    fn invalidate_rows(&mut self, kernel: &Kernel, dirty: Dirty) {
         if self.rows.kept.is_empty() {
             return;
         }
@@ -249,6 +258,19 @@ impl Painter {
 
     /// At a walk's start: whether rows are kept this walk.
     pub(super) fn rows_begin(&mut self, walk: &Walk<'_, '_>) {
+        let focus = walk
+            .scene
+            .focus
+            .and_then(|id| walk.scene.kernel.node(id))
+            .map(|node| (node.key, self.unringed(&node)));
+        if self.rows.focus != focus {
+            let mut dirty = Dirty::default();
+            for (key, _) in self.rows.focus.into_iter().chain(focus) {
+                dirty.node(key);
+            }
+            self.invalidate_rows(walk.scene.kernel, dirty);
+            self.rows.focus = focus;
+        }
         let off = *self
             .rows
             .off
@@ -335,6 +357,20 @@ impl Painter {
     }
 
     /// Whether `key` is the container walked for its scroller's rows.
+    /// Rows neither record nor keep until [`Painter::rows_resume`]: a tape
+    /// walks every node (`stage.rs`).
+    pub(super) fn rows_pause(&mut self) -> Paused {
+        Paused(
+            self.rows.recording.take(),
+            std::mem::replace(&mut self.rows.active, false),
+        )
+    }
+
+    pub(super) fn rows_resume(&mut self, Paused(recording, active): Paused) {
+        self.rows.recording = recording;
+        self.rows.active = active;
+    }
+
     pub(super) fn rows_wrapper(&self, key: NodeKey) -> bool {
         self.rows.wrapper == Some(key)
     }

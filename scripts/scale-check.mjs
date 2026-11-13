@@ -353,7 +353,7 @@ export function drive(host, plan, png, steps = [], app = null) {
   // SHA-256), the steps, then `layout` (its reply carries each corner's
   // radius: it draws none a picture could be measured by, so there is none).
   const run = host === 'terminal'
-    ? spawnSync('cargo', ['run', '-q', '-p', 'exact-terminal', '--', plan, '--size', '64x64', 'plan', ...steps.flatMap(terminalVerb), 'layout'], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 })
+    ? spawnSync('cargo', ['run', '-q', '-p', 'exact-terminal', '--', plan, '--size', '64x64', '--drive', 'plan', ...steps.flatMap(terminalVerb), 'layout'], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 })
     : spawnSync(process.execPath, [join(ROOT, 'scripts/agent.mjs'), host, ...launch, '--storage', 'scale-check', '--reset-storage', '--json', 'perf', ...steps, 'layout', `screenshot ${png}`], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 });
   const ran = (run.stdout ?? '').split('\n').map(l => /"plan":"([0-9a-f]{64})"/.exec(l)?.[1]).find(Boolean);
   const want = createHash('sha256').update(readFileSync(plan)).digest('hex');

@@ -75,6 +75,59 @@ impl<D: DataSource> Host<D> {
         }
     }
 
+    /// What a window's change brings at once, each part when given: the
+    /// viewport, the safe-area insets `env(safe-area-inset-*)` resolves to
+    /// and the software keyboard's overlap, answered to `exactViewport()`'s
+    /// readers in one commit with one layout (LLP 1039 D9), so no reader sees
+    /// the keys without the viewport they shrank, or a rotation's insets
+    /// with the size before it. The readers are asked whether or not a style
+    /// reads the environment. Whether anything changed; a size given always
+    /// lays out, as a resize does. A refused change leaves the kernel's
+    /// environment as it was.
+    pub fn set_view(
+        &mut self,
+        size: Option<(f32, f32)>,
+        insets: Option<[f32; 4]>,
+        keyboard: Option<f32>,
+    ) -> Result<bool, String> {
+        let before = self.runner.kernel().env();
+        let mut restyled = false;
+        if let Some([top, right, bottom, left]) = insets {
+            let env = before.with_insets(top, right, bottom, left);
+            restyled =
+                (self.runner.kernel_mut().set_env(env)).map_err(|e| format!("safe area: {e:?}"))?;
+        }
+        let told = size.map(|(w, h)| (f64::from(w), f64::from(h)));
+        let receipt = match self.runner.set_view(told, keyboard.map(f64::from)) {
+            Ok(receipt) => receipt,
+            Err(e) => {
+                if restyled {
+                    let _ = self.runner.kernel_mut().set_env(before);
+                    let _ = self.layout_unauthored();
+                }
+                return Err(format!("viewport: {e:?}"));
+            }
+        };
+        if let Some(size) = size {
+            self.viewport = size;
+            self.presence.snap = true;
+        }
+        if let Some(receipt) = receipt {
+            self.presence.unauthored |= restyled;
+            let at_ms = self.now_ms;
+            return (self.commit(&[Timed { at_ms, receipt }], None)).map_or(Ok(true), Err);
+        }
+        if size.is_some() {
+            let laid_out = self.layout().err();
+            self.observe_layout();
+            return laid_out.map_or(Ok(true), Err);
+        }
+        match restyled {
+            true => self.layout_unauthored().map(|_| true),
+            false => Ok(false),
+        }
+    }
+
     /// Tell the runner the display's scale: a relayout in one commit where a
     /// row is a hairline, nothing where none is.
     pub fn set_display_scale(&mut self, scale: f64) -> Option<String> {

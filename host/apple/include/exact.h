@@ -673,8 +673,13 @@ void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects
 /* Versioned LE collection feedback in exact_in; returns the ordinary batch. */
 uint32_t exact_collection_feedback(ExactRuntime rt, size_t len, double now_ms);
 /* Read a local row-root snap without mounting views; NaN when absent.
- * distance is the nearest mounted target's distance, infinity when absent. */
-double exact_collection_snap(ExactRuntime rt, uint32_t view, double proposed, double port, double maximum, double distance);
+ * Positions are the snapport start along the list axis, in its border box;
+ * minimum and maximum bound them. distance is the nearest mounted target's distance, infinity when absent. */
+double exact_collection_snap(ExactRuntime rt, uint32_t view, double proposed, double port, double minimum, double maximum, double distance);
+/* The first position past release toward rest an unmounted row root with
+ * scroll-snap-stop: always holds a snap at, in exact_collection_snap's
+ * coordinates; NaN when none within 256 rows of the release. */
+double exact_collection_snap_stop(ExactRuntime rt, uint32_t view, double release, double rest, double port, double minimum, double maximum);
 /* The agent's tap <list> into <key> (LLP 1070.000): "key\nblock\ninline" in
    exact_in; returns the ordinary batch. */
 uint32_t exact_into_view(ExactRuntime rt, uint32_t view, size_t len);
@@ -722,6 +727,9 @@ uint32_t exact_reorder_group_end(ExactRuntime rt, uint64_t token, uint32_t drop,
 uint32_t exact_reorder_group_finish(ExactRuntime rt, uint64_t token, double now_ms);
 uint32_t exact_hold_begin(ExactRuntime rt, uint32_t view, uint32_t property, double now_ms);
 uint32_t exact_has_hold(ExactRuntime rt, uint64_t token);
+/* A scroller marked `scrollTimeline` (the page, for page 1) now stands at
+ * left, top CSS px: the scroll and view timelines it drives, presented. */
+uint32_t exact_timeline_scrolled(ExactRuntime rt, uint32_t page, uint32_t view, double left, double top);
 uint32_t exact_hold_update(ExactRuntime rt, uint64_t token, double x, double y, double now_ms);
 /* cancel: 0 releases at vx, vy; 1 cancels; 2 releases at the velocity the
  * engine measured over the hold's values (LLP 1057.001 §3). */
@@ -935,13 +943,15 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
 /* What changed of the view at once, from the input buffer's first len bytes,
  * little-endian 32-bit words: a mask of what is given (1 the window's size,
  * 2 the safe-area insets, 4 the layout regions, 8 the viewport, 16 the
- * segments' rects), the window's width and height (nonpositive clears it),
- * the insets top, right, bottom, left, the viewport's width and height, the
- * regions' count (20 or 0) and their insets, then, with 16, the rects' count
- * and each rect's x y w h, on the grid exact_segments set: exact_screen,
- * exact_insets, exact_regions, exact_resize and a keyboard's segment extents
- * in one batch under one layout. Rects off the grid, or not finite, are
- * refused and change nothing. */
+ * segments' rects, 32 the keyboard), the window's width and height
+ * (nonpositive clears it), the insets top, right, bottom, left, the
+ * viewport's width and height, the regions' count (20 or 0) and their insets,
+ * then, with 16, the rects' count and each rect's x y w h, on the grid
+ * exact_segments set, then, with 32, the software keyboard's overlap with the
+ * viewport (exactViewport().keyboardHeight): exact_screen, exact_insets,
+ * exact_regions, exact_resize and a keyboard's segment extents in one batch
+ * under one layout. Rects off the grid, or not finite, are refused and change
+ * nothing. */
 uint32_t exact_view(ExactRuntime rt, size_t len);
 /* @ref LLP 1078 D4: the device's posture (0 continuous, 1 folded) and the
  * viewport segments a fold makes — cols × rows rects, row-major, each

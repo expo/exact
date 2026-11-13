@@ -109,10 +109,12 @@ impl<D: DataSource> Swappable<D> {
         self
     }
 
-    /// Name the source digest (`scripts/app.mjs` `nativeSource`) the binary
+    /// Name the source digest (`scripts/rust.mjs` `nativeSource`) the binary
     /// compiled `make`'s data crate from. A Rust candidate whose receipt names
     /// the same source is that code already: replacement makes it natively,
     /// so a module costs interpretation only while it differs from the binary.
+    /// The comparison is of source, never of the wasm module, whose bytes can
+    /// stay the same while a native-only arm changed (LLP 1030 D3a).
     pub fn with_native(mut self, source: &'static str, make: fn() -> D) -> Self {
         self.native = Some((source, make));
         self

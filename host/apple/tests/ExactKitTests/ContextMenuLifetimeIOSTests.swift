@@ -14,6 +14,13 @@ final class ContextMenuLifetimeIOSTests: XCTestCase {
         func addAnimations(_ animations: @escaping () -> Void) { animations() }
         func addCompletion(_ completion: @escaping () -> Void) { completion() }
     }
+    private final class Animation: NSObject, UIContextMenuInteractionAnimating {
+        var previewViewController: UIViewController? { nil }
+        var completions: [() -> Void] = []
+        func addAnimations(_ animations: @escaping () -> Void) { animations() }
+        func addCompletion(_ completion: @escaping () -> Void) { completions.append(completion) }
+        func finish() { completions.forEach { $0() }; completions.removeAll() }
+    }
     /// A source (1) naming popover 2, whose rows are a preview (3) and an item (4).
     private func presenter(kind: String = "button") -> Presenter {
         let p = Presenter()
@@ -130,6 +137,25 @@ final class ContextMenuLifetimeIOSTests: XCTestCase {
         let controller = try XCTUnwrap(p.menus.context.lift(try XCTUnwrap(p.menus.context.open)))
         XCTAssertTrue(p.menus.context.lift(try XCTUnwrap(p.menus.context.open)) === controller, "asked again, the same controller")
         return (interaction, configuration, controller)
+    }
+
+    func testContextMenuTransitionsEndWithUIKitsAnimations() throws {
+        let p = presenter()
+        defer { p.menus.reset(); window.isHidden = true }
+        let (interaction, configuration, _) = try opened(p)
+        _ = try XCTUnwrap(p.menus.context.menu(try XCTUnwrap(p.menus.context.open)))
+        let showing = Animation()
+        p.menus.context.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: showing)
+        XCTAssertTrue(p.menus.inTransition, "clock settle must wait for UIKit's presentation")
+        showing.finish()
+        XCTAssertFalse(p.menus.inTransition)
+        XCTAssertNotNil(p.menus.observation())
+        let hiding = Animation()
+        p.menus.context.contextMenuInteraction(interaction, willEndFor: configuration, animator: hiding)
+        XCTAssertTrue(p.menus.inTransition, "the menu and its preview are still leaving")
+        hiding.finish()
+        XCTAssertFalse(p.menus.inTransition)
+        XCTAssertNil(p.menus.observation())
     }
 
     func testCommandsCloseTheContextMenuAndReturnItsPreviewImmediately() throws {

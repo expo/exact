@@ -220,11 +220,11 @@ is done. One screenshot of each screen goes to .exact/verify/ (the first screen'
 test's named by the test, the relaunch's): look at them when the features work.
 Large    each of those screens again at the largest text size (ios: the simulator's, put back
          after; web: a 53 px root, iOS's body there, at 390x844, and the tests run again there
-         to read up to 12 screens they pass through): what spills (past the edge, squeezed,
-         overlapping) in the app's own layout, each with a remedy that gives the text room; a
-         smaller or fixed font is the tell, and so is a line-clamp in a list's row or hyphens="auto"
-         on a text of several words (a UILabel hyphenates only a word longer than its line; a
-         grouped list's rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
+         to read up to 12 screens they pass through). Reports spills past an edge, squeezing and
+         overlap, with remedies that give text room. The web comparison leaves out content iOS
+         projects into its navigation bar. A smaller or fixed font is the tell, as is a line-clamp
+         in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
+         than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.

@@ -198,27 +198,14 @@ fn a_progress_is_a_busy_progressbar_box_the_page_draws_a_ring_in() {
     assert!(include_str!("../index.html").contains("[data-exact-progress]::before"));
 }
 
-/// A progress (and a canvas) keeps its width in block flow with `justify-self: start` only where a
-/// `div` would stretch: under a block parent whose `justify-items` is `normal` or `stretch`. Under
-/// one that says `start`, `center` or `end`, the parent's own justification aligns it, as the
-/// kernel's block layout does (Chrome's too), so nothing is written over it.
+/// An aligning block parent's `justify-items` applies to progress in flow and
+/// to canvases both in flow and absolutely positioned with automatic insets.
 #[test]
-fn a_progress_or_canvas_in_block_flow_follows_the_parents_justify_items() {
-    use exact_kernel::{StyleId, StyleValue};
+fn a_progress_or_canvas_follows_the_parents_justify_items() {
+    use exact_kernel::{PositionType, StyleId, StyleValue};
     let mut props = PropList::default();
     props.set(PropId::Type, PropValue::Str("progress".into()));
     let (parent_props, empty) = (PropList::default(), PropList::default());
-    let style = StyleProps::default();
-    let node = |node_type, props| NodeFacts {
-        id: 1,
-        node_type,
-        style: &style,
-        props,
-        is_root: false,
-        inline_run: false,
-        symbol_color: false,
-        has_looks: false,
-    };
     for (items, forced) in [
         ("normal", true),
         ("stretch", true),
@@ -243,15 +230,30 @@ fn a_progress_or_canvas_in_block_flow_follows_the_parents_justify_items() {
             symbol_color: false,
             has_looks: false,
         };
-        for (kind, props, tag) in [
-            (NodeType::Control, &props, "div"),
-            (NodeType::Canvas, &empty, "canvas"),
+        for (kind, props, tag, position_type) in [
+            (NodeType::Control, &props, "div", PositionType::Static),
+            (NodeType::Canvas, &empty, "canvas", PositionType::Static),
+            (NodeType::Canvas, &empty, "canvas", PositionType::Absolute),
         ] {
-            let css = super::host_css_of(&node(kind, props), Some(&parent), String::new(), tag);
+            let style = StyleProps {
+                position_type,
+                ..StyleProps::default()
+            };
+            let node = NodeFacts {
+                id: 1,
+                node_type: kind,
+                style: &style,
+                props,
+                is_root: false,
+                inline_run: false,
+                symbol_color: false,
+                has_looks: false,
+            };
+            let css = super::host_css_of(&node, Some(&parent), String::new(), tag);
             assert_eq!(
                 css.contains("justify-self:start;"),
                 forced,
-                "{tag} under justify-items {items}: {css}"
+                "{tag} {position_type:?} under justify-items {items}: {css}"
             );
         }
     }

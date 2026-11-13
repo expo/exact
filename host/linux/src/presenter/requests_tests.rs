@@ -482,3 +482,27 @@ fn a_reload_drops_the_answer_of_a_picker_left_up() {
     );
     assert_eq!(says(&p, "its answer is dropped"), 1);
 }
+
+#[test]
+fn a_surfaces_haptics_go_to_a_shell_as_its_id_then_its_json() {
+    let mut p = boot();
+    let texture = r#"exact:haptics {"texture":{"intensity":0.5,"sharpness":0}}"#;
+    assert!(p.surfaces.haptics.take(4, texture));
+    p.tell_shell();
+    assert_eq!(p.take_requests(), None, "no shell, nothing queued");
+    p.serve_requests();
+    assert!(p.surfaces.haptics.take(4, texture));
+    p.surfaces.haptics.gone(4);
+    p.tell_shell();
+    let taken: Vec<_> = decode(p.take_requests())
+        .into_iter()
+        .filter(|r| r.0 == 15)
+        .collect();
+    assert_eq!(taken.len(), 2);
+    assert_eq!(taken[0].2[0], 4);
+    assert_eq!(
+        strings(&taken[0].2, 1),
+        [r#"{"texture":{"intensity":0.5,"sharpness":0}}"#]
+    );
+    assert_eq!(strings(&taken[1].2, 1), [r#"{"texture":null}"#]);
+}

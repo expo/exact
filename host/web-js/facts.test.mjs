@@ -127,3 +127,24 @@ export function R(r){data.reserved[r.source](null,null,r.name);} export function
     rmSync(dir,{recursive:true,force:true});
   }
 });
+
+
+test('delivery reads build-time versions even from a pre-baked plan', async () => {
+  for (const [version, buildNumber] of [[undefined, undefined], ['2.3.4', '56'], ['', '']]) {
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-delivery-facts-'));
+    try {
+      // The literals the build's Rolldown defines substitute, before either bundle runs.
+      const source = await Bun.file(resolve(import.meta.dir, 'facts.js')).text();
+      writeFileSync(resolve(dir, 'facts.js'), source.replace('globalThis.__exactVersion', JSON.stringify(version ?? '')).replace('globalThis.__exactBuildNumber', JSON.stringify(buildNumber ?? '')));
+      writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+      writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+      const { delivery, deliveryFacts } = await import(resolve(dir, 'facts.js'));
+      const { data } = await import(resolve(dir, 'rt.js'));
+      delivery({ build: [['buildNumber', 'version']], baked: [['version', 'seq', 'buildNumber'], ['old', 7, 'old']] });
+      expect(data.reserved.exactDelivery(null, null, 'build')).toEqual([buildNumber ?? '', version ?? '']);
+      expect(data.reserved.exactDelivery(null, null, 'baked')).toEqual([version ?? '', 7, buildNumber ?? '']);
+      expect(deliveryFacts.version).toBe(version ?? '');
+      expect(deliveryFacts.buildNumber).toBe(buildNumber ?? '');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});

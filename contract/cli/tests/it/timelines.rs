@@ -4,9 +4,7 @@
 //! timeline drives paint rows only (Q1): a bound animation whose keyframes
 //! animate layout or geometry is refused when the app compiles.
 
-use exact_kernel::timeline::{
-    AnimationRange, AnimationTimeline, Axis, DragTimeline, TimelineScope,
-};
+use exact_kernel::timeline::{AnimationTimeline, Axis, DragTimeline, TimelineScope};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
 use exact_runner::{agent, DataError, DataSource, Event, Runner};
@@ -50,7 +48,7 @@ fn the_rows_reach_the_kernel_and_a_computed_animation_keeps_its_binding() {
         backdrop.rare.animation_timeline,
         AnimationTimeline(Some("--dismiss".into()))
     );
-    assert_eq!(backdrop.animation_range, AnimationRange(Some([0.0, 300.0])));
+    assert_eq!(backdrop.animation_range.lengths(), Some([0.0, 300.0]));
     assert_eq!(backdrop.animation.0[0].name, "fade");
     assert_eq!(
         style(&r, "clip").rare.timeline_scope,
@@ -141,8 +139,18 @@ fn a_row_outside_its_grammar_is_refused_by_name() {
             "-exact-drag-timeline=\"--dismiss z\"",
             "-exact-drag-timeline",
         ),
-        ("animation-timeline=\"scroll()\"", "animation-timeline"),
-        ("animation-range=\"0% 100%\"", "animation-range"),
+        ("animation-timeline=\"scroll(far)\"", "animation-timeline"),
+        ("animation-timeline=\"--a, --b\"", "animation-timeline"),
+        ("animation-range=\"0% 0%\"", "animation-range"),
+        ("animation-range=\"exit 1em\"", "animation-range"),
+        ("scroll-timeline-name=\"cols\"", "scroll-timeline-name"),
+        ("scroll-timeline-axis=\"z\"", "scroll-timeline-axis"),
+        ("scroll-timeline=\"--a, --b\"", "scroll-timeline"),
+        ("scroll-timeline=\"--a x y\"", "scroll-timeline"),
+        ("scroll-timeline=\"--a 10px\"", "scroll-timeline"),
+        ("view-timeline=\"--a x 1px 2px 3px\"", "view-timeline"),
+        ("view-timeline=\"--a 1px x 2px\"", "view-timeline"),
+        ("view-timeline-inset=\"1em\"", "view-timeline-inset"),
         ("timeline-scope=\"--a --b\"", "timeline-scope"),
         ("timeline-scope=\"dismiss\"", "timeline-scope"),
         ("timelineScope=\"--a\"", "timeline-scope"),

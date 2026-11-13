@@ -1,7 +1,7 @@
 //! The reader's keys and system Back (`canvas/keys.rs`): what `canvas_jni!`
 //! defines beside its own, over the same `HOST`.
 
-/// `Native.key`, `Native.namedKey`, `Native.back`, `Native.open` and `Native.share`, expanded inside
+/// `Native.key`, `Native.namedKey`, `Native.back`, `Native.backProgress`, `Native.open` and `Native.share`, expanded inside
 /// `canvas_jni!`'s module, whose `with`, `string` and `flag` they use.
 #[macro_export]
 #[doc(hidden)]
@@ -42,6 +42,19 @@ macro_rules! canvas_jni_keys {
             _class: jclass,
         ) -> jboolean {
             flag(with(|h| h.back()).unwrap_or(false))
+        }
+
+        /// Predictive Back as it goes: whether exact2 previews it
+        /// (`CanvasHost::back_progress`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_backProgress(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            phase: jint,
+            progress: jfloat,
+            edge: jint,
+        ) -> jboolean {
+            flag(with(|h| h.back_progress(phase, progress, edge)).unwrap_or(false))
         }
 
         /// A URL given to the running app (`CanvasHost::open`).

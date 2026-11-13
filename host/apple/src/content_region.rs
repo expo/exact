@@ -174,13 +174,14 @@ impl RegionState {
         kernel: &Kernel,
         id: u64,
         known_source: u64,
+        language: &str,
     ) -> Result<String, String> {
         let p = self
             .pending
             .as_ref()
             .filter(|p| p.id == id)
             .ok_or("stale region request")?;
-        wire::request(kernel, p, known_source)
+        wire::request(kernel, p, known_source, language)
     }
     pub fn json(&self, kernel: &Kernel) -> String {
         wire::state(self, kernel)

@@ -140,6 +140,8 @@ struct Em<'a> {
     /// Possible height and transform owners whose motion values must be observed.
     heights: std::collections::BTreeSet<u32>,
     transforms: std::collections::BTreeSet<u32>,
+    /// Whether a node can declare a drag timeline (`rows::drag_timelines`).
+    drag_timelines: bool,
     /// The `@keyframes` that animate `scale` (a pressed node plays their `-exact-press` copies).
     press_keyframes: Vec<String>,
     /// Whether a dynamic row can reference an element (`url(#…)`): nodes
@@ -185,6 +187,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         None => style::project(plan, &sites, &mut warnings)?,
     };
     let paint = crate::paint::needed(plan, &parts);
+    // A look's colour needs rules for the boundaries below only where one
+    // takes a colour (`data-x-b` without its colour bit; an accent-only part
+    // sets every bit).
+    let boundaries = (parts.iter().flatten()).any(|p| {
+        (p.props.get("data-x-b"))
+            .is_some_and(|own| own.parse::<u32>().is_ok_and(|own| own & 1 == 0))
+    });
     let mut parts = parts;
     if !paint {
         for p in parts.iter_mut().flatten() {
@@ -195,6 +204,19 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             }
         }
     }
+    // A link's `rel` and `target` follow its bound `href`, `rel` or `target` (links.js); a static
+    // link's the template wrote whole (element.rs `props_of`), so a plan without a bound one never
+    // links it (LLP 1047.002 D1).
+    let links = parts.iter().zip(plan.nodes.iter()).any(|(p, n)| {
+        p.as_ref().is_some_and(|p| p.tag == "a")
+            && n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+                b.kind == BindingKind::Prop
+                    && [PropId::Href, PropId::Rel, PropId::Target]
+                        .iter()
+                        .any(|id| b.id == *id as u16)
+                    && style::literal(plan, plan.code(b.expr)).is_none()
+            })
+    });
     let mut em = Em {
         plan,
         sites: &sites,
@@ -221,6 +243,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         symbols: (false, false),
         heights: Default::default(),
         transforms: Default::default(),
+        drag_timelines: crate::timelines::drag_timelines(plan),
         press_keyframes: rows::press_keyframes(plan),
         refs: rows::can_refer(plan),
         site_attrs,
@@ -536,6 +559,10 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let media = em.uses.rt("useMedia");
         let _ = write!(body, "{media}($media());");
     }
+    if links {
+        let use_links = em.uses.rt("useLinks");
+        let _ = write!(body, "{use_links}($links());");
+    }
     // The host commands the actions name, each commands.js's export imported
     // by that name (commands.rs).
     let commands = commands::linked(&em.uses);
@@ -573,6 +600,21 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|b| plan.binding(b))
                 .any(|b| b.kind == BindingKind::Prop && b.id == PropId::NavigationBack as u16)
         });
+    // A root that can present a sheet (a route whose `navigationPresentation` is, or may be,
+    // `modal`) hands the projection the sheet's frame (navigation/routes.js `sheetFrame`), which a plan
+    // without one never links (LLP 1047.002 D1).
+    let sheets = roots
+        && plan.nodes.iter().any(|n| {
+            n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+                b.kind == BindingKind::Prop
+                    && b.id == PropId::NavigationPresentation as u16
+                    && style::literal(plan, plan.code(b.expr))
+                        .is_none_or(|v| v.as_str() == Some("modal"))
+            })
+        });
+    if sheets {
+        body.push_str("$useSheets($sheetFrame);");
+    }
     if let Some(slot) = plan.router {
         let router = em.uses.rt("router");
         let _ = write!(body, "{router}(s_{},$navigation);", slot.0);
@@ -732,7 +774,11 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         } else {
             format!("import{{{}}}from\"./budget.js\";", budget.join(","))
         },
-        if roots { "import{navigation as $navigation}from\"./navigation.js\";" } else { "" },
+        match (roots, sheets) {
+            (true, true) => "import{navigation as $navigation,useSheets as $useSheets,sheetFrame as $sheetFrame}from\"./navigation.js\";",
+            (true, false) => "import{navigation as $navigation}from\"./navigation.js\";",
+            _ => "",
+        },
         if dev_reload { "import{devResource as $devRes,devSignal as $devSig}from\"./checkpoint.js\";" } else { "" },
         // Loaded pieces, imported only where the plan uses them.
         [
@@ -740,6 +786,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (paint, "import{paintUse as $paint}from\"./paint.js\";"),
             (em.list, "import{vl as $vl}from\"./list.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
+            (links, "import{linkUse as $links}from\"./links.js\";"),
             (midi, "import{midi as $midi}from\"./midi.js\";"),
             (transport, "import{sequence as $sequence,transport as $transport}from\"./transport.js\";"),
             (!facts.is_empty(), facts.as_str()),
@@ -780,7 +827,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let at = format!("[data-exact-looks=\"{}\"]", i + 1);
         css.push_str(&exact_web::host::template::look_rules(&at, looks));
         // A boundary below that its colour reaches says so (modes.js `data-x-lc`).
-        if modes.is_some() {
+        if boundaries {
             let below = format!("[data-x-lc~=\"{}\"]", i + 1);
             css.push_str(&exact_web::host::template::look_colour_below(
                 &at, looks, &below,
@@ -922,6 +969,9 @@ impl Em<'_> {
         }
         let mut css = parts.css.clone();
         css.push_str(&extra);
+        if !self.drag_timelines {
+            crate::timelines::css_timelines(&mut css);
+        }
         // @ref LLP 1063 — `-exact-layout-transition` and `-exact-exit-animation` are custom
         // properties the web host's presence-glue.js reads from the element's
         // own declaration: inline, as the live host writes every row, not

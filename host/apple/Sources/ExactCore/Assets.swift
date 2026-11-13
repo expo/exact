@@ -62,19 +62,26 @@ public final class AssetResolver {
         do { return try delivery(name) } catch { lastRefusal = lastRefusal ?? error.localizedDescription; return nil }
     }
 
+    /// Safe on any thread. A file is read outside the lock, so a texture a
+    /// GPU canvas reads off the main thread holds up no lookup on it.
     package func delivery(_ name: String) throws -> Data? {
-        lock.lock(); defer { lock.unlock() }
-        guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else { throw CocoaError(.fileReadInvalidFileName) }
-        if let bytes = cache[name] { return bytes }
-        if let url = files[name] { return try Data(contentsOf: url) }
-        if let read {
-            guard names?.contains(name) == true else { return nil }
-            do { let bytes = try read(name); if let bytes, !name.hasSuffix(".tex") { cache[name] = bytes }; return bytes }
-            catch { lastRefusal = lastRefusal ?? error.localizedDescription; return nil }
+        let file: URL, embedded: Bool
+        do {
+            lock.lock(); defer { lock.unlock() }
+            guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else { throw CocoaError(.fileReadInvalidFileName) }
+            if let bytes = cache[name] { return bytes }
+            if let url = files[name] { file = url; embedded = false }
+            else if let read {
+                guard names?.contains(name) == true else { return nil }
+                do { let bytes = try read(name); if let bytes, !name.hasSuffix(".tex") { cache[name] = bytes }; return bytes }
+                catch { lastRefusal = lastRefusal ?? error.localizedDescription; return nil }
+            } else {
+                guard !isComplete, let url = embeddedURL(name) else { return nil }
+                file = url; embedded = true
+            }
         }
-        guard !isComplete, let url = embeddedURL(name) else { return nil }
-        do { return try Data(contentsOf: url) }
-        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+        do { return try Data(contentsOf: file) }
+        catch let error as CocoaError where embedded && error.code == .fileReadNoSuchFile { return nil }
     }
 
     package func url(_ name: String, maximumBytes: Int? = nil) -> URL? {

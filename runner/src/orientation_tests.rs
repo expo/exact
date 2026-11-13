@@ -42,53 +42,52 @@ component App
   action back
     nav = back(nav)
   view
-    column testId="root" orientationlock=rootLock
-      main navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
-        for e in stack(nav) key=e.id
-          if e.name == "home"
-            column navigationKey=`${e.id}` position="absolute" inset=0
-              column testId="child" orientationlock=childLock
-                text "child"
-              column testId="side" orientationlock=sideLock
-                text "side"
-              button press=root("none") testId="root-none"
-                text "root none"
-              button press=child("landscape") testId="child-landscape"
-                text "child landscape"
-              button press=child("any") testId="child-any"
-                text "child any"
-              button press=child("current") testId="child-current"
-                text "child current"
-              button press=side("landscape") testId="side-landscape"
-                text "side landscape"
-              button press=side("portrait-primary") testId="side-portrait-primary"
-                text "side portrait-primary"
-              button press=go("/item") testId="open-item"
-                text "item"
-              button press=go("/a") testId="open-a"
-                text "a"
-              dialog id="d"
-                Boxed()
-          if e.name == "item"
-            column navigationKey=`${e.id}` position="absolute" inset=0
-              button press=back testId="back"
-                text "back"
-          if e.name == "a"
-            column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0
-              column testId="a" orientationlock=aLock
-                button press=sheetA("none") testId="a-none"
-                  text "a none"
-                button press=go("/b") testId="open-b"
-                  text "b"
-          if e.name == "b"
-            column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0
-              column testId="b" orientationlock=bLock
-                button press=sheetB("portrait") testId="b-portrait"
-                  text "b portrait"
-                button press=sheetB("none") testId="b-none"
-                  text "b none"
-                button press=back testId="close-b"
-                  text "close"
+    main testId="root" orientationlock=rootLock navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            column testId="child" orientationlock=childLock
+              text "child"
+            column testId="side" orientationlock=sideLock
+              text "side"
+            button press=root("none") testId="root-none"
+              text "root none"
+            button press=child("landscape") testId="child-landscape"
+              text "child landscape"
+            button press=child("any") testId="child-any"
+              text "child any"
+            button press=child("current") testId="child-current"
+              text "child current"
+            button press=side("landscape") testId="side-landscape"
+              text "side landscape"
+            button press=side("portrait-primary") testId="side-portrait-primary"
+              text "side portrait-primary"
+            button press=go("/item") testId="open-item"
+              text "item"
+            button press=go("/a") testId="open-a"
+              text "a"
+            dialog id="d"
+              Boxed()
+        if e.name == "item"
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            button press=back testId="back"
+              text "back"
+        if e.name == "a"
+          column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0
+            column testId="a" orientationlock=aLock
+              button press=sheetA("none") testId="a-none"
+                text "a none"
+              button press=go("/b") testId="open-b"
+                text "b"
+        if e.name == "b"
+          column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0
+            column testId="b" orientationlock=bLock
+              button press=sheetB("portrait") testId="b-portrait"
+                text "b portrait"
+              button press=sheetB("none") testId="b-none"
+                text "b none"
+              button press=back testId="close-b"
+                text "close"
 
 component Boxed
   view

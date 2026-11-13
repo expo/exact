@@ -582,7 +582,7 @@ export function inspectDrive(host, plan, ids, app = null) {
   const steps = ids.map(id => (host === 'terminal' ? ['node', String(id)] : [`layout ${id}`])).flat();
   const launch = host === 'android' ? ['--reader', '--app', app, '--plan', plan] : ['--plan', plan];
   const run = host === 'terminal'
-    ? spawnSync('cargo', ['run', '-q', '-p', 'exact-terminal', '--', plan, '--size', '64x64', 'plan', 'runner-tree', ...steps], { cwd: ROOT, encoding: 'utf8', timeout: 900_000, maxBuffer: 1 << 30 })
+    ? spawnSync('cargo', ['run', '-q', '-p', 'exact-terminal', '--', plan, '--size', '64x64', '--drive', 'plan', 'runner-tree', ...steps], { cwd: ROOT, encoding: 'utf8', timeout: 900_000, maxBuffer: 1 << 30 })
     : spawnSync(process.execPath, [join(ROOT, 'scripts/agent.mjs'), host, ...launch, '--storage', 's13c-restyle', '--reset-storage', '--json', 'perf', 'tree', ...steps], { cwd: ROOT, encoding: 'utf8', timeout: 900_000, maxBuffer: 1 << 30 });
   const lines = (run.stdout ?? '').split('\n').filter(l => l.startsWith('{'));
   if (run.error || run.status !== 0) throw new Error(`the drive failed${run.error ? ` (${run.error.message})` : ''}\n${(run.stdout ?? '').slice(-1500)}${(run.stderr ?? '').slice(-1500)}`);

@@ -1,0 +1,52 @@
+keyframes fade
+  from opacity=0
+  to opacity=1
+
+component Timelines
+  view
+    column testId="root" width=400
+      view testId="drag" width=10 height=10 flex-shrink=0 -exact-drag-timeline="--drag y"
+      column timeline-scope="--st" flex-shrink=0
+        row testId="st" width=200 height=40 flex-shrink=0 overflow-x="auto" overflow-y="hidden" scroll-timeline="--st x"
+          for i in range(10) key=i
+            view width=80 height=40 flex-shrink=0
+        view testId="st-normal" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="--st"
+        view testId="st-px" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="--st" animation-range="100px 400px"
+        view testId="st-pct" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="--st" animation-range="25% 75%"
+        view testId="st-start" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="--st" animation-range="50%"
+        view testId="st-named" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="--st" animation-range="contain 20% contain 80%"
+        view testId="st-delay" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear 1s both" animation-timeline="--st"
+        view testId="st-fill" width=10 height=4 flex-shrink=0 opacity=0.25 animation="fade 1s linear" animation-timeline="--st" animation-range="100px 400px"
+      column testId="sv" width=100 height=100 flex-shrink=0 overflow-y="auto" padding=10 border-width=5 border-style="solid" border-color="#000000" scroll-timeline-name="--sv"
+        view testId="sv-anon" height=10 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="scroll()"
+        view testId="sv-named" height=10 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="--sv"
+        view testId="sv-self" height=10 flex-shrink=0 overflow="hidden" opacity=0.25 animation="fade 1s linear both" animation-timeline="scroll(self)"
+        view height=300 flex-shrink=0
+      column testId="vs" width=100 height=200 flex-shrink=0 overflow-y="auto"
+        view height=300 flex-shrink=0
+        view testId="vsub" height=100 flex-shrink=0 view-timeline-name="--v" opacity=0.25 animation="fade 1s linear both" animation-timeline="--v"
+          view testId="v-contain" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="contain"
+          view testId="v-entry" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="entry"
+          view testId="v-exit" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="exit"
+          view testId="v-entry-crossing" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="entry-crossing"
+          view testId="v-exit-crossing" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="exit-crossing"
+          view testId="v-mixed" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="entry 50% exit 50%"
+          view testId="v-px" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--v" animation-range="cover 50px cover 150px"
+          view testId="v-anon" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="view()"
+        view testId="vin" height=100 flex-shrink=0 view-timeline="--vi y 20px 10%" opacity=0.25 animation="fade 1s linear both" animation-timeline="--vi"
+        view testId="vbig" height=300 flex-shrink=0 view-timeline-name="--vb"
+          view testId="vb-contain" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--vb" animation-range="contain"
+          view testId="vb-entry" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--vb" animation-range="entry"
+          view testId="vb-exit" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--vb" animation-range="exit"
+          view testId="vb-crossing" height=10 opacity=0.25 animation="fade 1s linear both" animation-timeline="--vb" animation-range="entry-crossing"
+        view height=400 flex-shrink=0
+      column testId="vn" width=100 height=200 flex-shrink=0 overflow-y="auto"
+        view height=50 flex-shrink=0
+        view testId="vflat" height=50 flex-shrink=0 view-timeline-name="--vf" opacity=0.25 animation="fade 1s linear both" animation-timeline="--vf"
+        view testId="vflat-anon" height=50 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="view()"
+      row testId="hs" width=200 height=40 flex-shrink=0 overflow-x="auto" overflow-y="hidden" scroll-padding-left=30 scroll-padding-right=10
+        view width=300 height=40 flex-shrink=0
+        view testId="h-anon" width=60 height=40 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="view(x)"
+        view testId="h-auto" width=60 height=40 flex-shrink=0 view-timeline="--ha x" opacity=0.25 animation="fade 1s linear both" animation-timeline="--ha"
+        view testId="h-inset" width=60 height=40 flex-shrink=0 opacity=0.25 animation="fade 1s linear both" animation-timeline="view(x 25% 5px)"
+        view width=300 height=40 flex-shrink=0

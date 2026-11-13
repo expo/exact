@@ -25,8 +25,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     var textRasterReady = false
     var textRasterFailed = false
     var textLayoutValid = false
-    /// The last frame showed it: Core Animation committed it in a window, not hidden (`Presenter.unshown`).
-    var showed = false
+    /// Whether a frame has shown it where it is (`Presenter.showed`).
+    var shown = Shown.uncopied
     /// What the host's own writers hid (a covered route, a tab a native control
     /// stands in for, a placement); a `display: none` box is hidden besides, as
     /// CSS removes it with its subtree, or its texts paint at its 0×0 frame's
@@ -738,7 +738,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// The end the reader was following moved during their interaction:
     /// settle there when it ends, as a browser's scroll anchoring does.
     package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) }
+        if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) }; pagedDragEnded(scrollView)
         guard scrollView === self.scrollView else { return }
         // A follow of the end that animates ends with its animation.
         if !decelerate, !followEndIfOwed() { endScroll() }
@@ -769,7 +769,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
         presenter?.elementScrolls.userScrolled(scrollView) // its own scroller, or a grouped list's collection
         guard scrollView === self.scrollView else { return }
-        followingEndAnimated = false
+        followingEndAnimated = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
         retainedScrollTop = nil
@@ -1328,7 +1328,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // to match `auto` on such platforms; `none` only hides the track.
         // Indicators and deceleration are the app's once a hatch sets them
         // (LLP 1075.003 §3.5): written when what the style says changes.
-        let snap = ["x mandatory", "y mandatory"].contains(style["scroll_snap_type"]?.string ?? "none")
+        let snap = snapDeceleration == .fast
         let indicators = (style["scrollbar_width"]?.string ?? "auto") != "none"
         if let sv = scrollView, scrollWritten != "\(snap)|\(ox)|\(oy)|\(indicators)" {
             scrollWritten = "\(snap)|\(ox)|\(oy)|\(indicators)"

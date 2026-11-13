@@ -15,6 +15,8 @@ package struct LineBreakPlan {
     private var ordinary: [Int] = [], ordinaryContent: [Int] = []
     private var ordinaryIndex = 0
 
+    package init() {}
+
     package mutating func prepare(_ text: NSString, length: Int, emergency: [Int] = []) {
         (contentEnds, hardEnds) = TextEngine.breakEnds(text, boundaries: boundaries, length: length)
         if !emergency.isEmpty {

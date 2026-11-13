@@ -13,7 +13,8 @@
 //!   LLP 1116 D2 has it on iOS), where the bottom inset is the keyboard's and
 //!   not the navigation bar's; the field being edited is then kept in view.
 //!   `overlays-content` on the root lays nothing out again. The overlap is
-//!   `layout.env["keyboard-inset-height"]` either way.
+//!   `layout.env["keyboard-inset-height"]` and `exactViewport().keyboardHeight`
+//!   either way.
 //! - **What the shell draws.** Where the page is in the window, the colour
 //!   behind it and into the edges it keeps out of, and whether the scheme is
 //!   dark, plus the status bar's independent icon appearance ([`Chrome`]).
@@ -178,14 +179,17 @@ impl<D: DataSource> Presenter<D> {
             env[2] = 0.0;
         }
         let rose = keyboard > self.window.keyboard;
-        self.dirty |= self.window.frame != Some(frame) || self.window.keyboard != keyboard;
+        let moved = self.window.keyboard != keyboard;
+        self.dirty |= self.window.frame != Some(frame) || moved;
         self.window.frame = Some(frame);
         self.window.keyboard = keyboard;
-        let mut error = None;
-        if (frame[2], frame[3]) != self.viewport {
-            error = self.resize(frame[2], frame[3]);
-        }
-        error = error.or(self.set_safe_area(env));
+        // The size, the insets and the keyboard's overlap in one commit (LLP
+        // 1039 D9): a reader of `height` and `keyboardHeight` never sees the
+        // keys without the viewport they shrank, nor a rotation's insets
+        // with the size before it.
+        let size = (frame[2], frame[3]);
+        let size = (size != self.viewport).then_some(size);
+        let mut error = self.fit_view(size, env, moved.then_some(keyboard));
         // The shell's bars take their room of the page as it is now placed.
         error = error.or(self.fit_bars());
         // The field being edited stays above the keyboard. Where a picture
@@ -199,6 +203,35 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         error
+    }
+
+    /// The host told what changed of the view (`Host::set_view`), and the
+    /// presenter follows a new size as [`Presenter::resize`] does; nothing
+    /// when nothing changed.
+    fn fit_view(
+        &mut self,
+        size: Option<(f32, f32)>,
+        insets: [f32; 4],
+        keyboard: Option<f32>,
+    ) -> Option<String> {
+        let env = self.host.kernel().env();
+        let insets_moved = [env.top, env.right, env.bottom, env.left] != insets;
+        if size.is_none() && keyboard.is_none() && !insets_moved {
+            return None;
+        }
+        match self.host.set_view(size, Some(insets), keyboard) {
+            Ok(false) => return None,
+            Ok(true) => {}
+            Err(e) => return Some(e),
+        }
+        if let Some(size) = size {
+            self.field_reveal = true;
+            self.dirty = true;
+            self.viewport = size;
+            self.images.fit(self.viewport, self.brush.scale);
+            self.collection.advance_all();
+        }
+        self.after_commit()
     }
 
     /// After a picture is shown: the field a keyboard rose under is kept in

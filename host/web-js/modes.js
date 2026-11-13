@@ -6,10 +6,11 @@
 // (`data-x-pin`) over the tuple around it, and writes on the boundary every
 // inherited colour row it does not set, from the text of the nearest
 // ancestor's row when that row read a token, as the runner's implied rows
-// are (`instance/theme.rs`); a boundary that writes the colour again names
-// the state looks whose colour would reach it (`data-x-lc`), so it takes
-// theirs while one holds. It runs after each commit, a pin's change and
-// `setMode`. Like the runner's, the window's modes do not persist (§9 Q5).
+// are (`instance/theme.rs`); a boundary that does not set its own colour
+// names the state looks whose colour reaches it (`data-x-lc`), so it takes
+// theirs, resolved in its own modes, while one holds. It runs after each
+// commit, a pin's change and `setMode`. Like the runner's, the window's modes
+// do not persist (§9 Q5).
 import { After, PropHooks, inflight, say } from "./rt.js";
 
 // The rows by bit (`modes.rs` `CHANNELS`).
@@ -37,9 +38,13 @@ function pinned(text, base) {
 
 /** Row `j` at `e`, as the nearest element that sets it wrote it: its text
  * (`property:value`) when it read a token, null when it read none or none
- * sets it. A binding's is on its element (`Sx`), a class's in `Texts`. */
-function channel(e, j) {
+ * sets it. A binding's is on its element (`Sx`), a class's in `Texts`.
+ * `sets` collects the state looks (`data-exact-looks`) of the elements
+ * walked, that one included: those whose `color` reaches `e`. */
+function channel(e, j, sets) {
   for (; e?.nodeType === 1; e = e.parentElement) {
+    const looks = sets && e.getAttribute("data-exact-looks");
+    if (looks) sets.push(looks);
     const own = e.$xi?.[j];
     if (own !== undefined) return own;
     for (const c of e.classList) { const at = Classes[c]?.[j]; if (at !== undefined) return at >= 0 ? Texts[at] : null; }
@@ -47,22 +52,11 @@ function channel(e, j) {
   return null;
 }
 
-/** The state looks (`data-exact-looks`) whose `color` reaches `e`: its own
- * and its ancestors', up to and with the nearest that sets its colour, as
- * `channel` walks, space-separated. */
-function looking(e) {
-  const sets = [];
-  for (; e?.nodeType === 1; e = e.parentElement) {
-    const at = e.getAttribute("data-exact-looks");
-    if (at) sets.push(at);
-    if (e.$xi?.[0] !== undefined || [...e.classList].some(c => Classes[c]?.[0] !== undefined)) break;
-  }
-  return sets.join(" ");
-}
-/** A boundary that writes the colour around it again takes the colour of
- * the looks `sets` names while one holds (the sheet's `[data-x-lc~=…]`
- * rules, looks.rs `colour_below`), as its subtree would inherit it. */
-const mark = (b, sets) => { if (sets) { if (b.getAttribute("data-x-lc") !== sets) b.setAttribute("data-x-lc", sets); } else if (b.getAttribute("data-x-lc") != null) b.removeAttribute("data-x-lc"); };
+/** A boundary that does not set its own colour takes the colour of the
+ * looks `sets` names while one holds (the sheet's `[data-x-lc~=…]` rules,
+ * looks.rs `colour_below`), resolved in its own modes, as a token it
+ * inherits is. */
+const mark = (b, sets) => { if (b.getAttribute("data-x-lc") === (sets || null)) return; if (sets) b.setAttribute("data-x-lc", sets); else b.removeAttribute("data-x-lc"); };
 
 /** The boundaries under `root`, in document order (the render DOM has no
  * selectors). */
@@ -99,16 +93,16 @@ function apply() {
     else b.$xbad = undefined;
     b.$xd = d;
     if (tuples) set(b, key(d));
-    const own = Number(b.getAttribute("data-x-b")), was = b.$xs ??= [];
+    const own = Number(b.getAttribute("data-x-b")), was = b.$xs ??= [], sets = [];
     for (let j = 0; j < CH.length; j++) {
       // Its own row stands, from its CSS or a binding that sets it now.
-      if (own & 1 << j || b.$xi?.[j] !== undefined) { was[j] = undefined; if (j === 0) mark(b, ""); continue; }
-      const text = channel(b.parentElement, j);
-      if (j === 0) mark(b, text == null ? "" : looking(b.parentElement));
+      if (own & 1 << j || b.$xi?.[j] !== undefined) { was[j] = undefined; continue; }
+      const text = channel(b.parentElement, j, j === 0 ? sets : null);
       if (was[j] === text) continue;
       write(b, j, was[j], text);
       was[j] = text;
     }
+    mark(b, sets.join(" "));
   }
   globalThis.exact?.repaintPress?.(); // a held press eases over the tuples as they are now (input-glue.js)
 }

@@ -451,6 +451,12 @@ package final class Runtime {
         }
     }
     package func hasHold(_ token: UInt64) -> Bool { on(busy: false) { !destroyed && exact_has_hold(rt, token) != 0 } }
+    /// A scroller marked `scrollTimeline` (nil: the page) now stands at
+    /// `left`, `top`: the scroll and view timelines it drives, presented, to
+    /// apply in the scroll's own frame (LLP 1057.003 D5).
+    package func timelineScrolled(_ view: UInt32?, left: Double, top: Double) -> Batch {
+        on { read(exact_timeline_scrolled(rt, view == nil ? 1 : 0, view ?? 0, left, top)) }
+    }
     package func holdUpdate(_ token: UInt64, x: Double, y: Double, now: Double) -> Batch {
         return on {
             read(exact_hold_update(rt, token, x, y, now))
@@ -918,15 +924,17 @@ package final class Runtime {
     /// What changed of the view at once (`exact_view`): each part given is
     /// told, the window's size (`.some(nil)` clears it), the safe-area
     /// insets, the layout regions (`.some(nil)` when every region is the
-    /// safe area), the viewport and the segments' rects on the grid the
-    /// kernel has (a keyboard's), in one batch under one layout.
+    /// safe area), the viewport, the segments' rects on the grid the
+    /// kernel has (a keyboard's) and the software keyboard's overlap
+    /// (`exactViewport().keyboardHeight`), in one batch under one layout.
     package struct ViewChange {
         package var screen: CGSize?? = nil
         package var insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil
         package var regions: [CGFloat]?? = nil
         package var size: CGSize? = nil
         package var segments: [CGRect]? = nil
-        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil }
+        package var keyboard: CGFloat? = nil
+        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil }
         package init(screen: CGSize?? = nil, insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil,
                      regions: [CGFloat]?? = nil, size: CGSize? = nil) {
             self.screen = screen; self.insets = insets; self.regions = regions; self.size = size
@@ -940,11 +948,13 @@ package final class Runtime {
         if change.regions != nil { mask |= 4 }
         if change.size != nil { mask |= 8 }
         if change.segments != nil { mask |= 16 }
+        if change.keyboard != nil { mask |= 32 }
         let screen = (change.screen ?? nil) ?? .zero, insets = change.insets ?? (0, 0, 0, 0), size = change.size ?? .zero
         let floats = [screen.width, screen.height, insets.top, insets.right, insets.bottom, insets.left, size.width, size.height]
         let rects = change.segments.map { rects in [UInt32(rects.count)] + rects.flatMap { [$0.minX, $0.minY, $0.width, $0.height].map { Float($0).bitPattern } } } ?? []
-        var bytes = Data(capacity: (10 + regions.count + rects.count) * 4)
-        for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects {
+        let keyboard = change.keyboard.map { [Float($0).bitPattern] } ?? []
+        var bytes = Data(capacity: (11 + regions.count + rects.count) * 4)
+        for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects + keyboard {
             withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
         }
         return on { read(exact_view(rt, write(bytes))) }

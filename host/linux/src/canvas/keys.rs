@@ -17,9 +17,12 @@
 //!
 //! @ref LLP 1076 §3.3 (Exact plus Android Canvas)
 
+#[cfg(target_os = "android")]
 use super::CanvasHost;
+#[cfg(target_os = "android")]
 use exact_runner::DataSource;
 
+#[cfg(target_os = "android")]
 impl<D: DataSource + Default> CanvasHost<D> {
     /// A key typed at the focused node: a character, Enter (`'\n'`), or
     /// Backspace (`backspace`). Nothing when nothing holds the focus.
@@ -29,10 +32,25 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
-    /// A gamepad's state (`Pads.kt`): to the canvas a key would reach.
-    pub fn pad(&mut self, index: u8, connected: bool, buttons: [f32; 17], axes: [f32; 4]) {
+    /// A gamepad's state (`Pads.kt`): to the canvas a key would reach,
+    /// stamped when its event happened (`event_ms`, [`reported`]), as the
+    /// Linux display stamps a pad's report, so a press and a release that
+    /// reach the host together keep the time between them (LLP 1127.003 D2).
+    pub fn pad(
+        &mut self,
+        index: u8,
+        connected: bool,
+        buttons: [f32; 17],
+        axes: [f32; 4],
+        event_ms: i64,
+    ) {
         let now = self.now();
-        self.p.hardware_pad(index, connected, buttons, axes, now);
+        // A drive's clock is its own, not the device's: there it is arrival.
+        let at = match super::agent::clock(&self.p) {
+            Some(_) => now,
+            None => reported(event_ms, self.origin_ns, now),
+        };
+        self.p.hardware_pad(index, connected, buttons, axes, at);
         self.force = true;
     }
 
@@ -52,6 +70,16 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let taken = self.p.system_back(now);
         self.force |= taken;
         taken
+    }
+
+    /// Predictive Back as it goes (Android 14's `OnBackAnimationCallback`):
+    /// the presenter previews the pop or the sheet's close; Back itself
+    /// commits it ([`CanvasHost::back`]).
+    pub fn back_progress(&mut self, phase: i32, progress: f32, edge: i32) -> bool {
+        let now = self.now();
+        let previews = self.p.back_progress(phase, progress, edge, now);
+        self.force = true;
+        previews
     }
 
     /// A URL the activity was given while the app runs (`onNewIntent`, or
@@ -77,5 +105,48 @@ impl<D: DataSource + Default> CanvasHost<D> {
             eprintln!("exact: share: {error}");
         }
         self.force = true;
+    }
+}
+
+/// A reader event's `eventTime` on the host's clock, which reads zero at
+/// `origin_ns`: `eventTime` is `SystemClock.uptimeMillis()`, which is
+/// `CLOCK_MONOTONIC` in milliseconds, the clock `origin_ns` was read on
+/// (`reader::monotonic_ns`). Never later than `now`, the host's clock at
+/// arrival; `now` itself for 0, a send no event caused.
+pub(super) fn reported(event_ms: i64, origin_ns: i64, now: f64) -> f64 {
+    if event_ms <= 0 {
+        return now;
+    }
+    (event_ms as f64 - origin_ns as f64 / 1e6).min(now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reported;
+
+    /// LLP 1127.003 D2: a 150 ms press and a 210 ms one that reach the host
+    /// together, late, keep their lengths, on either side of a 200 ms
+    /// tap/hold window.
+    #[test]
+    fn a_late_press_keeps_the_time_its_events_happened() {
+        // The host started at 5 s of uptime; the events arrive at 9.5 s.
+        let (origin, now) = (5_000_000_000, 4_500.);
+        for span in [150, 210] {
+            let down = reported(9_000, origin, now);
+            let up = reported(9_000 + span, origin, now);
+            assert_eq!((down, up - down), (4_000., span as f64));
+        }
+    }
+
+    #[test]
+    fn a_send_no_event_caused_is_its_arrival() {
+        assert_eq!(reported(0, 5_000_000_000, 4_500.), 4_500.);
+    }
+
+    /// The reader and the host read the clock a moment apart: an event is
+    /// never placed after its arrival.
+    #[test]
+    fn an_event_is_never_stamped_after_its_arrival() {
+        assert_eq!(reported(9_600, 5_000_000_000, 4_500.), 4_500.);
     }
 }

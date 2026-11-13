@@ -758,7 +758,7 @@ pub enum AssetState {
 #[derive(Default, Clone)]
 pub(crate) struct Assets {
     pub models: map::AssetMap<ModelAsset>,
-    pub identities: std::collections::BTreeMap<String, u64>,
+    pub identities: std::collections::BTreeMap<String, generated::Identity>,
     pub levels: map::AssetMap<Arc<LevelValue>>,
     pub tables: Option<Arc<table::TableStore>>,
     pub sounds: map::AssetMap<Arc<SoundAsset>>,

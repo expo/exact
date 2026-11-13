@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,73 @@ export function cargoOnPath(env = process.env, home = homedir()) {
   env.PATH = [rustup, ...dirs].join(delimiter);
   return true;
 }
+
+/** Cargo's unused-patch diagnostics for the patches every outside workspace must carry (LLP 1036.001 D2).
+ * Match both package and canonical path; an author's patch with the same name still needs attention.
+ * Cargo shares one help block across consecutive unused patches, so keep it if any of them is the author's. */
+export function cargoDiagnosticFilter(write) {
+  const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
+  const required = new Set(Object.entries(Bun.TOML.parse(readFileSync(resolve(ROOT, 'Cargo.toml'), 'utf8')).patch?.['crates-io'] ?? {})
+    .map(([name, spec]) => `${name} ${real(resolve(ROOT, spec.path))}`));
+  const hint = [
+    'help: Check that the patched package version and available features are compatible',
+    '      with the dependency requirements. If the patch has a different version from',
+    '      what is locked in the Cargo.lock file, run `cargo update` to use the new',
+    '      version. This may also occur with an optional dependency that is not enabled.',
+  ];
+  let pending = '', patches = false, kept = false, help = 0;
+  const line = text => {
+    const plain = text.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r?\n$/, '');
+    const unused = /^warning: patch `(\S+) v\S+ \((.+)\)` was not used in the crate graph$/.exec(plain);
+    if (unused) {
+      patches = true; help = 0;
+      if (required.has(`${unused[1]} ${real(unused[2])}`)) return;
+      kept = true;
+    } else if (patches && plain === hint[help]) {
+      const keep = kept;
+      if (++help === hint.length) { patches = false; kept = false; help = 0; }
+      if (!keep) return;
+    } else { patches = false; kept = false; help = 0; }
+    write(text);
+  };
+  return {
+    write(text) {
+      pending += text;
+      let end;
+      while ((end = pending.indexOf('\n')) >= 0) {
+        line(pending.slice(0, end + 1)); pending = pending.slice(end + 1);
+      }
+    },
+    end() { if (pending) line(pending); pending = ''; },
+  };
+}
+
+/** A child drains stderr while the synchronous bake waits, forwarding progress immediately. Stdout stays Cargo's
+ * JSON. The relay inherits the build environment without loading another workspace's settings from .env. */
+export function cargoDiagnosticsCommand(command, args, options) {
+  return command === 'cargo' && options.stdio?.[2] === 'inherit'
+    ? [process.execPath, ['--no-env-file', fileURLToPath(import.meta.url), ...args], options] : [command, args, options];
+}
+
+async function streamCargo(args) {
+  const child = spawn('cargo', args, { stdio: ['ignore', 'inherit', 'pipe'] });
+  const ended = new Promise((ok, fail) => { child.once('error', fail); child.once('close', (code, signal) => ok({ code, signal })); });
+  const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => {
+    const handler = () => child.kill(signal);
+    process.on(signal, handler); return [signal, handler];
+  });
+  const filter = cargoDiagnosticFilter(text => process.stderr.write(text));
+  try {
+    child.stderr.setEncoding('utf8');
+    for await (const text of child.stderr) filter.write(text);
+    filter.end();
+    const { code, signal } = await ended;
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+    if (signal) process.kill(process.pid, signal); else process.exitCode = code;
+  } finally { for (const [signal, handler] of handlers) process.off(signal, handler); }
+}
+
+if (import.meta.main) await streamCargo(process.argv.slice(2));
 
 /** What `resolveApp` asked Cargo of an outside app's authored workspace (`cargo metadata --locked`, ~0.1 s), asked when a
  * build first reads `app.workspace` (LLP 1153 D2.1: a web verb never does), kept while the files Cargo reads for it are

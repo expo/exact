@@ -35,9 +35,12 @@ internal data class Device(
     val touchSlop: Float,
     /** How the device writes a date and a time: what a date control shows ([dates]). */
     val dates: String,
+    /** The device's locale with the hour cycle the person forces as its `hc` keyword ([formatLocale]); empty where
+     * none is forced, for the locale itself. */
+    val formatLocale: String,
 ) {
     /** Tell exact2: on the thread that holds the host, or on any before it boots. */
-    fun tell() = Native.configure(night, fontScale, locale, rtl, hour24, noAnimations, boldText, highContrast, touch, tv, touchSlop, dates)
+    fun tell() = Native.configure(night, fontScale, locale, rtl, hour24, noAnimations, boldText, highContrast, touch, tv, touchSlop, dates, formatLocale)
 
     companion object {
         fun read(context: Context): Device {
@@ -45,12 +48,13 @@ internal data class Device(
             var contrast = false
             if (Build.VERSION.SDK_INT >= 34) contrast = (context.getSystemService(UiModeManager::class.java)?.contrast ?: 0f) > 0f
             if (Build.VERSION.SDK_INT >= 36) contrast = contrast || context.getSystemService(AccessibilityManager::class.java)?.isHighContrastTextEnabled == true
+            val hour24 = android.text.format.DateFormat.is24HourFormat(context)
             return Device(
                 night = config.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES,
                 fontScale = config.fontScale,
                 locale = config.locales[0].toLanguageTag(),
                 rtl = config.layoutDirection == View.LAYOUT_DIRECTION_RTL,
-                hour24 = android.text.format.DateFormat.is24HourFormat(context),
+                hour24 = hour24,
                 noAnimations = !android.animation.ValueAnimator.areAnimatorsEnabled(),
                 // Bold Text is Android 12's.
                 boldText = Build.VERSION.SDK_INT >= 31 && config.fontWeightAdjustment.let { it != Configuration.FONT_WEIGHT_ADJUSTMENT_UNDEFINED && it > 0 },
@@ -58,7 +62,8 @@ internal data class Device(
                 touch = config.touchscreen == Configuration.TOUCHSCREEN_FINGER,
                 tv = tv(context),
                 touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop / scale(context),
-                dates = dates(config.locales[0], android.text.format.DateFormat.is24HourFormat(context)),
+                dates = dates(config.locales[0], hour24),
+                formatLocale = formatLocale(config.locales[0], hour24),
             )
         }
 
@@ -77,6 +82,23 @@ internal data class Device(
         }
 
         private const val TV_HEIGHT = 1080f
+
+        /**
+         * `exactTime().formatLocale` (LLP 1027.000.000): the device's locale with the hour cycle its clock keeps
+         * ([hour24]: Settings' "Use 24-hour format", else the locale's) as its `hc` keyword, `-u-hc-h12` or
+         * `-u-hc-h23`, where that differs from the locale's own preferred hour, as Apple's
+         * `SessionFacts.currentFormatLocale` reads it. Empty, which the host reads as the locale, where the two agree
+         * or the tag would pass the 64 characters the runner holds.
+         */
+        internal fun formatLocale(device: java.util.Locale, hour24: Boolean): String {
+            // The `j` skeleton's hour letter outside a quoted literal: `h` or `K` is the 12-hour cycle (fr-CA's
+            // `HH 'h'` is 24-hour).
+            val regional = android.text.format.DateFormat.getBestDateTimePattern(device, "j")
+            val twelve = regional.split('\'').filterIndexed { i, _ -> i % 2 == 0 }.any { part -> part.any { it == 'h' || it == 'K' } }
+            if (regional.isEmpty() || hour24 != twelve) return ""
+            val tag = java.util.Locale.Builder().setLocale(device).setUnicodeLocaleKeyword("hc", if (hour24) "h23" else "h12").build().toLanguageTag()
+            return if (tag.length <= 64) tag else ""
+        }
 
         /**
          * The lines `host/linux/src/paint/dates.rs` reads: the patterns Android's formatter picks for the locale for a

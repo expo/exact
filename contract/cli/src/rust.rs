@@ -127,7 +127,8 @@ pub fn compile_path_for_rust(
 /// Pass the call-record names from [`compile_path_for_rust`], or an empty set
 /// for a plan from [`crate::compile`], which cannot import native modules.
 pub fn rust(plan: &Plan, call_records: &BTreeSet<String>) -> Result<String, String> {
-    Plan::decode(&plan.encode()).map_err(|e| format!("invalid plan: {e:?}"))?;
+    plan.redecode()
+        .map_err(|e| format!("invalid plan: {e:?}"))?;
     // One struct per shape name; the plan may hold a shape more than once.
     let mut named = BTreeMap::new();
     for (i, row) in plan.types.iter().enumerate() {

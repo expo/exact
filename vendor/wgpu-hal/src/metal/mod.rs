@@ -28,6 +28,9 @@ mod command;
 mod conv;
 mod device;
 mod library_from_metallib;
+// EXACT (EXACT-PATCHES.md, 16).
+mod shipped;
+pub use shipped::set_shader_libraries;
 mod surface;
 mod time;
 

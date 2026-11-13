@@ -15,6 +15,8 @@
 mod byte_arrays;
 pub use byte_arrays::{bytes, utf8};
 
+#[path = "jni_frames.rs"]
+mod frames;
 #[path = "jni_extensions.rs"]
 pub mod jni_extensions;
 #[path = "jni_keys.rs"]
@@ -297,6 +299,7 @@ macro_rules! canvas_jni {
                 tv: jboolean,
                 touch_slop: jfloat,
                 dates: jstring,
+                format_locale: jstring,
             ) {
                 let device = $crate::presenter::Device {
                     night: night == JNI_TRUE,
@@ -311,6 +314,7 @@ macro_rules! canvas_jni {
                     tv: tv == JNI_TRUE,
                     touch_slop,
                     dates: string(env, dates),
+                    format_locale: string(env, format_locale),
                 };
                 $crate::canvas::configure(&device);
                 // What a hosted field measured was under the old settings.
@@ -1057,6 +1061,7 @@ macro_rules! canvas_jni {
             }
 
             $crate::canvas_jni_pad!();
+            $crate::canvas_jni_frames!();
 
             /// Pictures announced and not yet fetched, as id, width, height triples:
             /// a reader on its own thread makes them before the stream that draws

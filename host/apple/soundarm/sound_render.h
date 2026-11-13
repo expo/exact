@@ -6,9 +6,11 @@
 // ring, then sums every live voice from its first frame to its end frame,
 // times its gain. A voice reads its sound at its playback rate, from a
 // fractional position by linear interpolation, and a panned one is placed by
-// the Web Audio StereoPannerNode's equal-power algorithm. Times are host
-// seconds on CACurrentMediaTime's timebase: when the voice should reach the
-// speaker.
+// the Web Audio StereoPannerNode's equal-power algorithm. A change (LLP
+// 1096 D14) moves a voice's gain, rate and pan linearly from where they are
+// at its time to new values over its ramp, evaluated at every frame. Times
+// are host seconds on CACurrentMediaTime's timebase: when the voice should
+// reach the speaker.
 #ifndef EXACT_SOUND_RENDER_H
 #define EXACT_SOUND_RENDER_H
 
@@ -44,6 +46,13 @@ void exact_sound_set(ExactMixer *mixer, uint32_t index, const float *planes, uin
 /// before a voice's start that has not started frees its slot); kind 3 ends
 /// every voice now. False when the ring is full: the op is dropped and counted.
 bool exact_sound_push(ExactMixer *mixer, uint32_t kind, uint64_t id, uint32_t sound, double at, float gain, float rate, float pan);
+/// Push a change to voice `id` (LLP 1096 D14): from `at`, each of `gain`,
+/// `rate` and `pan` that is not NaN moves linearly from its value then to the
+/// new one, reaching it `ramp` seconds later; a voice whose start is after
+/// `at` takes them outright. A voice with no pan that is given one other than
+/// 0 is panned from then on, from centred. False when the ring is full, as
+/// for `exact_sound_push`.
+bool exact_sound_change(ExactMixer *mixer, uint64_t id, double at, float gain, float rate, float pan, double ramp);
 /// Ops the ring has room for now: a producer that waits for room never
 /// counts a drop.
 uint32_t exact_sound_room(const ExactMixer *mixer);

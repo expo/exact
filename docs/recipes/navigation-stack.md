@@ -1,7 +1,7 @@
 # Recipe: a navigation stack
 
-A list pushing a detail, a Cancel/Save sheet, an alert (`pattern list-detail`).
-A second screen is a route (`if` over state gets no Back, links or split).
+Keyed screens go directly in the app's first element (navigation root) or in
+panels named with `aria-controls` by its first linked tablist's direct tabs.
 
 A route's first `header` with one heading is its bar (title large at `aria-level=1`,
 inline at 2); buttons before it lead, after it trail. A pushed route has

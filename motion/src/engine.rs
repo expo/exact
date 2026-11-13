@@ -308,7 +308,8 @@ pub struct Engine {
     // and the nodes whose own appearance differs from it.
     dark: bool,
     node_dark: BTreeMap<u64, bool>,
-    // Drag timelines (LLP 1057.003): sources and bound consumers.
+    // Drag, scroll and view timelines (LLP 1057.003): drag sources,
+    // scrollers' offsets and bound consumers.
     timelines: timeline::Timelines,
     // Clock timelines (LLP 1055.002): each node's, and each one's origin.
     clocks: clock::Clocks,
@@ -772,7 +773,10 @@ impl Engine {
         property: Property,
     ) -> Option<SpringDescriptor> {
         let running = self.slots.get(&(node, property))?.running()?;
-        let Curve::Spring { config, velocity } = &running.curve else {
+        let Curve::Spring {
+            config, velocity, ..
+        } = &running.curve
+        else {
             return None;
         };
         Some(SpringDescriptor {

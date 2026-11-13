@@ -132,10 +132,16 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         set(value) { field = value; value?.timerReader(this) }
     private var timerTouch = false
     private var timerApplied = 0L
+    /** When the ingest of the streams [timerReport] tells of began and ended (`System.nanoTime`), 0 when none. */
+    private var ingestBegan = 0L
+    private var ingestEnded = 0L
     private var timerIdlePosted = false
     internal fun timerReport() {
         val o = owner
-        if (o != null) o.timerReport(this, timerTouch || scrolling.timerActive, samplerPosted, timerApplied)
+        if (o != null) {
+            o.timerReport(this, timerTouch || scrolling.timerActive, samplerPosted, timerApplied, ingestBegan, ingestEnded)
+            ingestBegan = 0L; ingestEnded = 0L
+        }
         else if (started && Native.timerObservation(timerTouch || scrolling.timerActive, samplerPosted, false, false)) pump()
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -214,7 +220,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             return
         }
         val frames = android.view.Choreographer.getInstance()
-        scrolling.released()
+        scrolling.stopped()
         removeCallbacks(held)
         frames.removeFrameCallback(turn); turnPosted = false
         frames.removeFrameCallback(sampler); samplerPosted = false
@@ -323,7 +329,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val hosted = fields
         if (started && hosted != null && hosted.touch(e)) {
             hold(null)
-            if (down) { val touch = hosted.serial; under(e.x, e.y) { hosted.under(touch, it.getOrElse(2) { 0 }) } }
+            if (down) {
+                val touch = hosted.serial; val scroll = scrolling.serial
+                under(e.x, e.y) { hosted.under(touch, it.getOrElse(2) { 0 }) { scrolling.next(scroll) } }
+            }
             return true
         }
         val action = fingers.touch(e).takeIf { it >= 0 } ?: return true
@@ -354,16 +363,23 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** What is under a touch's down ([Native.under]), asked behind the down itself: by the time the finger passes the
      * slop the reader knows which scrollers it could move and which axes exact2's own gestures claim. [then]: with
-     * the answer, after the scrolling has it. */
+     * the answer, after the scrolling has it and before it takes what came of the touch meanwhile
+     * ([Scrolling.caughtUp]), so that a hosted field gets what it held up to where a scroll takes the touch. */
     private fun under(x: Float, y: Float, then: (IntArray) -> Unit) {
         val serial = scrolling.serial
-        ask(x, y) { scrolling.under(serial, it); then(it) }
+        ask(x, y) { scrolling.under(serial, it); then(it); scrolling.caughtUp(serial) }
     }
 
     /** [Native.under], on exact2's thread when it has one, behind what was sent to it before. */
     private fun ask(x: Float, y: Float, then: (IntArray) -> Unit) {
         val o = owner
         if (o != null) o.under(x, y, then) else then(Native.under(x, y))
+    }
+
+    /** [Native.snapsAround], on exact2's thread when it has one. */
+    internal fun snapsAround(id: Int, vertical: Boolean, release: Float, projected: Float, then: (IntArray) -> Unit) {
+        val o = owner
+        if (o != null) o.snapsAround(id, vertical, release, projected, then) else then(Native.snapsAround(id, vertical, release, projected))
     }
 
     /** Whether the touch that is down is a hosted field's that asked to keep it ([Fields.keeps]): no scroll takes it. */
@@ -381,12 +397,19 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** exact2 runs here (owner=0) and was told something of a field: what that changed is drawn. */
     internal fun turned() = pump()
 
+    /** exact2 has heard a touch's down and not yet its end. */
+    private var heard = false
+
     /** A touch to exact2 (0 down, 1 up, 2 move, 3 cancel) at the view's pixels. [wait]: the ms the frame waits for
      * exact2's answer, or negative for the action's own. [Scrolling] cancels a touch its scroll won with this, and
      * waits for nothing. */
     internal fun forward(action: Int, x: Float, y: Float, tool: Int, wait: Long) {
         // A scroll that takes a hosted field's touch cancels it in the field: exact2 never heard of it.
         if (action == 3 && fields?.cancel() == true) return
+        // Nor is a touch whose end exact2 has heard cancelled there: one that lifted before exact2's answer for its
+        // down came, and became a scroll when the answer did ([Scrolling.caughtUp]).
+        if (action == 3 && !heard) return
+        if (action == 0) heard = true else if (action == 1 || action == 3) heard = false
         val o = owner
         // A press or release waits for exact2's answer within this frame, as a click handler holds the main thread; a
         // drag's moves barely wait, so the drag keeps its frames.
@@ -509,6 +532,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     internal val releaseWait = (context as Activity).intent.getStringExtra("wait")?.toLongOrNull() ?: Exact.WAIT_MS
     override fun onDetachedFromWindow() {
         forgetModuleTap()
+        scrolling.stopped()
         warmer.destroy()
         worker.shutdown()
         wakes?.close()
@@ -523,6 +547,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * the last paint; the feed's group then drawn where the scrolls the owner has not applied put it. */
     private fun takeOwned(): Boolean {
         val o = owner ?: return false
+        val began = System.nanoTime()
         var any = false
         var painted = false
         var allQuiet = true
@@ -565,6 +590,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         moved = !painted
         quiet = painted && allQuiet && move == null
         timerApplied = publication
+        if (any) { ingestBegan = began; ingestEnded = System.nanoTime() }
         timerReport()
         return any
     }

@@ -23,6 +23,7 @@ fn hidden(source: &str, reveal: Option<Range>) -> Vec<String> {
         .collect()
 }
 
+mod code_spans;
 mod commands;
 use commands::run;
 

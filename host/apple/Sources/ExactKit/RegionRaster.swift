@@ -270,6 +270,7 @@ final class RegionPaintIndex {
               let count = request.bytes else { throw RegionRasterRefusal.invalid }
         guard let charge = account.reserve(count, limit: request.pixelLimit) else { throw RegionRasterRefusal.capacity }
         guard let space = request.profile.makeSpace() else { throw RegionRasterRefusal.profile }
+        let shapedSelections = zip(request.rows, layouts).map { $1.metadata.shapedRange($0.selection) }
         let pixels = try RegionPixels(count: count, charge: charge, profile: request.profile, request: request) { pointer in
             guard let ctx = CGContext(data: pointer, width: request.width, height: request.height,
                     bitsPerComponent: 8, bytesPerRow: request.bytesPerRow, space: space,
@@ -294,14 +295,13 @@ final class RegionPaintIndex {
                     for ordinal in ids {
                         let p = Self.paragraph(Int(ordinal), starts: starts), i = Int(ordinal) - starts[p]
                         let layout = layouts[p], row = request.rows[p], line = layout.line(at: i)
-                        let flush: CGFloat = layout.source.align == 1 ? 0.5 : layout.source.align == 2 ? 1 : 0
-                        let x = row.box.minX - request.scroll.x + TextEngine.penOffset(line, flush: flush, room: Double(row.box.width), rtl: layout.source.direction == 1,
-                                                                                       whiteSpace: layout.source.whiteSpace, source: layout.preparation.attributed)
+                        let x = row.box.minX - request.scroll.x + layout.metadata.lines[i].flushOffset
                         let y = TextEngine.paintedLine(layout.baselines[i], top: row.box.minY - request.scroll.y, scale: CGFloat(request.scale), lineScale: layout.source.lineScale)
                         if pass == .ink { TextLinePaint.draw(line, at: CGPoint(x: x, y: y), in: ctx); continue }
                         let range = CTLineGetStringRange(line)
-                        let lo = max(row.selection.location, range.location)
-                        let hi = min(NSMaxRange(row.selection), range.location + range.length)
+                        let selection = shapedSelections[p]
+                        let lo = max(selection.location, range.location)
+                        let hi = min(NSMaxRange(selection), range.location + range.length)
                         guard hi > lo else { continue }
                         var a: CGFloat = 0, d: CGFloat = 0
                         _ = CTLineGetTypographicBounds(line, &a, &d, nil)

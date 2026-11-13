@@ -190,6 +190,34 @@ check('on a push the focus moves to the new route\'s heading, and on Back to the
   expect(await evaluate(`document.getElementById('scroller').scrollTop = 0; pop(); focus()`)).toEqual(['row-far', false, 0, 0]);
 }), 60000);
 
+check('keyboard arrivals outline headings and route containers unless the author removes the outline', () => inChrome(async (evaluate, press, key) => {
+  const outlined = () => evaluate(`(() => {
+    const a = document.activeElement, s = getComputedStyle(a);
+    return [a.id, a.matches(':focus-visible') && s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0];
+  })()`);
+  for (const [opener, target] of [['row-1', 'title-1'], ['bare', 'route-bare']]) {
+    await evaluate(`document.getElementById('${opener}').focus()`);
+    await enter(key);
+    expect(await outlined()).toEqual([target, true]);
+    await evaluate('pop()');
+    expect(await outlined()).toEqual([opener, true]);
+    // Back falls back to the route's heading when its opener cannot take focus.
+    await enter(key);
+    await evaluate(`document.getElementById('${opener}').inert = true; pop()`);
+    expect(await outlined()).toEqual(['list-title', true]);
+    await evaluate(`document.getElementById('${opener}').inert = false; document.activeElement.blur()`);
+    await press(opener);
+    expect(await outlined()).toEqual([target, false]);
+    await evaluate('pop()');
+    expect(await outlined()).toEqual([opener, false]);
+    await evaluate(`then = () => document.getElementById('${target}').style.outline = 'none'; document.getElementById('${opener}').focus()`);
+    await enter(key);
+    expect(await evaluate('focus().slice(0, 2)')).toEqual([target, true]);
+    expect(await outlined()).toEqual([target, false]);
+    await evaluate('pop()');
+  }
+}));
+
 check('a focus the commit set is left alone, and another tab is no arrival', () => inChrome(async (evaluate, press) => {
   // The pressed control's action focuses a field in the new route (an `autofocus`, a `focus()` command): it stays.
   await evaluate(`withField = true; then = () => document.getElementById('field-add').focus()`);

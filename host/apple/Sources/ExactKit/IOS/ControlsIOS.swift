@@ -16,6 +16,15 @@ import UIKit
 /// it, with its own symbols (`ExactRadio`, RadioIOS.swift). VoiceOver reads
 /// a checkbox as it reads UIKit's own toggles (`updateAccessibility`).
 class ExactCheckbox: UIControl {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     var isOn = false { didSet { if isOn != oldValue { setNeedsDisplay(); updateAccessibility() } } }
     var ariaUnavailable = false { didSet { if ariaUnavailable != oldValue { updateAccessibility() } } }
     var accent: UIColor? { didSet { setNeedsDisplay() } }
@@ -188,7 +197,7 @@ final class ControlHost: NSObject {
         // tvOS has no UISwitch; a checkbox stands in.
         case "switch": made = ExactCheckbox(frame: .zero)
         #else
-        case "switch": made = UISwitch()
+        case "switch": made = ExactSwitch()
         #endif
         case "checkbox": made = ExactCheckbox(frame: .zero)
         case "radio": made = ExactRadio(frame: .zero) // x2apps survey #2

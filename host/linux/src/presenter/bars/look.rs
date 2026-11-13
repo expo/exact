@@ -189,6 +189,11 @@ pub enum What {
     Tab(ViewId),
 }
 
+/// A target shown held: its place among the bar's targets, and a finger's
+/// ripple on it at an instant and whether motion is removed, or none for a
+/// TV remote's focus, which is its state layer.
+pub type Lit = (usize, Option<(crate::paint::ripple::Ripple, f64, bool)>);
+
 /// One thing in a bar that can be touched.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
@@ -199,6 +204,14 @@ pub struct Target {
     /// Whether it takes a press.
     pub enabled: bool,
     layer: (Shape, [u8; 4]),
+}
+
+impl Target {
+    /// A point of the bar as an offset into the shape its press shows in.
+    pub(super) fn held_at(&self, x: f32, y: f32) -> (f32, f32) {
+        let (left, top, ..) = self.layer.0.rect;
+        (x - left, y - top)
+    }
 }
 
 enum Item {
@@ -253,9 +266,10 @@ impl Layout {
     }
 
     /// Paint the bar into `backend`, its top left at the origin: its
-    /// colour over all of it, the state layer of the target a finger holds,
-    /// then what it says.
-    pub fn paint(&self, backend: &mut dyn Backend, engine: &mut TextEngine, lit: Option<usize>) {
+    /// colour over all of it, the target `lit` (a finger's ripple, at a
+    /// moment of it, or a TV remote's focus, its state layer), then what it
+    /// says.
+    pub fn paint(&self, backend: &mut dyn Backend, engine: &mut TextEngine, lit: Option<Lit>) {
         let ts = Transform::identity();
         let all = Shape::rect((0.0, 0.0, self.size.0, self.size.1));
         backend.fill(&all, self.container, ts);
@@ -265,10 +279,18 @@ impl Layout {
                 backend.fill(shape, *color, ts);
             }
         }
-        if let Some(target) = lit.and_then(|i| self.targets.get(i)) {
+        if let Some((target, ripple)) = lit.and_then(|(i, r)| Some((self.targets.get(i)?, r))) {
             let (shape, mut tint) = target.layer;
-            tint[3] = (f32::from(tint[3]) * STATE_LAYER).round() as u8;
-            backend.fill(&shape, tint, ts);
+            match ripple {
+                Some((ripple, now, still)) => {
+                    let wave = ripple.wave(shape.rect, now, still);
+                    crate::paint::ripple::fill(backend, &shape, tint, wave, ts);
+                }
+                None => {
+                    tint[3] = (f32::from(tint[3]) * STATE_LAYER).round() as u8;
+                    backend.fill(&shape, tint, ts);
+                }
+            }
         }
         for item in &self.items {
             match item {

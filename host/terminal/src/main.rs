@@ -1,7 +1,7 @@
-//! `exact-terminal <app.contract | app.plan> [--size COLSxROWS] [--inline] [op …]`:
+//! `exact-terminal <app.contract | app.plan> [location] [--print | --json] [--drive op …]`:
 //! a terminal entry with no data module (see [`exact_terminal::cli`]).
 
 fn main() -> std::process::ExitCode {
     let args = std::env::args().skip(1).collect();
-    exact_terminal::cli::run(args, (), None, exact_terminal::host::Mode::Fullscreen)
+    exact_terminal::cli::run(args, || (), None, exact_terminal::host::Mode::Fullscreen)
 }

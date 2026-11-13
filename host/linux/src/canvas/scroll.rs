@@ -18,7 +18,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// What is under a point of the view (pixels), for the reader to decide
     /// what a drag from there is: the scrollers, innermost first, and the
     /// axes the presenter's own gestures claim
-    /// ([`crate::presenter::Presenter::reader_under`] has the words).
+    /// ([`crate::presenter::Presenter::reader_under`] has the words); then
+    /// the module under it (eight words), and each of those scrollers'
+    /// snap ([`crate::presenter::Presenter::reader_snaps`]).
     pub fn under(&mut self, x: f32, y: f32) -> Vec<i32> {
         let mut words = self.p.reader_under(x, y, self.scale);
         let module = self.p.hit(x / self.scale, y / self.scale).filter(|id| {
@@ -38,7 +40,24 @@ impl<D: DataSource + Default> CanvasHost<D> {
             key.map_or(0, |key| key.generation as i32),
             self.p.long_presses() as i32,
         ]);
+        let ids: Vec<_> = (0..words[1] as usize)
+            .map(|k| words[3 + 11 * k] as exact_kernel::ViewId)
+            .collect();
+        words.extend(self.p.reader_snaps(&ids, self.scale));
         words
+    }
+
+    /// List `id`'s snap areas around a release's projection, in pixels
+    /// ([`crate::presenter::Presenter::reader_snaps_around`] has the words).
+    pub fn snaps_around(
+        &mut self,
+        id: u32,
+        vertical: bool,
+        release: f32,
+        projected: f32,
+    ) -> Vec<i32> {
+        self.p
+            .reader_snaps_around(id, vertical, release, projected, self.scale)
     }
 
     /// The reader moved scroller `id` by (`dx`, `dy`) pixels, knowing
@@ -76,12 +95,33 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The finger let go of scroller `id`: the platform's velocity
     /// (`vx`, `vy`, pixels per second, positive as the offset grows) and,
     /// with `rest`, where its fling will stop (`OverScroller.getFinalX/Y`),
-    /// in pixels ([`crate::presenter::Presenter::reader_drag_ended`]).
-    pub fn drag_ended(&mut self, id: u32, vx: f32, vy: f32, rest: Option<(f32, f32)>) {
+    /// in pixels, and whether it flings ([`crate::presenter::Presenter::reader_drag_ended`]).
+    pub fn drag_ended(
+        &mut self,
+        id: u32,
+        vx: f32,
+        vy: f32,
+        rest: Option<(f32, f32)>,
+        flings: bool,
+    ) {
         let s = self.scale;
         let velocity = ((vx / s) as f64, (vy / s) as f64);
         let rest = rest.map(|(x, y)| (x / s, y / s));
-        if let Some(error) = self.p.reader_drag_ended(id, velocity, rest) {
+        if let Some(error) = self.p.reader_drag_ended(id, velocity, rest, flings) {
+            self.p.host_mut().log(error);
+        }
+    }
+
+    /// The fling the reader threw from its drag of scroller `id` stopped
+    /// ([`crate::presenter::Presenter::reader_fling_ended`]).
+    pub fn fling_ended(&mut self, id: u32) {
+        self.p.reader_fling_ended(id);
+    }
+
+    /// The reader's pull to refresh of scroller `id` was let go past its
+    /// threshold ([`crate::presenter::Presenter::reader_refresh`]).
+    pub fn refresh(&mut self, id: u32) {
+        if let Some(error) = self.p.reader_refresh(id) {
             self.p.host_mut().log(error);
         }
     }

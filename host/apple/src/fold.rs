@@ -120,18 +120,21 @@ impl<D: DataSource> Host<D> {
         self.finish(batch, Some(error))
     }
 
-    /// The viewport's change into `batch`, after what it holds (`set_view`).
+    /// The viewport's change into `batch`, after what it holds (`set_view`),
+    /// with the keyboard's overlap when told.
     pub(super) fn resize_inner(
         &mut self,
         width: f32,
         height: f32,
+        keyboard: Option<f64>,
         mut batch: Batch,
         error: Option<String>,
         previous: Option<Env>,
     ) -> String {
         let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
                                                // @ref LLP 1039 D2 — merge re-answer and relayout, once.
-        let receipt = match self.runner.set_viewport(width as f64, height as f64) {
+        let size = Some((f64::from(width), f64::from(height)));
+        let receipt = match self.runner.set_view(size, keyboard) {
             Ok(receipt) => receipt,
             Err(e) => {
                 return self.geometry_refused(
@@ -185,12 +188,13 @@ impl<D: DataSource> Host<D> {
 
     /// What changed of the view at once, each part only when given: the
     /// window's size (`None` in it clears it), the safe-area insets, the
-    /// layout regions, the viewport and the segments' rects on the grid the
-    /// kernel has, in one batch under one layout, as the calls one by one
-    /// would leave them. An iOS boot's view takes the whole window as its
-    /// tab bar comes (LLP 1123 D1), which changes the first four
-    /// (`ExactView.fit`); a keyboard changes the viewport and the
-    /// segments' extents together (LLP 1078, the keyboard).
+    /// layout regions, the viewport, the segments' rects on the grid the
+    /// kernel has and the software keyboard's overlap, in one batch under
+    /// one layout and one commit, as the calls one by one would leave them.
+    /// An iOS boot's view takes the whole window as its tab bar comes (LLP
+    /// 1123 D1), which changes the first four (`ExactView.fit`); a keyboard
+    /// changes the viewport, the segments' extents and its overlap together
+    /// (LLP 1078, the keyboard; LLP 1039 D9).
     pub fn set_view(
         &mut self,
         screen: Option<Option<(f32, f32)>>,
@@ -198,7 +202,9 @@ impl<D: DataSource> Host<D> {
         regions: Option<Option<[[f32; 4]; 5]>>,
         size: Option<(f32, f32)>,
         segments: Option<Vec<exact_kernel::Rect>>,
+        keyboard: Option<f32>,
     ) -> String {
+        let keyboard = keyboard.map(f64::from);
         let previous = self.runner.kernel().env();
         let mut env = previous.clone();
         if let Some(screen) = screen {
@@ -213,11 +219,15 @@ impl<D: DataSource> Host<D> {
         if !env.is_finite() {
             return self.finish(Batch::new(), Some("view: invalid environment".into()));
         }
-        if let Some((width, height)) = size {
+        if size.is_some() || keyboard.is_some() {
+            let now = self.runner.viewport();
+            let (width, height) =
+                size.map_or((now.width, now.height), |(w, h)| (w as f64, h as f64));
             let candidate = exact_runner::Viewport {
-                width: width as f64,
-                height: height as f64,
-                ..self.runner.viewport()
+                width,
+                height,
+                keyboard_height: keyboard.unwrap_or(now.keyboard_height),
+                ..now
             };
             if let Err(e) = candidate.validate() {
                 return self.finish(Batch::new(), Some(format!("viewport: {e:?}")));
@@ -236,9 +246,11 @@ impl<D: DataSource> Host<D> {
             return self.geometry_refused(error, Some(previous));
         }
         match size {
-            Some((width, height)) => self.resize_inner(width, height, batch, None, Some(previous)),
+            Some((width, height)) => {
+                self.resize_inner(width, height, keyboard, batch, None, Some(previous))
+            }
             None => {
-                match self.runner.refresh_viewport_geometry() {
+                match self.runner.set_view(None, keyboard) {
                     Ok(Some(receipt)) => {
                         return self.commit_into(
                             &[Timed {

@@ -154,7 +154,7 @@ impl Gen<'_> {
     /// `floor`, which keeps the list computed: the runner's queue drops a
     /// malformed one after the command is issued.
     fn sound(&mut self, env: &Env, d: usize, pad: &str, out: &mut String) {
-        match self.rng.below(4) {
+        match self.rng.below(5) {
             0 => {
                 let src = self.expr(env, &Ty::Str, d, false);
                 let gain = self.expr(env, &Ty::Num, d, false);
@@ -164,6 +164,14 @@ impl Gen<'_> {
                 ));
             }
             1 => out.push_str(&format!("{pad}stopSounds()\n")),
+            3 => {
+                let group = self.expr(env, &Ty::Str, d, false);
+                let gain = self.expr(env, &Ty::Num, d, false);
+                let rate = self.expr(env, &Ty::Num, d, false);
+                out.push_str(&format!(
+                    "{pad}setSounds(group={group}, gain=min(1, max(0, {gain})), playbackRate={rate})\n"
+                ));
+            }
             2 => {
                 let group = self.expr(env, &Ty::Str, d, false);
                 out.push_str(&format!("{pad}stopSounds(group={group})\n"));

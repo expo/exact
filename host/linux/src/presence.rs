@@ -90,7 +90,7 @@ impl<D: DataSource> Host<D> {
 
     /// Lay out again for a host's fact and observe it: a box it moved takes
     /// its place unless it is moving already.
-    pub(super) fn layout_unauthored(&mut self) -> Result<bool, String> {
+    pub(crate) fn layout_unauthored(&mut self) -> Result<bool, String> {
         self.presence.unauthored = true;
         let laid = self.layout();
         self.observe_layout();

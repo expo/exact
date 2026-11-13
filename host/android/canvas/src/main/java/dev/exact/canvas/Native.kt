@@ -21,6 +21,7 @@ object Native {
     @JvmStatic external fun configure(
         night: Boolean, fontScale: Float, locale: String, rtl: Boolean, hour24: Boolean, noAnimations: Boolean,
         boldText: Boolean, highContrast: Boolean, touch: Boolean, tv: Boolean, touchSlop: Float, dates: String,
+        formatLocale: String,
     )
     /** The device's colours ([Palette], LLP 1115.001 D4): Material 3's colour roles as the reader resolved them for
      * this device, twelve under the light scheme and then the same twelve under the dark one, ARGB. Before [start],
@@ -42,6 +43,24 @@ object Native {
     @JvmStatic external fun timerObservation(scrolling: Boolean, sampling: Boolean, applying: Boolean, idle: Boolean): Boolean
     @JvmStatic external fun timerHeld(): Int
     @JvmStatic external fun displayFrame()
+    /** `perf frames` (LLP 1079.000 §6.2), all on exact2's thread and in `System.nanoTime`: a Choreographer turn at
+     * [vsync], its frame's [deadline] and its vsyncs' [period] (0 where Choreographer gave none), when it ran from
+     * [arrival] to [finished], and the publication it made (0: none), whose ingest finishes its work. */
+    @JvmStatic external fun frameTurn(arrival: Long, vsync: Long, deadline: Long, period: Long, finished: Long, publication: Long)
+    /** The main thread ingested every publication through [applied], from [began] to [ended]. */
+    @JvmStatic external fun frameLanded(applied: Long, began: Long, ended: Long)
+    /** No turn is asked for: the run of turns ends. */
+    @JvmStatic external fun frameIdle()
+    /** The display's refresh period: a GPU canvas's frame period (LLP 1009) and a turn's where Choreographer gives
+     * none. */
+    @JvmStatic external fun framePeriod(period: Long)
+    /** [count] window frames ([WindowFrames], five words each) and the reports [lost] before they were read. */
+    @JvmStatic external fun frameWindow(words: LongArray, count: Int, lost: Long)
+    /** The device a `perf frames report` names, as JSON. */
+    @JvmStatic external fun frameIdentity(identity: ByteArray)
+    /** The frame rates GPU canvases ask for (`Surface::max_fps`) that changed since last asked: view and rate (0: the
+     * display's) pairs, or null. */
+    @JvmStatic external fun frameRates(): IntArray?
     @JvmStatic external fun animating(): Boolean
     @JvmStatic external fun owed(): Boolean
     /** The collection pass a scroll left; `limit` >= 0 slices it (rows past what shows per list), the scrolled list
@@ -49,19 +68,28 @@ object Native {
     @JvmStatic external fun refine(limit: Int, velocity: Float): Int
     @JvmStatic external fun nextDue(): Double
     @JvmStatic external fun fds(): IntArray
-    /** A driver from outside scrolls the feed by [dy] px ([ExactActivity.drive]). A finger's scroll is the three
+    /** A driver from outside scrolls the feed by [dy] px ([ExactActivity.drive]). A finger's scroll is the
      * calls below. */
     @JvmStatic external fun scroll(dy: Float)
     /** What is under a point of the view (pixels), for the reader to decide what a drag from there is (LLP 1115.001
      * D7.3) and whose a touch there is (D8): the axes exact2's own gestures there claim (bit 0 sideways, bit 1 up
      * and down), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
      * innermost first: its id, flags (bit 0 it takes a sideways drag from here, bit 1 one up or down, bit 2 its
-     * rows are a node the reader can move, bit 3 no scrollbar), its revision, then as float bits its offset (x, y), its farthest offset
+     * rows are a node the reader can move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its `refreshing`
+     * is true, bits 6 and 7 its `keyboardDismissMode`), its revision, then as float bits its offset (x, y), its farthest offset
      * (x, y) and the box it shows in (x, y, width, height). exact2 tells the reader of each of them from then on
      * ([scrollers]). After the scrollers: the native module button under the point (0: none), then its painted
      * box x, y, width and height as float bits, in pixels, its allocation slot and generation, and how many long
-     * presses a node has taken so far (wrapping). */
+     * presses a node has taken so far (wrapping). Then each scroller's snap, in the same order (`host/linux/src/presenter/snap.rs`,
+     * `reader_snaps`): flags (bit 0 it snaps sideways, bit 1 up and down, bit 2 `mandatory`), then sideways and then up
+     * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
+     * at as float bits and 1 for `scroll-snap-stop: always`, in pixels; flag bit 3: a virtualized list, whose areas past
+     * these [snapsAround] tells. */
     @JvmStatic external fun under(x: Float, y: Float): IntArray
+    /** Virtualized list [id]'s snap areas up and down ([vertical]) or sideways, for a release at offset [release] whose
+     * rest is projected near [projected] (pixels): a count, then per area its least and greatest offsets as float bits
+     * and 1 for `scroll-snap-stop: always` (`host/linux/src/presenter/snap.rs`, `reader_snaps_around`). */
+    @JvmStatic external fun snapsAround(id: Int, vertical: Boolean, release: Float, projected: Float): IntArray
     /** What exact2 tells the reader of the text fields it hosts (LLP 1115.001 D8), when that is not what this last
      * returned (else null): a count, then for each field, in tree order: its id, its generation (moved on when its
      * node became another row's item: the view starts over), flags (bit 0 it was painted and has a place, bit 1 it
@@ -96,6 +124,15 @@ object Native {
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it. exact2 clamps the move to
      * the scroller's travel, and drops one sent under a revision the app's own scroll has moved on from. */
     @JvmStatic external fun scrolled(id: Int, dx: Float, dy: Float, rev: Int)
+    /** A finger began dragging scroller [id] (its `scrolldragstart`), or ([ended]) let go of it (its
+     * `scrolldragend`): at ([vx], [vy]) px/s, positive as its offset grows, and, with [rest], to come to rest at
+     * ([restX], [restY]) px; [flings] when it threw a fling. From the start until the lift, or the fling's end
+     * ([flingEnded]), the scroller's moves owe no `scrollend`. */
+    @JvmStatic external fun scrollDrag(id: Int, ended: Boolean, vx: Float, vy: Float, rest: Boolean, restX: Float, restY: Float, flings: Boolean)
+    /** A pull to refresh of scroller [id] was let go of past its threshold: its `refresh` ([Refresh]). */
+    @JvmStatic external fun refresh(id: Int)
+    /** The fling a drag of scroller [id] threw stopped: at rest, caught by a finger, or ended by the app's scroll. */
+    @JvmStatic external fun flingEnded(id: Int)
     /** What exact2 tells the reader of the scrollers it knows, when that is not what this last returned (else
      * null): nine numbers each: its id, flags (as [under]'s, for any drag), its revision, then as float bits where
      * it is (x, y), the offset its rows were last painted at (x, y) and its farthest offset (x, y). The revision
@@ -170,8 +207,9 @@ object Native {
      * Backspace. A hosted field ([Fields]) takes its keys itself. */
     @JvmStatic external fun key(code: Int, backspace: Boolean)
     /** A gamepad's state for the canvas a key would reach (LLP 1127.003 D2): [values] its 17 standard buttons, then
-     * its 4 axes; [connected] false when it went away. */
-    @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray)
+     * its 4 axes; [connected] false when it went away. [at] is the event's `eventTime`
+     * (`SystemClock.uptimeMillis()`), 0 for a send no event caused: the host stamps it on arrival then. */
+    @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long)
     /** A remote's key, down or up, by the web's `code` and `key` (LLP 1115.001.003 D3): a D-pad arrow, or Select. */
     @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean)
     /** System Back (LLP 1115.001 D6): whether the app took it. From its navigation root's selected route it goes to
@@ -179,6 +217,9 @@ object Native {
      * false when there is nowhere to go back to, and the activity finishes. The reader takes Back only while the
      * host says it has somewhere to go (a request, [requests]). */
     @JvmStatic external fun back(): Boolean
+    /** Predictive Back as it goes (Android 14): `phase` 0 started, 1 moved, 2 cancelled; `progress` 0 to 1 as the
+     * system eases it; `edge` 0 the left, 1 the right. Whether exact2 previews it. The commit is [back]. */
+    @JvmStatic external fun backProgress(phase: Int, progress: Float, edge: Int): Boolean
     /** A URL given to the running app: its location goes to the navigation root's `navigate` (LLP 1133.023 D15 item 3). */
     @JvmStatic external fun open(href: String)
     /** A share given to the running app, `{"target", "share"}` as [Shares.request] writes it (LLP 1133.024 D5). */

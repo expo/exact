@@ -3,6 +3,7 @@
 //! `-exact-drag-timeline` follows the presenter's contact and the release spring,
 //! at f(photo) in every frame, with nothing Linux-specific; and in a list of
 //! cards that each drive `--swipe`, each row's label follows its own card.
+//! Scroll and view timelines follow the presenter's scroll (D5).
 use exact_linux::{presenter::PainterChoice, Presenter};
 use std::path::PathBuf;
 
@@ -379,4 +380,38 @@ fn a_thrown_card_tilts_its_face_and_raises_the_next_in_every_frame() {
         (face.rotate, p.host().presented(id(&p, "next")).scale),
         (15., 1.)
     );
+}
+
+/// Scroll and view timelines on Linux (LLP 1057.003 D5), on the fixture the
+/// Apple hosts' `ScrollTimelineTests` drive: a names track that follows its
+/// sibling columns' sideways scroll, and a card that slides by its own
+/// progress through its list. The presenter gives the engine the offset in
+/// the scroll itself, so a consumer has moved before any paint.
+#[test]
+fn scroll_and_view_timelines_follow_the_presenters_scroll_before_a_paint() {
+    let source = include_str!("../../../apple/tests/fixtures/scroll-timelines.contract");
+    let (mut p, error) = Presenter::boot_with(
+        &contract::compile(source).unwrap().encode(),
+        (),
+        (400., 600.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let _ = p.frame();
+    let x = |p: &Presenter<()>, name: &str| p.host().presented(id(p, name)).translate.0;
+    assert_eq!((x(&p, "track"), x(&p, "card")), (0., 0.));
+    let cols = id(&p, "cols");
+    assert_eq!(p.scroll_to(cols, (120., 0.)), Some((120., 0.)));
+    assert!((x(&p, "track") + 120.).abs() < 1e-3, "{}", x(&p, "track"));
+    // The card's `cover` runs from 50 (its top at the list's bottom) to 200.
+    let list = id(&p, "list");
+    p.scroll_to(list, (0., 125.));
+    assert!((x(&p, "card") - 50.).abs() < 1e-3, "{}", x(&p, "card"));
+    // Painted again: still where the scrollers put them.
+    let _ = p.frame();
+    assert!((x(&p, "track") + 120.).abs() < 1e-3, "{}", x(&p, "track"));
+    assert!((x(&p, "card") - 50.).abs() < 1e-3, "{}", x(&p, "card"));
 }

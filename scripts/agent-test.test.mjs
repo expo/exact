@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backendFetchPrefixes, churnLines, disabledExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
+import { backendFetchPrefixes, churnLines, disabledExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
 import { axFindings } from './agent-ax.mjs';
 import { withEpoch } from './agent-launch.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
@@ -158,6 +158,14 @@ test('the fetch-loading-error recipe passes its own test', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 }, 180_000);
+
+test('a pick with no picker held names the step that holds one on its host', () => {
+  expect(pickHint('web')).toContain('tap the visible file input or a button');
+  for (const host of ['macos', 'ios', 'linux']) {
+    expect(pickHint(host)).not.toContain('tap the visible file input');
+    expect(pickHint(host)).toContain('tap a button whose action calls showPicker("<input id>")');
+  }
+});
 
 test('a presented popover belongs to its AppKit modal for outside-modal findings', () => {
   const elements = [

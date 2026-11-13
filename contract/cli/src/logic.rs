@@ -12,8 +12,9 @@ pub fn rust_entry(
     let constructor = native_storage_constructor(constructor, inputs)?;
     let constructor = constructor.as_str();
     // The digest of the source this binary compiles `constructor`'s crate
-    // from (`scripts/app.mjs` `nativeSource`): a Rust update built from the
-    // same source then runs this native code, not the module.
+    // from (`scripts/rust.mjs` `nativeSource`): a Rust update built from the
+    // same source then runs this native code, not the module. Routing compares
+    // source digests, never the wasm module's (LLP 1030 D3a, amended 2026-11-12).
     println!("cargo:rerun-if-env-changed=EXACT_NATIVE_SOURCE");
     let native = match std::env::var("EXACT_NATIVE_SOURCE") {
         Ok(source) if !source.is_empty() => {

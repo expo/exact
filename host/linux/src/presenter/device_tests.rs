@@ -35,6 +35,7 @@ fn phone() -> Device {
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     }
 }
 
@@ -361,9 +362,33 @@ fn a_touch_screen_alone_is_the_primary_pointer() {
     assert!(!touch_only(&[]));
 }
 
-/// Android's shell tells its locale and no regional format (LLP
-/// 1027.000.000): `formatLocale` answers the device's locale, not the one
-/// the process launched with.
+/// Android's shell tells its locale with the hour cycle the person forces
+/// (LLP 1027.000.000): `formatLocale` answers it, not the format the process
+/// launched with.
+#[test]
+fn a_phones_regional_format_is_its_format_locale() {
+    let mut p = boot(READS);
+    let launched = exact_runner::time::Place {
+        format_locale: "en-US".into(),
+        seed: 1.0,
+        ..Default::default()
+    };
+    assert!(p.set_place(&launched).is_none());
+    let korean = Device {
+        locale: "ko-KR".into(),
+        format_locale: "ko-KR-u-hc-h23".into(),
+        ..phone()
+    };
+    assert!(p.set_device(&korean).is_none());
+    let place = p.host().runner().place();
+    assert_eq!(
+        (place.locale.as_str(), place.format_locale.as_str()),
+        ("ko-KR", "ko-KR-u-hc-h23")
+    );
+}
+
+/// A shell that reports no regional format apart from the device's locale:
+/// `formatLocale` answers that locale, not the one the process launched with.
 #[test]
 fn a_phones_locale_is_its_format_locale_too() {
     let mut p = boot(READS);

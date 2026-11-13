@@ -38,7 +38,7 @@ for (const target of ['js', 'wasm']) test(`the ${target} frame tree URL keeps th
     const source = readFileSync(new URL('../web-js/agent.js', import.meta.url), 'utf8');
     Object.assign(f, { id: () => 7, type: () => 'WebView', loaded: new Map() });
     const record = glueNode(source, n => n.type === 'VariableDeclarator' && n.id.name === 'record' ? n : null);
-    read = vm.runInContext(`${glueDeclarations(source, ['PROPS', 'TABLE_TAGS'])}
+    read = vm.runInContext(`${glueDeclarations(source, ['PROPS', 'SEMANTIC_TAGS'])}
 const ${record}; () => record(views.get(7), 0);`, f);
   }
   const base = `https://exact.invalid/.exact/gen/${'a'.repeat(32)}/`;
@@ -49,6 +49,25 @@ const ${record}; () => record(views.get(7), 0);`, f);
     expect(read()).toMatchObject({ type: 'WebView', url: source, loading: false, guest,
       navigation: { url: 'https://exact.invalid/guest-navigation' } });
   }
+});
+
+test('the wasm tree keeps navigation props and reports an authored projection opt-out', () => {
+  const f = fixture(), props = { semanticTag: 'header', testId: 'header' };
+  const header = { isConnected: true, dataset: { exactSaid: 'appearance' } };
+  f.views.set(2, header);
+  f.getComputedStyle = () => ({ appearance: 'none' });
+  f.ask = () => ({ roots: [1], nodes: [
+    { id: 1, props: { navigationKey: 'home', navigationBar: 'none' }, children: [2] },
+    { id: 2, parent: 1, props, children: [] },
+  ] });
+  vm.runInContext(declaration('tree'), f);
+  const nodes = f.exact.agent({ op: 'tree' }).nodes;
+  expect(nodes[0].props).toEqual({ navigationKey: 'home', navigationBar: 'none' });
+  expect(nodes[1].props).toEqual(props);
+  expect(nodes[1].style).toEqual({ appearance: { value: 'none', source: 'authored' } });
+  // A browser's default appearance is no opt-out.
+  delete header.dataset.exactSaid;
+  expect(f.exact.agent({ op: 'tree' }).nodes[1].style).toBeUndefined();
 });
 
 test('layout joins a bare reason only to the matching plan site on every carrier', () => {

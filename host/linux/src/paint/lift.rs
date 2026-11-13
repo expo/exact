@@ -80,6 +80,11 @@ impl Painter {
             });
         }
         let children: Vec<ViewId> = order.into_iter().map(|(id, _)| id).collect();
+        // A surface that composites its children takes them in this order.
+        if self.composites.canvases.contains(&node.id) {
+            self.composite(walk, node, &children, ts, child_offset, child_rect);
+            return;
+        }
         // A scroller's rows are its children; a scroller holding one
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
@@ -97,6 +102,7 @@ impl Painter {
             } else {
                 self.node(walk, child, ts, child_offset, child_rect);
             }
+            self.paint_stage(walk, child);
         }
         if group {
             self.group_end(walk);

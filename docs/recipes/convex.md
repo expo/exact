@@ -12,10 +12,9 @@ import { getFunctionName } from 'convex/server';
 import { convexToJson, jsonToConvex } from 'convex/values';
 import { api } from './convex/_generated/api';
 
-// The deployment twice, literally (a grant is a constant): `convex()` takes its
-// URL or, as here, the origin the grant names.
+// The deployment's socket origin: the grant and the client both take it.
 const CONVEX = 'wss://happy-otter-123.convex.cloud';
-export const grants = 'net.websocket wss://happy-otter-123.convex.cloud';
+export const grants = `net.websocket ${CONVEX}`;
 
 const cx = convex(CONVEX, { getFunctionName, convexToJson, jsonToConvex });
 const sources: Sources = {

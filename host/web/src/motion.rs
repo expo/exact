@@ -641,7 +641,10 @@ impl Motion for Springs {
 // Native projection uses f32 CSS lengths. Reject malformed external positions
 // before advancing the clock; signed velocities/internal curve samples remain
 // unrestricted, and the DOM alone clamps a negative displayed height to zero.
-fn validate_height_position(property: Property, value: Value) -> Result<(), EngineError> {
+pub(super) fn validate_height_position(
+    property: Property,
+    value: Value,
+) -> Result<(), EngineError> {
     if property != Property::Height {
         return Ok(());
     }

@@ -100,13 +100,17 @@ pub async fn recover(
             .ok_or_else(|| crate::recovery::RecoveryFailure::other("no device"))?;
         let mut targets = Vec::new();
         for (id, canvas) in ids.iter().zip(canvases) {
-            let config = module.instances[id].config.as_ref().ok_or_else(|| {
+            let inst = module.instances.get_mut(id).unwrap();
+            let config = inst.config.as_mut().ok_or_else(|| {
                 crate::recovery::RecoveryFailure::other("missing presentation configuration")
             })?;
             let target = gpu
                 .instance
                 .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
                 .map_err(|e| crate::recovery::RecoveryFailure::other(e.to_string()))?;
+            let caps = target.get_capabilities(&gpu.adapter);
+            inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
+            inst.alpha_modes = caps.alpha_modes;
             target.configure(&gpu.device, config);
             targets.push((*id, target));
         }
@@ -114,6 +118,8 @@ pub async fn recover(
             let inst = module.instances.get_mut(&id).unwrap();
             let config = inst.config.as_ref().unwrap();
             inst.surface.device_ready(gpu.device.features());
+            inst.surface
+                .color_space_granted(crate::target::granted(Some(config)));
             inst.surface
                 .prepare_assets(&gpu.device, &gpu.queue, crate::view_format(config));
             inst.presentation = Some(SurfaceRef::new(target));

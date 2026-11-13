@@ -44,6 +44,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
     location: &str,
     site: &Site,
     deadline: Duration,
+    delivery: &exact_runner::delivery::Delivery,
     shell: &str,
     js: &Js,
     late: impl Fn(ActivatePolicy) -> bool,
@@ -110,6 +111,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
             deadline,
             true,
             crate::render_time(),
+            delivery,
             paints_boot.then_some(&mut on_boot as &mut dyn FnMut(&mut _)),
         )?
     };
@@ -118,7 +120,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
         Err(why) => {
             crate::log(format_args!("render {location}: with a kernel ({why})"));
             retire(page, data);
-            let rendered = crate::render_with(
+            let rendered = crate::render_with_at(
                 plan,
                 data,
                 viewport,
@@ -127,6 +129,8 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
                 deadline,
                 Ids::Any,
                 Projection::Kernel,
+                crate::render_time(),
+                delivery,
             )?;
             let late = late(rendered.activate);
             let body = crate::page::body_js(shell, js, &rendered, late, false, checkpoints);
@@ -405,6 +409,7 @@ component Cards
             "/",
             &Site::default(),
             Duration::from_secs(30),
+            &Default::default(),
             SHELL,
             &Js::of(SHELL).unwrap(),
             |_| false,
@@ -462,6 +467,7 @@ component Cards
             &Site::default(),
             Duration::from_secs(30),
             Some(SHELL),
+            &Default::default(),
         );
         assert!(result.contains("\"same\":true"), "{result}");
     }

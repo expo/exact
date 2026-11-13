@@ -96,8 +96,8 @@ test('a change waits for deferred view-transition tails and their host commands'
       rt.commit(() => { rt.W(side, true); rt.W(key, 1); rt.C('mark', [1]); });
       rt.commit(() => { rt.W(key, 2); rt.C('mark', [2]); });
       const deferred = !!transition;
-      // A history traversal applies synchronously while the earlier tail waits.
-      rt.useNavigation({ traversing: true }); rt.commit(() => {}); rt.useNavigation(null);
+      // A history traversal the browser animated applies synchronously while the earlier tail waits.
+      rt.useTraversal(() => true); rt.commit(() => {}); rt.useTraversal(null);
       rt.advance(20, false, undefined, false);
       const waiting = seen.slice();
       gate.resolve();

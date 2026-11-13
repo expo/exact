@@ -141,6 +141,11 @@ impl<D: DataSource> Host<D> {
         if result.is_ok() {
             self.scroll_anchors
                 .laid_out(self.runner.kernel(), &self.runner.roots());
+            // @ref LLP 1057.003 D5 — scroll and view timelines, placed from
+            // the layout; the presenter gives their scrollers' offsets.
+            for (node, binding) in self.runner.kernel_mut().place_timelines() {
+                self.engine.set_animation_timeline(node, binding);
+            }
         }
         result
     }

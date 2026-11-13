@@ -25,7 +25,7 @@ final class SplitMacTests: XCTestCase {
                       if e.name == "library"
                         column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" testId="route-library"
                           header display="flex" align-items="center"
-                            text "Library" role="heading" aria-level=1 flex=1
+                            text "Library" role="heading" aria-level=1 flex=1 testId="title-library"
                             button press=openAdd aria-label="Add Book" aria-keyshortcuts="Meta+N" testId="add-book"
                               image "symbol:add"
                             input type="search" value=query input=search placeholder="Search" testId="search"
@@ -43,6 +43,7 @@ final class SplitMacTests: XCTestCase {
                               image "symbol:delete"
                           box testId=`half-${e.params.id}` width="50%" height=40 background-color="#f9ab00"
                           input value=query input=search testId=`field-${e.params.id}`
+                          text `Shelved ${e.params.id}` testId=`shelf-${e.params.id}`
                       if e.name == "notes"
                         column navigationKey=`${e.id}` position="absolute" inset=0 testId="route-notes"
                           text "Notes on the book"
@@ -258,12 +259,14 @@ final class SplitMacTests: XCTestCase {
             XCTAssertNil(reply["error"], "\(name): \(reply)")
         }
         let split = session.presenter.navigation.split
-        split.listOwnsWindow = false
         XCTAssertEqual(window?.title, "About a")
         XCTAssertTrue(try node("title-a").isHiddenOrHasHiddenAncestor)
+        XCTAssertFalse(try node("title-library").isHiddenOrHasHiddenAncestor)
         split.listOwnsWindow = true
         XCTAssertEqual(window?.title, "Library")
         XCTAssertFalse(try node("title-a").isHiddenOrHasHiddenAncestor)
+        split.listOwnsWindow = false
+        XCTAssertEqual(window?.title, "About a")
     }
 
     func testAnUnsaidWindowGroundLetsTheSplitSurfaceShowThrough() throws {
@@ -520,7 +523,8 @@ final class SplitMacTests: XCTestCase {
         XCTAssertNil(columns.detail.saysNothing)
         XCTAssertEqual(feed.table.selectedRow, 1, "the row whose detail shows stays selected")
         XCTAssertEqual(split.shown?.row, try node("row-b").id)
-        // The list owns the window (§5 Q10): its heading is the title, and the detail's stays the first line of its pane.
+        // Beside a sidebar the list owns the window (§5 Q10), as Mail's three columns: its heading is the title,
+        // and the detail's stays the first line of its pane.
         XCTAssertEqual(window.title, "Library")
         let title = try node("title-b")
         XCTAssertFalse(title.isHiddenOrHasHiddenAncestor)
@@ -804,11 +808,31 @@ final class SplitMacTests: XCTestCase {
         // No sidebar's button; the list's items, the separator on the one divider, the detail's.
         XCTAssertEqual(items(window), ["exact.command.\(add.id)", "exact.split.separator",
                                        "exact.command.\(notes.id)", "exact.command.\(count.id)", "NSToolbarFlexibleSpaceItem", "exact.search.\(search.id)"])
-        XCTAssertEqual(window.title, "Library")
+        XCTAssertEqual(window.title, "About a")
         // The window stops at the list's 200, the divider and the detail's minimum.
         width(window, 200)
         XCTAssertEqual(window.contentView?.frame.width ?? 0, 200 + 320 + columns.splitView.dividerThickness, accuracy: 1)
         XCTAssertFalse(p.navigation.canGoBack)
+    }
+
+    /// The list is never pushed: its header's Back control (the root's
+    /// `navigationBack`) stays its own item over the list's column when the
+    /// detail takes the window, since no platform Back stands for it there.
+    func testTheListsBackControlStaysAnItemWhenTheDetailOwnsTheWindow() throws {
+        let source = replacing("button press=openAdd", with: [
+            "button id=\"back\" press=back aria-label=\"Close\" testId=\"list-back\"",
+            "  image \"symbol:delete\"",
+            "button press=openAdd aria-label=\"Add Book\" aria-keyshortcuts=\"Meta+N\" testId=\"add-book\"",
+        ], in: app(tabs: false))
+        let session = try boot(tabs: false, size: CGSize(width: 900, height: 500), source: source)
+        _ = compose(ExactView(session: session), width: 900, sidebar: false)
+        let window = try XCTUnwrap(self.window)
+        let close = try node("list-back")
+        XCTAssertTrue(items(window).contains("exact.command.\(close.id)"), "the list owns the window: \(items(window))")
+        try press("row-a")
+        XCTAssertEqual(window.title, "About a")
+        XCTAssertTrue(items(window).contains("exact.command.\(close.id)"), "the list beside the detail keeps it: \(items(window))")
+        XCTAssertFalse(items(window).contains(WindowToolbarHost.historyIdentifier.rawValue))
     }
 
     /// The text pump paints the detail's pane as it paints the page: a route
@@ -819,7 +843,7 @@ final class SplitMacTests: XCTestCase {
         let session = try boot(tabs: false, size: CGSize(width: 900, height: 500))
         let columns = compose(ExactView(session: session), width: 900, sidebar: false)
         try press("row-a")
-        let title = try node("title-a")
+        let title = try node("shelf-a")
         XCTAssertTrue(title.isDescendant(of: columns.detailPane))
         XCTAssertNil(title.enclosingScrollView)
         let shown = session.presenter.selection.shownParagraphs

@@ -1,6 +1,9 @@
 use super::*;
 use exact_runner::Request;
 
+#[cfg(target_os = "linux")]
+mod lifetime;
+
 pub(super) fn compile_fixture(source: &std::path::Path, path: &std::path::Path) {
     #[cfg(not(windows))]
     let mut command = {
@@ -112,6 +115,7 @@ fn deferred_restore_keeps_bytes_until_commit_and_late_refusal_is_once() {
             restore_input: true,
             restore_bytes: Some(vec![1]),
             restore_logged: false,
+            uploaded: None,
         };
         c.finish_restore(None, Some(&json!({"world":{"restored":false}})));
         assert_eq!(c.restore_bytes, Some(vec![1]));
@@ -336,6 +340,7 @@ fn cpu_canvas_pick_is_forwarded_without_a_device() {
             restore_input: false,
             restore_bytes: None,
             restore_logged: false,
+            uploaded: None,
         },
     );
     let reply = p.surface_request(1, json!({"op":"layout","x":50,"y":50}));
@@ -406,6 +411,7 @@ fn controls_own_release_and_focus_and_placed_siblings_cover() {
             restore_input: false,
             restore_bytes: None,
             restore_logged: false,
+            uploaded: None,
         },
     );
     p.boxes();
@@ -488,6 +494,7 @@ fn controls_own_release_and_focus_and_placed_siblings_cover() {
             restore_input: false,
             restore_bytes: None,
             restore_logged: false,
+            uploaded: None,
         },
     );
     p.dirty = true; // The injected canvas changes the next presented frame.
@@ -645,6 +652,7 @@ fn rendered_lifecycle_preserves_both_causes_and_initializes_replacements() {
             restore_input: false,
             restore_bytes: None,
             restore_logged: false,
+            uploaded: None,
         },
     );
     surfaces.lifecycle(true, true);

@@ -116,9 +116,34 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertEqual(navigation.observation()["route"] as? String, (nav.viewControllers.last as? RouteController)?.key, "no Back was read")
     }
 
-    private func fixture(_ label: String) throws -> ExactSession {
+    /// A tabpanel inside its root's tablist: the tab bar takes the tabs'
+    /// place, and the panel's routes stay in the page, shown and pressed.
+    func testAPanelInsideTheTablistStaysInThePage() throws {
+        let session = try fixture("nested-panel", plan: "EXACT_NESTED_PANEL_TABS_PLAN")
+        let navigation = session.presenter.navigation
+        XCTAssertNotNil(navigation.tabController, "the tab bar shows")
+        XCTAssertEqual(navigation.covers[try node(session, "tab-home").id], .whole, "the tab is the bar's")
+        XCTAssertNil(navigation.covers[try node(session, "tabs").id], "the tablist keeps the panel's room")
+        try assertReached(session, "push")
+        try press(session, "push")
+        waitFor("Detail is pushed") { (navigation.activeRoute?.node.props["testId"]) == "route-detail" && !navigation.inTransition }
+        try assertReached(session, "body")
+    }
+
+    /// The node is in the window with a size, and a touch at its center reaches it.
+    private func assertReached(_ session: ExactSession, _ testId: String) throws {
+        let view = try node(session, testId)
+        let window = try XCTUnwrap(view.window, "\(testId) is in the window")
+        window.layoutIfNeeded()
+        let frame = view.convert(view.bounds, to: window)
+        XCTAssertGreaterThan(frame.width * frame.height, 0, "\(testId) has a size: \(frame)")
+        let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil)
+        XCTAssertTrue(hit?.isDescendant(of: view) == true, "a touch at \(testId)'s center reaches it, not \(String(describing: hit))")
+    }
+
+    private func fixture(_ label: String, plan key: String = "EXACT_BARLESS_TAB_PLAN") throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
-        let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env["EXACT_BARLESS_TAB_PLAN"], "build.mjs --test --ios compiles the barless-tab fixture")))
+        let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[key], "build.mjs --test --ios compiles the fixture")))
         let session = ExactApp.shared.makeSession(label: label)
         sessions.append(session)
         let view = ExactView(session: session)

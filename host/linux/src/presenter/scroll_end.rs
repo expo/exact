@@ -3,7 +3,7 @@
 use super::*;
 use exact_kernel::NodeKey;
 use exact_runner::ReorderToken;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Completion {
@@ -28,6 +28,9 @@ pub(super) struct State {
     delivering: VecDeque<(ViewId, NodeKey)>,
     model: BTreeMap<ViewId, (collection::ModelScroll, Completion)>,
     reader_previous: BTreeMap<ViewId, Pending>,
+    /// The scrollers a reader's finger is dragging, or its fling is moving
+    /// (`scroll_drag.rs`): their samples owe no completion until it is over.
+    held: BTreeSet<ViewId>,
     command_work: bool,
 }
 
@@ -38,6 +41,7 @@ impl State {
         self.delivering.retain(|(view, _)| *view != id);
         self.model.remove(&id);
         self.reader_previous.remove(&id);
+        self.held.remove(&id);
     }
 }
 
@@ -120,10 +124,13 @@ impl<D: DataSource> Presenter<D> {
             {
                 completion = previous.kind;
             }
-            // Deferred wheel input has one scroll event at the final offset.
+            // Deferred wheel input has one scroll event at the final offset,
+            // and a reader's drag or fling goes on with the same scroll.
+            let held = completion == Completion::Reader && self.scroll_end.held.contains(&view);
             let continuing = self.scroll_end_frame_blocked(view)
                 || (completion == previous.kind
-                    && matches!(completion, Completion::Edge(_) | Completion::Collection));
+                    && (held
+                        || matches!(completion, Completion::Edge(_) | Completion::Collection)));
             if !continuing && self.scroll_end_finished(view, &previous) {
                 self.scroll_end.completed.push_back((
                     view,
@@ -303,7 +310,9 @@ impl<D: DataSource> Presenter<D> {
             .iter()
             .filter(|(id, _)| !self.scroll_end_frame_blocked(**id))
             .filter_map(|(id, p)| {
-                if matches!(p.kind, Completion::Instant | Completion::Reader) {
+                if p.kind == Completion::Reader && self.scroll_end.held.contains(id) {
+                    None
+                } else if matches!(p.kind, Completion::Instant | Completion::Reader) {
                     Some(p.due)
                 } else if self.scroll_end_finished(*id, p) {
                     Some(self.host.now())
@@ -325,7 +334,42 @@ impl<D: DataSource> Presenter<D> {
         match pending.kind {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
             Completion::Collection => false,
+            Completion::Reader if self.scroll_end.held.contains(&view) => false,
             _ => pending.due <= self.host.now(),
+        }
+    }
+
+    /// The reader holds scroller `view`'s scroll: its finger began dragging
+    /// it, or lifted from it into a fling. While held its samples owe no
+    /// completion, however long they rest.
+    pub(super) fn scroll_end_hold(&mut self, view: ViewId) {
+        self.scroll_end.held.insert(view);
+    }
+
+    /// The reader's scroll of `view` is over (a lift with nothing thrown,
+    /// the fling stopped): its completion is due now, as UIKit ends a drag
+    /// that does not decelerate and a deceleration when it stops.
+    pub(super) fn scroll_end_release(&mut self, view: ViewId) {
+        if !self.scroll_end.held.remove(&view) {
+            return;
+        }
+        let now = self.host.now();
+        if let Some(p) = self
+            .scroll_end
+            .pending
+            .get_mut(&view)
+            .filter(|p| p.kind == Completion::Reader)
+        {
+            p.due = now;
+        }
+    }
+
+    /// A touch's down: nothing of the reader's was moving any scroller
+    /// before it but what the touch stopped, so a scroll it did not say the
+    /// end of (its view went) is over.
+    pub(super) fn scroll_end_release_all(&mut self) {
+        for view in self.scroll_end.held.clone() {
+            self.scroll_end_release(view);
         }
     }
 

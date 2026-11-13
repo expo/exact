@@ -37,7 +37,7 @@ const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 const glue = readFileSync(resolve(WEB, 'glue.js'), 'utf8');
 const children = glueCase(glue, 'children');
-const resize = glueDeclarations(glue, ['mediaChanged', 'pageChanged']);
+const resize = glueDeclarations(glue, ['resizeRunner', 'mediaChanged', 'pageChanged']);
 const page = `<style>
   body { margin:0 } #exact-root { position:relative; padding:20px }
   #card { width:100px; height:40px; background:red; --exact-layout-transition:1000 0 linear }

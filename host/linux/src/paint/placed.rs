@@ -38,17 +38,8 @@ impl Painter {
         if f.width <= 0. || f.height <= 0. {
             return true;
         }
-        let mut painter = Painter::new(
-            self.text.clone(),
-            self.scale,
-            Box::new(crate::raster::Raster::transparent()),
-        );
-        painter.dark = self.dark;
-        painter.symbols = self.symbols;
-        painter.placements = self.placements.clone();
+        let mut painter = self.apart(f.width, f.height);
         painter.placements.remove(&id);
-        painter.viewport = (f.width, f.height);
-        painter.backend.begin(f.width, f.height, self.scale);
         let mut child_walk = Walk {
             scene: walk.scene,
             boxes: Vec::new(),
@@ -65,6 +56,7 @@ impl Painter {
         walk.text.extend(child_walk.text);
         walk.fields.extend(child_walk.fields);
         walk.inline.extend(child_walk.inline);
+        self.gather(&mut painter);
         if let Ok(source) = painter.backend.finish() {
             if let Some((pixels, rect)) =
                 placement::warp_clipped(&source, h, clip_depth, self.scale, self.viewport)

@@ -226,8 +226,9 @@ function asCall(call, run) {
   answering.call = call;
   try { return run(); } finally { answering.call = before; }
 }
-/** Whether `call`'s ticket was let go (new arguments, a refresh, a newer send, its view's end). rt.js ties the two as it makes the ticket. */
-export function letGo(call) { const t = call.ticket; return !!t && (t.owner.ticket !== t || t.owner.gone); }
+/** Whether `call`'s ticket was let go (new arguments, a refresh, a newer send, its view's end). rt.js ties the two as
+ *  it makes the ticket; a `parallel` mutation holds one for each send in flight (rt.js `tickets`). */
+export function letGo(call) { const t = call.ticket, o = t?.owner; return !!t && (!(o.parallel ? o.tickets.includes(t) : o.ticket === t) || o.gone); }
 /** Whether `call` still answers: it has not answered, and its ticket was not let go. */
 export function answers(call) { return !call.settled && !letGo(call); }
 function disarm(id) {

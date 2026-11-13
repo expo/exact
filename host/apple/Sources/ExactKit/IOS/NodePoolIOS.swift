@@ -554,6 +554,7 @@ extension NodeView {
         // The next node's hatch decides again.
         hatchReusable = false
         content = .zero
+        fitContentHeight = nil
         // The next node's layout sends its own content box, if any
         kernelContentBox = nil; kernelPadding = nil
         needsCapture = false; paintedThisTurn = false

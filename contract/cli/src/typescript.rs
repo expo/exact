@@ -22,7 +22,8 @@ pub fn typescript(plan: &Plan) -> Result<String, String> {
 pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<String, String> {
     // Public callers may construct a Plan directly. Refuse malformed tables
     // before following any indices, just as the runtime decoder does.
-    Plan::decode(&plan.encode()).map_err(|e| format!("invalid plan: {e:?}"))?;
+    plan.redecode()
+        .map_err(|e| format!("invalid plan: {e:?}"))?;
     let quoted = |s: &str| serde_json::to_string(s).expect("a string is JSON");
     let mut out = String::from(
         "// @generated from Contract source signatures; do not edit.\n\

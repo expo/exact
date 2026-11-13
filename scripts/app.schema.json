@@ -272,7 +272,7 @@
     },
     "theme_color": { "type": "string" },
     "color_scheme_dark": {
-      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page and the iOS launch screen), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
+      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page, the iOS launch screen and the Android launch window), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
       "type": "object",
       "properties": {
         "background_color": {
@@ -292,7 +292,7 @@
     "background_color": {
       "type": "string",
       "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-      "description": "The first-frame background, the web page's and the iOS launch screen's: #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, the iOS launch screen is the platform's: systemBackground, or the grouped background where the first route scrolls a grouped list."
+      "description": "The first-frame background, the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12): #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, each is the platform's: on iOS systemBackground, or the grouped background where the first route scrolls a grouped list; on Android the theme's surface."
     },
     "lang": {
       "description": "The W3C manifest's language: a BCP 47 tag for the page's <html lang> and the web manifest. Absent is en.",
@@ -591,6 +591,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "title": { "type": "string", "minLength": 1 },
+                    "description": { "type": "string", "minLength": 1, "description": "What the parameter means and what it takes, for a caller choosing a value: App Intents' parameter description, the input schema's description on the web." },
                     "entity": { "type": "string", "minLength": 1, "description": "A kind of intents.entities: the system offers that kind's entries, and passes the entry's id." },
                     "type": { "enum": ["integer"], "description": "A number parameter the system asks for as a whole number." }
                   }

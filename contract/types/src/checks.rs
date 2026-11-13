@@ -1052,7 +1052,10 @@ pub(super) fn check_command(
         }
         return Ok(());
     }
-    if matches!(name, "playSound" | "playSounds" | "stopSounds" | "haptic") {
+    if matches!(
+        name,
+        "playSound" | "playSounds" | "stopSounds" | "setSounds" | "haptic"
+    ) {
         return sounds::args(name, args, scope, shapes, span);
     }
     if matches!(name, "requestMIDIAccess" | "sendMIDI") {

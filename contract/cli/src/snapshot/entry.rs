@@ -171,9 +171,11 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
     };
     for field in &declared.fields {
         let expected = match field.name.as_str() {
-            "width" | "height" | "horizontalViewportSegments" | "verticalViewportSegments" => {
-                "number"
-            }
+            "width"
+            | "height"
+            | "horizontalViewportSegments"
+            | "verticalViewportSegments"
+            | "keyboardHeight" => "number",
             "prefersReducedMotion" | "prefersReducedTransparency" | "accessibilityTextSize" => {
                 "bool"
             }

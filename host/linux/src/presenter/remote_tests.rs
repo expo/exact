@@ -56,6 +56,7 @@ fn boot(tv: bool) -> Presenter<()> {
         tv,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert!(p.set_device(&device).is_none());
     p.advance(16.);

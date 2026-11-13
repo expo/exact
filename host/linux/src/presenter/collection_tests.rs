@@ -1032,6 +1032,44 @@ fn horizontal_card_boxes_match_the_eager_strip_at_the_same_scroll_left() {
     assert_eq!(virtualized, eager);
 }
 
+/// LLP 1070 as amended for #226: a row list's `gap` lays its cards out where
+/// the eager strip's flex row does, at a card's middle and past the end.
+#[test]
+fn horizontal_card_boxes_with_a_gap_match_the_eager_strip() {
+    let boxes = |attrs: &str, card: &str, left: f32| {
+        let mut p = boot_source(&strip(attrs, card).replace("rows()", "rows(0, 200)"));
+        settle(&mut p);
+        let view = named(&p, "strip");
+        p.wheel(view, left, 0.).unwrap();
+        settle(&mut p);
+        let shown = (0..200)
+            .filter_map(|n| {
+                let key = *p.host.kernel().find_by_test_id(&format!("c-{n}")).first()?;
+                let id = p.host.kernel().node_by_key(key)?.id;
+                let b = p.box_of(id)?;
+                (b.rect.0 + b.rect.2 > 0. && b.rect.0 < 400.).then_some((n, b.rect))
+            })
+            .collect::<Vec<_>>();
+        (p.scroll_of(view).0, shown)
+    };
+    // Every third card not displayed: no flex item, so no gap around it. Its
+    // estimate stands until it is measured, so that strip is compared where
+    // its first window measured the cards.
+    let hidden = r#"flex-shrink=0 display=(x % 3 == 1 ? "none" : "flex")"#;
+    for (card, lefts) in [("flex-shrink=0", [3_000., 100_000.]), (hidden, [0., 200.])] {
+        for left in lefts {
+            let eager = boxes("gap=10", card, left);
+            let virtualized = boxes(
+                "virtualized=true estimated-item-width=94 gap=10",
+                card,
+                left,
+            );
+            assert!(eager.1.len() > 3, "{card} {left}");
+            assert_eq!(virtualized, eager, "{card} {left}");
+        }
+    }
+}
+
 fn nested(strip_attrs: &str) -> Presenter<Rows> {
     boot_source(&format!(
         r#"component App

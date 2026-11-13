@@ -182,6 +182,18 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// Whether Back would go to the route now, as D6 orders it, and could
+    /// take it away: no surface of the top layer takes it first and the
+    /// route's Back control is not refused. What a predictive Back may
+    /// preview (`stage/touch.rs`); a handler can still keep the route.
+    pub(super) fn back_previewable(&self) -> bool {
+        !self.surface_takes_back()
+            && matches!(
+                self.back(),
+                Some(Back::Press(_) | Back::Navigate(..) | Back::Pop(_))
+            )
+    }
+
     /// Whether system Back would be taken now: what a shell's back callback
     /// is enabled by, so that Back with nowhere to go leaves the app with
     /// the system's own animation (D6).
@@ -256,6 +268,7 @@ impl<D: DataSource> Presenter<D> {
         if let Some(error) = error {
             self.host.log(error);
         }
+        self.stage_back_done(now_ms);
         true
     }
 

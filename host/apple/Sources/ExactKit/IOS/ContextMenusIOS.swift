@@ -78,6 +78,14 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
     }
     private(set) var open: Open?
+    private var animations = 0
+    var inTransition: Bool { animations > 0 }
+
+    private func track(_ animator: UIContextMenuInteractionAnimating?) {
+        guard let animator else { return }
+        animations += 1
+        animator.addCompletion { [weak self] in self?.animations -= 1 }
+    }
 
     func isOpen(_ pop: NodeView) -> Bool { open?.popover === pop && open?.toggled == true }
     func close(_ pop: NodeView) {
@@ -511,17 +519,32 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         // A view the touch fell on that has left the window gives way to the node
         let shown = owner.touched.flatMap { $0.window == nil ? nil : $0 } ?? source
+        if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
         let parameters = UIPreviewParameters()
         parameters.visiblePath = LiftTarget.rounded(shown)
         guard let target = LiftTarget.target(shown) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)
     }
 
+    /// A box inside a canvas child its surface places, lifted from where the
+    /// surface draws it: UIKit draws nothing of the child (its layer's empty
+    /// mask), so the picture is the screen's there.
+    static func placedPreview(of shown: UIView, in source: NodeView) -> UITargetedPreview? {
+        guard let container = LiftTarget.container(of: source) else { return nil }
+        let area = source.drawnRect(source.convert(shown.bounds, from: shown), in: container)
+        guard area.width >= 1, area.height >= 1,
+              let picture = container.resizableSnapshotView(from: area, afterScreenUpdates: false, withCapInsets: .zero) else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.backgroundColor = .clear
+        return UITargetedPreview(view: picture, parameters: parameters, target: UIPreviewTarget(container: container, center: CGPoint(x: area.midX, y: area.midY)))
+    }
+
     /// The run's words cut out of its paragraph's ink until `restore`. UIKit
     /// hides a view it lifts, but the paragraph stays shown, and its words
     /// showed beside their picture as the picture grew (filmed, iOS 27.1).
     private func hideRun(_ owner: Open, _ lines: RunLines) {
-        guard owner.hiddenInk == nil, let ink = owner.source?.textRasterLayer, ink.mask == nil else { return }
+        // A placed canvas child's ink is not what the screen shows: its surface's copy is.
+        guard owner.hiddenInk == nil, owner.source?.placedAncestor == nil, let ink = owner.source?.textRasterLayer, ink.mask == nil else { return }
         let path = UIBezierPath(rect: ink.bounds)
         for box in lines.boxes { path.append(UIBezierPath(rect: lines.container.layer.convert(box, to: ink))) }
         CATransaction.begin()
@@ -591,7 +614,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
         /// Nil where the run shows no lines.
         init?(_ run: InlineText, in source: NodeView, over container: UIView) {
-            let boxes = source.inlineRects(run).map { source.convert($0, to: container) }.filter { !$0.isEmpty }
+            // Where the screen shows them: through a canvas child's placement, which the surface draws them at.
+            let placed = source.placedAncestor?.placement != nil
+            let boxes = source.inlineRects(run).map { placed ? source.drawnRect($0, in: container) : source.convert($0, to: container) }.filter { !$0.isEmpty }
             guard let outline = UIPreviewParameters(textLineRects: boxes.map { NSValue(cgRect: $0) }).visiblePath?.copy() as? UIBezierPath,
                   !outline.bounds.isEmpty else { return nil }
             let area = outline.bounds
@@ -790,7 +815,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// paragraph paints more than its layer's fill.
     private static func padding(_ lines: RunLines, of source: NodeView) -> UIView? {
         let container = lines.container, area = lines.area, reach = lines.reach
-        guard !source.boxDrawn, source.boxFill == nil, source.style["background_image"] == nil, source.layer.borderWidth == 0, let parent = source.superview else { return nil }
+        // A placed canvas child's run is drawn by its surface: only the screen shows it.
+        guard source.placedAncestor == nil, !source.boxDrawn, source.boxFill == nil, source.style["background_image"] == nil,
+              source.layer.borderWidth == 0, let parent = source.superview else { return nil }
         // From the nearest view under the paragraph that covers the reach opaquely, or the box the padding extends: nothing behind it shows
         let root = sequence(first: parent, next: { $0.superview }).first {
             $0.layer.opacity >= 1 && ($0.layer.backgroundColor?.alpha ?? 0) >= 1 && ($0.layer === lines.box || covers($0.layer, reach, in: container.layer))
@@ -1221,11 +1248,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// Showing: the focus is set aside, or UIKit's type-to-select brings
     /// the software keyboard up over the menu (MenuFocusIOS.swift).
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
+        track(animator)
         menus?.focus.setAside()
         if let owner = open, let pop = owner.popover { owner.toggled = true; presenter?.popoverEvents.changed(pop, open: true) }
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
+        track(animator)
         let focus: () -> Void = { [weak self] in self?.menus?.focus.restore() }
         if let animator { animator.addCompletion(focus) } else { focus() }
         guard let owner = open, owner.configuration === configuration else { return }
@@ -1272,7 +1301,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         return ["kind": "contextmenu", "source": owner.source.map { Int($0.id) as Any } ?? NSNull(),
                 "popover": owner.popover.map { Int($0.id) as Any } ?? NSNull(),
                 "preview": owner.preview.map { Int($0.id) as Any } ?? NSNull(),
-                "phase": owner.committed ? "commit" : "open"]
+                "phase": owner.committed ? "commit" : inTransition ? "transition" : "open"]
     }
 }
 #endif

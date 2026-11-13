@@ -1,7 +1,7 @@
 //! What a button or a role promises a person and VoiceOver, and the
 //! element does not keep (LLP 1116.004 D4): a button with nothing to say,
 //! a button in a button, and a dialog's role on a box; and a heading's
-//! level with no heading (LLP 1115.000 D12.5).
+//! level with no heading (LLP 1115.000 D12.5), and a bar with only one tab.
 
 use super::{computed, has, literal, BOXES};
 use crate::LowerError;

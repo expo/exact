@@ -5,13 +5,12 @@
 use std::borrow::Cow;
 use taffy::prelude::{auto, length, percent};
 
-use crate::arena::NodeArena;
-use crate::error::StyleValueError;
 use crate::generated::{
     AlignContent, AlignItems, AlignSelf, BoxSizing, Direction, Display, FlexDirection, FlexWrap,
     GridAutoFlow, JustifyContent, JustifyItems, NodeType, Overflow, PositionType, StyleId,
     StyleMask, StyleProps,
 };
+use crate::{arena::NodeArena, error::StyleValueError};
 
 mod backdrop;
 pub use backdrop::{link as link_backdrop_filter, BackdropFilter, BackdropOp};
@@ -889,6 +888,10 @@ pub enum RowValue<'a> {
     AnimationRange(&'a crate::timeline::AnimationRange),
     /// CSS `timeline-scope` (LLP 1057.003 D4).
     TimelineScope(&'a crate::timeline::TimelineScope),
+    /// CSS `scroll-timeline-name` or `view-timeline-name` (LLP 1057.003 D5).
+    TimelineName(&'a crate::timeline::TimelineName),
+    /// CSS `view-timeline-inset` (LLP 1057.003 D5).
+    ViewTimelineInset(&'a crate::timeline::ViewTimelineInset),
     /// SVG paint (LLP 1055 D2).
     Paint(&'a crate::svg::Paint),
     /// SVG `stroke-dasharray` (LLP 1055 D2).
@@ -942,50 +945,6 @@ pub enum RowValue<'a> {
     Transitions(&'a Transitions),
     /// The `animation` row (LLP 1055 D5).
     Animations(&'a Animations),
-}
-
-impl RowValue<'_> {
-    /// Whether every number the row carries is finite. Rows without floats
-    /// (and the CSS values, which parse to finite numbers) are.
-    pub(crate) fn is_finite(&self) -> bool {
-        match self {
-            RowValue::LineHeight(v) => v.is_finite(),
-            RowValue::BackdropFilter(v) => v.is_finite(),
-            RowValue::Dimension(v) => v.is_finite(),
-            RowValue::Number(v) => v.is_finite(),
-            RowValue::Vec2(v) => v.x.is_finite() && v.y.is_finite(),
-            RowValue::Tracks(v) => v.is_finite(),
-            RowValue::Transitions(v) => v.is_finite(),
-            RowValue::Animations(v) => v.is_finite(),
-            RowValue::DashArray(v) => v.0.iter().all(|n| n.is_finite()),
-            RowValue::Transform(v) => v.is_finite(),
-            RowValue::TransformOrigin(v) => v.is_finite(),
-            RowValue::AnimationRange(v) => v.0.is_none_or(|[a, b]| a.is_finite() && b.is_finite()),
-            RowValue::Paint(_)
-            | RowValue::PaintOrder(_)
-            | RowValue::Marker(_)
-            | RowValue::Filter(_)
-            | RowValue::ClipPath(_)
-            | RowValue::ShapeOutside(_)
-            | RowValue::AspectRatio(_)
-            | RowValue::PositionTryFallbacks(_)
-            | RowValue::DragTimeline(_)
-            | RowValue::AnimationTimeline(_)
-            | RowValue::TimelineScope(_)
-            | RowValue::BackgroundImage(_)
-            | RowValue::TextShadow(_)
-            | RowValue::FontVariations(_)
-            | RowValue::FontFeatures(_)
-            | RowValue::BoxShadow(_)
-            | RowValue::MaskImage(_)
-            | RowValue::CornerShape(_)
-            | RowValue::RotateAxis(_)
-            | RowValue::SymbolPalette(_)
-            | RowValue::ColorValue(_)
-            | RowValue::Enum(_)
-            | RowValue::Placement(_) => true,
-        }
-    }
 }
 
 /// Two floats.
@@ -1052,7 +1011,7 @@ fn align_items(v: AlignItems) -> Option<taffy::style::AlignItems> {
     })
 }
 
-fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::AlignItems> {
+fn justify_items(v: JustifyItems) -> Option<taffy::style::AlignItems> {
     use taffy::style::AlignItems as T;
     Some(match v {
         JustifyItems::Normal => return None,
@@ -1065,14 +1024,8 @@ fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::
         JustifyItems::SelfEnd | JustifyItems::UnsafeSelfEnd => T::SELF_END,
         JustifyItems::FlexStart | JustifyItems::UnsafeFlexStart => T::FLEX_START,
         JustifyItems::FlexEnd | JustifyItems::UnsafeFlexEnd => T::FLEX_END,
-        JustifyItems::Left | JustifyItems::UnsafeLeft => match direction {
-            Direction::Ltr => T::START,
-            Direction::Rtl => T::END,
-        },
-        JustifyItems::Right | JustifyItems::UnsafeRight => match direction {
-            Direction::Ltr => T::END,
-            Direction::Rtl => T::START,
-        },
+        JustifyItems::Left | JustifyItems::UnsafeLeft => T::LEFT,
+        JustifyItems::Right | JustifyItems::UnsafeRight => T::RIGHT,
         JustifyItems::SafeCenter => T::SAFE_CENTER,
         JustifyItems::SafeStart => T::SAFE_START,
         JustifyItems::SafeEnd => T::SAFE_END,
@@ -1080,14 +1033,8 @@ fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::
         JustifyItems::SafeSelfEnd => T::SAFE_SELF_END,
         JustifyItems::SafeFlexStart => T::SAFE_FLEX_START,
         JustifyItems::SafeFlexEnd => T::SAFE_FLEX_END,
-        JustifyItems::SafeLeft => match direction {
-            Direction::Ltr => T::SAFE_START,
-            Direction::Rtl => T::SAFE_END,
-        },
-        JustifyItems::SafeRight => match direction {
-            Direction::Ltr => T::SAFE_END,
-            Direction::Rtl => T::SAFE_START,
-        },
+        JustifyItems::SafeLeft => T::SAFE_LEFT,
+        JustifyItems::SafeRight => T::SAFE_RIGHT,
     })
 }
 
@@ -1352,7 +1299,7 @@ impl StyleProps {
         s.align_items = align_items(self.align_items);
         s.align_self = align_self(self.align_self);
         s.align_content = align_content(self.align_content);
-        s.justify_items = justify_items(self.justify_items, self.direction);
+        s.justify_items = justify_items(self.justify_items);
         s.gap = taffy::geometry::Size {
             width: length(cells::gap(env, self.column_gap, across)),
             height: length(cells::gap(env, self.row_gap, down)),
@@ -1428,7 +1375,6 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
         Direction::Ltr => taffy::style::Direction::Ltr,
         Direction::Rtl => taffy::style::Direction::Rtl,
     };
-    s.justify_items = justify_items(arena.style(slot).justify_items, direction);
     if let Some(multicol) = crate::fragment::taffy_multicol(arena, slot) {
         s.rare.multicol = Some(multicol);
         // The flow thread starts at the content top: `align-content` moves
@@ -1486,15 +1432,16 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     s
 }
 
+mod decoration;
+// Whether a row's numbers are finite.
+mod finite;
 #[cfg(test)]
 mod finite_tests;
+pub mod snap;
 #[cfg(test)]
 mod tests;
 pub(crate) mod top_layer;
 // A `touch-action` value's pinch and pan parts.
-mod decoration;
-#[cfg(test)]
-mod decoration_tests;
 mod touch_action;
 #[cfg(test)]
 mod touch_action_tests;

@@ -611,6 +611,8 @@ function apply(batch) {
               });
               if (r.error) {
                 console.warn("exact:", r.error);
+              } else {
+                globalThis.exact.pickerOpened?.();
               }
             } else if (!el) {
               log(`picker: refused: no file input with id "${op.args?.[0]}"`);
@@ -785,7 +787,7 @@ function apply(batch) {
             log("setWindowOpacity refused: a page cannot change its window's opacity");
           } else if (op.name === "hideWindow") {
             log("hideWindow refused: a page cannot hide its window");
-          } else if (!/^(playSound|playSounds|stopSounds|sendMIDI|requestMIDIAccess)$/.test(op.name)) {
+          } else if (!/^(playSound|playSounds|stopSounds|setSounds|sendMIDI|requestMIDIAccess)$/.test(op.name)) {
             console.warn(`exact: unknown command ${op.name}`);
           }
           /* LLP 1069.010 */

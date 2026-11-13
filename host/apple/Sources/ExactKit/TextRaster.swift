@@ -324,7 +324,8 @@ struct TextRasterJob {
         // First pixels reuse plain range lines; apply the clamp on both paths.
         if let clamped, !lines.isEmpty {
             let range = NSRange(location: clamped.location, length: clamped.length)
-            lines[lines.count - 1] = TextEngine.clampedLine(source, range: range, width: Double(box.width)) ?? lines[lines.count - 1]
+            let width = box.width - insets.at(range.location).width
+            lines[lines.count - 1] = TextEngine.clampedLine(source, range: range, width: Double(width)) ?? lines[lines.count - 1]
         }
         let positions = zip(lines, baselines).map { line, baseline in
             let inset = insets.at(CTLineGetStringRange(line).location)

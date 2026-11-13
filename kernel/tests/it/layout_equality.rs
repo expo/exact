@@ -12,11 +12,28 @@ use exact_kernel::{
 
 /// The second state is a stream of its own (`side`): draws from it leave the
 /// trees the first stream builds, and so the seeds named below, as they were.
-struct Rng(u64, u64);
+mod size_cache;
+use size_cache::{compare, Comparison, ProofCounts};
+
+struct Rng(u64, u64, Option<u64>);
 
 impl Rng {
-    fn new(seed: u64) -> Self {
-        Rng(seed, seed ^ 0x9e37_79b9_7f4a_7c15 | 1)
+    fn new(seed: u64, mode: Comparison) -> Self {
+        Rng(
+            seed,
+            seed ^ 0x9e37_79b9_7f4a_7c15 | 1,
+            (mode == Comparison::Baseline).then_some(seed ^ 0x1165_9e37_79b9 | 1),
+        )
+    }
+
+    fn baseline(&mut self) -> bool {
+        let Some(x) = self.2.as_mut() else {
+            return false;
+        };
+        *x ^= *x << 13;
+        *x ^= *x >> 7;
+        *x ^= *x << 17;
+        *x % 4 == 0
     }
 
     fn side(&mut self, n: u64) -> u64 {
@@ -223,6 +240,10 @@ fn random_style(rng: &mut Rng, node_type: NodeType) -> Box<StyleProps> {
             s.line_clamp = rng.below(3) as u32;
             s.mask.set(StyleId::LineClamp);
         }
+    }
+    if rng.baseline() {
+        s.align_items = AlignItems::Baseline;
+        s.mask.set(StyleId::AlignItems);
     }
     Box::new(s)
 }
@@ -486,8 +507,12 @@ fn frames(k: &Kernel) -> Vec<(u32, [u32; 6])> {
 }
 
 fn run(seed: u64, rounds: usize) {
+    run_random(seed, rounds, Comparison::Geometry);
+}
+
+fn run_random(seed: u64, rounds: usize, mode: Comparison) -> ProofCounts {
     let mut world = World {
-        rng: Rng::new(seed),
+        rng: Rng::new(seed, mode),
         next_id: 1,
         live: Vec::new(),
         children: Vec::new(),
@@ -495,15 +520,19 @@ fn run(seed: u64, rounds: usize) {
         fixed: Vec::new(),
     };
     let first = world.initial();
-    compare(seed, rounds, world, first);
+    compare(seed, rounds, world, first, mode)
 }
 
 /// A list's shape: a flex column holding a header and clipping panes sized
 /// every way a pane is (flex, fixed, auto, percent, first or not), with most
 /// mutations inside the panes, where a relayout boundary replays them.
 fn run_panes(seed: u64, rounds: usize) {
+    run_panes_counted(seed, rounds, Comparison::Geometry);
+}
+
+fn run_panes_counted(seed: u64, rounds: usize, mode: Comparison) -> ProofCounts {
     let mut world = World {
-        rng: Rng::new(seed),
+        rng: Rng::new(seed, mode),
         next_id: 1,
         live: Vec::new(),
         children: Vec::new(),
@@ -581,57 +610,7 @@ fn run_panes(seed: u64, rounds: usize) {
         world.attach(&mut ops, parent, child);
     }
     world.log.push(ops.clone());
-    compare(seed, rounds, world, ops);
-}
-
-fn compare(seed: u64, rounds: usize, mut world: World, first: Vec<Op>) {
-    let mut kernel = Kernel::with_monospace();
-    let offer = Offer::definite(320.0, 480.0);
-    kernel.apply(0, 0, &first).unwrap();
-    kernel.compute_layout(1, offer).unwrap();
-
-    for round in 0..rounds {
-        let ops = world.mutate();
-        kernel
-            .apply(0, round as u64 + 1, &ops)
-            .unwrap_or_else(|e| panic!("seed {seed} round {round}: {e}\nops: {ops:?}"));
-        kernel.compute_layout(1, offer).unwrap();
-        let incremental = frames(&kernel);
-
-        // (a) Rehydrate from columns: fresh engine, same authored state.
-        let mut rehydrated = kernel.rehydrate(Box::new(MonospaceMeasurer::default()));
-        rehydrated.compute_layout(1, offer).unwrap();
-        assert_eq!(
-            frames(&rehydrated),
-            incremental,
-            "seed {seed} round {round}: rehydrated layout differs from incremental"
-        );
-
-        // (b) Replay every batch from scratch.
-        let mut replay = Kernel::with_monospace();
-        for (i, batch) in world.log.iter().enumerate() {
-            replay.apply(0, i as u64, batch).unwrap();
-        }
-        replay.compute_layout(1, offer).unwrap();
-        assert_eq!(
-            frames(&replay),
-            incremental,
-            "seed {seed} round {round}: replayed layout differs from incremental"
-        );
-
-        // The authored columns agree too, not just the geometry.
-        let a = export::decode(&kernel.export(None).unwrap()).unwrap();
-        let b = export::decode(&replay.export(None).unwrap()).unwrap();
-        assert_eq!(
-            a.styles, b.styles,
-            "seed {seed} round {round}: styles diverged"
-        );
-        assert_eq!(
-            a.props, b.props,
-            "seed {seed} round {round}: props diverged"
-        );
-        assert_eq!(a.rows.len(), b.rows.len());
-    }
+    compare(seed, rounds, world, ops, mode)
 }
 
 /// Each seed's world and kernels are its own, so the seeds run on threads of their own; a
@@ -655,42 +634,7 @@ fn incremental_relayout_is_result_equal_to_full_relayout() {
 /// rehydration bit for bit.
 #[test]
 fn multicol_relayout_is_result_equal_to_full_relayout() {
-    each_seed(1..=16, |seed| {
-        let mut world = World {
-            rng: Rng::new(seed),
-            next_id: 1,
-            live: Vec::new(),
-            children: Vec::new(),
-            log: Vec::new(),
-            fixed: Vec::new(),
-        };
-        let mut first = world.initial();
-        let mut s = StyleProps::default();
-        s.display = exact_kernel::Display::Block;
-        s.column_count = 2 + world.rng.side(2) as u16;
-        s.column_gap = 8.0;
-        for row in [StyleId::Display, StyleId::ColumnCount, StyleId::ColumnGap] {
-            s.mask.set(row);
-        }
-        match world.rng.side(3) {
-            0 => {
-                s.height = Dimension::Auto;
-                s.mask.set(StyleId::Height);
-            }
-            1 => {
-                s.column_fill = exact_kernel::ColumnFill::Auto;
-                s.mask.set(StyleId::ColumnFill);
-            }
-            _ => {}
-        }
-        let patch = vec![Op::SetStyle {
-            id: 1,
-            patch: Box::new(s),
-        }];
-        first.extend(patch.clone());
-        world.log.last_mut().unwrap().extend(patch);
-        compare(seed, 30, world, first);
-    });
+    each_seed(1..=16, run_multicol);
 }
 
 #[test]
@@ -1352,4 +1296,45 @@ fn a_hidden_static_ancestor_hides_a_hoisted_absolute_box() {
     .unwrap();
     k.compute_layout(1, offer).unwrap();
     assert_eq!(k.node(3).unwrap().frame.x, 300.0);
+}
+
+fn run_multicol(seed: u64) {
+    run_multicol_counted(seed, Comparison::Geometry);
+}
+
+fn run_multicol_counted(seed: u64, mode: Comparison) -> ProofCounts {
+    let mut world = World {
+        rng: Rng::new(seed, mode),
+        next_id: 1,
+        live: Vec::new(),
+        children: Vec::new(),
+        log: Vec::new(),
+        fixed: Vec::new(),
+    };
+    let mut first = world.initial();
+    let mut s = StyleProps::default();
+    s.display = exact_kernel::Display::Block;
+    s.column_count = 2 + world.rng.side(2) as u16;
+    s.column_gap = 8.0;
+    for row in [StyleId::Display, StyleId::ColumnCount, StyleId::ColumnGap] {
+        s.mask.set(row);
+    }
+    match world.rng.side(3) {
+        0 => {
+            s.height = Dimension::Auto;
+            s.mask.set(StyleId::Height);
+        }
+        1 => {
+            s.column_fill = exact_kernel::ColumnFill::Auto;
+            s.mask.set(StyleId::ColumnFill);
+        }
+        _ => {}
+    }
+    let patch = vec![Op::SetStyle {
+        id: 1,
+        patch: Box::new(s),
+    }];
+    first.extend(patch.clone());
+    world.log.last_mut().unwrap().extend(patch);
+    compare(seed, 30, world, first, mode)
 }

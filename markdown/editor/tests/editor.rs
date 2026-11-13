@@ -246,6 +246,47 @@ fn return_in_formatted_items_preserves_text_formats_and_caret() {
 }
 
 #[test]
+fn return_and_code_beside_a_backtick_pad_the_span_and_undo_in_one_step() {
+    // Return after a literal backtick: the left half's padding is hidden
+    // syntax, and the caret starts the right half's text.
+    let source = "- ``a`b``";
+    let after = "- `` a` ``\n- ``b``";
+    let mut p = Page::open(source);
+    p.caret(6);
+    let before = p.e.selection();
+    p.input(Input::Paragraph, "");
+    assert_eq!(p.source(), after);
+    assert_eq!(p.e.visible_text(), "a`\nb");
+    assert_eq!(p.e.selection(), (15, 15));
+    p.tool("undo");
+    assert_eq!(p.source(), source);
+    assert_eq!(p.e.selection(), before);
+    p.tool("redo");
+    assert_eq!(p.source(), after);
+    assert_eq!(p.e.selection(), (15, 15));
+    p.type_("X");
+    assert_eq!(p.source(), "- `` a` ``\n- ``Xb``");
+
+    // Code on text that begins with a backtick pads it; one undo takes it back.
+    let mut p = Page::open("say `a");
+    p.e.select(4, 6, None);
+    p.tool("code");
+    assert_eq!(p.source(), "say `` `a ``");
+    assert_eq!(p.e.visible_text(), "say `a");
+    assert_eq!(p.e.selection(), (4, 9));
+    p.tool("undo");
+    assert_eq!(p.source(), "say `a");
+    assert_eq!(p.e.selection(), (4, 6));
+
+    // A caret the app puts in the hidden padding is drawn at a visible edge.
+    let mut p = Page::open("x ` a ` y");
+    p.e.set_selection(3, 3);
+    let (s, e) = p.e.selection();
+    assert_eq!(s, e);
+    assert!(s == 2 || s == 4, "{s}");
+}
+
+#[test]
 fn a_return_caret_survives_orphan_cleanup() {
     let mut p = Page::open("**ab** cd");
     p.e.select(3, 8, None);

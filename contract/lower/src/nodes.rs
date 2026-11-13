@@ -356,7 +356,9 @@ impl Lowerer<'_> {
         // @ref LLP 1116.009 D3 — and a sheet is never transparent.
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
-        let nav_place = self.nav_place.enter(tag, expanded, children, *span)?;
+        let nav_place = self
+            .nav_place
+            .enter(first, tag, expanded, children, *span)?;
         // @ref LLP 1038 D8 — only the first root selects navigation; an
         // iframe's `navigate` is its guest's (LLP 1020.002 D2). The history
         // swipe and the ways through history offered are the root's too

@@ -204,7 +204,7 @@ impl<G: Game> Sim<G> {
             ..
         } = &event
         {
-            if self.input.pad(*index).is_some() != *connected {
+            if self.input.pad_state(*index).is_some() != *connected {
                 self.world.log(match (connected, standard) {
                     (false, _) => format!("pad {index} disconnected"),
                     (true, true) => format!("pad {index} connected standard"),
@@ -297,7 +297,7 @@ impl<G: Game> Sim<G> {
             })
             .unwrap_or_else(|| {
                 self.input
-                    .pad(index)
+                    .pad_state(index)
                     .map(|p| (p.standard, p.buttons, p.axes))
             })
     }

@@ -103,9 +103,10 @@ impl<D: DataSource> Presenter<D> {
             children.sort_by_key(|id| ranks.get(id).copied().unwrap_or_default());
             pending.extend(children.into_iter().rev());
         }
-        // Android's modal routes are pages, not native sheets. Both modal
-        // and fullscreen therefore cover the bar; there is no detent or
-        // native transition state to consult (host/android/README.md).
+        // A full-screen route covers the bar. A modal one does where it is
+        // a page; where the stage shows it as a sheet (`stage.rs`) the sheet
+        // rests below the bar, which stays the page's.
+        let sheets = self.stage_presents();
         let covering: Vec<_> = self
             .host
             .navigation
@@ -114,10 +115,11 @@ impl<D: DataSource> Presenter<D> {
             .filter_map(|stack| stack.last().copied())
             .filter(|id| {
                 kernel.node(*id).is_some_and(|n| {
-                    matches!(
-                        n.props.str(PropId::NavigationPresentation),
-                        Some("modal" | "fullscreen")
-                    )
+                    match n.props.str(PropId::NavigationPresentation) {
+                        Some("fullscreen") => true,
+                        Some("modal") => !sheets,
+                        _ => false,
+                    }
                 }) && !self.host.navigation.visibility_of(kernel, *id, false).0
                     && self.status_bar_in_page(*id)
             })

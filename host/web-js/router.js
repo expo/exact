@@ -1,6 +1,6 @@
 // The router on the JS target (LLP 1038; route/src), re-exported by rt.js: the verbs and reads, the route table, and the
 // router slot's changes to the browser's history.
-import { Refusal, effect, After, journal, clock, commit, W, pressFeedback, fact, Hosts, Resources, Assigned, refused, useNavigation } from "./rt.js";
+import { Refusal, effect, After, journal, clock, commit, W, pressFeedback, fact, Hosts, Resources, Assigned, refused, useTraversal } from "./rt.js";
 import { Counting } from "./held.js";
 import { projectRoots } from "./document.js";
 import { canonical, locationOf, fragmentOf, enc, dec, matchPattern } from "./route-pattern.js";
@@ -143,10 +143,10 @@ export const x_path = (name, ...values) => path(Routes.find(r => r.name === name
 /** The router slot's changes, to the browser's history (`navigation.js`,
  * the web host's own), and a popstate back as the navigation root's
  * `navigate` (LLP 1038 D7, D11). */
-let RouterSlot = null, Shown = null, Navigate = null, History = null; export const pageHistory = () => History; // the page's navigation.js, which the agent observes: its own copy's state is never written
+let RouterSlot = null, Shown = null, Navigate = null, History = null, Early = null; export const pageHistory = () => History; // the page's navigation.js, which the agent observes: its own copy's state is never written
 /** The plan's navigation roots, with a router or without (document.js `projectRoots`). A page with one loads the input
  * piece after first paint: the focus follows its routes (input-glue.js `arrive`; LLP 1115.000 D4.2). */
-export function navigationRoots(history) { History = history; useNavigation(history); projectRoots(history, location => Navigate ? (Navigate(location), true) : false, say, After, hostBack, hostGo, href => { const match = matchRoute(canonical(href)); return match !== null && !Routes[match[0]].notfound; }); pressFeedback(); }
+export function navigationRoots(history) { History = history; useTraversal(traversal); projectRoots(history, location => Navigate ? (Navigate(location), true) : false, say, After, hostBack, hostGo, href => { const match = matchRoute(canonical(href)); return match !== null && !Routes[match[0]].notfound; }); pressFeedback(); }
 /** The platform's own Back from the selected visit `id`, with no `navigate` handler (LLP 1115 D5): the router's `back`
  * as a commit of its own, the runner's `host_back`. */
 function hostBack(id) { const r = RouterSlot?.n.v; if (r && validRouter(r) && top_(r)[0] === id && depth_(r) > 1) commit(() => W(RouterSlot, back_(r)), "host back"); }
@@ -205,6 +205,26 @@ function afterCommit() {
   if (t && t[0] === n[1] && t[5] === n[2]) { const op = changeOf(r, t, true); History.apply(op); wantScroll(op); }
   queueMicrotask(fragmentDue);
 }
+/** The router's value `r`, to the history: the op it applied. */
+function mirror(r) {
+  const top = top_(r), ids = new Set(r[1].flatMap(t => t[1].map(e => e[0]))), before = Shown?.[1].flatMap(t => t[1]) ?? [];
+  const removed = before.map(e => e[0]).filter(id => !ids.has(id)), was = before.find(e => e[0] === top[0]);
+  Shown = r;
+  // A navigation to a fragment, a new visit with one, or a fragment that changed scrolls (LLP 1153 D5); a visit
+  // returned to keeps its place. The history mirrors the visit's url with its fragment.
+  const n = assigned(), activated = !!n && n[1] === top[0] && n[2] === top[5];
+  const op = changeOf(r, top, activated || (was ? was[5] !== top[5] : !!top[5]), removed);
+  History.apply(op);
+  return op;
+}
+/** Before a commit's tree update, which a view transition may defer with the router's effect (rt.js): during a Back or
+ * Forward the history mirrors the router's settled value now, for `popped` to judge (LLP 1007 §4). Whether the update
+ * runs at once instead of flying: when the browser animated the traversal itself (LLP 1013.000 D7). */
+function traversal() {
+  const pop = History.traversing, r = RouterSlot?.n.v;
+  if (pop && r?.[1].length && r !== Shown) Early = mirror(r);
+  return pop?.ua;
+}
 export function router(slot, history) {
   RouterSlot = slot; Assigned.n = slot.n; navigationRoots(history); After.push(afterCommit);
   // An author's own `scrollIntoView` wins over a fragment's scroll not yet made, or held while pictures load; its
@@ -235,17 +255,11 @@ export function router(slot, history) {
     if (Navigate) Navigate(target); else hostGo(target);
     if (RouterSlot.n?.v === r && !(here && url.hash)) say(`history: link ${JSON.stringify(target)} refused`);
   }, true);
+  // A value `traversal` mirrored already is not applied again: its scroll waited for the tree.
   effect(() => {
     const r = slot(); if (!r || !r[1].length) return;
-    const top = top_(r), ids = new Set(r[1].flatMap(t => t[1].map(e => e[0]))), before = Shown?.[1].flatMap(t => t[1]) ?? [];
-    const removed = before.map(e => e[0]).filter(id => !ids.has(id)), was = before.find(e => e[0] === top[0]);
-    Shown = r;
-    // A navigation to a fragment, a new visit with one, or a fragment that changed scrolls (LLP 1153 D5); a visit
-    // returned to keeps its place. The history mirrors the visit's url with its fragment.
-    const n = assigned(), activated = !!n && n[1] === top[0] && n[2] === top[5];
-    const op = changeOf(r, top, activated || (was ? was[5] !== top[5] : !!top[5]), removed);
-    history.apply(op);
-    if (op.scroll) wantScroll(op);
+    const op = r === Shown ? Early : mirror(r); Early = null;
+    if (op?.scroll) wantScroll(op);
   });
   // `effect` runs once synchronously. Its first apply follows
   // `projectRoots`' projection, so publish those initial visits now.

@@ -279,7 +279,9 @@ impl Painter {
         outer: &Shape,
         ts: Transform,
     ) {
-        let hosted = crate::fields::hosts(node);
+        // A tape keeps the field's text itself: the shell's view goes with
+        // its node (`tape.rs`).
+        let hosted = crate::fields::hosts(node) && self.backend.name() != "tape";
         // A row does not keep a caret, nor a focus ring, which comes and
         // goes with no change of the tree: a hosted field has one too.
         self.row_refuse();

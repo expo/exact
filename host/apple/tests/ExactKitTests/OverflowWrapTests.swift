@@ -212,6 +212,7 @@ final class OverflowWrapTests: XCTestCase {
             for text in ["Look " + url, "hi\n   world", "aa hello\r\nworld", "aa hello   \nworld", "Look " + String(repeating: "a", count: 60), "WWW\u{00AD}q", "hi WWW \u{00AD}q"] {
                 var s = spec(text, wrap: wrap); s.whiteSpace = 1
                 let source = RegionTextSource.capture(s, engine: engine)
+                s.hyphenateAuto()
                 for width: CGFloat in [50, 83.25, 200, 280] {
                     let ordinary = engine.paragraph(s, width: width).lines.map { CTLineGetStringRange($0) }
                     let done = DispatchSemaphore(value: 0)

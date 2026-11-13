@@ -142,6 +142,9 @@ final class GpuModule {
     var maxFps: WantsFn?
 
     let wantsInput: WantsFn?
+    /// Whether a canvas's world reads gamepads; absent from an older module,
+    /// whose canvases that take input all hear them.
+    var wantsPads: WantsFn?
     let input: BindFn?
     typealias HeadroomFn = @convention(c) (UInt32, Float) -> Void
     /// An HDR surface (LLP 1100 D12b): whether a canvas is one, and the
@@ -338,6 +341,7 @@ final class GpuModule {
         module.maxFps = sym("gpu_max_fps", WantsFn.self)
         module.bindAt = sym("gpu_bind_at", BindAtFn.self)
         module.canvasSize = sym("gpu_size", SizeFn.self)
+        module.wantsPads = sym("gpu_wants_pads", WantsFn.self)
         module.assets = sym("gpu_assets", WantsFn.self); module.asset = sym("gpu_asset", AssetFn.self); module.assetFailed = sym("gpu_asset_failed", AssetFn.self)
         module.carry = sym("gpu_carry", WantsFn.self); module.restore = sym("gpu_restore", RestoreFn.self)
         sym("gpu_seekable", SeekableFn.self)?(ExactEnv.agentFreezes)

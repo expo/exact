@@ -1366,10 +1366,6 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             }
             // How it is filled, and by which rule (element_symbol.rs).
             symbol::fill_marks(&mut out, role, symbol);
-            // Its author's `color` it draws in, untinted (LLP 1121 stage 9 B; glue.js).
-            if node.symbol_color {
-                out.insert("data-symbol-color".into(), String::new());
-            }
             // Decorative unless the author named it (`alt`, `aria-label`).
             if !out.contains_key("alt") {
                 out.insert("alt".into(), String::new());

@@ -266,10 +266,11 @@ pub fn activation(plan: &Plan) -> String {
     use exact_runner::activation::{runtime_kept, REPLAYED, WOKEN};
     let waits: Vec<&str> = REPLAYED.iter().chain(&WOKEN).map(|k| k.name()).collect();
     format!(
-        "{{waits:{},kept:{},viewport:{}}}",
+        "{{waits:{},kept:{},viewport:{},tools:{}}}",
         serde_json::to_string(&waits).unwrap(),
         runtime_kept(plan) || exact_runner::activation::wake(plan).is_none(),
-        exact_runner::viewport_reads::Reads::of(plan).any()
+        exact_runner::viewport_reads::Reads::of(plan).any(),
+        exact_runner::activation::offers_tools(plan)
     )
 }
 

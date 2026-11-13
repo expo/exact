@@ -1,15 +1,18 @@
-//! Drag timelines in the engine (LLP 1057.003 D2, D4).
+//! Drag, scroll and view timelines in the engine (LLP 1057.003 D2, D4, D5).
 //!
-//! A source node's presented `translate` drives a timeline on one axis; a
-//! consumer's `animation`s are bound to what its timeline name resolved to,
-//! over a range. The host resolves names as CSS scopes them (the kernel's
-//! `timeline-scope` lookup), so the engine hears a node, never a name. A
-//! bound consumer's plays are held (as `animation-play-state: paused` holds
-//! them) at the local time the source's position gives, re-sought whenever
-//! a frame is taken, so a held value and a release spring move the consumer
-//! in the frame they move the source. A sampling host paints it; a lowering
-//! host samples the node (its compositor's time is the clock's) or seeks its
-//! own executor's copy, as the web's glue does.
+//! A timeline's position is a drag source node's presented `translate` on
+//! one axis, or a scroller's offset on one axis as its host presents it
+//! ([`Engine::set_scroll_offset`]). A consumer's `animation`s are bound to
+//! what its timeline resolved to, over a range of positions. The host
+//! resolves names as CSS scopes them (the kernel's `timeline-scope` lookup)
+//! and places a scroll or view timeline's range from layout, so the engine
+//! hears a node and two positions, never a name. A bound consumer's plays
+//! are held (as `animation-play-state: paused` holds them) at the local
+//! time the position gives, re-sought whenever a frame is taken or the
+//! scroller moves, so a held value, a release spring or a scroll moves the
+//! consumer in the frame it moves the source. A sampling host paints it; a
+//! lowering host samples the node (its compositor's time is the clock's) or
+//! seeks its own executor's copy, as the web's glue does.
 //!
 //! What a name that finds no single source shows is Chrome's (Scroll-driven
 //! Animations 1 §4.2, Web Animations 2's timeline switch):
@@ -28,26 +31,37 @@ use crate::property::Property;
 pub enum NamedTimeline {
     /// The drag timeline this node's presented translate drives.
     Source(u64),
+    /// A scroll or view timeline: this scroller's offset on `x` or `y`.
+    Scroll {
+        /// The scroller's node.
+        scroller: u64,
+        /// Whether it reads the horizontal offset.
+        x: bool,
+    },
     /// An inactive timeline: its animations have no effect.
     Inactive,
     /// No timeline: its animations keep the time they have.
     Missing,
 }
 
-/// The drag timelines, in declaration order. A page has a handful; a scan
-/// is cheaper, in code and time, than a map.
+/// The timelines, in declaration order. A page has a handful; a scan is
+/// cheaper, in code and time, than a map.
 #[derive(Debug, Default)]
 pub(super) struct Timelines {
-    /// Each source node, and whether it reads the `x` axis.
+    /// Each drag source node, and whether it reads the `x` axis.
     sources: Vec<(u64, bool)>,
     /// Each consumer node, what its name resolved to, and its range in points.
     bound: Vec<(u64, NamedTimeline, [f64; 2])>,
+    /// Each scroller a host has given an offset, and that offset.
+    scrolls: Vec<(u64, [f64; 2])>,
 }
 
 impl Timelines {
     /// Whether `node` is a timeline's source or follows one.
     pub(super) fn names(&self, node: u64) -> bool {
-        self.sources.iter().any(|s| s.0 == node) || self.bound.iter().any(|b| b.0 == node)
+        self.sources.iter().any(|s| s.0 == node)
+            || self.bound.iter().any(|b| b.0 == node)
+            || self.scrolls.iter().any(|s| s.0 == node)
     }
 }
 
@@ -70,6 +84,31 @@ impl Engine {
         }
         for i in 0..self.timelines.bound.len() {
             if self.timelines.bound[i].1 == NamedTimeline::Source(node) {
+                self.seek_timeline(i);
+            }
+        }
+    }
+
+    /// `scroller` now stands at `(x, y)`, its scroll offset in points as
+    /// its host presents it (overscroll included): the scroll and view
+    /// timelines it drives seek their consumers at once. A scroller never
+    /// given one stands at its start.
+    pub fn set_scroll_offset(&mut self, scroller: u64, x: f64, y: f64) {
+        (self.links.set_scroll_offset)(self, scroller, x, y)
+    }
+
+    pub(super) fn set_scroll_offset_full(&mut self, scroller: u64, x: f64, y: f64) {
+        if !(x.is_finite() && y.is_finite()) {
+            return;
+        }
+        match self.timelines.scrolls.iter_mut().find(|s| s.0 == scroller) {
+            Some(s) if s.1 == [x, y] => return,
+            Some(s) => s.1 = [x, y],
+            None => self.timelines.scrolls.push((scroller, [x, y])),
+        }
+        for i in 0..self.timelines.bound.len() {
+            if matches!(self.timelines.bound[i].1, NamedTimeline::Scroll { scroller: s, .. } if s == scroller)
+            {
                 self.seek_timeline(i);
             }
         }
@@ -136,6 +175,7 @@ impl Engine {
     pub(super) fn forget_timelines(&mut self, node: u64) {
         self.timelines.sources.retain(|s| s.0 != node);
         self.timelines.bound.retain(|b| b.0 != node);
+        self.timelines.scrolls.retain(|s| s.0 != node);
     }
 
     /// Hold every bound consumer's plays at the time its timeline gives.
@@ -179,6 +219,15 @@ impl Engine {
                         0.0
                     }
                 }),
+            // Unclamped, as a drag's: the rubber band past either end moves
+            // the consumer on, and its fill decides outside the range. A
+            // zero-length range has no progress, an inactive timeline's.
+            NamedTimeline::Scroll { scroller, x } => {
+                let at = (self.timelines.scrolls.iter())
+                    .find(|s| s.0 == scroller)
+                    .map_or(0.0, |s| s.1[usize::from(!x)]);
+                Some(if a == b { f64::NAN } else { (at - a) / (b - a) })
+            }
             NamedTimeline::Inactive => Some(f64::NAN),
             NamedTimeline::Missing => None,
         };

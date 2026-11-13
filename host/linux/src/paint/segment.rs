@@ -82,8 +82,8 @@ impl Painter {
     /// 1 dp outline in `outline`; checked, a `secondaryContainer` fill and
     /// the content in `onSecondaryContainer`; unchecked, the content in
     /// `onSurface` on nothing; disabled, `onSurface` at the tokens' disabled
-    /// opacities. Held, an authored press background, else the state layer
-    /// in the content's colour; hovered or focused, the state layer.
+    /// opacities. Held, an authored press background, else the ripple in
+    /// the content's colour (`ripple.rs`); hovered or focused, the state layer.
     /// Compose slides the label and grows the check as the choice moves;
     /// here they change at once. The content's ink.
     pub(super) fn material_segment(
@@ -115,7 +115,8 @@ impl Painter {
         if let Some(ground) = pressed_background {
             self.backend.fill(shape, ground, ts);
         } else if !disabled {
-            let layer = if self.presses(node.id) || focused {
+            // A focus's layer is the pressed state's opacity, as Compose's.
+            let layer = if focused {
                 Some(metric::STATE_PRESSED_OPACITY)
             } else if self.feedback.0 == Some(node.id) {
                 Some(metric::STATE_HOVER_OPACITY)
@@ -125,6 +126,7 @@ impl Painter {
             if let Some(index) = layer {
                 self.backend.fill(shape, faded(ink, index), ts);
             }
+            self.ripple(node, shape, ink, ts);
         }
         let line = match disabled {
             true => faded(on_surface, metric::SEGMENTED_BUTTON_DISABLED_OUTLINE),

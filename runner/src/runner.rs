@@ -142,7 +142,7 @@ mod viewport;
 mod writes;
 pub use carry::Carried;
 pub use checkpoint::Checkpoint;
-pub use router::{routing, RouterChange, Routing};
+pub use router::{launch_matches, routing, RouterChange, Routing};
 pub use split::{press_writes_router, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 

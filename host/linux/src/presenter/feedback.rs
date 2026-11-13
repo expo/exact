@@ -9,6 +9,8 @@
 //! What presses in a row of a list whose rows are cells answers the same
 //! way (LLP 1115.000 D16): the look's row is this host's to draw too, and a
 //! row's press is its wash, as the web's sheet has it (`neutral.css`).
+//! Under the Material look a press is a ripple from the touch on whatever
+//! presses (LLP 1115.001 D9; `paint/ripple.rs`).
 use super::*;
 
 impl<D: DataSource> Presenter<D> {
@@ -28,9 +30,11 @@ impl<D: DataSource> Presenter<D> {
             {
                 return Some(id);
             }
+            // Under the Material look every pressable shows its press (LLP
+            // 1115.000 D6's Android row; LLP 1115.001 D9), a row or not.
             if node.node_type != NodeType::TextInput
                 && self.presses_itself(id)
-                && kernel.row_holding(id).is_some()
+                && (kernel.row_holding(id).is_some() || crate::paint::look::material())
             {
                 let handlers = self.host.runner().handlers_of(id);
                 let own = node.style.written.has(exact_kernel::StyleId::PressScale)
@@ -72,11 +76,48 @@ impl<D: DataSource> Presenter<D> {
             .filter(|_| self.contact.is_none())
             .and_then(|id| self.feedback_at(id));
         let pressed = self.pressed_feedback();
+        if self.brush.feedback.1 != pressed {
+            self.ripple(pressed);
+        }
         if self.brush.feedback != (hover, pressed) {
             self.brush.feedback = (hover, pressed);
             self.dirty = true;
         }
         self.refresh_looks(Some(hit));
+    }
+
+    /// Material's ripple (`paint/ripple.rs`): the press shown on the last
+    /// control lets go, and one on `pressed` starts at the contact's touch.
+    fn ripple(&mut self, pressed: Option<ViewId>) {
+        if !crate::paint::look::material() {
+            return;
+        }
+        let now = self.brush.ripples.clock(self.host.now());
+        if let Some(old) = self.brush.feedback.1 {
+            self.brush.ripples.release(old, now, false);
+        }
+        let Some(id) = pressed else { return };
+        let Some(key) = self.host.kernel().node(id).map(|n| n.key) else {
+            return;
+        };
+        let touch = self.contact_position();
+        let at = touch
+            .zip(self.box_of(id))
+            .map(|((x, y), b)| (x - b.rect.0, y - b.rect.1));
+        self.brush.ripples.press(id, key, at, now);
+        // In what scrolls the press waits the tap timeout (`ripple.rs`).
+        if touch.is_some_and(|(x, y)| !self.scrollers_at(x, y).chain.is_empty()) {
+            self.brush.ripples.delay(id);
+        }
+    }
+
+    /// The contact was cancelled (a scroller took it): its ripple, if it
+    /// has not shown yet, never does.
+    pub(super) fn cancel_ripple(&mut self) {
+        if let Some(id) = self.brush.feedback.1 {
+            let now = self.brush.ripples.clock(self.host.now());
+            self.brush.ripples.release(id, now, true);
+        }
     }
 
     /// The nodes whose `:hover` look holds (LLP 1121 D8): the pointer's hit
@@ -147,3 +188,6 @@ mod held;
 #[cfg(test)]
 #[path = "looks_tests.rs"]
 mod looks_tests;
+#[cfg(test)]
+#[path = "ripple_tests.rs"]
+mod ripple_tests;

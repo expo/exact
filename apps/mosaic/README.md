@@ -20,5 +20,6 @@ bun exact.mjs mac --run   # and as a Mac app beside it (ios --run: on a simulato
   `bun exact.mjs test` and `verify` start it, so they need no Convex. Stop
   `npx convex dev` first: both listen on 3210.
 
-A cloud deployment is named in `app.ts`'s two lines: its URL and its
-`net.websocket` grant.
+A cloud deployment is named once in `app.ts`: `CONVEX`, its socket's origin
+(`wss://<name>.convex.cloud`), which the client and the `net.websocket` grant
+both take.

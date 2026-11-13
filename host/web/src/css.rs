@@ -162,9 +162,27 @@ fn css_text_in(
             // @ref LLP 1055.002 — a clock is no CSS timeline either: the
             // animations play on the page's, and the glue sets their start
             // (navigation.js `animationClocks`).
+            // @ref LLP 1057.003 D5 — `scroll()` and `view()` are CSS's own
+            // row: the browser runs them, off the main thread. A browser
+            // without `animation-timeline` would play them on the clock, so
+            // they are paused there (`--exact-timeline-play`, index.html) and
+            // the glue puts them out of effect. A name is paused for the drag
+            // code, which finds what it names: a drag timeline it seeks, a
+            // scroll or view timeline it hands to the browser, as CSS's own
+            // row (motion-glue.js `followTimelines`). Written here, a name that
+            // finds no CSS timeline makes the browser's animation progress-based,
+            // which a drag cannot seek in time.
             (StyleId::AnimationTimeline, RowValue::AnimationTimeline(t)) => {
                 if let Some(clock) = t.clock() {
                     push_text!(&mut out, "--exact-animation-clock:{};", clock);
+                } else if t.anonymous().is_some() {
+                    let t = t.css();
+                    push_text!(
+                        &mut out,
+                        "--exact-animation-timeline:{};animation-timeline:{};animation-play-state:var(--exact-timeline-play,paused);--exact-css-timeline:1;",
+                        t,
+                        t
+                    );
                 } else if t.0.is_some() {
                     push_text!(
                         &mut out,
@@ -175,7 +193,36 @@ fn css_text_in(
             }
             (StyleId::AnimationRange, RowValue::AnimationRange(r)) => {
                 if r.0.is_some() {
-                    push_text!(&mut out, "--exact-animation-range:{};", r.css());
+                    let r = r.css();
+                    push_text!(
+                        &mut out,
+                        "--exact-animation-range:{};animation-range:{};",
+                        r,
+                        r
+                    );
+                }
+            }
+            // @ref LLP 1057.003 D5 — CSS's own rows, and the names, which
+            // the drag code's lookup reads: a scroll or view timeline
+            // shadows a drag timeline of its name, as on the native hosts.
+            (StyleId::ScrollTimelineName, RowValue::TimelineName(n)) => {
+                if let Some(name) = &n.0 {
+                    push_text!(
+                        &mut out,
+                        "scroll-timeline-name:{};--exact-scroll-timeline:{};",
+                        name,
+                        name
+                    );
+                }
+            }
+            (StyleId::ViewTimelineName, RowValue::TimelineName(n)) => {
+                if let Some(name) = &n.0 {
+                    push_text!(
+                        &mut out,
+                        "view-timeline-name:{};--exact-view-timeline:{};",
+                        name,
+                        name
+                    );
                 }
             }
             // @ref LLP 1057.003 D4 — CSS's own row, for the timelines the
@@ -628,7 +675,8 @@ fn lowered(id: StyleId, value: &RowValue<'_>) -> bool {
         | RowValue::DragTimeline(_)
         | RowValue::AnimationTimeline(_)
         | RowValue::AnimationRange(_)
-        | RowValue::TimelineScope(_) => false,
+        | RowValue::TimelineScope(_)
+        | RowValue::TimelineName(_) => false,
         _ => true,
     }
 }
@@ -797,6 +845,8 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
         RowValue::AnimationTimeline(t) => out.push_str(&t.css()),
         RowValue::AnimationRange(r) => out.push_str(&r.css()),
         RowValue::TimelineScope(s) => out.push_str(&s.css()),
+        RowValue::TimelineName(n) => out.push_str(&n.css()),
+        RowValue::ViewTimelineInset(i) => out.push_str(&i.css()),
         RowValue::Paint(p) => out.push_str(&p.css()),
         RowValue::DashArray(d) => out.push_str(&d.css()),
         RowValue::Transform(t) => out.push_str(&t.css()),

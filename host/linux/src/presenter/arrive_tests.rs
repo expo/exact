@@ -142,6 +142,130 @@ fn arrive_at(p: &mut Presenter<()>, location: &str) {
     settle(p);
 }
 
+fn assert_ring(p: &mut Presenter<()>, name: &str, ring: bool) {
+    assert_eq!(focused(p), name);
+    let (x, y, w, h) = p.rect_of(id(p, name)).unwrap();
+    let shot = p.frame();
+    let pixel = shot
+        .pixel((x + w - 1.) as u32, (y + h / 2.) as u32)
+        .unwrap();
+    assert_eq!(
+        [pixel.red(), pixel.green(), pixel.blue()] == [0xed, 0x12, 0x34],
+        ring,
+        "{name}: ring={ring}, pixel={pixel:?}"
+    );
+}
+
+fn ring_source() -> String {
+    APP.replace("testId=\"nav\"", "testId=\"nav\" accent-color=\"#ed1234\"")
+        .replace(
+            "testId=\"detail-title\"",
+            "testId=\"detail-title\" width=160 height=50",
+        )
+}
+
+#[test]
+fn keyboard_route_arrival_rings_the_heading_or_container_and_pointer_arrival_does_not() {
+    let source = ring_source();
+    for key in [true, false] {
+        for (opener, target, back) in [
+            ("open", "detail-title", "back"),
+            ("open-bare", "route-bare", "bare-back"),
+        ] {
+            let mut p = boot_source(&source);
+            if key {
+                enter(&mut p, opener);
+            } else {
+                click(&mut p, opener);
+            }
+            assert_ring(&mut p, target, key);
+            if key {
+                enter(&mut p, back);
+            } else {
+                click(&mut p, back);
+            }
+            assert_ring(&mut p, opener, key);
+        }
+    }
+}
+
+#[test]
+fn route_arrival_respects_authored_outlines_and_ancestor_clipping() {
+    for (opener, target) in [("open", "detail-title"), ("open-bare", "route-bare")] {
+        let source = ring_source().replace(
+            &format!("testId=\"{target}\""),
+            &format!("testId=\"{target}\" outline=\"none\""),
+        );
+        let mut p = boot_source(&source);
+        enter(&mut p, opener);
+        assert_ring(&mut p, target, false);
+    }
+    let source = ring_source()
+        .replace(
+            "header display=\"flex\"",
+            "header display=\"flex\" width=100 overflow=\"hidden\"",
+        )
+        .replace(
+            "width=160 height=50",
+            "width=160 height=50 flex-shrink=0 overflow=\"hidden\"",
+        );
+    let mut p = boot_source(&source);
+    enter(&mut p, "open");
+    assert_ring(&mut p, "detail-title", false);
+    let (x, y, _, h) = p.rect_of(id(&p, "detail-title")).unwrap();
+    let shot = p.frame();
+    let pixel = shot.pixel((x + 10.) as u32, (y + h - 1.) as u32).unwrap();
+    assert_eq!(
+        [pixel.red(), pixel.green(), pixel.blue()],
+        [0xed, 0x12, 0x34]
+    );
+}
+
+#[test]
+fn keyboard_back_rings_the_route_when_its_opener_is_disabled() {
+    let source = ring_source()
+        .replace("  state note", "  state used = false\n  state note")
+        .replace(
+            "    nav = push(nav, url)",
+            "    used = true\n    nav = push(nav, url)",
+        )
+        .replace("testId=\"open\"", "testId=\"open\" disabled=used");
+    let mut p = boot_source(&source);
+    enter(&mut p, "open");
+    enter(&mut p, "back");
+    assert_ring(&mut p, "route-home", true);
+}
+
+#[test]
+fn a_heading_rings_its_box_without_an_extra_ring_around_its_text() {
+    let mut p = boot_source(&ring_source());
+    enter(&mut p, "open");
+    let (x, y, w, h) = p.rect_of(id(&p, "detail-title")).unwrap();
+    let focused = p.frame();
+    assert!(p.set_focus(None, p.host.now()).is_none());
+    let blurred = p.frame();
+    for x in (x + 3.) as u32..(x + w - 3.) as u32 {
+        for y in (y + 3.) as u32..(y + h - 3.) as u32 {
+            assert_eq!(focused.pixel(x, y), blurred.pixel(x, y), "{x}, {y}");
+        }
+    }
+}
+
+#[test]
+fn touch_route_arrival_stays_unringed_until_a_key() {
+    let mut p = boot_source(&ring_source());
+    (p.brush.touch_mode, p.brush.keyless) = (true, true);
+    p.set_pointer_kind(PointerKind::Touch);
+    click(&mut p, "open");
+    assert_ring(&mut p, "detail-title", false);
+    p.key_down("ArrowDown", p.host.now());
+    assert_ring(&mut p, "detail-title", true);
+    let now = p.host.now();
+    p.pointer_down(200., 400., now).unwrap();
+    assert_ring(&mut p, "detail-title", false);
+    p.pointer_up(200., 400., now + 1.).unwrap();
+}
+
 #[test]
 fn autofocus_skips_unrendered_candidates_without_painting_and_retries_when_shown() {
     let source = r#"component App

@@ -70,6 +70,8 @@ pub mod executor;
 pub mod fetch;
 pub mod fields;
 mod file;
+#[cfg(any(target_os = "android", test))]
+mod frame_health;
 pub mod frames;
 pub mod gamepad;
 pub mod gpu;
@@ -96,6 +98,7 @@ pub mod presence_secrets;
 pub mod presenter;
 pub mod raster;
 mod scroll_anchor;
+mod surface_haptics;
 mod surfaces;
 mod tamber;
 pub mod teardown;

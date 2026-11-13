@@ -12,7 +12,8 @@ import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } 
 let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
 import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { heldAsks, heldReplies, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
-let Media = null; export function useMedia(m) { Media = m; } let Nav = null; export function useNavigation(n) { Nav = n; } // media.js only where a plan has a `video` or `audio`; navigation.js's `navigation` (the history, the stacks, the app bar) only where a plan has routes or a back control, handed over by the router (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
+let Media = null; export function useMedia(m) { Media = m; } let Traversal = null; export function useTraversal(f) { Traversal = f; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
+let Links = null; export function useLinks(l) { Links = l; } // links.js only where a plan binds a link's `href`, `rel` or `target` (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
 // Semantics kept from the runner (LLP 1005 §6):
 // - an action's writes land together at its commit (the VM collects `StoreSlot`s), then one
@@ -225,7 +226,7 @@ export function commit(f, what = "commit", finished) {
     Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
     return true;
   };
-  return Sh && ok && !Nav?.traversing ? Sh.commit(tail, Queue, inflight, After) : tail(); // a history traversal lands at once (navigation.js `traversing`)
+  return Sh && ok && !Traversal?.() ? Sh.commit(tail, Queue, inflight, After) : tail(); // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
 }
 /** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while reads are
  * owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of that leaves nothing owed. */
@@ -280,7 +281,7 @@ export const Hosts = {
   observe: n => say(`observe ${n}`), observeAttributes: () => {}, observeError: m => say(`observeError ${m}`) }; // journal lines only; marks.js replaces these when the app has launch modules
 export function useCommands(table) { for (const name in table) Hosts[name] = table[name](say, () => agentMode()); } // commands.js's, each by name as the compiled plan imported it for an action that names it (emit.rs, LLP 1047.002 D1): a factory over the journal and whether the agent drives the page; one no action names is never linked
 let KeyEvent = null, Propagating = null; Hosts.preventDefault = () => { KeyEvent?.preventDefault(); if (KeyEvent?.type === "beforeunload") KeyEvent.returnValue = ""; if (!KeyEvent && Propagating?.type === "pointerdown") Propagating.preventDefault(); /* a pointerdown handler's: the browser keeps the focus, places no caret, starts no selection; the click still fires (LLP 1005 §3) */ }; Hosts.stopPropagation = () => { const e = KeyEvent ?? Propagating; if (e) e.$stopped = true; }; // Propagating: the pointer's down or up a handler is running for, which only its `stopPropagation()` reaches (its default is the browser's); // the key, focus, wheel, beforeunload or clipboard event whose handler is running (`on`): commands run before its commit returns; a stopped key reaches no ancestor's `key` handler, its default still does (files diary F8); a prevented beforeunload is the browser's "Leave site?" (Safari reads `returnValue`)
-export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
+export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
 function command(name, args, origin) {
   const f = Hosts[name];
   say(`command ${name}`);
@@ -622,7 +623,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (Adopt) { const e = adopt(p, tag, cls, attrs); if (tag === "video" || tag === "audio") Media.media(e, attrs); if (tag === "iframe") frame(e, attrs?.["data-app-src"]); if (tag === "button") oneActivation(e); return e; }
   const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag), owner = listOwner(p); e.$exactTree = true; e.authoredInert = attrs?.inert !== undefined;
   if (cls !== 0) e.setAttribute("class", "c" + cls); // `bits`, below: the paint facts the compiler wrote, kept as paint.js `facts` reads them rather than read back from the attribute names; a bound fact's `P` clears them (LLP 1071.001 A6)
-  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if (tag === "a") linkAttrs(e, attrs); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
+  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if (tag === "a") Links?.made(e, attrs); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
   if (text !== 0) e.textContent = text;
   if (tag === "iframe") frame(e, attrs?.["data-app-src"]);
   if (tag === "button") oneActivation(e);
@@ -658,7 +659,7 @@ function adopt(p, tag, cls, attrs) {
   if (e.hasAttribute("data-view")) e.removeAttribute("data-view");
   if (attrs?.["data-exact-own-isolation"] === undefined && !e.hasAttribute("data-exact-own-isolation") && !e.hasAttribute("data-exact-policy") && e.style.isolation) e.style.removeProperty("isolation");
   if (cls !== 0 && e.getAttribute("class") !== "c" + cls) e.setAttribute("class", "c" + cls);
-  if (attrs) { const rendered = tag === "a" ? e.getAttribute("rel") : null; for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if (tag === "a") linkAttrs(e, attrs, rendered); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
+  if (attrs) { const rendered = Links && tag === "a" ? e.getAttribute("rel") : null; for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if (tag === "a") Links?.made(e, attrs, rendered); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
   Paint?.list(e); return e;
 }
 function mark(p) { const c = document.createComment(""); p.insertBefore(c, at(p)); return c; }
@@ -714,29 +715,10 @@ export function P(e, name, f) {
     else if (v == null) { if (e.hasAttribute(name) || suppressedInvocation(e, name)) { e.removeAttribute(name); if (name.startsWith("data-exact-")) Paint?.facts(e); } }
     else if (e.getAttribute(name) !== v) { e.setAttribute(name, v); if (name.startsWith("data-exact-")) Paint?.facts(e); }
     if (name === "role") syncListItemRoles(e); else if (name === "popover" && e.parentElement?.hasAttribute("data-exact-list-item")) listItem(e);
-    if (e.localName === "a" && (name === "rel" || name === "target" || name === "href")) { // a link to an absolute URL leaves the app in a new browsing context unless its `target` is authored (element.rs `leaves_app`, `props_of`; chat F11)
-      if (name === "rel") e.$rel = v; else if (name === "target") { e.$target = v != null; e.$external = false; }
-      else if (!e.$target) { const out = v != null && /^\s*(https?:)?\/\//i.test(v); if (out) e.setAttribute("target", "_blank"); else e.removeAttribute("target"); e.$external = out; }
-      linkRel(e);
-    }
+    if (e.localName === "a" && (name === "rel" || name === "target" || name === "href")) Links?.prop(e, name, v);
     if (name === "sandbox" && e.localName === "iframe" && !e.exactAppFrame) { const source = e.$src ?? e.getAttribute("src"); if (source != null) { const s = navigable(source, e) ? source : "about:blank"; if (sandboxChanged || e.getAttribute("src") !== s) e.setAttribute("src", s); } } // a new sandbox takes effect on navigation, even to the same source; a literal source stays in src, a refused `data:` source in $src
     if ((name === 'src' || name === 'sandbox') && e.localName === 'iframe') commitGuestOrigin(e);
   });
-}
-const relTokens = v => (v ?? "").split(/[ \t\n\f\r]+/).filter(Boolean);
-/** A link made or adopted from its template: its literal `rel` and `target` are the author's; `external` stays as the
- * page was rendered until a bound `href` says again. */
-function linkAttrs(e, attrs, rendered) {
-  e.$rel = relTokens(attrs.rel).filter(t => !/^(external|noopener)$/i.test(t)).join(" "); e.$target = "target" in attrs && !relTokens(attrs.rel).includes("external");
-  e.$external ??= relTokens(rendered ?? attrs.rel).includes("external"); linkRel(e);
-}
-/** A link's `rel` (element.rs `link_rel`): the author's tokens, then those its target needs that they lack, compared
- * ASCII case-insensitively: `noopener` for a new browsing context, and `external` before it for the one an absolute
- * URL opens by default. The author's are what `rel` last wrote, and the template's (`linkAttrs`) before that. */
-function linkRel(e) {
-  const own = relTokens(e.$rel), need = e.getAttribute("target") !== "_blank" ? [] : e.$external ? ["external", "noopener"] : ["noopener"];
-  const all = own.concat(need.filter(t => !own.some(o => o.toLowerCase() === t))).join(" ");
-  if (all) { if (e.getAttribute("rel") !== all) e.setAttribute("rel", all); } else e.removeAttribute("rel");
 }
 /** A reader uses built pieces; new text loads the parser on demand. */
 export function md(e, f, prepared) { markdownText(e, f, prepared, { effect, inflight, adopting, renderMarkup }); }
@@ -844,10 +826,10 @@ export function css(e, prop, unit, v, rendered) {
   // The value this binding last wrote: the same again writes nothing (a write restyles and repaints the node, for every dynamic row a list update touched).
   const last = e.$css ??= {}, t = cssText(prop, unit, v);
   if (last[prop] === t) return;
-  last[prop] = t;
-  // An adopted node's inline style is the renderer's: a value it already
-  // shows is not written again (a write restyles and repaints the node).
-  // (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
+  last[prop] = t; // The `animation` shorthand resets the longhands a timeline's consumer writes again after it (LLP 1057.003 D5).
+  if (prop === "animation") for (const p of ["animation-timeline", "animation-range", "animation-play-state"]) delete last[p];
+  // An adopted node's inline style is the renderer's: a value it already shows is not written again (a write
+  // restyles and repaints the node). (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
   if (rendered) {
     const now = e.style.getPropertyValue(prop);
     if (t == null ? !now : same(now) === (normal(prop, t) || "unset")) return;
@@ -1156,14 +1138,14 @@ export const pressFeedback = () => input(); if (DEVELOPMENT_STORE) globalThis.__
 /** The web host's input piece (input-glue.js), after first paint: pans. */
 let Input = null, Inputs = null;
 function input() {
-  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
+  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return Inputs;
   inflight.n++;
   // Its link handler asks the wasm's route table; this runtime routes its own.
   const x = globalThis.exact ??= {}; (x.wasm ??= {}).exact_route_match ??= () => 0;
   const to = (id, p, k) => Views.get(id)?.[k]?.(...p.split(",").map(Number));
-  Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
+  return Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
     Input = m.createInputHandlers({ root: document.getElementById("exact-root"), views: Views, retiredViews: new WeakSet(), ready: () => true,
-      inertAncestor, agentMode: clock.agent, dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
+      inertAncestor, agentMode: clock.agent, pick: el => x.files?.activate(el), dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
       velocity: { sample: (...a) => Mo?.pan.sample(...a), velocity: (...a) => Mo?.pan.velocity(...a) }, log: say }); Input.arrive(); // the stack as it stands, for the focus to follow (LLP 1115.000 D4.2)
   }).catch(err => say(`input: ${err.message}`)).finally(() => inflight.n--);
 }

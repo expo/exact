@@ -265,7 +265,14 @@ pub fn answer<D: DataSource>(
                 None,
             ));
         };
-        return Some(match (picker.hold)(runner, &id) {
+        let held = match field_num(request, "view") {
+            Some(view) if view >= 0.0 && view <= u32::MAX as f64 && view == view.trunc() => {
+                (picker.hold_view)(runner, view as u32)
+            }
+            Some(_) => Err("showPicker needs a valid view".into()),
+            None => (picker.hold)(runner, &id),
+        };
+        return Some(match held {
             Ok(ticket) => (format!("{{\"ticket\":{ticket}}}"), None),
             Err(e) => (error(&e), None),
         });
@@ -1076,6 +1083,10 @@ fn delivery<D: DataSource>(runner: &Runner<D>, s: &mut String) {
     }
     s.push_str("],\"compatibilityId\":");
     quote(&d.compatibility_id, s);
+    s.push_str(",\"version\":");
+    quote(&d.version, s);
+    s.push_str(",\"buildNumber\":");
+    quote(&d.build_number, s);
     s.push_str(",\"L\":");
     quote(&d.store.to_string(), s);
     s.push_str(",\"E\":[");

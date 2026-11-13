@@ -15,21 +15,25 @@ import java.io.File
 @Config(sdk = [31], manifest = Config.NONE)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FieldsTest {
-    private val family = File("../../linux/tests/fonts/Inter-Regular.ttf").canonicalPath + "#0"
+    companion object {
+        private val family = File("../../linux/tests/fonts/Inter-Regular.ttf").canonicalPath + "#0"
 
-    private fun statement(features: String): IntArray {
-        val words = mutableListOf(1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, (-1f).toBits(), (-1f).toBits(), 0)
-        fun string(s: String) {
-            val bytes = s.toByteArray(Charsets.UTF_8)
-            words.add(bytes.size)
-            for (part in bytes.toList().chunked(4)) {
-                words.add(part.foldIndexed(0) { i, word, b -> word or ((b.toInt() and 255) shl (i * 8)) })
+        /** A statement of one field, id 1, with these font features; with a size, placed in that box. */
+        fun statement(features: String = "", x: Float = 0f, y: Float = 0f, w: Float = 0f, h: Float = 0f): IntArray {
+            val placed = if (w > 0f) 1 else 0
+            val words = mutableListOf(1, 1, 0, placed, 0, x.toBits(), y.toBits(), w.toBits(), h.toBits(), 0, 0, (-1f).toBits(), (-1f).toBits(), 0)
+            fun string(s: String) {
+                val bytes = s.toByteArray(Charsets.UTF_8)
+                words.add(bytes.size)
+                for (part in bytes.toList().chunked(4)) {
+                    words.add(part.foldIndexed(0) { i, word, b -> word or ((b.toInt() and 255) shl (i * 8)) })
+                }
             }
+            string("1111")
+            words.addAll(listOf(0, 0, 0, 0, -1, 0, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, 0, 0, 0))
+            for (s in listOf("", "", family, "", features)) string(s)
+            return words.toIntArray()
         }
-        string("1111")
-        words.addAll(listOf(0, 0, 0, 0, -1, 0, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, 0, 0, 0))
-        for (s in listOf("", "", family, "", features)) string(s)
-        return words.toIntArray()
     }
 
     @Test fun displayedFieldsApplyAndClearNumericFeatures() {

@@ -153,6 +153,12 @@ export function targetsIn(nodes, limit = 12) {
  * sessions are the Mac's and the iPhone's. */
 export const testScope = (host) => ({ mac: 'macos', host: 'macos', 'host-ios': 'ios' })[host] ?? host;
 
+/** What an authored `pick` that found no picker held says to do first. A tap on the file input holds one on the
+ * web, and on Linux only when the input has an id; macOS and iOS hold one for `showPicker(id)` alone. */
+export const pickHint = (host) => host === 'web'
+  ? '; first tap the visible file input or a button whose action calls showPicker("<input id>")'
+  : '; first tap a button whose action calls showPicker("<input id>"); the file input needs id as well as testId';
+
 /** Where a native host keeps a drive's scratch stores (host/apple and host/linux `configure_storage`), or
  * null where the driver cannot reach them: an iOS simulator's are in its app container and go with the app. */
 export function storeBase(appId, host, env = process.env, home = homedir()) {
@@ -883,7 +889,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           // A held picker, by the node its answer arrives at or its capability (files F11); paths are the test file's.
           case 'pick': {
             try { delivered(st.paths.length ? await s.type(`@${st.target}`, st.paths.map((p) => resolve(dirname(resolve(file)), p)).join('\n') + '\n') : await s.tap(`@${st.target}`, { choice: 'cancel' })); }
-            catch (error) { if (error.message.includes('held: none')) error.message += '; first tap a button whose action calls showPicker("<input id>"); the file input needs id as well as testId'; throw error; }
+            catch (error) { if (error.message.includes('held: none')) error.message += pickHint(host); throw error; }
             input = st.line; break;
           }
           // The held sign-in, completed against the app's own server (LLP 1146 D4): its authorization URL is

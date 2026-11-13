@@ -89,6 +89,8 @@ pub struct Block {
     pub runs: Vec<Run>,
     /// A table row's cells.
     pub cells: Vec<Vec<Run>>,
+    /// Each table column's separator alignment, or empty for the reader's default.
+    pub cell_align: Vec<String>,
     /// Whether a table row is the header row.
     pub header: bool,
     /// The source an image shows in a dark appearance instead of `href`, or
@@ -678,6 +680,21 @@ fn table(
     context: &Context<'_>,
     doc: &mut Document,
 ) -> usize {
+    let align: Vec<String> = lines[at + 1]
+        .trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|rule| {
+            let rule = rule.trim();
+            match (rule.starts_with(':'), rule.ends_with(':')) {
+                (true, true) => "center",
+                (false, true) => "right",
+                (true, false) => "left",
+                _ => "",
+            }
+            .to_owned()
+        })
+        .collect();
     for (offset, line) in lines[at..at + rows].iter().enumerate() {
         if context.scan.cancelled() {
             return lines.len();
@@ -689,6 +706,7 @@ fn table(
             kind: Kind::TableRow,
             header: offset == 0,
             cells: cells_of(line, context),
+            cell_align: align.clone(),
             ..Block::default()
         });
     }

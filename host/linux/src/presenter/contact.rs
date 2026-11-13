@@ -81,6 +81,14 @@ pub(super) struct Contact {
     focus_blocked: bool,
     /// The canvas that owns this contact and sees its down, moves and up.
     canvas: Option<ViewId>,
+    /// The axes the `touch-action` under the down keeps from the platform's
+    /// panning ([`Presenter::touch_kept`]), read once, as a browser reads it
+    /// at the touch's start.
+    touch: (bool, bool),
+    /// Whether a finger stays the page's past the slop, decided at its
+    /// first move past it and kept, as the reader decides once whose the
+    /// drag is.
+    kept: Option<bool>,
 }
 impl<D: DataSource> Presenter<D> {
     pub(super) fn input_live(&self, key: NodeKey) -> bool {
@@ -156,10 +164,9 @@ impl<D: DataSource> Presenter<D> {
                         .is_none_or(|(key, _)| {
                             self.input_live(key)
                                 && self.host.kernel().node_by_key(key).is_some_and(|n| {
-                                    self.host
-                                        .runner()
-                                        .handlers_of(n.id)
-                                        .contains(&EventKind::Press)
+                                    n.props.link().is_some()
+                                        || (self.host.runner().handlers_of(n.id))
+                                            .contains(&EventKind::Press)
                                 })
                         })
                     && match contact.candidate {
@@ -252,21 +259,26 @@ impl<D: DataSource> Presenter<D> {
         box_.contains(c.position.0, c.position.1).then_some(*key)
     }
     pub(crate) fn contact_position(&self) -> Option<(f32, f32)> {
-        self.contact.as_ref().map(|c| c.position)
+        (self.contact.as_ref().map(|c| c.position))
+            .or_else(|| self.stage_contact().map(|(at, _)| at))
     }
     /// The agent's contact phase is done: its press lands at once (LLP
     /// 1061 D2, D7), the clock unmoved.
     pub(crate) fn land_presses(&mut self) {
         self.host.land_presses();
+        self.brush.ripples.land(self.host.now());
+        self.land_bar_ripple();
         self.dirty = true;
     }
     pub(crate) fn contact_event_ms(&self) -> Option<f64> {
-        self.contact.as_ref().map(|c| c.event_ms)
+        (self.contact.as_ref().map(|c| c.event_ms))
+            .or_else(|| self.stage_contact().map(|(_, ms)| ms))
     }
     pub(crate) fn delay_contact_event(&mut self, ms: f64) {
         if let Some(contact) = &mut self.contact {
             contact.event_ms += ms;
         }
+        self.stage_delay_contact(ms);
     }
     /// A held Arrange's preview again where the contact is, after an edge
     /// scroll moved the list under it (the page's `sampleMove` after its
@@ -443,10 +455,14 @@ impl<D: DataSource> Presenter<D> {
     /// synthesis; then the node's `pointerdown` (LLP 1005 §3), which the
     /// contact never waits for.
     pub fn pointer_down(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.brush.ripples.input(now_ms);
         // A finger of an earlier touch whose up never came.
         #[cfg(any(target_os = "android", test))]
         self.cancel_fingers(now_ms);
         self.touched();
+        if self.stage_down(x, y, now_ms) {
+            return Ok(true);
+        }
         if self.overlay_pointer(0, x, y, now_ms) || self.scrollbar_pointer(0, x, y) {
             return Ok(true);
         }
@@ -493,7 +509,8 @@ impl<D: DataSource> Presenter<D> {
         };
         self.refresh_feedback();
         self.hatch_pointer(mark, crate::hatches::Phase::Down, x, y);
-        result
+        // A contact that may drag a sheet is taken, whatever it presses.
+        result.map(|taken| taken || self.stage_drag_pending())
     }
     /// A desktop mouse down with the shell's platform click count.
     pub fn pointer_down_with_clicks(
@@ -598,6 +615,8 @@ impl<D: DataSource> Presenter<D> {
                     focus_before_down: None,
                     focus_blocked: false,
                     canvas: None,
+                    touch: (false, false),
+                    kept: None,
                     panning: false,
                     pan_velocity: VelocityTracker::new(),
                 });
@@ -654,10 +673,14 @@ impl<D: DataSource> Presenter<D> {
                 focus_before_down: None,
                 focus_blocked: false,
                 canvas: Some(canvas),
+                touch: (false, false),
+                kept: None,
             });
             return Ok(true);
         }
-        let pressed = self.handler_target(view, EventKind::Press);
+        // A link with no `press` shows its press too (LLP 1121 D8, as amended),
+        // and is followed by the lift's hit as before.
+        let pressed = self.press_target(view);
         // `-exact-press-haptic` plays at the press, the host's own as the
         // scale and paint below are (LLP 1077 D14; LLP 1061 D7).
         if let Some(id) = pressed {
@@ -668,6 +691,8 @@ impl<D: DataSource> Presenter<D> {
             let (key, origin) = (node.key, node.style.transform_origin.clone());
             self.box_of(id).map(|b| (key, b.unpressed(origin)))
         });
+        // A pressed box that shows its press (a scale shrinks it) activates
+        // where the lift is in the box it had unpressed, a link as a press.
         let press_activates = feedback.is_some_and(|(key, _)| {
             self.host
                 .kernel()
@@ -699,6 +724,8 @@ impl<D: DataSource> Presenter<D> {
             focus_before_down: None,
             focus_blocked: false,
             canvas: None,
+            touch: self.touch_kept(hit),
+            kept: None,
         });
         self.set_collection_interaction(Some(view));
         Ok(true)
@@ -731,6 +758,10 @@ impl<D: DataSource> Presenter<D> {
         now_ms: f64,
         event_ms: f64,
     ) -> Result<bool, String> {
+        // A sheet's scrim, or its drag once past the slop (`stage/touch.rs`).
+        if self.stage_move(x, y, event_ms) {
+            return Ok(true);
+        }
         if self.overlay_pointer(2, x, y, now_ms) || self.scrollbar_pointer(2, x, y) {
             return Ok(true);
         }
@@ -924,10 +955,20 @@ impl<D: DataSource> Presenter<D> {
                     self.begin_swipe(key, ways, now_ms)
                 }
                 _ => {
+                    // A finger is the platform's to pan with past the slop,
+                    // except along an axis its `touch-action` keeps; which,
+                    // by its first move past it, for the rest of the touch.
+                    let touch = contact.touch;
+                    let kept = *contact
+                        .kept
+                        .get_or_insert_with(|| match dx.abs() > dy.abs() {
+                            true => touch.0,
+                            false => touch.1,
+                        });
                     if (contact.press_activates && contact.feedback.is_some())
                         || (contact.candidate.is_none()
                             && contact.retained.is_none()
-                            && !self.contact_is_direct())
+                            && (!self.contact_is_direct() || kept))
                     {
                         self.contact = Some(contact);
                     } else {
@@ -1008,6 +1049,10 @@ impl<D: DataSource> Presenter<D> {
         now_ms: f64,
         event_ms: f64,
     ) -> Result<bool, String> {
+        self.brush.ripples.input(now_ms);
+        if self.stage_up(x, y, now_ms, event_ms) {
+            return Ok(true);
+        }
         if self.overlay_pointer(1, x, y, now_ms) || self.scrollbar_pointer(1, x, y) {
             return Ok(true);
         }
@@ -1176,7 +1221,13 @@ impl<D: DataSource> Presenter<D> {
                         self.focus_for_press(hit, (x, y), now_ms, self.contact_is_direct());
                     }
                     self.press_point = Some((x, y));
+                    // Read before the press, whose handler may remove it: a
+                    // link is followed after its press, as `press_at` has it.
+                    let link = self.link_at(hit, x, y);
                     self.activate(id, now_ms);
+                    if let Some(href) = link {
+                        self.follow(hit, &href, now_ms);
+                    }
                 }
             }
             Ok(false)
@@ -1252,6 +1303,8 @@ impl<D: DataSource> Presenter<D> {
     /// Escape, wheel takeover, disconnection, or invalidated binding: no
     /// release event, except a pan that began, which releases at rest.
     pub fn pointer_cancel(&mut self, now_ms: f64) -> Result<(), String> {
+        self.brush.ripples.input(now_ms);
+        self.stage_cancel(now_ms);
         self.overlay_pointer_cancel();
         self.field_drag = None;
         self.end_range_drag();
@@ -1261,6 +1314,7 @@ impl<D: DataSource> Presenter<D> {
         let at = self.contact_position().or(self.pointer).unwrap_or((0., 0.));
         let mark = self.hatch_pointer_mark(crate::hatches::Phase::Cancel, at.0, at.1);
         let result = self.pointer_abandon(now_ms);
+        self.cancel_ripple();
         self.refresh_feedback();
         self.hatch_pointer(mark, crate::hatches::Phase::Cancel, at.0, at.1);
         result

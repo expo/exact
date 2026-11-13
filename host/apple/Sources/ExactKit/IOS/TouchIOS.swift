@@ -315,6 +315,18 @@ extension Agent {
         if !presenter.reach(of: v).contains(local) || seen == nil {
             return ["error": "tap #\(v.id): the point is outside the viewport; scroll it into view first"]
         }
+        #if os(iOS) && EXACT_INSPECT
+        // UIKit's backdrop takes an outside touch to dismiss its context menu.
+        // Only an explicit point may address it; a named press still means that node.
+        if at["at"] != nil || at["x"] != nil || at["y"] != nil,
+           let owner = presenter.menus.context.open, owner.toggled, owner.source?.window === win,
+           let backdrop = seen, NSStringFromClass(Swift.type(of: backdrop)) == "_UIContextMenuPlatterTransitionView",
+           let space = scene?.coordinateSpace {
+            if let why = obscured(backdrop, at: p, hit: backdrop) { return ["error": "tap #\(v.id): \(why)"] }
+            return aimed(v, at: p, local: local, in: win, space: space, hit: nil,
+                         native: ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
+        }
+        #endif
         if let why = obscured(inBar ? barItemTarget(v, bar: target, hit: seen!) : target, at: p, hit: seen!) { return ["error": "tap #\(v.id): \(why)"] }
         // Named, it presses what it names, as the activation's tap does.
         var avoided: PressReach?

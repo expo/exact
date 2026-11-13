@@ -7,9 +7,11 @@
 // a stop that ends what sounds and cancels what waits; the bound of 32 live
 // voices; the drops a computed call can make; and a voice's playback rate
 // and pan, literal, clamped, non-finite and small enough that JavaScript's
-// own text for it is exponential (LLP 1125 D10). The journal's `sound`
-// lines and `state.sounds` compare on every target, and the JS target
-// never refuses one of the three commands. (No slot shares a name with
+// own text for it is exponential (LLP 1125 D10); and `setSounds` moving a
+// sounding voice's rate inside and past its ramp, a waiting one's outright,
+// one made in the same commit, and a non-finite value (LLP 1096 D14). The
+// journal's `sound` lines and `state.sounds` compare on every target, and
+// the JS target never refuses one of the four commands. (No slot shares a name with
 // Caltrain's: the wasm page carries its first world into this plan by slot
 // name.)
 sound "assets/kick.wav"
@@ -99,6 +101,16 @@ component Sounds
     playSound("assets/kick.wav", playbackRate=0.5, group="tape")
   action warp(rate: number, pan: number)
     playSound("assets/hat.wav", playbackRate=rate == -1 ? 0 / 0 : rate, pan=pan)
+  action glide
+    playSound("assets/kick.wav", group="glide")
+    playSound("assets/hat.wav", at=performanceNow() + 500, group="later")
+  action bend(rate: number, gain: number, pan: number)
+    setSounds(group="glide", playbackRate=rate == -1 ? 0 / 0 : rate, gain=gain, pan=pan, ramp=40)
+  action bendAll
+    setSounds(playbackRate=0.25, ramp=0)
+  action playSet
+    playSound("assets/hat.wav", group="made")
+    setSounds(group="made", playbackRate=2, gain=0.5)
   task clock mount
     every(25, tick)
   view
@@ -118,3 +130,9 @@ component Sounds
       button "tiny pan" press=warp(0.2500001, 0.0000001) testId="tinypan"
       button "tiny left" press=warp(1, -0.0000002) testId="tinyleft"
       button "tiny gain" press=odd("assets/hat.wav", 0, 0.0000001) testId="tinygain"
+      button "glide" press=glide testId="glide"
+      button "bend" press=bend(0.5, 0.5, -1) testId="bend"
+      button "bend up" press=bend(4, 1, 1) testId="bendup"
+      button "bend nan" press=bend(-1, 1, 0) testId="bendnan"
+      button "bend all" press=bendAll testId="bendall"
+      button "play set" press=playSet testId="playset"

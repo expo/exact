@@ -193,6 +193,8 @@ open class ExactActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) backCallback.take(on)
     }
     private fun back() { if (Exact.back()) view.invalidate() else finish() }
+    /** Predictive Back's gesture as it goes ([Native.backProgress]): exact2 previews the pop or the sheet's close. */
+    private fun backProgress(phase: Int, progress: Float, edge: Int) { Exact.backProgress(phase, progress, edge); view.invalidate() }
 
     /** Before Android 13 Back arrives here, and the app's routes take it while they have somewhere to go. */
     @Deprecated("Android 13's OnBackInvokedDispatcher takes Back from then on ([Back]).")
@@ -200,14 +202,28 @@ open class ExactActivity : Activity() {
         if (Build.VERSION.SDK_INT < 33 && takesBack) back() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
-    /** [takeBack]'s callback from Android 13, in a class of its own: an older release never resolves its types. */
+    /** [takeBack]'s callback from Android 13, in a class of its own: an older release never resolves its types. From
+     * Android 14 it hears the gesture as it goes, so exact2 can preview what Back does (LLP 1115.001 D6, D12). */
     @android.annotation.TargetApi(33)
     private class Back(activity: ExactActivity) {
         private val dispatcher = activity.onBackInvokedDispatcher
-        private val callback = android.window.OnBackInvokedCallback { activity.back() }
+        private val callback: android.window.OnBackInvokedCallback =
+            if (Build.VERSION.SDK_INT >= 34) Predictive.callback(activity) else android.window.OnBackInvokedCallback { activity.back() }
         fun take(on: Boolean) {
             if (on) dispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
             else dispatcher.unregisterOnBackInvokedCallback(callback)
+        }
+    }
+
+    /** Android 14's `OnBackAnimationCallback`, in an object of its own: an older release never resolves its types. The
+     * system eases the progress; the edge is `BackEvent`'s (0 the left, 1 the right). */
+    @android.annotation.TargetApi(34)
+    private object Predictive {
+        fun callback(activity: ExactActivity) = object : android.window.OnBackAnimationCallback {
+            override fun onBackStarted(e: android.window.BackEvent) = activity.backProgress(0, e.progress, e.swipeEdge)
+            override fun onBackProgressed(e: android.window.BackEvent) = activity.backProgress(1, e.progress, e.swipeEdge)
+            override fun onBackCancelled() = activity.backProgress(2, 0f, 0)
+            override fun onBackInvoked() = activity.back()
         }
     }
 
@@ -270,6 +286,9 @@ open class ExactActivity : Activity() {
         if (owner != null) {
             owner.chrome = { c -> chrome(c) }
             owner.asked = { r -> requests.perform(r) }
+            owner.rates = { r -> natives?.frameRates(r) }
+            owner.displays(this)
+            frameIdentity(owner)
             owner.configure(device)
             owner.colors(colors)
             owner.window(size.first, size.second, density, edges)
@@ -490,6 +509,22 @@ open class ExactActivity : Activity() {
         configure()
         view.running(true)
         Exact.hidden(false)
+        if (measured) Exact.owner?.windowFrames?.attach(window)
+    }
+
+    /** A driver's launch: the window's frames are measured for `perf frames` while it shows (LLP 1079.000 §6.2). */
+    private val measured by lazy { android.system.Os.getenv("EXACT_AGENT") == "1" }
+
+    /** The device a `perf frames report` names. */
+    private fun frameIdentity(owner: Owner) {
+        if (!measured) return
+        val display = (getSystemService(android.hardware.display.DisplayManager::class.java))?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        val identity = org.json.JSONObject().put("host", "android").put("app", packageName.take(160))
+            .put("device", "${Build.MANUFACTURER} ${Build.MODEL}".take(160))
+            .put("os", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            .put("emulator", Build.FINGERPRINT.contains("generic") || Build.HARDWARE.contains("ranchu"))
+            .put("displayMaximumHz", display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: 0f)
+        owner.tell { try { Native.frameIdentity(identity.toString().toByteArray()) } catch (e: UnsatisfiedLinkError) {} }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -499,6 +534,7 @@ open class ExactActivity : Activity() {
 
     override fun onStop() {
         stopped = true
+        Exact.owner?.windowFrames?.detach()
         Exact.hidden(true)
         if (reads()) pads.background()
         view.running(false, reads())
@@ -521,6 +557,7 @@ open class ExactActivity : Activity() {
         // Everything committed before the pause is on disk (exact2 writes the store on a thread of its own).
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the pause")
         Extensions.paused()
+        requests.paused()
         super.onPause()
     }
 

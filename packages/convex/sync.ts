@@ -16,13 +16,16 @@ export const PROTOCOL = '1.49.0';
 export type Frame = { type: string; [field: string]: unknown };
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Version = { querySet: number; identity: number; ts: string };
-/** A query's or a request's outcome: Convex's value, or its error's words and `ConvexError` data. */
-export type Outcome = { ok: true; value: Value } | { ok: false; message: string; data?: Value };
+/** A query's or a request's outcome: Convex's value, or its error's words and `ConvexError` data. `again`: the
+ *  handle of a mutation the connection ended before Convex answered (`Sync.again`). */
+export type Outcome = { ok: true; value: Value } | { ok: false; message: string; data?: Value; again?: number };
 
-/** A Convex function's failure: `message` is the server's, `data` a `ConvexError`'s payload. */
+/** A Convex function's failure: `message` is the server's, `data` a `ConvexError`'s payload. `again`: set on a
+ *  mutation the connection ended before Convex answered, which `again(handle)` sends once more as the same request. */
 export class ConvexFailure extends Error {
   data: Value | undefined;
-  constructor(message: string, data?: Value) { super(message); this.name = 'ConvexFailure'; this.data = data; }
+  again: number | undefined;
+  constructor(message: string, data?: Value, again?: number) { super(message); this.name = 'ConvexFailure'; this.data = data; this.again = again; }
 }
 
 type Query = {
@@ -45,6 +48,10 @@ type Request = {
   kind: 'Mutation' | 'Action';
   /** The identity version of the last `Authenticate` sent ahead of it on its connection. */
   behind: number;
+  /** How many times the app had signed out when it was sent (`Sync.era`). */
+  era: number;
+  /** What was sent: a mutation left unanswered is sent again as this frame, under the same request id. */
+  frame: Frame;
   /** A mutation the server ran, held until a `Transition` reaches `ts`, so its caller reads its own write. */
   done?: { ts: string; value: Value };
   settle: (outcome: Outcome) => void;
@@ -122,10 +129,19 @@ export class Sync {
   private nextQueryId = 0;
   private requests = new Map<number, Request>();
   private nextRequestId = 0;
+  /** The mutations a connection ended before Convex answered, by request id, for `again`. Convex answers a
+   *  request id a session has sent before with its first answer (`request_manager.ts`, `restart`, sends each
+   *  again on that ground), so one sent again writes once. */
+  private kept = new Map<number, Frame>();
+  /** How many times the app has signed out. A mutation sent before a sign-out is not kept: sent again, it
+   *  would run as whoever signs in next. */
+  private era = 0;
   /** The newest `rev` an ask has carried, and the generation of asks before it. */
   private generation = -1;
   private chunks: string[] = [];
   private chunkId = '';
+  /** The pings since this connection opened, while no `Transition` has arrived. */
+  private silent = 0;
 
   constructor(private codec: Codec) {}
 
@@ -145,6 +161,7 @@ export class Sync {
     this.status = 'open';
     this.version = { querySet: 0, identity: 0, ts: ZERO_TS };
     this.chunks = [];
+    this.silent = 0;
     const frames: Frame[] = [{
       type: 'Connect', sessionId: this.sessionId, connectionCount: this.connectionCount, lastCloseReason: this.lastCloseReason,
       ...(this.maxObservedTs ? { maxObservedTimestamp: this.maxObservedTs } : {}),
@@ -166,9 +183,9 @@ export class Sync {
   /** The socket ended, with why; `fatal` when a new connection would end the same way. A query with no
    *  answer yet fails, and is asked again when one arrives. A request in flight ends here too: an answer
    *  cannot wait across the gap (natively one that awaits with nothing outstanding is refused), so, unlike
-   *  the npm client (`request_manager.ts`, `restart`), this sends no mutation again on the next connection.
-   *  One the server acknowledged succeeded; one sent behind an `Authenticate` Convex refused did not run;
-   *  any other may have run. */
+   *  the npm client (`request_manager.ts`, `restart`), this sends no mutation again on the next connection:
+   *  the app does, with `again`. One the server acknowledged succeeded; one sent behind an `Authenticate`
+   *  Convex refused did not run; any other may have run. */
   closed(reason: string, fatal = false) {
     // The close that follows a fatal end is that end's, not a new one: `failed` and its reason stand.
     if (this.status === 'failed') return;
@@ -176,9 +193,20 @@ export class Sync {
     this.error = reason;
     this.lastCloseReason = reason;
     for (const q of this.queries.values()) { q.sent = false; q.current = false; this.wake(q); }
-    for (const request of this.requests.values())
-      request.settle(request.done ? { ok: true, value: request.done.value } : { ok: false, message: this.unanswered(request, reason) });
+    for (const [id, request] of this.requests)
+      request.settle(request.done ? { ok: true, value: request.done.value } : this.left(id, request, reason));
     this.requests.clear();
+  }
+
+  /** The failure of a request Convex did not answer. A mutation is kept and its failure carries `again`, unless
+   *  the app has signed out since it was sent. An action is not: Convex has no first answer of one to give again. */
+  private left(id: number, request: Request, reason: string): Outcome {
+    const message = this.unanswered(request, reason);
+    if (request.kind !== 'Mutation' || request.era !== this.era) return { ok: false, message };
+    // (The oldest goes when a hundred are kept.)
+    if (this.kept.size >= 100) this.kept.delete(this.kept.keys().next().value!);
+    this.kept.set(id, request.frame);
+    return { ok: false, message, again: id };
   }
 
   /** Why a request Convex did not answer ended. Convex handles a connection's frames in order and closes it
@@ -198,7 +226,12 @@ export class Sync {
     const message = JSON.parse(text) as Frame;
     if (this.chunks.length && message.type !== 'TransitionChunk') throw new ProtocolError(`Convex sent ${String(message.type)} inside a chunked Transition`);
     switch (message.type) {
-      case 'Ping': return [];
+      case 'Ping':
+        // Convex answers a connection's first frames at once and pings a quiet one every 15 s. A second ping
+        // with no `Transition` yet is taken as frames that never left (a refused commit takes them back,
+        // unsaid): the module cannot tell that from a first answer Convex is half a minute late with.
+        if (this.status === 'open' && (this.silent += 1) >= 2) throw new ProtocolError('Convex sent no results on this connection; connecting again');
+        return [];
       case 'TransitionChunk': {
         // A large `Transition` in parts, in order (`web_socket_manager.ts`, `assembleTransition`).
         const { chunk, partNumber, totalParts, transitionId } = message as unknown as { chunk: string; partNumber: number; totalParts: number; transitionId: string };
@@ -369,6 +402,23 @@ export class Sync {
    *  the person before. If it did, this one moves the identity to the same person. */
   request(kind: 'Mutation' | 'Action', udfPath: string, args: Record<string, Value>, deliver: (frames: Frame[]) => void = () => {}): { frames: Frame[]; outcome: Promise<Outcome> } {
     const message: Frame = { type: kind, requestId: this.nextRequestId, udfPath: canonicalPath(udfPath), args: [this.codec.convexToJson(args as never)] };
+    const sent = this.dispatch(kind, this.nextRequestId, message, deliver);
+    this.nextRequestId += 1;
+    return sent;
+  }
+
+  /** The mutation `handle` names (a failure's `again`), sent once more under its own request id, while the
+   *  socket is open: Convex answers with what it answered first, or runs it now if it never did, as the
+   *  person asked for now. Nothing when no kept mutation has that handle: each is sent again once. */
+  again(handle: number, deliver: (frames: Frame[]) => void = () => {}): { frames: Frame[]; outcome: Promise<Outcome> } | undefined {
+    const frame = this.kept.get(handle);
+    if (!frame) return undefined;
+    const sent = this.dispatch('Mutation', handle, frame, deliver);
+    this.kept.delete(handle);
+    return sent;
+  }
+
+  private dispatch(kind: 'Mutation' | 'Action', requestId: number, message: Frame, deliver: (frames: Frame[]) => void): { frames: Frame[]; outcome: Promise<Outcome> } {
     const guarded = this.unconfirmed(), frames = guarded ? [this.authenticate(), message] : [message];
     try { deliver(frames); }
     catch (e) {
@@ -376,18 +426,18 @@ export class Sync {
       if (guarded) { this.identities.pop(); this.identitiesAt.pop(); }
       throw e;
     }
-    const requestId = this.nextRequestId++;
     const behind = this.identities.length - 1;
-    const outcome = new Promise<Outcome>(settle => this.requests.set(requestId, { kind, behind, settle }));
+    const outcome = new Promise<Outcome>(settle => this.requests.set(requestId, { kind, behind, era: this.era, frame: message, settle }));
     return { frames, outcome };
   }
 
   /** The person's token changed (`undefined`: signed out). The answers held are kept, since Convex's next
    *  `Transition` names only the ones that changed, and each is given again only once it is known to be
    *  this token's (`given`). `deliver` sends the frame. A token Convex has not confirmed is sent again
-   *  when asked for again, so a call whose frame never left can be repeated. */
+   *  when asked for again, so a call whose frame never left can be repeated. Signing out forgets the
+   *  mutations kept for `again`, also when Convex's refusal had already dropped the token. */
   setAuth(token: string | undefined, deliver: (frames: Frame[]) => void = () => {}): Frame[] {
-    if (token === this.token && !(this.connected() && this.unconfirmed())) return [];
+    if (token === this.token && !(this.connected() && this.unconfirmed())) { if (token === undefined) this.signedOut(); return []; }
     const was = this.token;
     this.token = token;
     let frames: Frame[] = [];
@@ -401,9 +451,12 @@ export class Sync {
       throw e;
     }
     this.authError = '';
+    if (token === undefined) this.signedOut();
     this.release();
     return frames;
   }
+
+  private signedOut() { this.kept.clear(); this.era += 1; }
 
   /** For `state` and tests: the queries the server is asked for, and the requests in flight. */
   inspect() {

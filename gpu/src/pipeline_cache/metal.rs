@@ -5,6 +5,7 @@ pub(super) fn install(
     device: &wgpu::Device,
     data: Option<&[u8]>,
 ) -> Option<Arc<wgpu::hal::metal::BinaryArchive>> {
+    shader_libraries();
     // SAFETY: the guarded device remains owned by wgpu; this installs only its optional cache.
     let hal = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }?;
     match hal.install_binary_archive(data) {
@@ -14,6 +15,31 @@ pub(super) fn install(
             None
         }
     }
+}
+
+/// Point the backend at the shader libraries the build compiled into the
+/// bundle (`exact-metal/`, host/apple/shader-libraries.mjs), and in a
+/// development build where to record the MSL it compiles at run time
+/// (`ExactMetalSources`). `EXACT_METAL_LIBRARIES` and `EXACT_METAL_SOURCES`
+/// replace them for a controlled run.
+fn shader_libraries() {
+    let bundle = NSBundle::mainBundle();
+    let libraries = std::env::var_os("EXACT_METAL_LIBRARIES")
+        .map(PathBuf::from)
+        .or_else(|| {
+            bundle
+                .resourcePath()
+                .map(|p| PathBuf::from(p.to_string()).join("exact-metal"))
+        });
+    let sources = std::env::var_os("EXACT_METAL_SOURCES")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let key = objc2_foundation::NSString::from_str("ExactMetalSources");
+            let value = bundle.objectForInfoDictionaryKey(&key)?;
+            let path = value.downcast::<objc2_foundation::NSString>().ok()?;
+            Some(PathBuf::from(path.to_string()))
+        });
+    wgpu::hal::metal::set_shader_libraries(libraries, sources);
 }
 
 pub(super) fn uninstall(
@@ -63,7 +89,18 @@ pub(super) fn disk(device: &wgpu::Device, artifact: u64) -> Option<Disk> {
     Some(disk)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_abi = "sim"))]
+mod simulator {
+    #[test]
+    fn the_simulator_installs_no_archive() {
+        let Some(gpu) = crate::fixture::device_or_skip(crate::fixture::device()) else {
+            return;
+        };
+        assert!(super::install(&gpu.device, None).is_none());
+    }
+}
+
+#[cfg(all(test, not(target_abi = "sim")))]
 mod tests {
     use super::*;
     fn pipelines(gpu: &crate::Gpu, blue: bool) {
@@ -253,6 +290,129 @@ mod tests {
         std::fs::write(&path, pack(b"invalid Metal archive", 1)).unwrap();
         run("metal-corrupt");
         run("reopen");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A source the build compiled replaces the run-time compile: a run with no
+    /// libraries records each MSL source it compiled; `metal` compiles them as
+    /// host/apple/shader-libraries.mjs does; a run with those libraries
+    /// compiles none and draws the same; a damaged library falls back.
+    #[test]
+    fn shipped_shader_libraries_replace_run_time_compiles() {
+        const CHILD: &str = "EXACT_METAL_LIBRARY_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let gpu = crate::fixture::device().expect("Metal adapter required");
+            let _cache = PipelineCache::new(&gpu.device);
+            pipelines(&gpu, false);
+            return;
+        }
+        let tool = std::process::Command::new("xcrun")
+            .args(["-sdk", "macosx", "metal", "--version"])
+            .output();
+        if !tool.is_ok_and(|o| o.status.success()) {
+            eprintln!("skipped: no Metal toolchain");
+            return;
+        }
+        let directory = super::super::tests::directory();
+        let run = |libraries: &str, sources: &str| {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "pipeline_cache::metal::tests::shipped_shader_libraries_replace_run_time_compiles", "--nocapture"])
+                .env(CHILD, "1")
+                .env("EXACT_METAL_LIBRARIES", directory.join(libraries))
+                .env("EXACT_METAL_SOURCES", directory.join(sources))
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let dir = directory.join(sources);
+            let mut keys: Vec<String> = std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter_map(|e| {
+                            e.file_name()
+                                .to_str()?
+                                .strip_suffix(".metal")
+                                .map(String::from)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            keys.sort();
+            keys
+        };
+        let recorded = run("none", "recorded");
+        assert_eq!(
+            recorded.len(),
+            3,
+            "a vertex, a fragment and a compute source: {recorded:?}"
+        );
+        let libraries = directory.join("libraries");
+        std::fs::create_dir_all(&libraries).unwrap();
+        for key in &recorded {
+            let options =
+                std::fs::read_to_string(directory.join("recorded").join(format!("{key}.json")))
+                    .unwrap();
+            let msl = options
+                .split("\"msl\":\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let air = directory.join(format!("{key}.air"));
+            for (tool, args) in [
+                (
+                    "metal",
+                    vec![
+                        format!("-std=metal{msl}"),
+                        "-fpreserve-invariance".into(),
+                        "-c".into(),
+                        directory
+                            .join("recorded")
+                            .join(format!("{key}.metal"))
+                            .display()
+                            .to_string(),
+                        "-o".into(),
+                        air.display().to_string(),
+                    ],
+                ),
+                (
+                    "metallib",
+                    vec![
+                        air.display().to_string(),
+                        "-o".into(),
+                        libraries
+                            .join(format!("{key}.metallib"))
+                            .display()
+                            .to_string(),
+                    ],
+                ),
+            ] {
+                let status = std::process::Command::new("xcrun")
+                    .args(["-sdk", "macosx", tool])
+                    .args(&args)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "{tool} {args:?}");
+            }
+        }
+        assert_eq!(
+            run("libraries", "shipped"),
+            Vec::<String>::new(),
+            "every source came from a library"
+        );
+        for key in &recorded {
+            std::fs::write(libraries.join(format!("{key}.metallib")), b"not a library").unwrap();
+        }
+        assert_eq!(
+            run("libraries", "damaged"),
+            recorded,
+            "a damaged library falls back to the source"
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

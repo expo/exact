@@ -175,9 +175,11 @@ private final class SoundArm {
 
     /// False, the op not taken, while the ring has no room: the caller
     /// keeps it for the next render (SoundOutput's backlog).
-    func push(_ kind: UInt32, _ id: UInt64, _ sound: UInt32, _ at: Double, _ gain: Float, _ rate: Float, _ pan: Float) -> Bool {
-        guard exact_sound_room(mixer) > 0, exact_sound_push(mixer, kind, id, sound, at, gain, rate, pan) else { return false }
-        if kind == 1 { started[id] = at }
+    func push(_ kind: UInt32, _ id: UInt64, _ sound: UInt32, _ at: Double, _ gain: Float, _ rate: Float, _ pan: Float, _ ramp: Double) -> Bool {
+        guard exact_sound_room(mixer) > 0 else { return false }
+        guard kind == 4 ? exact_sound_change(mixer, id, at, gain, rate, pan, ramp) : exact_sound_push(mixer, kind, id, sound, at, gain, rate, pan) else { return false }
+        // Only the device check reads a voice's start, so none is kept otherwise.
+        if kind == 1 && checking { started[id] = at }
         return true
     }
 
@@ -213,7 +215,10 @@ private final class SoundArm {
 
     func report(_ onset: Double) {
         guard let (id, aimed) = started.filter({ $0.value <= onset + 0.1 }).max(by: { $0.value < $1.value }) else { return }
-        started[id] = nil
+        // A later onset follows a silence after this one, so it is never a
+        // voice aimed at or before this voice: those went unheard, or sounded
+        // without a silence before them.
+        started = started.filter { $0.value > aimed }
         say(String(format: "sound check: voice %llu reached the speaker %+.3f ms from its time", id, (onset - aimed) * 1000))
     }
 }
@@ -233,12 +238,14 @@ public func exact_sound_open(_ paths: UnsafePointer<UnsafePointer<CChar>?>?, _ c
 }
 
 /// `kind` 1 plays `sound` from host second `at` times `gain`, at playback
-/// rate `rate` and pan `pan`; 2 ends voice `id` at `at`; 3 ends every voice now.
-/// False while the mixer's ring has no room: the op was not taken.
+/// rate `rate` and pan `pan`; 2 ends voice `id` at `at`; 3 ends every voice now;
+/// 4 changes voice `id`'s gain, rate and pan (each NaN when not given) from
+/// `at`, over `ramp` seconds (LLP 1096 D14). False while the mixer's ring has
+/// no room: the op was not taken.
 @_cdecl("exact_sound_op")
-public func exact_sound_op(_ handle: UnsafeMutableRawPointer?, _ kind: UInt32, _ id: UInt64, _ sound: UInt32, _ at: Double, _ gain: Float, _ rate: Float, _ pan: Float) -> Bool {
+public func exact_sound_op(_ handle: UnsafeMutableRawPointer?, _ kind: UInt32, _ id: UInt64, _ sound: UInt32, _ at: Double, _ gain: Float, _ rate: Float, _ pan: Float, _ ramp: Double) -> Bool {
     guard let handle else { return true }
-    return Unmanaged<SoundArm>.fromOpaque(handle).takeUnretainedValue().push(kind, id, sound, at, gain, rate, pan)
+    return Unmanaged<SoundArm>.fromOpaque(handle).takeUnretainedValue().push(kind, id, sound, at, gain, rate, pan, ramp)
 }
 
 /// What `state.sounds.output` reports: live voices, dropped ops and plays, late starts.

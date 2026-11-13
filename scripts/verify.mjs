@@ -50,8 +50,9 @@ import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
 import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
-import { byRule, groups, ruleOf } from './verify-findings.mjs';
-export { byRule, groups, ruleOf };
+import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent } from './verify-findings.mjs';
+import { cargoDiagnosticFilter } from './cargo-check.mjs';
+export { byRule, groups, ruleOf, largeRemedy };
 
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
 
@@ -71,7 +72,7 @@ const firstLine = (text) => String(text ?? '').split('\n').find((l) => l.trim())
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // The app's own server (LLP 1116.006 D3). A local origin the data module calls, with any path under it.
-const LOCAL = /\bhttps?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}(?:\/[\w\-./]*)?/;
+const LOCAL = /\bhttps?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}(?:\/[\w\-./]*)?/, LOCAL_SOCKET = new RegExp(LOCAL.source.replace('https?', 'wss?'));
 const readIn = (dir, path) => { try { return readFileSync(resolve(dir, path), 'utf8'); } catch { return null; } };
 
 /** The modules of the app's own that `path` imports (`from './x'`, `import './x'`, `import('./x')`, `require('./x')`),
@@ -98,11 +99,11 @@ export function onThisMachine(origin) {
 function builtSettings(dir, env, code = readIn(dir, 'app.ts')) {
   try { const { code: built, record } = inlineSettings(code, dir, createRequire(import.meta.url)('rolldown/utils').parseSync, env); return { code: built, values: Object.fromEntries(Object.entries(record).map(([name, s]) => [name, s.value])) }; } catch { return { code, values: {} }; }
 }
-/** The server URL the data module calls: the first local one (`http://127.0.0.1:8787`, localhost) in app.ts as built (a
- * setting's value, not a default it overrides), else in a module of its own it imports (`./api`'s `API`); else null. */
+/** The server URL the data module calls: the first local one (`http://127.0.0.1:8787`, localhost; with none, a socket's origin, `ws://…`, is its
+ * server's) in app.ts as built (a setting's value, not a default it overrides), else in a module of its own it imports (`./api`'s `API`); else null. */
 export function serverUrl(dir, env = process.env) {
-  const at = (text) => text?.match(LOCAL)?.[0].replace(/\/$/, '') ?? null;
-  return at(builtSettings(dir, env).code) ?? importsOf(dir, 'app.ts').map((p) => at(readIn(dir, p))).find(Boolean) ?? null;
+  const texts = [builtSettings(dir, env).code, ...importsOf(dir, 'app.ts').map((p) => readIn(dir, p))], at = (re) => texts.map((t) => t?.match(re)?.[0]).find(Boolean);
+  return (at(LOCAL) ?? at(LOCAL_SOCKET))?.replace(/\/$/, '').replace(/^ws/, 'http') ?? null;
 }
 
 /** Whether `entry`, or a module of the app's own it imports (a root shim that only imports the backend), reads the
@@ -415,11 +416,10 @@ async function webBuild(app) {
 /** A build's warning lines, less Cargo's that a crates.io patch every outside workspace must carry (`patchLines`, LLP
  * 1036.001 D2) is unused in this app's graph. An unused patch of the author's own, or at another path, still counts. */
 export function buildWarnings(output) {
-  const real = (path) => { try { return realpathSync(path); } catch { return resolve(path); } };
-  const required = new Set(Object.entries(Bun.TOML.parse(readFileSync(resolve(ROOT, 'Cargo.toml'), 'utf8')).patch?.['crates-io'] ?? {})
-    .map(([name, spec]) => `${name} ${real(resolve(ROOT, spec.path))}`));
-  const unused = (line) => /^warning: patch `(\S+) v\S+ \((.+)\)` was not used in the crate graph$/.exec(line);
-  return output.split('\n').filter((line) => { const m = unused(line); return /^warning: /.test(line) && !(m && required.has(`${m[1]} ${real(m[2])}`)); });
+  let kept = '';
+  const filter = cargoDiagnosticFilter(text => { kept += text; });
+  filter.write(output); filter.end();
+  return kept.split('\n').filter(line => /^warning: /.test(line));
 }
 
 /** The iOS build a drive needs, or its plan alone (agent-build.mjs): null when fresh, else what it said. */
@@ -703,31 +703,10 @@ const ANDROID = 'not on Android yet: check\'s findings (each screen is captured 
 // layout is the builder's (LLP 1115.000 D12.1), and a failure would invite `overflow: hidden`. iOS sets the
 // simulator's own size, which UIKit's controls and Exact's text both follow; the web, where a builder iterates, sets the root
 // font size to iOS's body at that size on the phone's width. Only the kinds of finding a larger text makes are kept, each with
-// a remedy that keeps the text's size: a smaller font is the platform tell this pass exists to prevent.
+// a remedy that keeps the text's size: a smaller font is the platform tell this pass exists to prevent. The web omits
+// content iOS projects into its navigation bar: its authored web boxes do not measure UIKit's title and items.
 export const LARGEST = 'accessibility-extra-extra-extra-large', LARGEST_PX = 53;
 const LARGE_KINDS = new Set(['overflow', 'clipped', 'overlap', 'squeezed']), PAGES = 6;
-const WRAP = 'wrap the row: flex-wrap="wrap" with a flex-basis in rem on its items (docs/recipes/responsive-columns.md)';
-/** The remedy for a finding at the largest size: never a smaller or fixed font. A text in a list's row (`inRow`) is cut by
- * the row, which wrapping the row does not change: at the accessibility sizes UIKit's cells wrap a label and grow taller,
- * never truncating it, so a `line-clamp` there reads as a tell (round 22's book-club and contacts took one from this
- * remedy). A grouped list's standard cell already hyphenates as its label does. Elsewhere a UILabel wraps at words and breaks
- * between syllables only a word longer than its line (iOS 27), so `hyphens="auto"` is the remedy for a text of one word;
- * on a heading or sentence it hyphenates words a UILabel keeps whole, which round 26's graders named a tell. */
-export function largeRemedy(f, { inRow = false } = {}) {
-  const wide = (f.detail?.need ?? f.detail?.cut ?? [0])[0] > 0;
-  if (f.kind === 'clipped' && inRow && !f.detail?.edge) {
-    return `${wide ? 'give the text more of the row (no px width beside it) and ' : ''}let the row grow taller with its text, as a cell does at this size (no px height on the row or what it holds; no \`line-clamp\`, which cuts what a cell shows whole)`;
-  }
-  const oneWord = typeof f.text === 'string' && f.text.trim() !== '' && !/\s/.test(f.text.trim());
-  if (f.kind === 'clipped') return f.detail?.edge ? 'let the page scroll there (a scroll with flex=1 min-height=0)'
-    : wide && f.detail?.need ? `give it room (no px width on its box), or ${WRAP}; ${oneWord ? 'a word longer than any line breaks between syllables with `hyphens="auto"`, as a UILabel breaks it' : 'not `hyphens="auto"`, which breaks words a UILabel wraps whole'}`
-    : f.detail?.need ? 'let its box grow with its text: no px height on it (a rem size, or none)' : `give the box that cuts it room (no px width or height on it), or ${WRAP}`;
-  if (f.kind === 'squeezed') return `let it keep its words (no min-width: 0 or px width beside it), or ${WRAP}`;
-  // Overlapping cells of a row that stays one line (a week's days) wrap nowhere: UIKit's calendar caps its day numbers, which
-  // grow to 31 points and no further (iOS 27), never shrinking them.
-  if (f.kind === 'overlap') return `${WRAP}; for a row of equal cells that must stay one line (a week's days), cap the size its text grows to, as UIKit's calendar does: font-size="min(-exact-subheadline, 31px)"`;
-  return WRAP;
-}
 /** LLP 1116.020 D4: each font size the app's own Contract fixes (no-tells.mjs `fixedSizesIn`), which no spill shows (a fixed
  * size never grows to spill), and LLP 1116.021 D6's two like it: a symbol sized in points beside text that grows
  * (`fixedSymbolsIn`), and text that breaks inside words (`brokenWordsIn`), the remedy builders reached for when a large
@@ -762,7 +741,7 @@ const contentSize = (udid, size) => spawnSync('xcrun', ['simctl', 'ui', udid, 'c
  * own size is put back after, and when the process ends first. Null on iOS with no simulator to set. */
 /** Where the largest text size's pictures go, this run's (`deviceMain`): one per screen with a finding (LLP 1156.001 D3). */
 let largeShots = null;
-async function largestText(s, screen) {
+export async function largestText(s, screen) {
   const web = s.host === 'web', udid = s.carrier?.udid, was = web ? null : udid && contentSize(udid).stdout?.trim();
   if (!web && !was) return null;
   const started = Date.now(), body = async () => (await s.prefer({})).page?.['root-font-size'];
@@ -782,19 +761,22 @@ async function largestText(s, screen) {
     await s.clock('settle');
     const [{ judge, line, accepts }, tree] = await Promise.all([import('./agent-check.mjs'), s.op({ op: 'tree' })]);
     const nodes = new Map((tree.nodes ?? []).map((n) => [n.id, n])), looked = new Set(), found = new Map();
+    const projected = web ? await iosNavigationContent(nodes, async id => (await s.op({ op: 'layout', id })).node?.style) : new Set();
     let obs; const shots = [];
     // A screen at a time, as check reads one: the page is scrolled to the first node with a testId that no reading has
-    // held yet, at most PAGES times (a list's rows off the screen have no cells to read).
+    // held yet, at most PAGES times (a list's rows off the screen have no cells to read). Never to projected content:
+    // scrolling sideways to a header item the bar would size moves the whole page past the viewport.
     for (let page = 0; page < PAGES; page++) {
       obs = await s.op({ op: 'check' });
       for (const it of obs.items ?? []) looked.add(it.id).add(it.of);
       const before = found.size;
-      for (const f of judge(obs, null, { host: web ? 'web' : 'ios' })) if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(`${f.kind} ${f.id}`)) found.set(`${f.kind} ${f.id}`, f);
+      const compared = { ...obs, items: (obs.items ?? []).filter(it => !projected.has(it.id) && !projected.has(it.of)) };
+      for (const f of judge(compared, null, { host: web ? 'web' : 'ios' })) if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(`${f.kind} ${f.id}`)) found.set(`${f.kind} ${f.id}`, f);
       // Each page as its findings were read, before it scrolls on, so each finding is seen, not reproduced by hand.
       if (found.size > before && largeShots) { const shot = resolve(largeShots.dir, `${largeShots.host}-largest-${++largeShots.n}.png`); if (await s.screenshot(shot).then(() => true, () => false)) shots.push(shot); }
       let moved = false;
       for (const n of tree.nodes ?? []) {
-        if (n.inactive || n.props?.testId == null || looked.has(n.id)) continue;
+        if (n.inactive || n.props?.testId == null || looked.has(n.id) || projected.has(n.id)) continue;
         looked.add(n.id);
         if ((await s.carrier.reveal(n.id).catch(() => null))?.scrolled) { moved = true; break; }
       }

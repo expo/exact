@@ -51,6 +51,7 @@ final class NodeAside {
     var scale: CGFloat = 1
     var rotate: CGFloat = 0
     var content = CGSize.zero
+    var fitContentHeight: CGFloat?
     var image: UIImage?
     var raster: NativeRasterLease?
     var imageLayer: CALayer?
@@ -247,6 +248,7 @@ extension NodeView {
     /// A scroll container's content extent (the `content` op), before the
     /// axes that do not scroll are held to the box.
     var content: CGSize { get { aside?.content ?? .zero } set { if newValue != .zero || aside != nil { asideMade.content = newValue } } }
+    var fitContentHeight: CGFloat? { get { aside?.fitContentHeight } set { if newValue != nil || aside != nil { asideMade.fitContentHeight = newValue } } }
     /// An image node's picture, once loaded (decoded off the main thread),
     /// the source it came from, and which load is current: a completion
     /// from an older load, or for a view that was destroyed, is dropped.

@@ -28,6 +28,7 @@ mod windows;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::presenter) enum Role {
     Surface,
+    SurfaceContainerLow,
     SurfaceContainer,
     SurfaceContainerHigh,
     OnSurface,
@@ -44,6 +45,7 @@ impl Role {
     pub(in crate::presenter) fn color(self, dark: bool) -> [u8; 4] {
         let name = match self {
             Role::Surface => "Canvas",
+            Role::SurfaceContainerLow => "-exact-secondary-background",
             Role::SurfaceContainer => "-exact-secondary-grouped-background",
             Role::SurfaceContainerHigh => "-exact-tertiary-grouped-background",
             Role::OnSurface => "-exact-label",

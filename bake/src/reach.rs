@@ -164,6 +164,9 @@ pub(crate) fn derive(
     // entitlements the platform's signature must carry.
     let mut usage = Map::new();
     let mut entitlements = Vec::new();
+    // macOS's entitlements a provisioning profile must authorize, apart from
+    // the hardened-runtime ones any signature carries.
+    let mut profile_entitlements: Vec<&str> = Vec::new();
     // An entitlement whose value is no boolean (LLP 1133.035 D16 item 2).
     let mut values = Map::new();
     let mut flags: Vec<&str> = Vec::new();
@@ -206,7 +209,10 @@ pub(crate) fn derive(
         // LLP 1133.004 §9 P2). `auth.*`'s associated domains are `reach.auth`
         // (below).
         match platform {
-            "macos" => entitlements.extend(grant.device.hardened),
+            "macos" => {
+                entitlements.extend(grant.device.hardened);
+                profile_entitlements.extend(grant.device.macos_profile);
+            }
             "ios" => {
                 entitlements.extend(grant.device.ios_entitlements);
                 for (name, value) in grant.device.ios_entitlement_values {
@@ -281,6 +287,8 @@ pub(crate) fn derive(
     }
     entitlements.sort_unstable();
     entitlements.dedup();
+    profile_entitlements.sort_unstable();
+    profile_entitlements.dedup();
     for list in [&mut modes, &mut tasks] {
         list.sort_unstable();
         list.dedup();
@@ -330,6 +338,7 @@ pub(crate) fn derive(
         "flags": flags,
         "android": android,
         "entitlements": entitlements,
+        "profileEntitlements": profile_entitlements,
         "helperEntitlements": helpers,
         "tvOmits": tv_omits,
         "auth": auth,
@@ -1055,8 +1064,9 @@ mod tests {
     }
 
     #[test]
-    fn push_signs_aps_environment_on_ios_alone() {
-        // LLP 1133.004 §9 P2: nothing on the Mac, and tvOS drops it.
+    fn push_signs_aps_environment_on_ios_and_under_a_mac_profile() {
+        // LLP 1133.004 §9 P2: tvOS drops it, and the Mac's key travels apart
+        // from the hardened-runtime list, for a profile to authorize.
         let dir = app(&[("en", r#"{"n": "Says when a build ends."}"#)]);
         let derive_for = |platform: &str| {
             let mut c = compat("device.notifications n\ndevice.push");
@@ -1066,7 +1076,13 @@ mod tests {
         let ios = derive_for("ios");
         assert_eq!(ios["entitlements"], json!(["aps-environment"]));
         assert_eq!(ios["tvOmits"], json!(["aps-environment"]));
-        assert_eq!(derive_for("macos")["entitlements"], json!([]));
+        assert_eq!(ios["profileEntitlements"], json!([]));
+        let mac = derive_for("macos");
+        assert_eq!(mac["entitlements"], json!([]));
+        assert_eq!(
+            mac["profileEntitlements"],
+            json!(["com.apple.developer.aps-environment"])
+        );
     }
 
     #[test]

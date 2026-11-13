@@ -115,9 +115,21 @@ let tests: [Target] = [
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]
 
+// The iOS and tvOS deployment target every target here compiles for. SwiftPM takes it from `platforms`, not from
+// `swift build --triple`'s OS version, so build.mjs passes an app's compiled target (`compiledTargets`: 17.0, or the
+// app's own minimum when its launch modules compile inside this package as ExactLaunchParts) in
+// EXACT_IOS_DEPLOYMENT. Never below the host's floor, 17.0.
+let iosFloor: String = {
+    let floor = [17, 0]
+    guard let asked = ProcessInfo.processInfo.environment["EXACT_IOS_DEPLOYMENT"], !asked.isEmpty else { return "17.0" }
+    let parts = asked.split(separator: ".").map { Int($0) ?? 0 }
+    // `.iOS(_:)` takes two or three components; app.json may write "18".
+    return parts.lexicographicallyPrecedes(floor) ? "17.0" : parts.count == 1 ? "\(asked).0" : asked
+}()
+
 let package = Package(
     name: "Exact",
-    platforms: [.macOS(.v14), .iOS(.v17), .tvOS(.v17), .watchOS(.v10), .visionOS(.v1)],
+    platforms: [.macOS(.v14), .iOS(iosFloor), .tvOS(iosFloor), .watchOS(.v10), .visionOS(.v1)],
     products: [.library(name: "ExactCore", type: widgetCore ? .dynamic : nil, targets: ["ExactCore"]), .library(name: "ExactSnapshot", type: widgetCore ? .static : nil, targets: ["ExactSnapshot"])] + (testing ? [.library(name: "ExactKit", targets: ["ExactKit"])] : [
         .library(name: "ExactKit", targets: ["ExactKit"]),
         .library(name: "ExactUpdates", targets: ["ExactUpdates"]),
