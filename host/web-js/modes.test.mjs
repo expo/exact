@@ -211,12 +211,12 @@ test('a boundary names the looks whose colour reaches it', async () => {
   const underLiteral = el(literal, 'c2', { 'data-x-b': '0' });
   modes([], { c1: { 0: 0 }, c3: { 0: -1 }, c4: { 0: -1 } }, ['color:var(--x-ink)'], {}, [], { '--x-ink': 'ink' });
   for (const f of After) f();
-  expect(below.getAttribute('data-x-lc')).toBe('1 3');
-  expect(inWriter.getAttribute('data-x-lc')).toBe('2');
+  expect(below.getAttribute('data-x-lc')).toBe('1:1 2:3');
+  expect(inWriter.getAttribute('data-x-lc')).toBe('1:2');
   expect(own.getAttribute('data-x-lc')).toBeNull();
   expect(untinted.getAttribute('data-x-lc')).toBeNull();
   // A literal base colour: the look's token still resolves on the boundary.
-  expect(underLiteral.getAttribute('data-x-lc')).toBe('4');
+  expect(underLiteral.getAttribute('data-x-lc')).toBe('1:4');
 });
 
 // A dev reload's checkpoint carries the window's modes: each axis the

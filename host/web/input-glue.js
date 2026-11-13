@@ -413,6 +413,10 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         if (mask) { out.push(mask); state.factor = paint => to != null ? (base + (to - base) * paint) / base : 1 - paint * (1 - share); }
       }
     }
+    // A boundary below that writes again the colour this node gives it (modes.js `pressBelow`) takes the press's
+    // colour too, eased from its own (`hold`): the progress and the colour are this node's, inherited.
+    state.below = own("--exact-press-color") ? globalThis.exact?.pressBelow?.(el) ?? [] : [];
+    if (state.below.length) out.push("--x-press-paint: var(--exact-press-paint)", "--x-press-colour: var(--exact-press-color)");
     if (kept.color) next.color = kept.color;
     else if (own("--exact-press-color") && !later("color")) {
       const m = /^rgba?\((\d+), (\d+), (\d+)\)$/.exec(cs.color), x = /^color\(srgb ([-\d.e]+) ([-\d.e]+) ([-\d.e]+)(?: \/ ([\d.]+))?\)$/.exec(cs.getPropertyValue("--exact-press-color-in-srgb").trim());
@@ -471,15 +475,24 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const sheet = declarations && sheetOf(el);
     if (!sheet) return "";
     state.key ??= String(++paintKeys);
-    const at = sheet.insertRule(`#exact-root [data-exact-painting="${state.key}"][data-exact-painting] { ${declarations} }`, sheet.cssRules.length);
-    state.rule = { sheet, rule: sheet.cssRules[at] };
+    const painting = `#exact-root [data-exact-painting="${state.key}"][data-exact-painting]`;
+    const insert = text => sheet.cssRules[sheet.insertRule(text, sheet.cssRules.length)];
+    state.rule = { sheet, rule: insert(`${painting} { ${declarations} }`), below: [] };
+    // Each boundary below it takes the press's colour over its own (the colour it wrote again).
+    (state.below ?? []).forEach((b, n) => {
+      const base = b.style.getPropertyValue("color"), mark = `${state.key}.${n}`;
+      if (!base) return;
+      b.setAttribute("data-x-pr", mark);
+      state.rule.below.push([b, mark, insert(`${painting} [data-x-pr="${mark}"] { color: color-mix(in srgb, var(--x-press-colour) calc(var(--x-press-paint) * 100%), ${base}) !important }`)]);
+    });
     return state.key;
   };
   const drop = state => {
     if (!state.rule) return;
-    const { sheet, rule } = state.rule, at = [...sheet.cssRules].indexOf(rule);
+    const { sheet, rule, below } = state.rule;
     state.rule = null;
-    if (at >= 0) sheet.deleteRule(at);
+    for (const r of [rule, ...below.map(([, , r]) => r)]) { const at = [...sheet.cssRules].indexOf(r); if (at >= 0) sheet.deleteRule(at); }
+    for (const [b, mark] of below) if (b.getAttribute("data-x-pr") === mark) b.removeAttribute("data-x-pr");
   };
   // The look beneath changed: the ease goes on from where it is, over the rest of its time.
   // `stale`: a sheet, the scheme or a token changed, which no attribute of the node's says.
