@@ -1,6 +1,7 @@
 # Feedback redaction misses credentials whose JSON keys are quoted
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Redaction recognizes credential keys that end in a quote (JSON, JS objects and computed keys, JSON escaped inside a string) and blanks a quoted value whole, through its escaped quotes, before diary and attachment upload.
 **Systems:** scripts/feedback.mjs, credential redaction
 **Author:** Codex
 **Date:** 2026-11-12

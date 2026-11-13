@@ -328,6 +328,7 @@ impl<D: DataSource> Presenter<D> {
                         symbol: row.symbol,
                         selected: node.props.bool(PropId::AccessibilitySelected) == Some(true),
                         enabled: row.enabled && !self.host.authored_visibility(*id).1,
+                        badge: kernel.press_face(*id).and_then(|face| face.badge),
                     })
                 })
                 .collect(),

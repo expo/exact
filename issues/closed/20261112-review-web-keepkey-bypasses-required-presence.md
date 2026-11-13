@@ -1,6 +1,7 @@
 # Web `keepKey` stores a key whose grant requires user presence
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The web's `keepKey` rejects a name that must be locked with `NotSupportedError` before it writes the handle or the key, as `set` and `exclusive` do (LLP 1133.010 D15); an `optional` name is still kept plain.
 **Systems:** web secret storage, host/web-js/admission.js, host/web/storage-environment.js
 **Author:** Codex
 **Date:** 2026-11-12

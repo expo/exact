@@ -100,6 +100,10 @@ pub struct CollectionFill {
     /// where the animation is headed (LLP 1070.000 §11), so a request is not
     /// done until it has landed. Flag bit 7.
     pub animating: bool,
+    /// Actual port offset for first-reveal animations when `offset` plans
+    /// the window at a smooth scroll's destination (LLP 1055 D13).
+    /// `None` uses the report's offset and subsequent anchor corrections.
+    pub view_offset: Option<f64>,
 }
 /// A mounted row; unmounted keys and records never cross the host seam.
 #[derive(Debug, Clone, PartialEq)]
@@ -225,11 +229,18 @@ impl CollectionFeedback {
     /// focus and interaction (zero means none), f64 velocity, u32 limit
     /// (`u32::MAX` means none), u32 flags (bit 0: an ancestor list is
     /// moving; bit 1: build only; bit 2: retire only; bit 3: lean; bit 4: a glimpse; bit 5: the reader is scrolling;
-    /// bit 6: a gesture since the request; bit 7: a smooth correction animates), u32 count, then count × (u32 wrapper, u64 epoch, f64 size).
+    /// bit 6: a gesture since the request; bit 7: a smooth correction animates; bit 8: a view offset follows the rows),
+    /// u32 count, then count × (u32 wrapper, u64 epoch, f64 size), then
+    /// the optional f64 actual view offset.
     /// Main and cross are the list's axes. No keys, strings, or JSON parsing.
     pub fn encode_with(&self, fill: CollectionFill) -> Result<Vec<u8>, FeedbackError> {
         self.validate()?;
-        if !fill.velocity.is_finite() || fill.limit == Some(u32::MAX) {
+        if !fill.velocity.is_finite()
+            || fill
+                .view_offset
+                .is_some_and(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
+            || fill.limit == Some(u32::MAX)
+        {
             return Err(FeedbackError);
         }
         let mut w = Writer::default();
@@ -259,7 +270,8 @@ impl CollectionFeedback {
                 | u32::from(fill.glimpse) << 4
                 | u32::from(fill.scrolling) << 5
                 | u32::from(fill.gesture) << 6
-                | u32::from(fill.animating) << 7,
+                | u32::from(fill.animating) << 7
+                | u32::from(fill.view_offset.is_some()) << 8,
         );
         w.u32(
             self.measurements
@@ -271,6 +283,9 @@ impl CollectionFeedback {
             w.u32(row.view);
             w.u64(row.epoch);
             w.f64(row.size);
+        }
+        if let Some(offset) = fill.view_offset {
+            w.f64(offset);
         }
         Ok(w.into_vec())
     }
@@ -300,13 +315,13 @@ impl CollectionFeedback {
             let limit = r.u32()?;
             let flags = r.u32()?;
             // A glimpse is built where it applies, and bounded.
-            if flags > 255
+            if flags > 511
                 || flags & 6 == 6
                 || (flags & 16 != 0 && (flags & 2 != 0 || limit == u32::MAX))
             {
                 return Err(exact_plan::PlanError::BadCount(flags));
             }
-            let fill = CollectionFill {
+            let mut fill = CollectionFill {
                 velocity,
                 limit: (limit != u32::MAX).then_some(limit),
                 ancestor_moving: flags & 1 != 0,
@@ -317,9 +332,14 @@ impl CollectionFeedback {
                 scrolling: flags & 32 != 0,
                 gesture: flags & 64 != 0,
                 animating: flags & 128 != 0,
+                view_offset: None,
             };
             let count = r.u32()? as usize;
-            if count.checked_mul(20) != Some(r.remaining()) {
+            if count
+                .checked_mul(20)
+                .and_then(|n| n.checked_add(if flags & 256 != 0 { 8 } else { 0 }))
+                != Some(r.remaining())
+            {
                 return Err(exact_plan::PlanError::BadCount(count as u32));
             }
             let mut measurements = Vec::with_capacity(count);
@@ -329,6 +349,9 @@ impl CollectionFeedback {
                     epoch: r.u64()?,
                     size: r.f64()?,
                 });
+            }
+            if flags & 256 != 0 {
+                fill.view_offset = Some(r.f64()?);
             }
             let facts = Self {
                 view,
@@ -347,7 +370,12 @@ impl CollectionFeedback {
         })()
         .map_err(|_| FeedbackError)?;
         out.0.validate()?;
-        if !out.1.velocity.is_finite() {
+        if !out.1.velocity.is_finite()
+            || out
+                .1
+                .view_offset
+                .is_some_and(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
+        {
             return Err(FeedbackError);
         }
         Ok(out)

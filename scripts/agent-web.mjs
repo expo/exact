@@ -36,8 +36,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pageAim, pageOutside } from './agent-aim.mjs';
-import { fileDrag, driverFiles } from './agent-drag.mjs';
+import { pageAim, pagePoint, pageOutside } from './agent-aim.mjs';
+import { fileDrag, driverFiles, pageContact } from './agent-drag.mjs';
 import {
   MalformedOperation,
   cdpKey,
@@ -47,6 +47,7 @@ import {
   chordModifiers,
   withChordModifiers,
   heldForClick,
+  cdpWheel,
 } from './agent-keys.mjs';
 import { waitAtMost } from './agent-wire.mjs';
 import { builtAppMatches, jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs';
@@ -640,14 +641,12 @@ async function openWebUnlocked({
         const modifiers = String(opts.modifiers ?? '')
           .split('+')
           .reduce((m, k) => m | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 }[k] ?? 0), 0);
-        // The middle of the box, unless the target is not there: then the middle of the first of its client rects that
-        // is — a wrapped inline run's line, where its box's middle falls between two lines, in the paragraph's
-        // half-leading (reader).
         const line =
-          r && !point && ['press', 'contextmenu', 'dblclick', 'auxclick', 'clicks', 'hover'].includes(kind)
-            ? await evaluate(
-                `(() => { const el = exact.views.get(${id}), on = (x, y) => { const h = document.elementFromPoint(x, y); return !!h && (el === h || el.contains(h)); }, b = el?.getBoundingClientRect(); if (!el || on(b.x + b.width / 2, b.y + b.height / 2)) return null; for (const c of el.getClientRects()) if (c.width && c.height && on(c.x + c.width / 2, c.y + c.height / 2)) return [c.x + c.width / 2, c.y + c.height / 2]; return null; })()`,
-              )
+          r &&
+          !point &&
+          (['press', 'contextmenu', 'dblclick', 'auxclick', 'clicks', 'hover'].includes(kind) ||
+            (kind === 'wheel' && opts.hover))
+            ? await evaluate(`(${pagePoint})({ id: ${id} })`)
             : null;
         let x = line ? line[0] : r ? r.x + (point?.[0] ?? r.w / 2) : contact?.x,
           y = line ? line[1] : r ? r.y + (point?.[1] ?? r.h / 2) : contact?.y;
@@ -733,6 +732,7 @@ async function openWebUnlocked({
             // runner's clock makes the DOM event's timeStamp that clock,
             // independent of how long the carrier took between operations.
             const t = ((await evaluate('performance.timeOrigin')) + (await ask({ op: 'tags' })).clock) / 1000;
+            if (!mouse) await evaluate(`(${pageContact})('start', ${JSON.stringify({ x: px, y: py })})`);
             if (mouse) {
               await button('mouseMoved', { x: px, y: py }, t, 0);
               await button('mousePressed', { x: px, y: py }, t, 1);
@@ -777,7 +777,8 @@ async function openWebUnlocked({
           const at = [contact.x, contact.y];
           contact = null;
           await frame();
-          return { phase: kind, at, delivery: 'platform' };
+          const note = mouse ? null : await evaluate(`(${pageContact})('finish')`);
+          return { phase: kind, at, delivery: 'platform', ...(note ? { note } : {}) };
         }
         if (kind === 'pinch') {
           // two fingers spread from d to d·scale about the middle (LLP 1057.001 §5)
@@ -796,15 +797,7 @@ async function openWebUnlocked({
           await frame();
           return { pinch: opts.pinch, at: [cx, cy], delivery: 'platform' };
         }
-        if (kind === 'wheel')
-          await call('Input.dispatchMouseEvent', {
-            type: 'mouseWheel',
-            x,
-            y,
-            deltaX: opts.wheel[0],
-            deltaY: opts.wheel[1],
-            modifiers,
-          });
+        if (kind === 'wheel') await cdpWheel(call, frame, { ...opts, x, y, modifiers });
         else if (kind === 'drop' || kind === 'dragenter' || kind === 'dragleave')
           // Chrome's own drag (agent-drag.mjs)
           dragged = await fileDrag({ kind, opts, id, x, y, dragged, call, evaluate });
@@ -938,11 +931,13 @@ async function openWebUnlocked({
         return { at: [x, y], ...(avoided ? { avoided } : {}) };
       },
       async screenshot(path, window = false, film = false) {
-        // a transition under way is shown where it ends, unless filmed (LLP 1116.003 D8; the wasm target has no
-        // `picture`)
-        const tags = await ask({ op: film ? 'tags' : 'picture' }).then(r =>
-          r.error && !film ? ask({ op: 'tags' }) : r,
-        );
+        // A picture holds transitions at their end; a film follows the clock (LLP 1116.003 D8).
+        // The wasm target has no `picture`.
+        const readPicture = () =>
+          ask({ op: film ? 'tags' : 'picture' }).then(r =>
+            r.error === 'unknown op: picture' && !film ? ask({ op: 'tags' }) : r,
+          );
+        const tags = await readPicture();
         if (tags.error) throw new Error(tags.error);
         delete tags.moving;
         await frame();
@@ -960,6 +955,9 @@ async function openWebUnlocked({
           3500,
         );
         await frame();
+        // Frame and image callbacks can start GPU work after the first read.
+        const settled = await readPicture();
+        if (settled.error) throw new Error(settled.error);
         const { data } = await call('Page.captureScreenshot', { format: 'png' });
         writeFileSync(path, Buffer.from(data, 'base64'));
         return { ...tags, screenshot: path, w: size[0], h: size[1], ...(pending ? { imagesPending: pending } : {}) };

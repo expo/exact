@@ -229,6 +229,8 @@ pub(crate) struct Collection {
     /// The last report said the host animates a smooth correction
     /// ([`CollectionFill::animating`]).
     animating: bool,
+    /// The actual port, when reports plan a destination instead.
+    view_offset: Option<f64>,
     /// A request ended or began while the host animated, which stops the
     /// animation where the port is: until a report says where, nothing
     /// anchors and a request waits.
@@ -547,6 +549,7 @@ impl Collection {
             target: None,
             scrolling: false,
             animating: false,
+            view_offset: None,
             port_unknown: false,
             request: 0,
             into_view_status: None,
@@ -1313,6 +1316,7 @@ impl Collection {
         }
         let waited = self.request_waits();
         self.animating = fill.animating;
+        self.view_offset = fill.view_offset;
         // A report gives where the port is, unless the host animates.
         self.port_unknown &= fill.animating;
         // @ref LLP 1010 §6.9 — the padding the host laid out, taken in now

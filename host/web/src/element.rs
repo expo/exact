@@ -596,7 +596,18 @@ pub(super) fn css_style<'a>(
     node: &NodeRef<'a>,
 ) -> std::borrow::Cow<'a, exact_kernel::StyleProps> {
     let style = css_style_of(&|from, id| kernel.resolve_id(from, id), &node.facts());
-    with_style_rows(style, node)
+    with_style_rows(animation_style(kernel, node, style), node)
+}
+
+pub(super) fn animation_style<'a>(
+    kernel: &Kernel,
+    node: &NodeRef<'_>,
+    mut style: std::borrow::Cow<'a, exact_kernel::StyleProps>,
+) -> std::borrow::Cow<'a, exact_kernel::StyleProps> {
+    if !node.style.animation.0.is_empty() && kernel.awaits_view(node) {
+        style.to_mut().animation = kernel.animation_row(node);
+    }
+    style
 }
 
 /// `style` with the weight and leading a text style named on `node` gives it
@@ -1336,6 +1347,34 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
 mod name_tests;
 
 impl<D: exact_runner::DataSource> super::Host<D> {
+    pub(super) fn reveal_animations(
+        &mut self,
+        receipt: &exact_kernel::CommitReceipt,
+        batch: &mut super::Batch,
+    ) {
+        let kernel = self.runner.kernel();
+        let mut pending: Vec<_> = receipt
+            .revealed
+            .iter()
+            .filter_map(|key| kernel.node_by_key(*key).map(|n| n.id))
+            .collect();
+        let mut changed = std::collections::BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            let Some(node) = kernel.node(id) else {
+                continue;
+            };
+            if !node.style.animation.0.is_empty()
+                && node.style.rare.animation_trigger == exact_kernel::AnimationTrigger::View
+            {
+                changed.insert(id);
+            }
+            pending.extend(node.children());
+        }
+        for id in changed {
+            self.update(id, batch);
+        }
+    }
+
     /// A view's CSS as the page has it: the rows, the host's additions, a
     /// folded text's (LLP 1007.001) and its paint isolation.
     pub(crate) fn view_css(&self, node: &exact_kernel::NodeRef<'_>) -> String {

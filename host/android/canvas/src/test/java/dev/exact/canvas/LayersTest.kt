@@ -38,4 +38,60 @@ class LayersTest {
         Structure().walkColorLayer(words) { visited.add(it) }
         assertEquals(listOf(0, matrix.size, matrix.size + glyphs.size), visited)
     }
+
+    @Test fun linearHoldsTheSecondOutputBeforeDuplicateFirstInputs() {
+        // linear(0 25%, 1 25%, 1), as Chrome and motion/src/easing.rs evaluate it.
+        val stops = floatArrayOf(0.25f, 0f, 0.25f, 1f, 1f, 1f)
+        assertEquals(1.0, Layers.piecewise(stops, 0.1), 1e-9)
+    }
+
+    @Test fun linearExtrapolatesBeforeAndAfterTwoStops() {
+        // linear(0 25%, 1 75%).
+        val stops = floatArrayOf(0.25f, 0f, 0.75f, 1f)
+        assertEquals(-0.5, Layers.piecewise(stops, 0.0), 1e-9)
+        assertEquals(1.5, Layers.piecewise(stops, 1.0), 1e-9)
+    }
+
+    @Test fun linearUsesTheLastOutputAtEachSharedInput() {
+        val stops = floatArrayOf(
+            0.25f, 0f, 0.25f, 1f, 0.25f, 2f,
+            0.5f, 3f, 0.5f, 4f,
+            0.75f, 5f, 0.75f, 6f,
+        )
+        assertEquals(2.0, Layers.piecewise(stops, 0.25), 1e-9)
+        assertEquals(4.0, Layers.piecewise(stops, 0.5), 1e-9)
+        assertEquals(6.0, Layers.piecewise(stops, 0.75), 1e-9)
+        assertEquals(2.5, Layers.piecewise(stops, 0.375), 1e-9)
+        assertEquals(4.5, Layers.piecewise(stops, 0.625), 1e-9)
+        assertEquals(1.0, Layers.piecewise(stops, 0.0), 1e-9)
+        assertEquals(6.0, Layers.piecewise(stops, 1.0), 1e-9)
+    }
+
+    @Test fun linearExtrapolatesUsingEachOuterSegment() {
+        val stops = floatArrayOf(0.25f, 1f, 0.5f, 2f, 0.75f, 4f)
+        assertEquals(0.0, Layers.piecewise(stops, 0.0), 1e-9)
+        assertEquals(6.0, Layers.piecewise(stops, 1.0), 1e-9)
+        assertEquals(1.5, Layers.piecewise(stops, 0.375), 1e-9)
+        assertEquals(3.0, Layers.piecewise(stops, 0.625), 1e-9)
+    }
+
+    @Test fun linearWithAllInputsEqualHoldsTheSecondThenTheLastOutput() {
+        val stops = floatArrayOf(0.5f, 1f, 0.5f, 2f, 0.5f, 3f)
+        assertEquals(2.0, Layers.piecewise(stops, 0.0), 1e-9)
+        assertEquals(3.0, Layers.piecewise(stops, 0.5), 1e-9)
+        assertEquals(3.0, Layers.piecewise(stops, 1.0), 1e-9)
+    }
+
+    @Test fun linearWithNoStopsPreservesTheInput() {
+        for (input in listOf(0.0, 0.25, 1.0)) {
+            assertEquals(input, Layers.piecewise(floatArrayOf(), input), 1e-9)
+        }
+    }
+
+    @Test fun linearWithOneStopHoldsItsOutput() {
+        val stops = floatArrayOf(0.5f, 2f)
+        for (input in listOf(0.0, 0.5, 1.0)) {
+            assertEquals(2.0, Layers.piecewise(stops, input), 1e-9)
+        }
+    }
 }

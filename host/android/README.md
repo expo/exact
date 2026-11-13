@@ -1158,6 +1158,7 @@ that opens a search view, or a search action in the bar; neither is built.
 | Symbol and label | a 24 dp symbol 16 dp from the top, its label under it (label-medium, 12/16 sp), 16 dp from the bottom | the same |
 | Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol | the same |
 | Colours | the selected destination's symbol `onSecondaryContainer` and its label `secondary`; the others `onSurfaceVariant`, at 38 % when disabled | the same (`NavigationBarItemDefaults.colors`) |
+| Badge | a tab's badge box (LLP 1075.003 §9.9): its text, label-small in `onError` on an `error` pill at least 16 dp square, 4 dp either side of the text, its start 12 dp before the symbol's end and 14 dp into it; not run on a device | `Badge` with content in a `BadgedBox` (`BadgeTokens`, `Badge.kt`, read at the pinned version) |
 
 "Here" in both tables is what was seen on a Pixel 10 Pro XL (Android 16, 2.4375 pixels a dp), from `state.bars`
 and its screenshots: the top bar's view is 317 pixels tall (a 66.05 dp status bar and 64 dp), the navigation bar's

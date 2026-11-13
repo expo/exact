@@ -146,7 +146,7 @@ async function noWebGPU(install, run) {
     document.documentElement.setAttribute('data-exact-worlds','world arena');
     const element=document.getElementById('host');
     globalThis.exact={views:new Map([[1,host],[2,document.getElementById('sky')]]),root:document.body,devAssets:[],generation:0,pageFacts:{agent:false,read:()=>({}),tell(){},changed(){}},
-      wasm:{exact_surface_record:()=>0},writeIn:x=>x,send(){}};
+      wasm:{exact_surface_record:()=>0},writeIn:x=>x,send(){},mutate:fn=>fn()};
     await import('/gpu-glue.js'); exact.gpu.surface(1,'world',[]);
     const started=performance.now(); await exact.gpu.settled(); globalThis.settleMs=performance.now()-started;
     exact.gpu.surface(2,'glass',[]); await exact.gpu.settled();
@@ -155,6 +155,18 @@ async function noWebGPU(install, run) {
   const server=Bun.serve({port:0,hostname:'127.0.0.1',fetch(req){
     const path=new URL(req.url).pathname;
     if(path==='/')return new Response(html,{headers:{'content-type':'text/html'}});
+    if(path==='/gpu.js' && new URL(req.url).searchParams.has('g')) return new Response(`
+      var wasm_bindgen = Object.assign(async () => {}, {
+        gpu_child_view() {}, gpu_load() {}, gpu_unload() {}, gpu_seekable() {}, gpu_tier() {},
+        gpu_shader_names: () => '[]', gpu_shaders_clear() {}, gpu_shader_check: async () => true,
+        gpu_create: () => ${new URL(req.url).searchParams.get('g') === '1' ? 0 : 1},
+        gpu_bind_at: () => true, gpu_lifecycle() {}, gpu_error: () => 'controlled create failure',
+        gpu_render: () => 0, gpu_flush: () => true, gpu_dirty: () => false,
+        gpu_wants_input: () => false, gpu_published() {}, gpu_messages() {},
+        gpu_assets: () => '{"requests":[],"retired":[]}', gpu_destroy() {},
+        gpu_agent: () => '{"world":{"tick":0}}',
+        gpu_recover: async () => '{"status":"no device","code":"no-adapter","error":"no adapter"}'
+      });`, {headers:{'content-type':'text/javascript'}});
     if(path==='/gpu.js'){globalThis.moduleFetched=true;return new Response('export default function(){}',{headers:{'content-type':'text/javascript'}});}
     if(path==='/.exact/install.json')return install();
     if(path==='/favicon.ico')return new Response('',{status:404});
@@ -220,6 +232,22 @@ test('install data that never answers delays no agent reply past its bound', () 
     const tree=await evaluate(`exact.gpu.decorate({op:'tree'},{nodes:[{id:1}]})`);
     expect(tree.nodes[0].status).toContain('needs WebGPU');
     expect(tree.nodes[0].status).not.toContain('App Store');
+  }), 120000);
+
+test('a successful swap removes a refusal page and a later failure can show it again', () => noWebGPU(
+  () => Response.json({}),
+  async evaluate => {
+    const refused = () => evaluate(`[!!document.querySelector('#host > [role=status]'), document.getElementById('hud').inert]`);
+    expect(await refused()).toEqual([true, true]);
+    expect(await evaluate(`exact.gpu.swap(1).then(() => null, error => error.message)`)).toContain('controlled create failure');
+    expect(await refused()).toEqual([true, true]);
+    await evaluate('exact.gpu.swap(2)');
+    expect(await refused()).toEqual([false, false]);
+    const tree = await evaluate(`exact.gpu.decorate({op:'tree'}, {nodes:[{id:1}]})`);
+    expect(tree.nodes[0].status).toBeUndefined();
+    await evaluate('exact.gpu.deviceLost(); exact.gpu.settled()');
+    expect(await refused()).toEqual([true, true]);
+    expect(await evaluate(`document.querySelectorAll('#host > [role=status]').length`)).toBe(1);
   }), 120000);
 
 // The shell's root carries a game's world surfaces beside the manifest's language (host/web/build.mjs writes

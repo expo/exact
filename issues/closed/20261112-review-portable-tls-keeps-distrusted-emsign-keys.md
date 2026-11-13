@@ -1,6 +1,7 @@
 # Portable TLS still trusts the affected emSign certificate chain
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Every lock holding them now resolves `webpki-roots` 1.0.12, without the distrusted emSign roots, and `rustls-webpki` 0.103.17, which refuses a path through the distrusted emSign keys; `ibex2`'s `transport/trust_tests.rs` checks both, over a system store and the compiled-in fallback.
 **Systems:** Cargo.lock, vendored Ibex HTTP and WebSocket transports
 **Author:** Codex
 **Date:** 2026-11-12

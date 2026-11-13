@@ -408,6 +408,11 @@ export function css(e, prop, unit, v, rendered) {
     t = cssText(prop, unit, v);
   if (last[prop] === t) return;
   last[prop] = t;
+  if (prop === '--exact-animation-trigger') {
+    if (v === 'none') e.setAttribute('data-exact-animation-trigger', 'none');
+    else e.removeAttribute('data-exact-animation-trigger');
+    return;
+  }
   // The `animation` shorthand resets the longhands a timeline's consumer writes again after it (LLP 1057.003 D5).
   if (prop === 'animation')
     for (const p of ['animation-timeline', 'animation-range', 'animation-play-state']) delete last[p];

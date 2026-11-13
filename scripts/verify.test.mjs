@@ -390,7 +390,7 @@ test('the report: each test end reloaded; a saved value lost is a finding once a
   const stuck = report({ ...base, tested: { passed: 1, failed: 0, results: [] },
     reloads: [{ test: 'saves', ran: true, error: 'reload: the app\'s storage did not finish before the restart: x\nmore' }] });
   assert.deepEqual(stuck.lines.slice(2, 4), ['reload 1 test end: 1 finding', '  reload   "saves": could not reload the end screen: reload: the app\'s storage did not finish before the restart: x']);
-  // The iOS report has no reload: a native host's cold launch is `/` (LLP 1038 §7).
+  // The iOS report has no end-route reload: relaunch uses its launch location, defaulting to the manifest's `start_url`.
   assert.ok(!report({ ...base, host: 'ios', reloads: [{ test: 'a', ran: false }] }).lines.some((l) => l.startsWith('reload')));
 });
 

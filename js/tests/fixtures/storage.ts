@@ -74,6 +74,15 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
     storage.fs.atomicWriteFile(song, bytes(value)).then(() => native.call({value})).catch((e) => { lastError = e.message; });
     return {text:"saved " + value};
   }
+  // What background work may do: draw randomness, after a write alone, after a combinator over one, or after a
+  // database's own step (LLP 1069.005 D3).
+  if (op === "save-then-draw" || op === "save-all-then-draw" || op === "query-then-draw") {
+    const draw = () => { lastError = crypto.randomUUID().length + "/" + crypto.getRandomValues(new Uint8Array(4)).length; };
+    const work = op === "query-then-draw" ? storage.sqlite.open("app:/data/notes.db").then(db => db.query("SELECT 1 AS one").then(draw).finally(() => db.close()))
+      : (op === "save-all-then-draw" ? Promise.all([storage.fs.writeFile(song, bytes(value))]) : storage.fs.writeFile(song, bytes(value))).then(draw);
+    work.catch((e) => { lastError = e.message; });
+    return {text:"saved " + value};
+  }
   // A background write that fails: its promise rejects, as on the web.
   if (op === "save-bad") {
     storage.fs.writeFile(storage.fs.directories.data + "/absent/file", bytes(value)).catch((e) => { lastError = String(e.code); });
@@ -86,6 +95,7 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
     return {text:"answered"};
   }
   if (op === "last-error") return {text:lastError};
+  if (op === "reset-error") { lastError = ""; return {text:"reset"}; }
   // Each part appended to one log, awaited in turn: two such answers
   // interleave at their awaits, as two async calls do on the web (D4.5).
   if (op === "append") {

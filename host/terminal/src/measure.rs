@@ -362,8 +362,9 @@ fn tab_stop(col: usize) -> usize {
 }
 
 /// LLP 1104 D7: the terminal drops the symbol and paints the title, or
-/// the accessible label of a symbol-only face. Measurement and paint share
-/// this wrap, with one cell of chrome on each side.
+/// the accessible label of a symbol-only face, and a tab's badge (LLP
+/// 1075.003 §9.9) after it in parentheses. Measurement and paint share this
+/// wrap, with one cell of chrome on each side.
 pub(crate) fn button_lines(
     face: &PressFace,
     style: &ButtonFaceStyle,
@@ -374,8 +375,13 @@ pub(crate) fn button_lines(
         .as_deref()
         .or(face.label.as_deref())
         .unwrap_or("");
+    let text = match face.badge.as_deref() {
+        Some(badge) if title.is_empty() => format!("({badge})"),
+        Some(badge) => format!("{title} ({badge})"),
+        None => title.to_owned(),
+    };
     let runs = [TextRun {
-        text: title.into(),
+        text: text.into(),
         style: exact_kernel::text::TextStyle::from_style(&style.title),
         inline: None,
     }];

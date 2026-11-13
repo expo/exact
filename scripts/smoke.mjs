@@ -19,6 +19,7 @@ import { DirectoryOrigin, parseWebRoot, webReleasePath, webRootPath } from './or
 import { jsTargetBuild, readStaticFile, serveStatic } from '../host/web/serve.mjs';
 import { canonicalBytes, channelOf, publicKeyFromRaw, readAssetIndex, webRelease } from './deploy.mjs';
 import { crop, decodePng, diff, encodePng } from './png.mjs';
+import { requireNativeBuilds } from './parity.mjs';
 import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
@@ -113,25 +114,15 @@ check(!browserDiagnosticNoise('console.error: exact: failed'), 'page/runtime err
 check(browserDiagnosticNoise('[1:2:0927/223530.638588:ERROR:components/page_load_metrics/browser/page_load_metrics_update_dispatcher.cc:179] Invalid first_paint 0.059 s for first_image_paint 0.057 s'), 'Chrome\'s paint-timing bookkeeping is no longer classified as browser noise');
 check(!browserDiagnosticNoise('[1:2:0927/223530.286557:ERROR:components/os_crypt/common/keychain_password_mac.mm:102] Keychain lookup failed'), 'a keychain lookup must fail the smoke: the carrier launches Chrome with a mock keychain');
 
-// SVG parity (LLP 1055.000 §5): apps/svg-gallery on each native host against
-// Chrome's, fixture by fixture (scripts/svgparity.mjs).
-if (host === 'svg') {
-  const { svgParity } = await import('./svgparity.mjs');
+// SVG (LLP 1055.000 §5) and motion parity (LLP 1011.000, LLP 1055 D7): each
+// gallery on the requested native hosts against Chrome's at fixed clock times.
+// Missing native builds are reported together before any capture starts.
+if (host === 'svg' || host === 'motion') {
   const hosts = argv.includes('--hosts') ? argv[argv.indexOf('--hosts') + 1].split(',') : ['linux', ...(process.platform === 'darwin' ? ['macos', 'ios'] : [])];
-  await svgParity({ open: (o) => openAgent({ device, phone, ...o }), check, hosts });
-  console.log(`svg smoke: ${failures.length ? `${failures.length} failure(s)` : 'ok'} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-  if (failures.length) { for (const f of failures) console.error('FAIL ' + f); process.exit(1); }
-  process.exit(0);
-}
-
-// Motion parity (LLP 1011.000, LLP 1055 D7): apps/motion-gallery's animated
-// images and keyframes on each native host against Chrome's at fixed clock
-// times (scripts/motionparity.mjs).
-if (host === 'motion') {
-  const { motionParity } = await import('./motionparity.mjs');
-  const hosts = argv.includes('--hosts') ? argv[argv.indexOf('--hosts') + 1].split(',') : ['linux', ...(process.platform === 'darwin' ? ['macos', 'ios'] : [])];
-  await motionParity({ open: (o) => openAgent({ device, phone, ...o }), check, hosts });
-  console.log(`motion smoke: ${failures.length ? `${failures.length} failure(s)` : 'ok'} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  requireNativeBuilds(`${host}-gallery`, hosts, { device });
+  const parity = host === 'svg' ? (await import('./svgparity.mjs')).svgParity : (await import('./motionparity.mjs')).motionParity;
+  await parity({ open: (o) => openAgent({ device, phone, ...o }), check, hosts });
+  console.log(`${host} smoke: ${failures.length ? `${failures.length} failure(s)` : 'ok'} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   for (const f of failures) console.error('FAIL ' + f); process.exit(failures.length ? 1 : 0);
 }
 

@@ -1,6 +1,7 @@
 # An iOS app with widgets or Live Activities holds a file lock in its App Group container and is killed with 0xdead10cc when suspended
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The Apple update store, whose owner and reader locks last the process, lives in the app's private Application Support, so an app with widgets or Live Activities holds no lock in its App Group (371201f6).
 **Systems:** update/src/store.rs, host/apple/Sources/ExactUpdates/Updates.swift, host/apple/Sources/ExactCore/WidgetContainer.swift
 **Severity:** P1
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

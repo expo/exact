@@ -537,6 +537,11 @@ class Collection {
     const w = served ?? document.createElement("div");
     w.$exactTree = true;
     w.style.cssText = WRAP[this.axis];
+    // LLP 1055 D13: bootstrap rows wait for the first port report too.
+    if (this.o.animations) {
+      const g = this.geometry, offset = this.viewOffset ?? g?.offset, start = this.index.prefix(p), size = this.index.h[p];
+      if (!g || !(start < offset + g.port_main && start + size > offset)) w.setAttribute("data-exact-await-view", "");
+    }
     w.setAttribute("role", "listitem");
     w.setAttribute("data-listitemkey", key);
     const position = sig(p);
@@ -551,6 +556,13 @@ class Collection {
       this.o.row(w, m.item, m.index, m.key);
     }, this.own);
     m.s = served ? adoptRow(w, build) : unadopted(build);
+    // The document may have painted before adoption; this is the row's live mount.
+    if (served && w.hasAttribute("data-exact-await-view")) {
+      for (const a of w.getAnimations({ subtree: true })) {
+        if (a.animationName !== undefined && (!a.timeline || a.timeline instanceof DocumentTimeline)
+          && a.effect?.target?.getAttribute("data-exact-animation-trigger") !== "none") a.currentTime = 0;
+      }
+    }
     m.view = viewId(w); w.dataset.view = m.view;
     m.root = w.firstElementChild ? viewId(w.firstElementChild) : m.view;
     if (this.dups.get(p)) journal.push(`list: a key repeats; this row is ${key}`);
@@ -564,6 +576,14 @@ class Collection {
     end(m.s);
     if (!(left && exitView(m.wrapper, m.wrapper.firstElementChild))) m.wrapper.remove();
     Views.delete(m.view); Views.delete(m.root);
+  }
+  revealAt(offset, port) {
+    if (!this.o.animations) return;
+    for (const m of this.mounted) {
+      if (!m.wrapper.hasAttribute("data-exact-await-view")) continue;
+      const start = this.index.prefix(m.position), size = this.index.h[m.position];
+      if (start < offset + port && start + size > offset) m.wrapper.removeAttribute("data-exact-await-view");
+    }
   }
   /** A row whose root is not displayed is no flex item either: its wrapper goes, so no gap is laid out around it, as
    * CSS Flexbox lays none around an item that is not displayed (sizing.rs `sync_undisplayed`), and its extent is
@@ -975,6 +995,11 @@ class Collection {
 /** A virtualized `list`'s rows: `o` carries the key and row builders, the
  * edges' handlers, and what the runner reads when the list is created. */
 export function vl(el, subject, key, row, o) {
+  if (o.animations && !document.getElementById("exact-animation-view")) {
+    const style = document.head.appendChild(document.createElement("style"));
+    style.id = "exact-animation-view";
+    style.textContent = '[data-exact-await-view] :not([data-exact-animation-trigger="none"], [data-exiting], [data-exiting] *){animation-play-state:paused!important}';
+  }
   row = presentRows(row, subject, key, (value, unique) => collectionKey(value, unique)[0]);
   const own = owner();
   let outer = null;
@@ -1134,7 +1159,7 @@ function load() {
 function report(bytes, f, fill) {
   f = { ...f, revision: Number(f.revision), scroll_sequence: Number(f.scroll_sequence), focus_view: f.focus_view ?? null, interaction_view: f.interaction_view ?? null };
   fill = { velocity: fill?.velocity ?? 0, limit: Number.isInteger(fill?.limit) ? fill.limit : null, ancestorMoving: !!fill?.ancestorMoving,
-    scrolling: !!fill?.scrolling, gesture: !!fill?.gesture, animating: !!fill?.animating };
+    scrolling: !!fill?.scrolling, gesture: !!fill?.gesture, animating: !!fill?.animating, viewOffset: fill?.viewOffset };
   const c = Lists.get(f.view);
   // A row's extent in the index is its size and the gap after it, but for one that is not displayed (mod.rs `feedback`).
   if (c?.gap) {
@@ -1146,7 +1171,9 @@ function report(bytes, f, fill) {
   if (!byView) { publish(); return false; }
   const cats = [f.focus_view != null, f.interaction_view != null];
   if (cats[0] || cats[1]) for (const o of Lists.values()) if (o !== c && !o.contains(c)) o.releasePins(cats);
+  c.viewOffset = fill?.viewOffset ?? f.offset;
   const [, edge] = c.feedback(f, byView, fill);
+  c.revealAt(c.viewOffset, c.geometry.port_main);
   settled();
   if (edge) edges(c, edge);
   return true;

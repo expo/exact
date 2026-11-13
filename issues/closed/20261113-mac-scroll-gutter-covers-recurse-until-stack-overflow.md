@@ -1,6 +1,7 @@
 # On macOS, a scroll box whose legacy scrollers change whether they are needed reports its gutter on and off until the stack overflows
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A scroll box reports a legacy gutter only on an axis that overflows with the other scroller hidden and keeps a gutter whose own layout made its content fit, and covers reported during a delivery are delivered after it returns, at most eight times in a row.
 **Systems:** host/apple/Sources/ExactKit/Mac/ChainingScrollView.swift, host/apple/Sources/ExactKit/Mac/CoversMac.swift, host/apple/Sources/ExactKit/Mac/PresenterMac.swift, host/apple/Sources/ExactKit/Session.swift
 **Severity:** P1
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

@@ -98,7 +98,12 @@ impl<D: DataSource> Runner<D> {
         if self.poisoned {
             return Err(RunnerError::Poisoned);
         }
-        if feedback.validate().is_err() || !fill.velocity.is_finite() {
+        if feedback.validate().is_err()
+            || !fill.velocity.is_finite()
+            || fill
+                .view_offset
+                .is_some_and(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
+        {
             return Err(RunnerError::Instance(InstanceError::Collection(
                 "invalid collection feedback".into(),
             )));

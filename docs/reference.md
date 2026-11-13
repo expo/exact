@@ -3580,6 +3580,13 @@ types, and an `app.module.json` pairing receipt into a **new** directory; it
 never overwrites an existing generation. An installed package's code is captured
 file by file as the bundle reaches it; the receipt's `packages` names each
 `name@version` with a digest of what was taken (LLP 1027 D5, "Package code").
+A linked (workspace or `link:`) package's `peerDependencies` resolve from the
+app for both declarations and runtime code, including subpath exports. The app
+must have a version that satisfies the declared range, even when the linked
+package has its own install.
+A peer imported by a reachable declaration or runtime file is refused if missing
+or incompatible. Installed packages, including those an isolated install (pnpm,
+Bun) links from its store, keep Node's ancestor lookup.
 `EXACT_TSC` and `EXACT_ROLLDOWN` override producer tools. `hermesc` is always
 the compiler paired with the selected `hermes-lean-sys` bundle.
 A module's placement (LLP 1027.002) is the manifest's: `typescript.placement`

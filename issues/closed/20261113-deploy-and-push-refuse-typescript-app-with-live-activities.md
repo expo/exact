@@ -1,6 +1,7 @@
 # `deploy.mjs` and `push.mjs` refuse a TypeScript app with widgets or Live Activities
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Deploy gives each Apple stream's bundle the `typescript/` module pair its bake made, held to the bake graph's digests, and push reads bake-made `plans/`, `activities/` and `typescript/` files from the bake's output and lists one module pair.
 **Systems:** scripts/deploy.mjs, scripts/push.mjs, bake/src/receipt.rs, bake/src/widgets.rs
 **Severity:** P1
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

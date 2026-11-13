@@ -28,7 +28,11 @@ const rules = `@media (any-hover:hover){${['3', '6', '7', '9', '11'].map(id => h
 // the JS target's (`data-exact-looks`).
 const eased = 'width:100px;height:40px;background-color:#ffffff;opacity:1;transition:background-color 400ms linear,opacity 400ms linear';
 const press = 'scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:0.95;--exact-press-background-color:rgba(0,0,255,1);--exact-press-opacity-to:0.6;';
-const page = sheet + `<style id="exact-looks">${rules}</style>
+// The wasm host's rules for a boundary (21) below a holder (20), as `looks.rs` writes them in the boundary's modes:
+// the holder's hover colour, and its press colour, which the input glue paints the boundary with when the holder is
+// pressed (`--exact-press-color-below-20`).
+const boundary = `@media (any-hover:hover){${hover('[data-view="20"]')}:where(:where(html:not([data-exact-input=touch])) [data-view="20"]:hover${on}) [data-view="21"]{color:rgba(0,170,0,1)!important;}}[data-view="21"]{--exact-press-color-below-20:rgba(0,0,204,1);}`;
+const page = sheet + `<style id="exact-looks">${rules}${boundary}</style>
 <div id="exact-root" style="padding:20px">
   <div id="card" data-view="3" data-exact-on="press" tabindex="0" style="${press}width:100px;height:100px;background-color:#ffffff;border:2px solid #000000">c</div>
   <div id="away" style="height:100px"></div>
@@ -41,10 +45,13 @@ const page = sheet + `<style id="exact-looks">${rules}</style>
   <div id="eased-js" data-exact-looks="1" style="${eased}"><span id="eased-js-in">j</span></div>
   <div id="focused" data-exact-looks="2" tabindex="0" style="${eased}">f</div>
   <div id="delayed" data-exact-looks="1" style="width:100px;height:40px;background-color:#ffffff;transition:background-color 0s linear 300ms">d</div>
+  <div id="holder" data-view="20" data-exact-on="press" style="--exact-press-color:rgba(204,0,204,1);color:rgb(102,102,102);width:100px;height:40px">
+    <div id="boundary" data-view="21" data-exact-from="20" style="color:rgb(255,255,255)">t</div>
+  </div>
 </div>
 <script type="module">
   import { createInputHandlers } from './input-glue.js';
-  createInputHandlers({ root: document.getElementById('exact-root'), views: new Map(), retiredViews: new Set(), ready: () => true, inertAncestor: () => false, dispatch() {} });
+  createInputHandlers({ root: document.getElementById('exact-root'), views: new Map([[20, document.getElementById('holder')]]), retiredViews: new Set(), ready: () => true, inertAncestor: () => false, dispatch() {} });
   // As the wasm glue keeps the looks sheet's rules, by view.
   document.getElementById('exact-looks').exactRules = new Map([[11, '[data-view="11"]:hover{}']]);
   window.ready = true;
@@ -291,4 +298,36 @@ check('hover scale transitions its paint and hit target while keeping layout and
       expect(left).toEqual([100, composed ? 0.9 : computed ? 0.5 : 1]);
     }
   } finally { await cdp.send('Target.closeTarget', { targetId }); }
+}, 60000);
+
+// The wasm target (LLP 1121 D8): a boundary that writes the colour around it again takes the colour of a look above
+// it, and a press above it paints it with the press's colour in its own modes (`--exact-press-color-below-<view>`), found
+// by its `data-exact-from`; the release gives its own colour back.
+check("a look's and a press's colour reach a boundary below, in its own modes", async () => {
+  const { targetId, sessionId } = await suite.page();
+  const call = (method, params) => cdp.send(method, params, sessionId);
+  const evaluate = async (expression) => {
+    const reply = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text);
+    return reply.result.value;
+  };
+  try {
+    await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
+    const [x, y] = await evaluate(`(() => { const r = document.getElementById('holder').getBoundingClientRect(); return [r.x + r.width / 2, r.y + 5]; })()`);
+    const mouse = (type, buttons = 0, at = [x, y]) => call('Input.dispatchMouseEvent', { type, x: at[0], y: at[1], button: type === 'mouseMoved' ? 'none' : 'left', buttons, clickCount: 1 });
+    // The boundary's colour once every ease has finished.
+    const colour = () => evaluate(`(document.getAnimations().forEach(a => a.finish()), new Promise(r => requestAnimationFrame(() => r(getComputedStyle(document.getElementById('boundary')).color))))`);
+    expect(await colour()).toBe('rgb(255, 255, 255)');
+    await mouse('mouseMoved');
+    expect(await colour()).toBe('rgb(0, 170, 0)');
+    await mouse('mousePressed', 1);
+    expect(await colour()).toBe('color(srgb 0 0 0.8)'); // the press's colour in the boundary's modes, not the holder's
+    await mouse('mouseReleased');
+    await mouse('mouseMoved', 0, await evaluate(`(() => { const r = document.getElementById('away').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`));
+    // The paint ends (its ease finished), and its rule on the boundary with it.
+    expect(await evaluate(`(document.getAnimations().forEach(a => a.finish()), new Promise(r => { const e = document.getElementById('holder'); if (!e.hasAttribute('data-exact-painting')) return r(true); setTimeout(() => r(false), 5000); new MutationObserver((_, o) => { if (!e.hasAttribute('data-exact-painting')) { o.disconnect(); r(true); } }).observe(e, { attributes: true, attributeFilter: ['data-exact-painting'] }); }))`)).toBe(true);
+    expect(await colour()).toBe('rgb(255, 255, 255)');
+  } finally {
+    await cdp.send('Target.closeTarget', { targetId });
+  }
 }, 60000);

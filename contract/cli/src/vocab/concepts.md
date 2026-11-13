@@ -142,7 +142,7 @@ component App
 - Each option is one short `text` (or a symbol `image` with an `aria-label`); leave its
   look unsaid. A radio that paints itself (its own `background-color`, `border` or
   `border-radius`, LLP 1104 D2) makes the group your drawn control on every host, keys
-  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or long labels: a `select` (`contract vocab select`). A setting on or off: `input
+  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or labels that do not fit side by side at the largest text size (verify reads it): a `select` (`contract vocab select`). A setting on or off: `input
   type="checkbox" switch`.
 - An item checked off (a to-do, a shopping list) is a plain `input type="checkbox"`: on iOS
   the checklist's circle, as Reminders draws it, never a switch. Several of a fixed set (a
@@ -188,6 +188,9 @@ test "a course is picked"
 - In a test or a drive, `type` picks an option by its `value`; a tap does not open the menu.
 - An option whose `value` is `""` stands for none chosen ("None", "Choose…"). Two to five
   short options are a `choice` (a segmented control).
+- A `select` is no wider than what holds it (an implied `max-width: 100%`), however long its
+  options. Beside a label in a row it keeps its width until the row is full: let the row
+  wrap (`flex-wrap="wrap"`), or give the select `min-width=0` to shrink with the row.
 
 ## screen: a second screen, a list and its detail, and Back
 names: navigate, navigation, navigationBack, back, detail, route, routes, router, list-detail, master-detail, deep-link, deep link, protocol_handlers, openURL, url-scheme, react-router, back button, back-button, back title, backButtonDisplayMode, headerBackTitle, backButtonTitle, backBarButtonItem, navigationBackTitle, large title, large-title, largeTitle, prefersLargeTitles, navigation bar, navigation-bar, navbar, UINavigationBar, phase, stage, anchor, hashchange, location.hash
@@ -1363,9 +1366,20 @@ component App
       button press=save testId="save"
         text "Save"
       if toast != ""
-        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 backgroundMaterial="thin" aria-live="polite" testId="toast"
+        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 text-align="center"
+          backgroundMaterial="thin" box-shadow="0 4px 16px rgba(0, 0, 0, 0.2)" pointer-events="none"
+          aria-live="polite" testId="toast"
 ```
 
+- A material takes the colour of what is behind it, so over a page of its own colour (a thin
+  material on a white page) only its shadow sets it apart; the shadow reads in both schemes.
+
+- In a tab app it stands above the tab bar: `bottom="calc(6rem + env(safe-area-inset-bottom))"`
+  clears the bar on every host at every text size (the web's bar is 3.5rem tall and grows
+  with the text; iOS 26's floating bar ends about 84 points above the screen's bottom).
+- `pointer-events="none"` lets taps through to what it lies over while it shows. verify
+  takes such an announcement (out of flow, `aria-live`, letting taps through) as lying over
+  the page by design, so a test may end while it shows.
 - The action the task runs clears the message whatever it reads: a gated task is armed at
   commits, not by the clock (docs/agent-pitfalls.md, "A gate reads state at commits").
 

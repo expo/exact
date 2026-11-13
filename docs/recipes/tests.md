@@ -1,8 +1,8 @@
 # Recipe: tests
 
-`app.test.contract` drives the app by `testId`, the same on the web and iOS (`bun
-exact.mjs test web`, `test ios`; `verify` runs them too). Each
-test is a fresh launch with empty storage, after its first data has landed. Against
+`app.test.contract` drives `testId`s on every host (`bun exact.mjs test web`,
+`test ios`, `verify`). Each test starts with empty storage after its
+first data lands. Against
 [Start here](../start-here.md)'s Groceries:
 
 ```contract-test
@@ -25,7 +25,7 @@ test "a repeat is refused and keeps its text; the list survives a relaunch"
 | `type "id" "text"`, `type "id" key "Enter"` | Sets a value (a `select`'s, a date `"2026-10-10"`, a checkbox `"true"`); presses a key. |
 | `expect text "id" == "…"` | Its text, else its value, else its descendants' text. |
 | `expect tree has "id"` (`missing`) · `expect disabled "id"` (`enabled`) · `expect state groceries.0 .title == "Eggs"` | In the tree or not · a control's `disabled` · a state, derive or resource. |
-| `clock data` · `clock settle` · `clock +5000` · `reload` | Lands replies · ends transitions · moves the virtual clock · relaunches on the same storage, at the clock's time. |
+| `clock data` · `clock settle` · `clock +5000` · `reload` | Lands replies · ends transitions · moves virtual time · reloads on the same storage and date: web at its URL, native at a path or scheme `--url`, else its cold launch location. |
 | `back` | The platform's Back: cancels a dialog, else dismisses a sheet, else pops the route. |
 | `fail fetch "<prefix>"`, `pass fetch …` | A lost connection there, then none. |
 | `request POST "/items" {…} as grace expect 409` | Writes through the app's server as another person ([a REST server](rest-backend.md)); a status not 2xx fails, or with `expect 409` any other. |

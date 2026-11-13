@@ -1,6 +1,7 @@
 # A web agent `drag` is a finger, a macOS one a mouse, and the web reply does not say when the browser took the touch
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Web finger drags report observed pointer cancellation, touch-action and scrolling by node.
 **Systems:** scripts/agent-drag.mjs (`dragTap`), scripts/agent.mjs (web carrier's held contact), docs/agent-pitfalls.md
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -43,3 +44,14 @@ in the drag's reply and name the node whose `touch-action` let the browser take 
 the reorder journal line does. Add a line to the drag pitfall: a node with its own
 pointer handlers needs `touch-action="none"` for a finger, and `drag … mouse` tests the
 pointer path alone.
+
+## Verification
+
+The browser contact test cancels on an inner element and names its Exact ancestor.
+The note reports that ancestor’s own `touch-action` and the effective intersection
+from the hit element through its ancestors, captured before injecting touch-start
+and associated with the observed pointer id. A pointerdown handler changing both
+the target and ancestor from `auto` to `none` still reports the initial `auto`.
+It covers an ancestor restricting
+`pan-y pinch-zoom` to `pan-y`, and a scroll container whose outer `none` does not
+block its panning. `none` on the target and mouse input produce no cancellation note.

@@ -30,7 +30,12 @@ pub(super) fn read(
                 Ok(0) => return failed(FailureKind::Network, "the byte stream ended"),
                 Ok(n) => {
                     if !append(shared, ticket, &chunk[..n], bound, &abort) {
-                        return failed(FailureKind::Aborted, "the stream was let go");
+                        let message = if abort.signal().aborted() {
+                            "native request aborted"
+                        } else {
+                            "the stream was let go"
+                        };
+                        return failed(FailureKind::Aborted, message);
                     }
                 }
                 Err(_) if abort.signal().aborted() => {

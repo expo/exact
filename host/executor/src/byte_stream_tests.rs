@@ -187,3 +187,37 @@ fn a_byte_stream_with_no_body_is_one_answer_as_on_the_web() {
     );
     assert!(settled(&core));
 }
+
+#[test]
+fn an_abort_while_a_byte_stream_waits_for_space_reports_native_request_aborted() {
+    let (core, script, woke) = setup();
+    core.run_owned(bytes_stream(1, "/bytes", 8), None).unwrap();
+    let tx = feed(&script, 0);
+    tx.send(vec![1; 8]).unwrap();
+    queued(&core, 1, 8);
+    tx.send(vec![2; 8]).unwrap();
+    read_at_least(&script, 16);
+    // Abort the transport without forgetting the ticket, so its outcome
+    // remains observable. Leave the queue full until the reader has ended.
+    let abort = core.shared.state.lock().unwrap().running[0]
+        .abort
+        .clone()
+        .unwrap();
+    abort.abort();
+    let ended = script.ended.0.lock().unwrap();
+    let (ended, _) = script
+        .ended
+        .1
+        .wait_timeout_while(ended, Duration::from_secs(5), |n| *n == 0)
+        .unwrap();
+    assert_eq!(*ended, 1, "the body was not released");
+    drop(ended);
+    assert_eq!(binary(&next(&core, &woke).1), [1; 8]);
+    let (_, outcome) = next(&core, &woke);
+    assert!(
+        matches!(&outcome, Outcome::Failed { kind: FailureKind::Aborted, message }
+        if message == "native request aborted"),
+        "{outcome:?}"
+    );
+    assert!(settled(&core));
+}

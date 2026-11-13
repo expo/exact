@@ -33,6 +33,34 @@ fn source_capture_skips_module_xcframeworks_with_versioned_slices() {
 }
 
 #[test]
+fn one_shot_reports_a_missing_peer_as_a_type_check_refusal() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let stage = Scratch::new(&app.0).unwrap();
+    let package = app.0.join("consumer");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::create_dir_all(app.0.join("node_modules")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&package, app.0.join("node_modules/consumer")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&package, app.0.join("node_modules/consumer")).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"consumer","version":"1.0.0","types":"index.d.ts","peerDependencies":{"missing-peer":"^1.0.0"}}"#).unwrap();
+    std::fs::write(
+        package.join("index.d.ts"),
+        "export type Value = import('missing-peer').Value;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        stage.0.join("__exact_paths.json"),
+        serde_json::json!({"app":app.0,"mounts":[]}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(stage.0.join("app.ts"), "import type { Value } from 'consumer'; export const appId = 'test.exact.peer'; export const grants = '';\n").unwrap();
+    std::fs::write(stage.0.join("__exact_entry.ts"), "export * from './app';\n").unwrap();
+    let error = super::compile_once(&stage.0, &super::Tools::default()).unwrap_err();
+    assert_eq!(error, "the TypeScript does not compile (tsc):\nconsumer@1.0.0 requires peer missing-peer@^1.0.0, which is not installed in the app; install a compatible version");
+}
+
+#[test]
 fn source_capture_names_a_file_above_the_per_file_limit() {
     let app = Scratch::new(&std::env::temp_dir()).unwrap();
     let path = app.0.join("oversized.json");

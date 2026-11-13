@@ -247,6 +247,7 @@ export function createSecretFacade(store, admitted, keys) {
     async keepKey(name, pair) {
       if (overlaying.on) throw inOverlay('store.keepKey()');
       allowed(name);
+      if (mustLock(admitted, name)) throw unsupported(name);
       const handle = 'exact.key:' + crypto.randomUUID();
       store.set(name, handle);
       return keys().then(service => service.put(handle, pair));

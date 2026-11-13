@@ -992,13 +992,30 @@ value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key;
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
-web page reloads its current history entry in the same profile, keeping Back
-and Forward entries; each separate test starts with an isolated history.
-A native app relaunches on the same scratch store. Its state starts over and
-`performanceNow()` is 0 again, at the date the test had
-reached (`epoch` plus its `clock` steps); what the app
-stored is what it reads, so persistence is testable. `close` presses the
-window's close button as ⌘W or the red button does (the driver's `close`): its
+web page reloads its current URL in the same profile, keeping Back and Forward
+entries; each separate test starts with an isolated history. A native app
+relaunches on the same scratch store with a fresh navigation stack. On Linux,
+Windows, macOS and iOS, a path or app scheme `--url` supplies the launch
+location. Without one, the host uses its no-link cold launch location: the
+manifest's `start_url` on Apple (`/` by default), `/` on Linux and Windows.
+An HTTP(S) `--url` selects a development
+server and does not override that launch location. A leading `at` changes
+only the test's first launch, not the native reload destination. On every
+host, state starts over and `performanceNow()` is 0 again, at the date the test
+had reached (`epoch` plus its `clock` steps); what the app stored is what it
+reads, so persistence is testable.
+
+To test a detail-route launch on Linux, Windows, macOS or iOS, lead the test
+with `at "/item/7"` and assert the detail screen before any `reload`. To test
+reloading at that URL, run
+`bun exact.mjs agent linux --url /item/7 --test app.test.contract`
+(or use `windows`, `macos` or `ios`). That opens a fresh stack at `/item/7`
+on each reload; it does not preserve the stack the test built through navigation.
+Android's APK reader refuses a path or app scheme `--url` and a leading `at`
+path. `agent android --headless` runs the Linux host on Android and accepts both.
+
+`close` presses the window's close button as ⌘W or the red button does (the
+driver's `close`): its
 `beforeunload` handlers hear it, and a window one keeps stays open, so the
 test goes on to the app's own "Save changes?" (on the web the browser's "Leave
 site?", answered "Stay"). A window that closes, by `close` or by a press the app

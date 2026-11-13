@@ -204,17 +204,20 @@ export function open({ input, init, redirect, protocols }, conv, grantSet, deliv
     const turn = socket && frame ? answering.mapper = { owner: controller, socketOps: null, overload: null } : null;
     // The call is the mapper's in every turn, and no answer's (ts-fetch.js `answering.mapperCall`).
     const outer = { call: answering.call, mapperCall: answering.mapperCall };
-    answering.call = null; answering.mapperCall = controller;
+    answering.call = null;
+    // Settled once it has answered or its stream was let go: entropy is then refused (ts-fetch.js `answerOnly`).
+    let ended = false;
+    const call = answering.mapperCall = { get settled() { return ended || controller.active?.() === false; } };
     try {
       const v = map(event, socket);
       if (turn?.overload) throw turn.overload;
       // A socket no resource owns (a mutation's stream) takes none, as natively.
       if (turn?.socketOps?.length && !controller.resource) throw new DOMException('the socket is not open', 'InvalidStateError');
       const ops = turn?.socketOps, effects = ops?.length ? [Object.assign(() => { try { publish(ops)(); } catch (e) { refused(e?.message ?? e); } }, { refused })] : null;
-      if (!v || typeof v.then !== 'function') return effects ? { v: conv(v), effects } : { v: conv(v) };
+      if (!v || typeof v.then !== 'function') { ended = true; return effects ? { v: conv(v), effects } : { v: conv(v) }; }
       effects?.[0]();
-      return Promise.resolve(v).then(v => controller.active?.() === false ? { error: 'the stream was let go', code: 'error' } : { v: conv(v) }).catch(e => failed(e));
-    } catch (e) { return failed(e, turn); } finally { if (turn) answering.mapper = null; Object.assign(answering, outer); }
+      return Promise.resolve(v).then(v => controller.active?.() === false ? { error: 'the stream was let go', code: 'error' } : { v: conv(v) }).catch(e => failed(e)).finally(() => { ended = true; });
+    } catch (e) { ended = true; return failed(e, turn); } finally { if (turn) answering.mapper = null; Object.assign(answering, outer); }
   };
   // A later frame's mapper call waits for an earlier one's promise, and so
   // does the end: `behind` is the last call still settling.

@@ -315,6 +315,14 @@ pub fn project(
         let child_may_fold = matches!(tree[i].as_slice(), [c] if may_fold[*c as usize]);
         let mut parts = template::parts_with(&kernel, plan, view(i), may_fold[i], child_may_fold)
             .ok_or("a view the kernel lost")?;
+        if kernel
+            .node(view(i))
+            .is_some_and(|n| n.style.rare.animation_trigger == exact_kernel::AnimationTrigger::None)
+        {
+            parts
+                .props
+                .insert("data-exact-animation-trigger".into(), "none".into());
+        }
         if let Some(writes) = exact_runner::press_writes_router(plan, exact_plan::NodesId(i as u32))
         {
             parts
@@ -1016,9 +1024,11 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         | StyleId::ScrollEdgeEffect
         | StyleId::HoverEffect
         | StyleId::SmartInvert => vec![],
-        // @ref LLP 1055 D13 — the browser starts an animation at insertion;
-        // this target does not hold one for its row (a declared deviation).
-        StyleId::AnimationTrigger => vec![],
+        // @ref LLP 1055 D13 — tree.js `css` gives the list's hold rule this value as an attribute.
+        StyleId::AnimationTrigger => vec![with(
+            "--exact-animation-trigger",
+            "v=>v===\"none\"?\"none\":\"view\"",
+        )],
         StyleId::Animation => vec![with("animation", NONE)],
         // @ref LLP 1069.011 D8 — and the custom property a native button reads.
         // The accent role must inherit, never write a self-reference.

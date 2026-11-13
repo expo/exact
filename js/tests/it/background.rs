@@ -404,6 +404,22 @@ fn background_work_cannot_fetch_or_call_native() {
     assert_eq!(m.in_flight(), 0, "no answer claimed a request");
 }
 
+/// LLP 1069.005 D3: background work draws randomness, through a combinator and
+/// a database's step as directly (host/web-js/seeded-entropy.test.mjs).
+#[test]
+fn background_work_may_draw_randomness() {
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    for op in ["save-then-draw", "save-all-then-draw", "query-then-draw"] {
+        assert_eq!(call(&mut m, &mut s, op, "a"), "saved a");
+        rounds(&mut m, &s);
+        assert_eq!(call(&mut m, &mut s, "last-error", ""), "36/4", "{op}");
+        assert_eq!(call(&mut m, &mut s, "reset-error", ""), "reset");
+    }
+}
+
 /// D8: a failing background write rejects the app's own promise and is
 /// journaled, with `state.background` counting it; an unhandled rejection
 /// is journaled through the engine's tracker.

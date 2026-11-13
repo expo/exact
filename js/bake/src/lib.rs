@@ -1338,9 +1338,8 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 const [tsc, root] = process.argv.slice(1);
 const {parseSync}=await import(createRequire(resolve(root, 'package.json')).resolve('rolldown/utils'));
-configure(process.cwd(),false,parseSync);
 const libraries = resolve(dirname(createRequire(resolve(root, 'package.json')).resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`)), 'lib');
-try { await prepareCanvas(process.cwd(), libraries); await check(process.cwd(), tsc, libraries); }
+try { configure(process.cwd(),false,parseSync); await prepareCanvas(process.cwd(), libraries); await check(process.cwd(), tsc, libraries); }
 catch (error) { process.stderr.write(String(error?.message ?? error)); process.exit(3); }
 "#;
 

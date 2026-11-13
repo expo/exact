@@ -1,6 +1,6 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { writeCrawlerFiles } from '../web/crawl.mjs';
-import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
+import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { fileIdentity, resourceIdentities } from '../apple/assets.mjs';
@@ -82,6 +82,8 @@ if (production && (process.env.EXACT_UPDATE_TRUST ?? 'production') !== 'producti
 if (production) process.env.EXACT_UPDATE_TRUST = 'production';
 // `--check` (`exact.mjs contract build app.contract`): app.ts's type check alone, saying nothing else.
 const checkOnly = args.includes('--check');
+// The wrapper's --check compiles the plan to select artifacts, without building them or checking TypeScript.
+const prerequisitesOnly = args.includes('--prerequisites');
 // The source revision a development build's install pages name, read while
 // it builds: optional, so no git, no repository, or a git held past 5 s (a
 // held index lock) leaves it unknown rather than failing or hanging the build.
@@ -193,7 +195,11 @@ const containerHatches = pageExports.exports.some(n => ['navigation', 'route', '
 // compiler's diagnostics, and the primary's surfaces stay unknown (null).
 const gpuLib = resolve(appDir, 'gpu/src/lib.rs');
 let gpuSurfaces = existsSync(gpuLib) ? null : [], declaredGpu = [];
-if (existsSync(gpuLib) && !checkOnly) {
+if (existsSync(gpuLib) && prerequisitesOnly) {
+  const { webGpuArtifacts } = await import('../../scripts/app.mjs');
+  webGpuArtifacts(resolveApp(app), null, { check: true });
+}
+if (existsSync(gpuLib) && !checkOnly && !prerequisitesOnly) {
   const { gpuModules, resolveApp, webGpuArtifacts, copyShaders, shaderWatchRoots } = await import('../../scripts/app.mjs');
   const target = resolveApp(app), cache = resolve(target.target, 'web-js-gpu', target.name);
   declaredGpu = gpuModules(target.manifest);
@@ -223,6 +229,12 @@ const compiler = webCompiler();
 const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', input, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : 'inherit', encoding: 'utf8', env: { ...process.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(',') } });
 if (cargo.status !== 0) { if (checkOnly) process.stderr.write(cargo.stderr ?? ''); process.exit(cargo.status ?? 1); }
 compiler.done();
+const leaves = [['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
+  .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`)));
+if (!checkOnly || prerequisitesOnly) {
+  if (rust || leaves.length) webToolchainEnv(process.env);
+  if (prerequisitesOnly) process.exit(0);
+}
 const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'beat.js', 'regions.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
 for (const f of runtime) cpSync(resolve(here, f === 'timer-observations.js' ? '../web/' + f : f), resolve(gen, f));
 // The live table's runtime is the dev loop's build's alone.
@@ -672,11 +684,12 @@ writeFileSync(resolve(gen, 'admission.js'), localImports(stubbed));
 // never linked. The realm it binds (the clock, the timers, the refused globals) stays with the module.
 if (fetchRefused) writeFileSync(resolve(gen, 'ts-fetch-refused.js'), [
   '// Generated: `fetch` for sources with no network grant (LLP 1047.002 D3): the app\'s own assets, else the refusal by name.',
-  "import { fetchWith } from './admission.js'; import { ordinary } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
-  'export const fetch = (input, init) => ordinary(() => fetchWith(tsGrantSet, input, init));', ''].join('\n'));
+  "import { fetchWith } from './admission.js'; import { ordinary, responseFor } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
+  'export const fetch = (input, init) => ordinary(() => fetchWith(tsGrantSet, input, init)).then(responseFor);', ''].join('\n'));
 cpSync(resolve(here, 'ts-fetch.js'), resolve(gen, 'ts-fetch.js'));
 cpSync(resolve(here, 'ts-body-from.js'), resolve(gen, 'ts-body-from.js'));
 cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
+cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
 cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
 cpSync(resolve(here, 'files.js'), resolve(gen, 'files.js'));
 cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
@@ -794,7 +807,7 @@ const scopedModule = (code, id) => {
   // string, which throws as on Hermes (`eval`, which no import may bind, is imported under a fresh name below).
   const bound = ['fetch', 'Date', 'Math', 'Intl', 'setTimeout', 'setInterval', 'requestAnimationFrame', 'requestIdleCallback',
     'clearTimeout', 'clearInterval', 'cancelAnimationFrame', 'cancelIdleCallback', 'performance', 'scheduler', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'crypto', 'AbortSignal',
-    'Function'];
+    'Function', 'Promise', 'queueMicrotask', 'Response'];
   // The DOM and Node's globals are absent, as on Hermes (js/bake/src/typescript.mjs `packageRefusals`).
   const absent = ['window', 'self', 'frames', 'parent', 'top', 'opener', 'document', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage',
     'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'process', 'Buffer', 'global'];
@@ -972,8 +985,7 @@ if (auth) {
 // motion engine (host/web-js/motion), the Markdown editor's rules
 // (exact-markdown-editor) and the exclusions walker (exact-textflow's
 // `textflow-web`), each beside its chunk.
-await Promise.all([['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
-  .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`))).map(async ([, build, name]) => cpSync(await build(), resolve(out, name))));
+await Promise.all(leaves.map(async ([, build, name]) => cpSync(await build(), resolve(out, name))));
 // The app's GPU module (LLP 1009 D2), built here as the wasm target's build
 // makes it, with the web host's glue: a loaded capability.
 // Built again only when something a module was built from changed (Cargo's

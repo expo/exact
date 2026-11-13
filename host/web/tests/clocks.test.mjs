@@ -140,6 +140,23 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
     await evaluate(`add('back2', 'pulse 800ms infinite alternate', 'Back')`);
     const [back, back2] = await evaluate(`[anim('back').startTime, anim('back2').startTime]`);
     expect(apart(back2, back)).toBeLessThan(1);
+
+    const revealed = await evaluate(`(async () => {
+      const { animationClock } = await import('./navigation.js');
+      document.getElementById('exact-root').replaceChildren();
+      add('waiting', 'pulse 1s linear both paused', '');
+      add('authored', 'pulse 1s linear -500ms both paused', '');
+      let t = 0;
+      const clock = animationClock(() => t, () => null, () => {});
+      clock.register(t);
+      t = 500; clock.seek(t);
+      const held = [anim('waiting').currentTime, anim('authored').currentTime, clock.settle()];
+      document.getElementById('waiting').style.animationPlayState = 'running';
+      clock.register(t);
+      t = 750; clock.seek(t);
+      return { held, times: [anim('waiting').currentTime, anim('authored').currentTime], end: clock.settle() };
+    })()`);
+    expect(revealed).toEqual({ held: [0, 0, 500], times: [250, 0], end: 1500 });
   } finally {
     await suite.close();
     server.close();

@@ -286,7 +286,9 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           return (x < 0 || y < 0 || x >= vp.w || y >= vp.h) && { x, y, vp };
         };
       const scrolled =
-        opts.wheel || opts.history !== undefined || (explicit && !(await pointOut())) ? null : await s.reveal(node.id);
+        (opts.wheel && !opts.hover) || opts.history !== undefined || (explicit && !(await pointOut()))
+          ? null
+          : await s.reveal(node.id);
       const out = form && (await pointOut(opts.at));
       if (out)
         throw new Error(

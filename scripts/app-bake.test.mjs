@@ -1047,7 +1047,7 @@ test('rewriting an input with its own bytes does not make a web build stale', as
     const source = resolve(app.dir, 'logic/src/lib.rs');
     writeFileSync(source, 'fn tick() {}\n');
     const marker = resolve(dist, '.exact-build.json');
-    writeFileSync(marker, JSON.stringify({ exactBuild: 1, inputs: webInputDigests(app, false) }));
+    writeFileSync(marker, JSON.stringify({ exactBuild: 1, inputs: webInputDigests(app, false), inputRoots: [] }));
     const past = new Date(Date.now() - 60_000);
     utimesSync(marker, past, past);
     writeFileSync(source, 'fn tick() {}\n');
@@ -1120,7 +1120,7 @@ impl Game for BuildInputs {
       import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
       const appPath = ${JSON.stringify(resolve(import.meta.dir, 'app.mjs'))};
-      const actual = await import(appPath);
+      const actual = await import(appPath), resolveOriginal = actual.resolveApp;
       const servePath = ${JSON.stringify(resolve(import.meta.dir, '../host/web/serve.mjs'))};
       const serve = await import(servePath), cards = serve.publicFileCards;
       mock.module(servePath, () => ({ ...serve, publicFileCards(stage) {
@@ -1128,7 +1128,13 @@ impl Game for BuildInputs {
         if (${operation === 'update'}) writeFileSync(${JSON.stringify(resolve(dir, 'assets', asset))}, 'edited during packaging');
         return cards(stage);
       } }));
-      mock.module(appPath, () => ({ ...actual, buildBake(app, platform, target, { env }) {
+      mock.module(appPath, () => ({ ...actual, resolveApp(...args) {
+        const app = resolveOriginal(...args);
+        if (app.manifest.game) app.prepare = () => ({ workspace_root: app.workspace,
+          packages: ['web', 'gpu'].map(kind => ({ id: kind, name: app.crate(kind), manifest_path: resolve(app.workspace, kind, 'Cargo.toml') })),
+          resolve: { nodes: ['web', 'gpu'].map(id => ({ id, deps: [] })) } });
+        return app;
+      }, buildBake(app, platform, target, { env }) {
         const started = Date.now();
         const source = resolve(app.dir, 'app.contract');
         const header = Buffer.alloc(36);

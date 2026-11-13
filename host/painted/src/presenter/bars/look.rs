@@ -40,11 +40,19 @@ use tiny_skia::Transform;
 
 const TITLE_LARGE: Type = Type(22.0, 28.0, 400, 0.0);
 const LABEL_MEDIUM: Type = Type(12.0, 16.0, 500, 0.5);
+const LABEL_SMALL: Type = Type(11.0, 16.0, 500, 0.5);
 
 /// The top app bar's height, under the status bar.
 pub fn top_height() -> f32 {
     dp(metric::TOP_HEIGHT)
 }
+
+/// A badge with text: its least size, its text's inset, and where it sits
+/// on its anchor (`BadgeTokens.LargeSize`, `BadgeWithContentHorizontalPadding`,
+/// `BadgeWithContentHorizontalOffset`, `BadgeWithContentVerticalOffset`).
+const BADGE: f32 = 16.0;
+const BADGE_PADDING: f32 = 4.0;
+const BADGE_OFFSET: (f32, f32) = (12.0, 14.0);
 
 /// An icon button: a 48 target (the minimum interactive size), its state
 /// layer a 40 circle.
@@ -149,6 +157,8 @@ pub struct Tab {
     pub selected: bool,
     /// Not `disabled`.
     pub enabled: bool,
+    /// Its badge (LLP 1075.003 §9.9, `PressFace.badge`).
+    pub badge: Option<String>,
 }
 
 /// The navigation bar, as said.
@@ -425,6 +435,36 @@ impl Layout {
         }
     }
 
+    /// A destination's badge on its anchor (its icon, else its label), Material's large badge in a
+    /// `BadgedBox` (Compose Material 3 1.4, `Badge.kt`, `BadgeTokens`): a
+    /// pill at least 16 square in `error`, its text label-small in
+    /// `onError` 4 from its sides; its start 12 before the anchor's end and
+    /// its bottom 14 into the anchor.
+    fn badge(
+        engine: &mut TextEngine,
+        text: &str,
+        anchor: Rect4,
+        node: ViewId,
+        inputs: &Inputs,
+        items: &mut Vec<Item>,
+    ) {
+        let dark = inputs.dark;
+        let p = paragraph(engine, text, LABEL_SMALL, inputs.font_scale, None);
+        let h = BADGE.max(p.height);
+        let w = (p.width + 2.0 * BADGE_PADDING).max(h);
+        let pill = (
+            anchor.0 + anchor.2 - BADGE_OFFSET.0,
+            anchor.1 - h + BADGE_OFFSET.1,
+            w,
+            h,
+        );
+        let fill = told(Material::Error, dark, 0xFFB3_261E, 0xFFF2_B8B5);
+        items.push(Item::Fill(Shape::new(pill, [h / 2.0; 4]), fill));
+        let ink = told(Material::OnError, dark, 0xFFFF_FFFF, 0xFF60_1410);
+        let at = (pill.0 + (w - p.width) / 2.0, pill.1 + (h - p.height) / 2.0);
+        items.push(Item::Text(p, at, ink, node));
+    }
+
     /// Material's navigation bar for `bottom`.
     pub fn bottom(engine: &mut TextEngine, bottom: &Bottom, inputs: &Inputs) -> Layout {
         let (dark, scale, nav) = (inputs.dark, inputs.font_scale, nav());
@@ -475,6 +515,9 @@ impl Layout {
                     }
                     let icon = (middle - nav.icon / 2.0, padding, nav.icon, nav.icon);
                     items.push(Item::Symbol(role.clone(), icon, ink));
+                    if let Some(badge) = &tab.badge {
+                        Self::badge(engine, badge, icon, tab.node, inputs, &mut items);
+                    }
                     if let Some(p) = &label {
                         let y = padding + nav.icon + nav.indicator_padding + nav.label_gap;
                         items.push(Item::Text(
@@ -495,6 +538,11 @@ impl Layout {
                         items.push(Item::Fill(layer, fill));
                     }
                     items.push(Item::Text(p.clone(), at, text, tab.node));
+                    // A destination of a label alone: the label is the badge's anchor, as the icon is.
+                    if let Some(badge) = &tab.badge {
+                        let anchor = (at.0, at.1, p.width, p.height);
+                        Self::badge(engine, badge, anchor, tab.node, inputs, &mut items);
+                    }
                 }
                 (None, None) => {}
             }
@@ -529,6 +577,16 @@ mod tests {
     /// Three destinations, the first selected and the last disabled, in a
     /// 412 wide window under the light scheme, no palette told.
     fn bar() -> Layout {
+        badged(None)
+    }
+
+    /// `bar()`, its second destination holding `badge`.
+    fn badged(badge: Option<&str>) -> Layout {
+        labelled(badge, true)
+    }
+
+    /// `badged`, its destinations' symbols left out where `symbols` is false.
+    fn labelled(badge: Option<&str>, symbols: bool) -> Layout {
         let mut engine = TextEngine::from_font_files(
             &[std::path::Path::new(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -539,9 +597,10 @@ mod tests {
         let tab = |node, label: &str, selected, enabled| Tab {
             node,
             label: label.into(),
-            symbol: Some("star".into()),
+            symbol: symbols.then(|| "star".into()),
             selected,
             enabled,
+            badge: badge.filter(|_| node == 3).map(Into::into),
         };
         let bottom = Bottom {
             tablist: 1,
@@ -646,5 +705,65 @@ mod tests {
         assert_eq!((w, h), (56.0, 32.0));
         assert_eq!(x + w / 2.0, 66.0);
         assert_eq!(symbols[2].0 .0 + 12.0, 280.0 + 66.0);
+    }
+
+    #[test]
+    fn a_destinations_badge_is_materials_large_badge_on_its_icon() {
+        let bar = badged(Some("12"));
+        let icon = bar
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Symbol(_, rect, _) => Some(*rect),
+                _ => None,
+            })
+            .nth(1)
+            .expect("the second destination's icon");
+        let pill = bar
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Fill(shape, color) if *color == [0xB3, 0x26, 0x1E, 0xFF] => Some(shape.rect),
+                _ => None,
+            })
+            .expect("one badge, in `error`");
+        // 12 before the icon's end, 14 into it, 16 tall, wider for two digits.
+        assert_eq!(
+            (pill.0, pill.1 + pill.3, pill.3),
+            (icon.0 + icon.2 - 12.0, icon.1 + 14.0, 16.0)
+        );
+        assert!(pill.2 > 16.0, "{pill:?}");
+        assert!(
+            bar.items
+                .iter()
+                .any(|item| matches!(item, Item::Text(_, _, [255, 255, 255, 255], 3))),
+            "its count in `onError`"
+        );
+    }
+    #[test]
+    fn a_destination_of_a_label_alone_keeps_its_badge_on_the_label() {
+        let bar = labelled(Some("3"), false);
+        let label = bar
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Text(p, at, color, 3) if *color != [255, 255, 255, 255] => {
+                    Some((at.0, at.1, p.width, p.height))
+                }
+                _ => None,
+            })
+            .expect("the label");
+        let pill = bar
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Fill(shape, color) if *color == [0xB3, 0x26, 0x1E, 0xFF] => Some(shape.rect),
+                _ => None,
+            })
+            .expect("its badge");
+        assert_eq!(
+            (pill.0, pill.1 + pill.3),
+            (label.0 + label.2 - 12.0, label.1 + 14.0)
+        );
     }
 }
