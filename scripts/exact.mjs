@@ -642,9 +642,32 @@ function compilerCargo(verb, env = process.env) {
   return { pin, args: [`+${pin}`, verb, '-q', '--manifest-path', resolve(ROOT, 'Cargo.toml'), '-p', 'contract'], env: clean };
 }
 const COMPILER = resolve(ROOT, 'target/debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+/** A Contract compiler built elsewhere from this checkout (`EXACT_CONTRACT_BIN`, a path to its binary), which `exact
+ * contract` runs instead of building one, so a machine without Rust can check an app (a build service hands one out
+ * per SDK snapshot). Its optional `<binary>.commit` names the exact2 commit it was built from; one that is not this
+ * checkout's HEAD is set aside, since a compiler from other sources would answer for another language. */
+export function prebuiltCompiler(env = process.env) {
+  const path = env.EXACT_CONTRACT_BIN;
+  if (!path) return null;
+  if (!existsSync(path)) {
+    console.error(`exact: EXACT_CONTRACT_BIN names ${path}, which does not exist; building the compiler here instead`);
+    return null;
+  }
+  const stamp = `${path}.commit`;
+  if (existsSync(stamp)) {
+    const built = readFileSync(stamp, 'utf8').trim();
+    const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).stdout?.trim();
+    if (head && built !== head) {
+      console.error(`exact: EXACT_CONTRACT_BIN was built from exact2 ${built.slice(0, 10)}, and this checkout is ${head.slice(0, 10)}; building the compiler here instead`);
+      return null;
+    }
+  }
+  return path;
+}
 /** `exact new` starts the compiler's build apart from this shell, so the builder's first `contract vocab` or
  * `contract build` does not wait the minute a cold one takes (a port's first lookup, 67 s). A fresh one is a no-op. */
 function prebuildCompiler() {
+  if (prebuiltCompiler()) return;
   const { args, env } = compilerCargo('build');
   const child = spawn('cargo', args, { detached: true, stdio: 'ignore', env });
   child.on('error', () => {});
@@ -653,14 +676,15 @@ function prebuildCompiler() {
 }
 
 export function contract(args, env = process.env) {
-  const cargo = compilerCargo('run', env), binary = COMPILER;
-  if (!existsSync(binary)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
+  const prebuilt = prebuiltCompiler(env), cargo = prebuilt ? null : compilerCargo('run', env), binary = prebuilt ?? COMPILER;
+  if (!prebuilt && !existsSync(binary)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
   // `build --json` is one JSON array on stdout and nothing on stderr: the compiler's diagnostics, then app.ts's.
   const json = args[0] === 'build' && args.includes('--json');
-  const result = spawnSync('cargo', [...cargo.args, '--', ...args], {stdio: ['inherit', json ? 'pipe' : 'inherit', 'inherit'], env: cargo.env, encoding: 'utf8', maxBuffer: 1 << 26});
-  if (result.error) throw new Error(`cargo: ${result.error.message} (install rustup from https://rustup.rs)`);
+  const options = {stdio: ['inherit', json ? 'pipe' : 'inherit', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26};
+  const result = prebuilt ? spawnSync(prebuilt, args, {...options, env}) : spawnSync('cargo', [...cargo.args, '--', ...args], {...options, env: cargo.env});
+  if (result.error) throw new Error(prebuilt ? `EXACT_CONTRACT_BIN ${prebuilt}: ${result.error.message}` : `cargo: ${result.error.message} (install rustup from https://rustup.rs)`);
   // Cargo's own failures exit 101; one that is not rustup's refuses `+<pin>` before the compiler runs.
-  if (result.status === 101) { const fault = cargoProxyFault(cargo.pin, cargo.env); if (fault) console.error(`exact contract: ${fault}`); }
+  if (!prebuilt && result.status === 101) { const fault = cargoProxyFault(cargo.pin, cargo.env); if (fault) console.error(`exact contract: ${fault}`); }
   // A build of an app's `app.contract` refreshes the types its `app.ts` imports (LLP 1116.001 D4.5); of unsaved text
   // (`--stdin`), whose types no file holds, neither refreshes them nor type-checks app.ts.
   const input = args[0] === 'build' && !args.includes('--stdin') ? args.slice(1).find((arg, i, rest) => !arg.startsWith('-') && rest[i - 1] !== '-o') : null;
@@ -758,9 +782,10 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
   if (game && !path) throw new Error('Usage: exact new <path> --game [--assets] (the last part names the game: lowercase-hyphenated, no host suffix)');
   // The web's rows alone for an app (LLP 1153 D1.6); a native platform's are checked by the verb that first needs it.
   const report = sdkReport(process.env, game ? {} : { only: 'web' });
-  if (report.some(row => row.name === 'rustup' && !row.ok)) {
+  // An app needs Rust only for exact2's own tools, the compiler among them, which EXACT_CONTRACT_BIN can stand in for.
+  if (report.some(row => row.name === 'rustup' && !row.ok) && (game || !prebuiltCompiler())) {
     printReport(report, {onlyMissing: true});
-    throw new Error('exact new needs Rust (rustup) to build exact2\'s own tools, the compiler among them; install it, then run exact new again');
+    throw new Error(`exact new needs Rust (rustup) to build exact2's own tools, the compiler among them; install it, then run exact new again${game ? '' : ', or set EXACT_CONTRACT_BIN to a compiler built from this checkout'}`);
   }
   // A game is a path here, as an app is: `game/new.mjs` alone takes a bare name for game/games.
   console.log(game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms}));
