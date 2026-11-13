@@ -6,14 +6,17 @@ use std::sync::Arc;
 
 /// Capabilities available before an engine or runner exists (LLP 1162.000 D2).
 pub trait LaunchContext {
-    /// A granted, unguarded kept secret, from this launch's snapshot.
+    /// A granted, unguarded kept secret as it was when the function began,
+    /// or as the function last wrote it (LLP 1162.000 D2).
     fn secret(&mut self, name: &str) -> Option<String>;
-    /// Persist a granted secret only if its version has not changed since the
-    /// function last read or wrote it, or since launch if it has not read it.
+    /// Persist a granted secret only if nobody else has written it since the
+    /// function began or since its own last successful write (LLP 1162.000 D2).
     fn set_secret(&mut self, name: &str, value: &str) -> Result<(), String>;
     /// Durably forget a granted secret under the same version check as `set_secret`.
     fn forget_secret(&mut self, name: &str) -> Result<(), String>;
     /// Start a named preload, or return its refusal reason (LLP 1162.000 D1–D3).
+    /// Refuse it if somebody else has since written a secret the function read
+    /// or wrote, including when a later `secret` call returned the snapshot.
     fn preload(&mut self, request: LaunchRequest) -> Result<(), String>;
     /// Fetch synchronously, under the binary's grants, without the HTTP cache.
     fn fetch(&mut self, request: Request) -> Result<Response, String>;

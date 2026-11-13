@@ -356,8 +356,16 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
             .map_err(|_| unavailable("turn reply: an invalid redirect mode"))?,
         cache: CacheMode::parse(json["cache"].as_str())
             .map_err(|_| unavailable("turn reply: an invalid cache mode"))?,
-        preload: json["preload"].as_str().map(Box::from),
-        prefetch: json["prefetch"].as_bool().unwrap_or(false),
+        preload: match &json["preload"] {
+            Json::Null => None,
+            Json::String(name) => Some(name.as_str().into()),
+            _ => return Err(unavailable("exactPreload must match ^[a-z][a-z0-9-]*$")),
+        },
+        prefetch: match &json["prefetch"] {
+            Json::Null => false,
+            Json::Bool(value) => *value,
+            _ => return Err(unavailable("exactPrefetch is true or false")),
+        },
         held: json["held"].as_bool().unwrap_or(false),
         due_ms: json["due_ms"].as_u64(),
         wake_ms: json["wake_ms"].as_u64(),
@@ -390,6 +398,41 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preload_and_prefetch_types_are_checked_at_the_envelope() {
+        let request = Request::get("https://example.test");
+        for (key, why) in [
+            ("preload", "exactPreload must match ^[a-z][a-z0-9-]*$"),
+            ("prefetch", "exactPrefetch is true or false"),
+        ] {
+            for value in [json!(7), json!([]), json!({}), json!(true), json!("true")] {
+                if (key == "prefetch" && value.is_boolean())
+                    || (key == "preload" && value.is_string())
+                {
+                    continue;
+                }
+                let mut wire = request_json(&request);
+                wire[key] = value;
+                assert_eq!(request_from(&wire).unwrap_err(), unavailable(why));
+            }
+            for value in [None, Some(Json::Null)] {
+                let mut wire = request_json(&request);
+                wire.as_object_mut().unwrap().remove(key);
+                if let Some(value) = value {
+                    wire[key] = value;
+                }
+                assert_eq!(request_from(&wire).unwrap(), request);
+            }
+        }
+        let mut wire = request_json(&request);
+        wire["prefetch"] = json!(false);
+        wire["preload"] = json!("feed-2");
+        assert_eq!(
+            request_from(&wire).unwrap(),
+            request.preload("feed-2").unwrap()
+        );
+    }
 
     #[test]
     fn preload_names_cross_a_module_turn_and_invalid_names_are_refused() {

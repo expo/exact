@@ -2,6 +2,45 @@ use super::*;
 use crate::store::{KeptStore, StoreRead};
 
 #[test]
+fn a_second_secret_read_keeps_the_start_value_and_refuses_a_stale_write_and_handoff() {
+    let server = Server::new(0);
+    let url = format!("http://{}/stale", server.address);
+    let (entered, entering) = channel();
+    let (release, released) = channel();
+    let released = Mutex::new(released);
+    let (answer, answered) = channel();
+    let source = source(&server, move |ctx| {
+        assert_eq!(ctx.secret("session").as_deref(), Some("A"));
+        entered.send(()).unwrap();
+        released.lock().unwrap().recv_timeout(HANG).unwrap();
+        answer
+            .send((
+                ctx.secret("session"),
+                ctx.set_secret("session", "C"),
+                ctx.preload(LaunchRequest::new("stale", Request::get(&url))),
+            ))
+            .unwrap();
+    });
+    let launch = fixture();
+    let backend = launch.0.backend.lock().unwrap().clone().unwrap();
+    backend.write("session", Some("A")).unwrap();
+    begin(&launch, &source, false);
+    entering.recv_timeout(HANG).unwrap();
+    launch
+        .with_secret_write("session", || backend.write("session", Some("B")))
+        .unwrap();
+    release.send(()).unwrap();
+    let (value, write, handoff) = answered.recv_timeout(HANG).unwrap();
+    definitions(&launch);
+    assert_eq!(value.as_deref(), Some("A"));
+    assert_eq!(write, Err("launch secret changed".into()));
+    assert_eq!(handoff, Err("launch preload secret changed".into()));
+    assert_eq!(backend.read("session").unwrap().as_deref(), Some("B"));
+    assert_eq!(launch.count(), 0);
+    assert_eq!(server.count.load(Ordering::Acquire), 0);
+}
+
+#[test]
 fn launch_secret_snapshot_holds_the_version_lock_against_the_app_writer() {
     struct HeldRead {
         value: Mutex<String>,

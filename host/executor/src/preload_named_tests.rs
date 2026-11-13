@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn the_launch_deadline_sends_a_named_read_without_the_function_reporting_its_end() {
+    for asynchronous in [false, true] {
+        for after_adoption in [false, true] {
+            let server = Server::new();
+            let (set, clock) = fresh_clock(&server, Vec::new());
+            let control = set.control();
+            let deadline = Duration::from_secs(5);
+            if !after_adoption {
+                control.launch_pending(Some(deadline));
+            }
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            if after_adoption {
+                control.launch_pending(Some(deadline));
+            }
+            server.plan("/feed", Plan::new(200, &[], b"sent"));
+            core.run(
+                job(1, server.request("/feed").preload("feed").unwrap()),
+                None,
+            )
+            .unwrap();
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert_eq!(state.jobs[0].len(), 1);
+                assert!(waiting(&state, &state.jobs[0][0]));
+                assert!(state.running.is_empty());
+                assert_eq!(server.count(), 0);
+            }
+            *clock.lock().unwrap() += deadline;
+            if let Some(machine) = &core.machine {
+                machine.timer.expire((0, 0));
+            } else {
+                core.shared.ready.notify_all();
+            }
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, 1);
+            assert!(!timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
+            assert_eq!(server.count(), 1);
+        }
+    }
+}
+
+#[test]
 fn a_named_read_takes_different_headers_and_body_ready_or_inflight() {
     for asynchronous in [false, true] {
         for pending in [false, true] {

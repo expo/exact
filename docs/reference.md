@@ -364,18 +364,21 @@ to `context.preload(request)`: it returns `Result<(), String>` with a refusal re
 else starts it immediately (`Foreground` waits for Opened). `when` defaults to
 `Start`; the request's `timeout_ms` is its exchange deadline.
 The context offers `secret`, durable `set_secret` and `forget_secret`, and blocking
-`fetch` under the binary's grants, without the cache. A secret write succeeds only
-if its version still equals the function's last read or own write; for a secret
-it has not read, the version at the function's start applies. A changed version
-returns a refusal reason. If `set_secret` or `forget_secret` fails, the function
-cannot write that secret again during this launch, and each request it hands over
-afterwards is refused: what is stored is then unknown.
+`fetch` under the binary's grants, without the cache. `secret` returns the value
+from when the function began, or the value the function last wrote; it does not
+observe intervening app writes. A secret write succeeds only if nobody else has
+written that secret since the function began or since its own last successful
+write. A changed version returns a refusal reason. If `set_secret` or
+`forget_secret` fails, the function cannot write that secret again during this
+launch, and each request it hands over afterwards is refused: what is stored is
+then unknown.
 The context exposes no app storage.
 On hosts that start preloads, it runs before the app's module, after the manifest's
 start requests reach the client. Its requests share the eight-entry bound.
-A handoff checks the version last read or written of every secret the function
-has used; an intervening app write refuses it. Each accepted request depends on
-all those secrets: a later write by either writer cancels it and drops its reply.
+A handoff is refused if the app has since written any secret the function read
+or wrote, even if the function read its snapshot again. Each accepted request
+depends on all those secrets: a later write by either writer cancels it and drops
+its reply.
 While the function runs, a read waits only if it names a preload with no definition
 yet. It proceeds when that name is handed over, the function returns, or five
 seconds pass, then uses the ordinary holding rule. Unnamed reads and reads under

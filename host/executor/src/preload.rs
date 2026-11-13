@@ -220,7 +220,7 @@ impl Drop for ThreadGuard {
 
 enum Destination {
     Staging(Box<cache::Cache>),
-    Adopted(Weak<Shared>),
+    Adopted(Weak<Shared>, Option<Weak<asynch::timer::Timer>>),
     Closed,
 }
 enum Message {
@@ -361,10 +361,20 @@ impl Control {
     /// Hold reads naming unknown preloads while the Rust launch function runs,
     /// bounded by its remaining window (LLP 1162.000 D2).
     pub fn launch_pending(&self, deadline: Option<Duration>) {
-        update(&self.destination, |cache| {
+        let delay = update(&self.destination, |cache| {
             cache.preload_definitions_due = None;
             cache.preload_launch_due = deadline.map(|wait| (cache.clock)() + wait);
+            cache
+                .preload_launch_due
+                .map(|due| due.saturating_duration_since((cache.clock)()))
         });
+        if let Some(Some(delay)) = delay {
+            if let Destination::Adopted(_, Some(timer)) = &*self.destination.state.lock().unwrap() {
+                if let Some(timer) = timer.upgrade() {
+                    arm_expiry(&self.destination, &timer, delay);
+                }
+            }
+        }
         let _ = self.send.send(Message::Tick);
     }
     /// A test's clock in place of the monotonic one.
@@ -500,7 +510,7 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             location.changed.notify_all();
             Some(result)
         }
-        Destination::Adopted(shared) => {
+        Destination::Adopted(shared, _) => {
             let shared = shared.upgrade()?;
             drop(destination);
             let mut state = shared.state.lock().unwrap();
@@ -515,6 +525,18 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
         }
         Destination::Closed => None,
     }
+}
+
+fn arm_expiry(location: &Arc<Location>, timer: &asynch::timer::Timer, delay: Duration) {
+    let destination = Arc::downgrade(location);
+    timer.arm_callback(
+        delay,
+        Box::new(move || {
+            if let Some(destination) = destination.upgrade() {
+                update(&destination, expire);
+            }
+        }),
+    );
 }
 
 impl Core {
@@ -533,19 +555,18 @@ impl Core {
             return Err(set);
         };
         cache.grants = self.grants.clone();
-        if let (Some(machine), Some(due)) = (&self.machine, cache.preload_definitions_due) {
-            let destination = Arc::downgrade(&set.destination);
-            machine.timer.arm_callback(
+        if let (Some(machine), Some(due)) = (&self.machine, pending_due(&cache)) {
+            arm_expiry(
+                &set.destination,
+                &machine.timer,
                 due.saturating_duration_since((cache.clock)()),
-                Box::new(move || {
-                    if let Some(destination) = destination.upgrade() {
-                        update(&destination, expire);
-                    }
-                }),
             );
         }
         state.cache = Some(*cache);
-        *destination = Destination::Adopted(Arc::downgrade(&self.shared));
+        *destination = Destination::Adopted(
+            Arc::downgrade(&self.shared),
+            self.machine.as_ref().map(|m| Arc::downgrade(&m.timer)),
+        );
         drop(destination);
         *owned = Some(set);
         Ok(())
