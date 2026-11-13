@@ -179,6 +179,7 @@ mod queue;
 mod reach;
 mod realworld_then;
 mod recorder_start;
+mod recorder_transcript;
 mod records;
 mod refreshes;
 mod refusal_remedies;

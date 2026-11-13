@@ -1403,6 +1403,16 @@ documentation requires (LLP 1146; the IDs are `packages/oauth/test/PROVIDERS.md`
 | ForgeRock (PingAM) | `issuer`: the realm's, `…/oauth2/realms/root/realms/<realm>`, as its discovery document names it. An app with its own sign-in screens answers the authentication tree (FR-1), then passes `signIn` an `authorize` that POSTs the authorization request with the SSO token (FR-2; below), natively only. A gateway that answers 403 for an expired access token: `expiredStatus: [401, 403]` (FR-4) |
 | Sign in with Apple | not supported: its token exchange needs a server-signed client secret |
 
+`signOut` forgets and revokes the session, but the browser keeps the
+provider's own sign-in, so the next sign-in returns as the same account
+without showing a page. To let the person choose another account,
+`signOut(store, { endSession: true })` also opens the provider's end-session
+endpoint (OpenID Connect RP-Initiated Logout 1.0): send it from a press,
+register the callback as a post-logout redirect URI, and set
+`logoutRedirectParam` for a provider that does not call that parameter
+`post_logout_redirect_uri`. A browser step that does not finish still signs
+out, answered `ok` with code `end_session` and a sentence in `error`.
+
 Every option, with what it does, is in `@exact/oauth`'s `index.d.ts`.
 
 **Tokens outside HTTP.**

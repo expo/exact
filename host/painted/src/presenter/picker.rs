@@ -489,25 +489,44 @@ impl<D: DataSource> Presenter<D> {
     ) {
         let (inbox, wake) = (self.portal.clone(), self.executor.waker());
         let kind = request.kind;
+        let ask = {
+            let mut asks = inbox.lock().unwrap_or_else(|e| e.into_inner());
+            asks.next += 1;
+            let ask = asks.next;
+            asks.wanted.push((ask, view));
+            ask
+        };
         let asked = std::thread::Builder::new()
             .name("exact-portal".into())
             .spawn(move || {
                 let outcome = crate::portal::choose(&request, address.as_deref(), timeout);
-                inbox
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push((view, kind, outcome));
+                (inbox.lock().unwrap_or_else(|e| e.into_inner()))
+                    .answered
+                    .push((ask, kind, outcome));
                 wake();
             });
         if let Err(e) = asked {
+            let mut asks = self.portal.lock().unwrap_or_else(|e| e.into_inner());
+            asks.wanted.retain(|(a, _)| *a != ask);
+            drop(asks);
             self.host.log(format!("{}: refused: {e}", kind.command()));
             self.deliver_picker(view, Event::Cancel);
         }
     }
 
-    /// The outcomes the portal has answered since the last turn.
+    /// The outcomes the portal has answered since the last turn, each to the
+    /// element it was asked for while that element stands.
     pub(super) fn finish_portal_picks(&mut self) {
-        let done = std::mem::take(&mut *self.portal.lock().unwrap_or_else(|e| e.into_inner()));
+        let done: Vec<_> = {
+            let mut asks = self.portal.lock().unwrap_or_else(|e| e.into_inner());
+            let answered = std::mem::take(&mut asks.answered);
+            (answered.into_iter())
+                .filter_map(|(ask, kind, outcome)| {
+                    let at = asks.wanted.iter().position(|(a, _)| *a == ask)?;
+                    Some((asks.wanted.remove(at).1, kind, outcome))
+                })
+                .collect()
+        };
         for (view, kind, outcome) in done {
             let name = kind.command();
             match outcome {

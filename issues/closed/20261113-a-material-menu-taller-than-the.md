@@ -1,6 +1,7 @@
 # A Material menu taller than the window cannot scroll
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Material's menu is held to the window less the margins it keeps and scrolls past that, under a finger that moves past the touch slop and under the arrows, with square rows and no scrollbar as Compose's DropdownMenu has.
 **Systems:** host/linux, host/android
 **Severity:** P2
 **Author:** Grok 4.7

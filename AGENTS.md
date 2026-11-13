@@ -155,8 +155,9 @@ section binds (`rules/RULES.md`, "Agents").
   fails the build. A game builds the wasm target (LLP 1071 §8), and `--wasm` is the
   internal flag for the uses below. The dev loop, the agent's web host, the smoke's app drive and
   metrics run what the build makes: on the JS target an edit rebuilds and reloads the
-  page (~0.1 s, no state carried); a native client opening the dev URL is forwarded to
-  the resident loop's producers (`dev.mjs --wasm`, started at its first request).
+  page, carrying compatible state and, while the logic is unchanged, settled answers.
+  A native client opening the dev URL is forwarded to the resident loop's producers
+  (`dev.mjs --wasm`, started at its first request).
   Delivery bakes the web crate without its wasm for the native streams and publishes
   the JS build of that bake's plan as the web root; the smoke's bare-plan fixtures and
   conformance's oracle stay `--wasm` (LLP 1071 §7, "Retiring the wasm target on the web").

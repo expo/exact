@@ -1,6 +1,7 @@
 # An edit or write preview can block the harness turn on a pipe
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The harness reads an edit or write target by opening it without blocking and refusing anything that is not a regular file, so a FIFO or device fails the preview at once instead of holding the turn.
 **Systems:** harness tools
 **Severity:** P2
 **Author:** Grok 4.7

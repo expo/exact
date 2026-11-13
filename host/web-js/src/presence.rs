@@ -34,8 +34,9 @@ fn named_values(
     out
 }
 
-pub fn layout_transitions(plan: &Plan, code: &[u8]) -> PresenceValues {
-    named_values(plan, code, StyleId::LayoutTransition, layout_transition)
+/// Map a runtime value through the transition grammar, journaling invalid values.
+pub fn layout_transition_map(parser: &str, view: &str, say: &str) -> String {
+    format!("v=>{{const t=({parser})(v);if(t)return t.css;{say}(`view ${{{view}}}: invalid layout-transition value ${{JSON.stringify(v)}}; unset`);return null}}")
 }
 
 pub fn exit_animations(plan: &Plan, code: &[u8], press: bool) -> PresenceValues {
@@ -58,6 +59,7 @@ pub fn exit_animations(plan: &Plan, code: &[u8], press: bool) -> PresenceValues 
 }
 
 /// The kernel's CSS for a bound layout transition, or no declaration.
+#[cfg(test)]
 pub fn layout_transition(value: &str) -> Option<Option<String>> {
     let mut style = exact_kernel::StyleProps::default();
     style
@@ -74,9 +76,8 @@ pub fn layout_transition(value: &str) -> Option<Option<String>> {
     )
 }
 
-/// The JS function that maps a bound `-exact-{name}` value to the kernel's
-/// declaration. A value the binding's code does not name clears the row with a
-/// diagnostic, so the target needs no CSS parser of its own.
+/// Resolve a bound exit through the plan's named keyframes. An unlisted value
+/// clears the row with a diagnostic.
 pub fn declaration_map(values: &PresenceValues, view: &str, say: &str, name: &str) -> String {
     let held = values
         .held

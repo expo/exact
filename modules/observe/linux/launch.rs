@@ -98,6 +98,21 @@ fn session_id() -> String {
     uuid_v4((u128::from(a) << 64 | u128::from(b)).to_be_bytes())
 }
 
+/// The metadata that names the app's build: its identity and environment. A crash
+/// record carries it, so a crash before this session's row is saved is counted
+/// against the build that crashed, not the one that opens next.
+fn app_meta(app: &Value, config: &Value, development: bool) -> Map<String, Value> {
+    let environment = config["environment"].as_str().unwrap_or(if development {
+        "development"
+    } else {
+        "production"
+    });
+    object(json!({
+        "appIdentifier": app["id"], "appName": app["name"], "appVersion": app["version"],
+        "environment": environment,
+    }))
+}
+
 /// The launch part: no I/O, no parsing, no thread until startup is reported.
 pub fn launch(ctx: LaunchContext) {
     let session = session_id();
@@ -120,9 +135,11 @@ pub fn launch(ctx: LaunchContext) {
             .map(|s| s.to_string())
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_default();
+        let parse = |text: &str| serde_json::from_str::<Value>(text).unwrap_or_default();
+        let meta = app_meta(&parse(app), &parse(config), development);
         let record = json!({
             "session": crash_session, "sessionStart": start, "time": journal::wall(),
-            "type": "panic", "message": message,
+            "meta": meta, "type": "panic", "message": message,
             "location": info.location().map(|l| format!("{}:{}", l.file(), l.line())),
             "thread": std::thread::current().name().map(str::to_string),
         });
@@ -413,12 +430,7 @@ impl Service {
             session,
             config: Value::Object(config),
         };
-        let environment = s.config["environment"].as_str().unwrap_or(if development {
-            "development"
-        } else {
-            "production"
-        });
-        let meta = json!({
+        let mut meta = object(json!({
             "osName": "Linux",
             "osVersion": read("/proc/sys/kernel/osrelease"),
             "deviceModel": read("/sys/devices/virtual/dmi/id/product_name"),
@@ -426,9 +438,8 @@ impl Service {
             "language": std::env::var("LANG").ok().map(|l| l.split('.').next().unwrap_or("").replace('_', "-"))
                 .filter(|l| !l.is_empty() && l != "C" && l != "POSIX"),
             "clientVersion": CLIENT_VERSION,
-            "appIdentifier": app["id"], "appName": app["name"], "appVersion": app["version"],
-            "environment": environment,
-        });
+        }));
+        meta.extend(app_meta(app, &s.config, development));
         s.entry = json!({ "start": start, "meta": meta });
         if log_enabled() {
             eprintln!("observe: service started, session {}", s.session);
@@ -805,7 +816,11 @@ impl Service {
                 continue;
             };
             if !self.sessions.contains_key(crashed) {
-                let meta = self.sessions[&self.session]["meta"].clone();
+                // The device's metadata is this process's; the build's is the record's.
+                let mut meta = self.sessions[&self.session]["meta"].clone();
+                if let (Some(meta), Some(build)) = (meta.as_object_mut(), o["meta"].as_object()) {
+                    meta.extend(build.clone());
+                }
                 self.sessions.insert(
                     crashed.into(),
                     json!({ "start": o["sessionStart"], "meta": meta }),

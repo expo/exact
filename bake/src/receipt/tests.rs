@@ -492,6 +492,26 @@ fn a_plan_requires_the_typescript_runtime_its_inputs_carry() {
     assert_eq!(requires(json!({})), Value::Null);
 }
 
+/// A TypeScript module pair requires exactly the binary's TypeScript grants
+/// and its prelude's runtime, as a Rust module requires its own.
+#[test]
+fn a_typescript_pair_requires_its_grants_and_runtime() {
+    let plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    let inputs = json!({"javascriptGrants": "net.fetch https://x/", "typescriptRuntime": 2});
+    let assets = ["typescript/app.hbc", "typescript/app.module.json"]
+        .map(|name| json!({"name": name, "sha256": "00", "bytes": 1}));
+    let graph = artifact_graph(&plan, &inputs, &assets, false, "aarch64-apple-ios").unwrap();
+    for row in &graph["artifacts"].as_array().unwrap()[1..] {
+        assert_eq!(
+            row["requires"],
+            json!({"javascriptGrants": "net.fetch https://x/", "typescriptRuntime": 2}),
+            "{row}"
+        );
+    }
+}
+
 /// LLP 1098 D8: the receipt says whether a node claims the media session.
 #[test]
 fn a_plan_with_metadata_claims_the_media_session() {

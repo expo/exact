@@ -125,7 +125,9 @@ impl Em<'_> {
         if !self.paint || kind.is_svg_element() || kind.is_metadata() {
             return;
         }
-        if let Some((name, value)) = crate::paint::binding(self.plan, kind, b) {
+        if let Some((name, value)) = crate::paint::binding(self.plan, kind, b, || {
+            self.uses.share('t', crate::paint::transitions())
+        }) {
             let f = if b.kind == BindingKind::Style && b.id == StyleId::BackdropFilter as u16 {
                 format!("()=>{}(({f})(),false)", self.uses.rt("backdropValue"))
             } else {
@@ -481,15 +483,15 @@ impl Em<'_> {
                 "transition",
                 Some(pressed_transition_map()),
             ),
-            // Presence maps source literals through the kernel; other values clear the row.
-            StyleId::LayoutTransition | StyleId::ExitAnimation => {
-                let (property, name, values) = if id == StyleId::LayoutTransition {
-                    ("--exact-layout-transition", "layout-transition", crate::presence::layout_transitions(plan, plan.code(b.expr)))
-                } else {
-                    ("--exact-exit-animation", "exit-animation", crate::presence::exit_animations(plan, plan.code(b.expr), press))
-                };
+            StyleId::LayoutTransition => {
+                let parser = self.uses.share('t', crate::paint::transitions());
                 let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
-                one(property, Some(crate::presence::declaration_map(&values, &format!("{view}({e})"), &say, name)))
+                one("--exact-layout-transition", Some(crate::presence::layout_transition_map(&parser, &format!("{view}({e})"), &say)))
+            }
+            StyleId::ExitAnimation => {
+                let values = crate::presence::exit_animations(plan, plan.code(b.expr), press);
+                let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
+                one("--exact-exit-animation", Some(crate::presence::declaration_map(&values, &format!("{view}({e})"), &say, "exit-animation")))
             }
             // A side is the author's when they wrote it or the other of its
             // pair (css.rs `unsaid_side`): only a side the sheet alone sets mirrors.
@@ -669,21 +671,11 @@ impl Em<'_> {
                 }
             }
         }
-        // Presence asks which values declare the row before each tree update (rt.js `lt`).
+        // Probe the new region value while presence can still measure the old box.
         if id == StyleId::LayoutTransition {
-            let values = crate::presence::layout_transitions(plan, plan.code(b.expr));
-            let declaring: Vec<&String> = values
-                .held
-                .iter()
-                .filter(|(_, css)| css.is_some())
-                .map(|(v, _)| v)
-                .collect();
+            let parser = self.uses.share('t', crate::paint::transitions());
             let lt = self.uses.rt("lt");
-            let _ = write!(
-                self.out,
-                "{lt}({e},{},{f});",
-                serde_json::to_string(&declaring).unwrap()
-            );
+            let _ = write!(self.out, "{lt}({e},{parser},{f});");
         }
         Ok(())
     }

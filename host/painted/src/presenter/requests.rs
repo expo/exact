@@ -944,14 +944,26 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        let stale: Vec<(u32, ViewId)> = (self.requests.waiting.iter())
+        let picks: Vec<(u32, ViewId)> = (self.requests.waiting.iter())
             .filter_map(|(id, w)| match w {
                 Waiting::Pick(node) if stale(*node) => Some((*id, *node)),
                 _ => None,
             })
             .collect();
-        for (id, node) in stale {
+        for (id, node) in picks {
             self.requests.waiting.remove(&id);
+            self.host.log(format!(
+                "picker: {node} was made again; its answer is dropped"
+            ));
+        }
+        // And a portal's pick, answered yet or not.
+        let mut asks = self.portal.lock().unwrap_or_else(|e| e.into_inner());
+        let (dropped, kept) = std::mem::take(&mut asks.wanted)
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, node)| stale(*node));
+        asks.wanted = kept;
+        drop(asks);
+        for (_, node) in dropped {
             self.host.log(format!(
                 "picker: {node} was made again; its answer is dropped"
             ));

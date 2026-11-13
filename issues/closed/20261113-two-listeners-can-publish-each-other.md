@@ -1,6 +1,7 @@
 # Two listeners can publish each other's socket when pids share 16 bits
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Staging names carry the whole pid and a 64-bit count, and staging through publication holds an exclusive flock on the socket's directory, so two listeners in one directory never share or remove each other's staging name.
 **Systems:** host/listen
 **Severity:** P2
 **Author:** Grok 4.7

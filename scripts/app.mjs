@@ -168,10 +168,10 @@ export function injectedProfiles(app, workspace = app.workspace) {
  * at `from`: each vendored crate, by a path relative to it. Two copies of taffy
  * or cosmic-text in one build fail far from the cause, so `exact new` writes
  * these and every run checks them (LLP 1036.001 D2). */
-export function patchLines(from) {
+export function patchLines(from, path = pathFrom) {
   const root = Bun.TOML.parse(readFileSync(resolve(ROOT, 'Cargo.toml'), 'utf8'));
   return Object.entries(root.patch?.['crates-io'] ?? {}).map(([name, spec]) =>
-    `${name} = { path = ${JSON.stringify(pathFrom(from, resolve(ROOT, spec.path)))} }`);
+    `${name} = { path = ${JSON.stringify(path(from, resolve(ROOT, spec.path)))} }`);
 }
 /** How an outside workspace at `from` names a path in this checkout: relative, with `/`
  * (Windows reads it; a Mac can't read Skirmish's `..\\exact2`), when the two share a directory

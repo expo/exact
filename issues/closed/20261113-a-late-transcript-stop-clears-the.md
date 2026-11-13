@@ -1,6 +1,7 @@
 # A late transcript stop clears the next recording's recognition id
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Recorder clears recognitionId as it sends the stop rather than when the stop answers, and counts a pending transcript stop as busy, so a late answer cannot clear the next take's recognition.
 **Systems:** apps/recorder, speech recognition
 **Severity:** P2
 **Author:** Grok 4.7

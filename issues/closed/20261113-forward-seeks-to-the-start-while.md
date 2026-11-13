@@ -1,6 +1,7 @@
 # Forward seeks to the start while the video's duration is still zero
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Video Player's Forward does nothing until durationchange has given a length, so it no longer clamps to an unknown length of 0 and seeks to the start.
 **Systems:** apps/video-player
 **Severity:** P2
 **Author:** Grok 4.7

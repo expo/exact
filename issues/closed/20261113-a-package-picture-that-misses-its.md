@@ -1,6 +1,7 @@
 # A package picture that misses its budget is not asked again
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A package picture's ask that the raster budget cannot charge leaves asked at the size shown, so the next sync asks for the larger box again.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

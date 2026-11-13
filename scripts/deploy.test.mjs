@@ -384,6 +384,15 @@ async function rejects(action, matches) {
   result('a bundle needing a newer TypeScript runtime is refused by an older cohort only',
     !olderPrelude.bundle&&olderPrelude.missing[0].includes('typescriptRuntime')&&!runtimeOne.bundle&&runtimeOne.missing[0].includes('runtime 2 or later; this cohort\'s is 1')
     &&samePrelude.bundle&&newerPrelude.bundle, JSON.stringify({olderPrelude,runtimeOne,samePrelude,newerPrelude}));
+  // The TypeScript module pair runs only where the binary's TypeScript grants are exactly its own (js/src/paired.rs).
+  const pair=(grants)=>{const c=structuredClone(moved);c.graph.artifacts.push({name:'typescript/app.hbc',requires:{javascriptGrants:grants}});return c;};
+  const holding=g=>({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,javascriptGrants:g}}});
+  const narrower=classifyArtifacts(pair('net.fetch https://x/\nnet.fetch https://y/'),holding('net.fetch https://x/'));
+  const wider=classifyArtifacts(pair('net.fetch https://x/'),holding('net.fetch https://x/\nnet.fetch https://y/'));
+  const exact=classifyArtifacts(pair('net.fetch https://x/'),holding('net.fetch https://x/'));
+  result('a TypeScript pair goes only to a binary holding exactly its grants',
+    !narrower.bundle&&narrower.missing[0].includes('typescript/app.hbc: javascriptGrants')&&!wider.bundle&&exact.bundle,
+    JSON.stringify({narrower,wider,exact}));
   result('artifact graph separates binary changes, compatible older cohorts, and named missing dependencies',
     same.binary&&same.bundle&&old.binary&&old.bundle&&old.warnings[0].includes('will run the old code')
     &&!absent.bundle&&absent.missing[0].includes('sources.camera')&&!unsupported.bundle&&unsupported.missing[0].includes('gpuSurfaces.map')

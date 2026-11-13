@@ -1,6 +1,7 @@
 # A crash before Observe starts is filed under the next launch
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Observe's Linux panic record carries the crashing build's app identity, version and environment, and the next launch stores those for the crashed session over its own device metadata.
 **Systems:** modules/observe
 **Severity:** P2
 **Author:** Grok 4.7
