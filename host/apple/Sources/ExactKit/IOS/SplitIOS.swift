@@ -43,8 +43,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var inspectorClosed: () -> Void = {}
     /// The detail is about to cover the list as the columns collapse.
     var listWillBeCovered: () -> Void = {}
-    /// Whether the router's stack is the list, alone or with its search's results (`NavigationHost.listOnTop`).
-    var listOnTop: () -> Bool = { false }
+    /// Whether no page is above the list in the router's stack: the list alone, or its search's results directly
+    /// over it with any routes over them (`NavigationHost.noPageAboveList`).
+    var noPageAboveList: () -> Bool = { false }
     /// UIKit is moving the columns, inside its animation (`moveAlong`).
     var columnsMove: () -> Void = {}
     /// UIKit has said the columns will move and has yet to open its animation. It lays them out itself, inside that
@@ -343,12 +344,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         expansion = false
         // Collapsed, a pop of the detail's controller left its routes in it.
         show(stack, animated: false)
-        // At the list after a Back while collapsed, the detail goes back to the page the person left. Asked once the
-        // expansion is over, as the router's answer changes the columns, while the router is still at the list, alone or
-        // with its search's results (which may have moved to the detail, or left with an empty search, meanwhile).
-        if stack.count == 1, let location = left {
+        // With no page above the list after a Back while collapsed, the detail goes back to the page the person left,
+        // under the search's results if they are over the list. Asked once the expansion is over, as the router's
+        // answer changes the columns, while the router still has no page there (the results may have moved to the
+        // detail, or left with an empty search, meanwhile).
+        if let location = left {
             DispatchQueue.main.async { [weak self] in
-                guard let self, listOnTop(), !controller.isCollapsed else { return }
+                guard let self, noPageAboveList(), !controller.isCollapsed else { return }
                 returnTo(location)
             }
         }
@@ -399,7 +401,7 @@ extension NavigationHost {
         split.returnTo = { [weak self] location in self?.go(to: location) }
         split.inspectorClosed = { [weak self] in self?.inspectorClosed() }
         split.listWillBeCovered = { [weak split] in (split?.list.viewControllers.first as? RouteController)?.search?.resign() }
-        split.listOnTop = { [weak self] in self?.listOnTop() ?? false }
+        split.noPageAboveList = { [weak self] in self?.noPageAboveList() ?? false }
         split.columnsMove = { [weak self] in self?.reportCovers(); self?.presenter.owners.publish() }
         self.split = split
         primaryNavigation = list
@@ -420,6 +422,7 @@ extension NavigationHost {
 
     /// The stack in the split's columns, its routes projected into each.
     func syncSplit(_ split: SplitIOS, _ stack: [RouteController], animated: Bool) {
+        let routes = stack
         // Collapsed, results typed at the list are drawn in it; expanded they are the detail's
         let stack = placingResults(stack, on: split.controller.isCollapsed ? split.list : nil, inPlace: !split.settledExpanded)
         prepareRoutes(Array(stack.prefix(1)), in: split.list)
@@ -430,7 +433,7 @@ extension NavigationHost {
         let results = resultsRoute(of: stack.first?.search?.field, in: stack)
         let pages = { (routes: [RouteController]) in routes.filter { $0 !== results }.map(ObjectIdentifier.init) }
         split.show(stack, animated: animated, revealsDetail: pages(stack) != pages(shown))
-        noteDetail(split, stack)
+        noteDetail(split, routes)
         for nav in [split.list, split.detail] { recordOwned(nav) }
         // A sidebar's selected row follows the detail.
         if split.shown != shown, split.showsList, let root = stack.first,
@@ -440,12 +443,13 @@ extension NavigationHost {
     }
 
     /// The page the detail shows, which the split returns to after a Back to the list while collapsed
-    /// (`SplitIOS.left`). The stack at its root on a split settled expanded leaves none: the router took the page
-    /// away, not a Back the person made from it on the collapsed split.
+    /// (`SplitIOS.left`): the top of the router's stack, or what is under the list's search's results. Results over
+    /// the list, and a result opened over them, are no page: the page left is still the one before them. The stack at
+    /// its root on a split settled expanded leaves none: the router took the page away, not a Back the person made
+    /// from it on the collapsed split.
     private func noteDetail(_ split: SplitIOS, _ stack: [RouteController]) {
-        // Never the search's results: the page under them is the one left
         let results = resultsRoute(of: stack.first?.search?.field, in: stack)
-        guard let root = stack.first, let top = stack.dropFirst().last(where: { $0 !== results }) else {
+        guard let root = stack.first, let top = stack.dropFirst().prefix(while: { $0 !== results }).last else {
             if split.settledExpanded { split.left = nil }
             return
         }
@@ -456,24 +460,26 @@ extension NavigationHost {
     /// The router's stack, root first.
     private var routerRoutes: [RouteController] { shownKeys.compactMap { key in controllers.values.first { $0.key == key } } }
 
-    /// Whether the router's stack is the list, alone or with its search's results over it.
-    func listOnTop() -> Bool {
+    /// Whether no page is above the list in the router's stack: the list alone, or its search's results directly over
+    /// it, with any result opened over them.
+    func noPageAboveList() -> Bool {
         let routes = routerRoutes
-        return routes.count == 1 || (routes.count == 2 && resultsRoute(of: routes[0].search?.field, in: routes) === routes[1])
+        return routes.count == 1 || (routes.count > 1 && resultsRoute(of: routes[0].search?.field, in: routes) === routes[1])
     }
 
     /// The router goes to `location`, as a link there takes it: the root's `navigate`, else the runner's own `go`.
     /// Nothing is asked under a presentation, as the router would push the page onto the presented stack.
     private func go(to location: String) {
         guard let session = presenter.session, presenter.modals.routes.isEmpty else { return }
-        // The list with its search's results over it: they go back on top of the page it left, so Back from them shows
-        // that page. Back from the results, the page, the results again, as the person would ask for each, unanimated.
-        let routes = routerRoutes
-        if routes.count == 2, resultsRoute(of: routes[0].search?.field, in: routes) === routes[1], routes[1].key == selectedKey,
-           let again = session.runtime.visitLocation(routes[1].key) {
+        // The list with its search's results over it, and any result opened over them: they go back on top of the page
+        // it left, so Back from the results shows that page. Back to the list, the page, then each of them again, as
+        // the person would ask for each, unanimated.
+        let routes = routerRoutes, over = routes.dropFirst(), again = over.compactMap { session.runtime.visitLocation($0.key) }
+        if let list = routes.first, let top = over.last, top.key == selectedKey, again.count == over.count,
+           resultsRoute(of: list.search?.field, in: routes) === over.first {
             unanimated = true
-            goBack()
-            for next in [location, again] {
+            goBack(from: top.key, to: list.key)
+            for next in [location] + again {
                 unanimated = true
                 if let root = container, root.handlers.contains("navigate") { session.navigate(next, at: root) } else { session.hostGo(next) }
             }

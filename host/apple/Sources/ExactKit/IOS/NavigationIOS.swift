@@ -1209,7 +1209,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     /// A history jump uses navigation; the authored Back control handles the adjacent intent.
-    private func goBack(from source: String, to destination: String) {
+    func goBack(from source: String, to destination: String) {
         endEditingLeavingResults()
         pendingSync = true
         guard let session = presenter.session, let root = container,

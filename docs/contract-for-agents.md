@@ -2345,11 +2345,12 @@ restart, start another drive on the same `--storage`. See [host commands](contra
   (`input type="search" value=query input=search cancel=keepQuery` with `action keepQuery`
   calling `preventDefault()`).
 - Results that are a level of their own: `aria-controls` on the header's search input names an
-  element of another route, the results route, which `focus` enters (`nav = go(nav,
-  "/search")`). iOS pushes it as any route, but over a list alone in its stack it is drawn
-  over the list, so the field stays in reach; Back, the ✕ or another page leaves it and the
-  search closes, keeping its text (LLP 1127.000). Without `aria-controls` the search filters
-  its own route.
+  element of another route, the results route, which text in the field enters (`nav = go(nav,
+  "/search")` from `input`, and from `focus` when the field kept text) and an emptied field
+  leaves, as UIKit shows a search's results controller. iOS pushes it as any route, but over a
+  list alone in its stack it is drawn over the list, so the field stays in reach; Back, the ✕
+  or another page leaves it and the search closes, keeping its text (LLP 1127.000). Without
+  `aria-controls` the search filters its own route.
 - A header's buttons that press, and its disabled ones (dimmed, as UIKit's), are bar
   items; a readout nothing presses ("● Clock") is a `row` or `text` with `role="status"`
   ("Tabs and stacks"). Past the subtitle, the first text after the heading, other texts

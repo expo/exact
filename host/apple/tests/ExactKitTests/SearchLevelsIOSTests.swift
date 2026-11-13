@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactGroupedLists
 
 /// A header search's results as a level of the stack (`placingResults`), over `scripts/fixtures/search-levels.contract`:
 /// using the field enters the results route. Collapsed they are drawn in the list's controller, over its whole view,
@@ -117,6 +118,58 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(try node(session, "search").props["value"], "x")
     }
 
+    /// A result opened over results typed at the collapsed list: an unfold puts the page left under the results and the
+    /// result back over them, so Back from the result shows the results with a Back of their own, and the close shows
+    /// the page (LLP 1127 D5.9).
+    func testAnUnfoldPutsThePageLeftUnderTheResultsAndTheResultOverThem() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is pushed") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("back at the list") { split.shown.count == 1 && !has(session, "book-a") && !agent.nativeInFlight() }
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results route is on top") { navigation.resultsInPlace != nil && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "result-b").id)])["error"])
+        until("the result is pushed") { has(session, "book-b") && navigation.selectedKey == routeKey(session, "book-b") && !agent.nativeInFlight() }
+        expand()
+        let detail = { split.detail.viewControllers.map { ($0 as? RouteController)?.key } }
+        until("the book is back under the results and the result over them") {
+            !split.controller.isCollapsed && !agent.nativeInFlight()
+                && detail() == [routeKey(session, "book-a"), routeKey(session, "results"), routeKey(session, "book-b")]
+        }
+        XCTAssertNil(agent.back()["error"])
+        until("Back shows the results over the book") {
+            detail() == [routeKey(session, "book-a"), routeKey(session, "results")] && !has(session, "book-b") && !agent.nativeInFlight()
+        }
+        search.controller.isActive = false
+        until("the close shows the book") {
+            detail() == [routeKey(session, "book-a")] && !has(session, "results") && !agent.nativeInFlight() && search.controller.transitionCoordinator == nil
+        }
+        XCTAssertEqual(try node(session, "search").props["value"], "x")
+    }
+
+    /// UIKit pads a grouped list's first section while its route's search is open, which moved the rows down as the search
+    /// opened: the list keeps the inset it had.
+    func testAGroupedListKeepsItsRowsInPlaceAsItsSearchOpens() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let (_, search) = try listSearch(split)
+        let collection = try XCTUnwrap((session.presenter.groupedLists as? GroupedListHost)?.lists[try node(session, "books").id]?.collection, "the list's collection view")
+        let first = IndexPath(item: 0, section: 0)
+        collection.layoutIfNeeded()
+        let closed = try XCTUnwrap(collection.layoutAttributesForItem(at: first)?.frame.minY)
+        session.presenter.focusElement(["levels-search"])
+        until("the search is open") { opened(search) }
+        collection.layoutIfNeeded()
+        XCTAssertEqual(collection.layoutAttributesForItem(at: first)?.frame.minY, closed, "the first row stays where it was in the list")
+    }
+
     /// Expanded, the results are pushed on the detail over its page; Back pops them and the search closes, keeping its
     /// text.
     func testExpandedTheResultsArePushedOverThePageAndBackClosesTheSearch() throws {
@@ -146,6 +199,7 @@ final class SearchLevelsIOSTests: XCTestCase {
     private func boot(size: CGSize = CGSize(width: 402, height: 874), regular: Bool = false) throws -> (ExactSession, SplitIOS) {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         if ExactEnv.authoredChrome { throw XCTSkip("under the agent's chrome the stack is not split") }
+        ExactGroupedLists.install() // the list is UIKit's grouped list, as an app's composition links it
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_SEARCH_LEVELS_PLAN"], "build.mjs --test --ios compiles the fixture")))
         let session = ExactApp.shared.makeSession(label: "search-levels-\(UUID().uuidString)")
         self.session = session

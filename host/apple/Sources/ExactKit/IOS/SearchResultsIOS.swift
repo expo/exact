@@ -7,8 +7,7 @@ import UIKit
 /// (a closed iPhone Duo's list, a stack's root): there they are drawn in that route's controller, over its whole
 /// view, and the field stays in its bar to type in. UIKit hides that bar while its search is open
 /// (`hidesNavigationBarDuringPresentation`), so the results take its area too, as UIKit's own results controller
-/// does; and they cover the list as the search opens, when UIKit moves the list's first section down by the grouped
-/// list's top padding.
+/// does.
 extension NavigationHost {
     /// The route in `stack` that holds the element `field` names by `aria-controls`, other than the field's own.
     func resultsRoute(of field: NodeView?, in stack: [RouteController]) -> RouteController? {
@@ -129,6 +128,14 @@ extension NavigationHost {
         results.view.setPaintForeground(false)
         results.view.removeFromSuperview()
         results.removeFromParent()
+    }
+}
+
+extension Presenter {
+    /// Whether the bar search of the route `view` is in is open, or UIKit is moving its bar into search.
+    package func barSearchOpen(around view: UIView) -> Bool {
+        guard let search = ViewPresentation.controllers(for: view).lazy.compactMap({ ($0 as? RouteController)?.search }).first else { return false }
+        return search.presenting || search.controller.isActive
     }
 }
 #endif

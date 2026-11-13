@@ -2,7 +2,8 @@
 // results, a level on top of the stack (`search`), before anything is typed. Collapsed, they are drawn in
 // the list's controller, the field in its bar; expanded, they are the detail's, pushed over its page. A
 // result pushes over them, and Back returns to them. The close button keeps the text (`preventDefault()`
-// on `cancel`). SearchLevelsIOSTests.
+// on `cancel`). The list is grouped, as UIKit pads a grouped list's top while its search is open.
+// SearchLevelsIOSTests.
 routes nav
   library "/"
     book "/book/:id"
@@ -31,12 +32,13 @@ component App
             header
               text "Library" role="heading" aria-level=1
               input type="search" id="levels-search" value=query input=search focus=enterSearch cancel=keepQuery aria-controls="found" placeholder="Search" testId="search"
-            list testId="books" flex=1 min-height=0
-              for id in ["a", "b"] key=id
-                link href=path("book", id) testId=`row-${id}`
-                  text `Book ${id}`
-              link href=path("chapter", "c") testId="row-c"
-                text "Chapter c"
+            list testId="books" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              section
+                for id in ["a", "b"] key=id
+                  link href=path("book", id) testId=`row-${id}`
+                    text `Book ${id}`
+                link href=path("chapter", "c") testId="row-c"
+                  text "Chapter c"
         if e.name == "book"
           column navigationKey=`${e.id}` position="absolute" inset=0 testId=`book-${e.params.id}`
             header
