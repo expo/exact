@@ -62,10 +62,11 @@ component Breadcrumbs
       row flex-wrap="wrap" align-items="center" row-gap=4
         for c in crumbs key=c.title
           if c.href != ""
-            link href=c.href display="flex" align-items="center" gap=4 padding="2px 6px" border-radius=4 testId=`crumb-${c.title}`
-              if c.icon != ""
-                image c.icon aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-              text c.title class=CrumbText
+            link href=c.href padding="2px 6px" border-radius=4 testId=`crumb-${c.title}`
+              row align-items="center" gap=4
+                if c.icon != ""
+                  image c.icon aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+                text c.title class=CrumbText
           else
             view padding="2px 6px" testId=`crumb-${c.title}`
               text c.title class=CrumbText
