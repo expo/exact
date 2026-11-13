@@ -336,7 +336,7 @@ final class Canvas2DHost: Canvas2DEnv {
                 withExtendedLifetime(gpuEnv) {}
                 replayers[id] = r
                 k.drop()
-                k.recording = false
+                k.recording = nil
                 contents = r.image()
             }
             DispatchQueue.main.async { [weak self] in

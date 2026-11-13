@@ -59,6 +59,62 @@ fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
     }
 }
 
+/// What an answer watched, drew and persisted under a lease crosses the
+/// seam to the host's store, as an embedded source's store records it: its
+/// topics, its draws of randomness, and each write's `durable`.
+#[test]
+fn topics_entropy_and_durable_writes_reach_the_host_store() {
+    struct Effects;
+    impl DataSource for Effects {
+        fn grants(&self) -> &str {
+            "secret.keep token\nsecret.keep lease"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!()
+        }
+        fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            store.observe_topic("contacts");
+            store.observe_topic("calendar");
+            store.observe_entropy();
+            store.set_durable("lease", "held")?;
+            store.forget_durable("token")?;
+            store.set("token", "plain")?;
+            Ok(Answer::Now(Value::Unit))
+        }
+    }
+    let mut module = Session::new(Effects);
+    let mut store = Store::new(
+        "secret.keep token\nsecret.keep lease",
+        [("token".into(), b"old".to_vec())],
+    );
+    module
+        .dispatch(&call_request(&store, "effects", &[], None).unwrap())
+        .unwrap();
+    assert_eq!(
+        call_reply(module.output(), &mut store).unwrap(),
+        Answer::Now(Value::Unit)
+    );
+    assert_eq!(store.take_topics(), ["contacts", "calendar"]);
+    assert_eq!(store.entropy_draws(), 1);
+    let writes: Vec<_> = (store.take_writes().into_iter())
+        .map(|w| {
+            (
+                w.name,
+                w.value.map(|v| String::from_utf8(v).unwrap()),
+                w.durable,
+            )
+        })
+        .collect();
+    assert_eq!(
+        writes,
+        [
+            ("lease".into(), Some("held".into()), true),
+            ("token".into(), None, true),
+            ("token".into(), Some("plain".into()), false),
+        ]
+    );
+}
+
 struct Fixture(u32);
 impl DataSource for Fixture {
     fn app_id(&self) -> &str {
@@ -342,6 +398,8 @@ fn storage_unknown_tags_truncation_and_oversize_are_refused_before_effects() {
 fn reserved_store_writes_are_refused_before_any_other_write_is_applied() {
     let mut encoded = header(2);
     encoded.u8(1);
+    encoded.u32(0);
+    encoded.u32(0);
     encoded.u32(2);
     for (name, value) in [("token", "first"), ("exact.kept.hidden", "not allowed")] {
         encoded.string(name);
@@ -600,6 +658,8 @@ fn invalid_held_results_are_refused_before_effects() {
     let prefix = || {
         let mut w = header(2);
         w.u8(1);
+        w.u32(0); // topics
+        w.u32(0); // draws of randomness
         w.u32(1);
         w.string("token");
         w.u8(1);
@@ -897,7 +957,7 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 10);
+    assert_eq!(ABI, 11);
     let mut old = header(0).into_vec();
     old[..4].copy_from_slice(&9u32.to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));

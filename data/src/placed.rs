@@ -7,6 +7,7 @@
 //! source that can be moved to the thread and a TypeScript module that must
 //! be built there.
 
+mod worker;
 use crate::envelope;
 use exact_plan::{Plan, Value};
 use exact_runner::{
@@ -28,6 +29,7 @@ pub type Obtain<D> = Box<dyn FnOnce() -> Result<D, DataError> + Send + 'static>;
 /// `Value` is not `Send`, so arguments cross as their canonical bytes.
 enum Job {
     Answer {
+        instance: Option<exact_runner::ModuleInstance>,
         target: Option<Target>,
         source: String,
         args: Vec<Vec<u8>>,
@@ -37,7 +39,9 @@ enum Job {
         reply: Reply,
     },
     Resume {
+        instance: Option<exact_runner::ModuleInstance>,
         fetch: Option<u64>,
+        continuation: Option<u64>,
         target: Option<Target>,
         source: String,
         args: Vec<Vec<u8>>,
@@ -146,6 +150,22 @@ fn publish_aborts(
     }
 }
 
+struct RetirementWake {
+    instance: Option<exact_runner::ModuleInstance>,
+    wake: Arc<Mutex<Option<AbortWake>>>,
+}
+
+impl Drop for RetirementWake {
+    fn drop(&mut self) {
+        if self.instance.as_ref().and_then(|i| i.failure()).is_some() {
+            let wake = self.wake.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Some(wake) = wake {
+                wake();
+            }
+        }
+    }
+}
+
 fn encode_args(args: &[Value]) -> Vec<Vec<u8>> {
     args.iter().map(Value::to_bytes).collect()
 }
@@ -162,12 +182,15 @@ fn decode_args(args: &[Vec<u8>]) -> Result<Vec<Value>, DataError> {
 /// A call recorded at `answer` or `parse`, dispatched later.
 enum Recorded {
     Answer {
+        instance: Option<exact_runner::ModuleInstance>,
         target: Option<Target>,
         source: String,
         args: Vec<Value>,
     },
     Resume {
+        instance: Option<exact_runner::ModuleInstance>,
         fetch: Option<u64>,
+        continuation: Option<u64>,
         target: Option<Target>,
         source: String,
         args: Vec<Value>,
@@ -179,8 +202,11 @@ enum Recorded {
 /// outcome for the request its turn yielded.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
-    Turn,
-    Yielded,
+    Turn(u64),
+    Yielded {
+        outer: Option<u64>,
+        child: Option<u64>,
+    },
 }
 
 /// A call's stages are keyed by the runner's target when it named one,
@@ -202,6 +228,7 @@ fn recorded_key(recorded: &Recorded) -> Key {
             target,
             source,
             args,
+            ..
         }
         | Recorded::Resume {
             target,
@@ -227,6 +254,8 @@ pub struct Placed<D> {
     /// The source (`Main`), the template (`Worker`, built there), or nothing
     /// once moved to its owner (`Worker`, moved there).
     inner: Option<D>,
+    identity: Option<exact_runner::ModuleIdentity>,
+    generation: Option<exact_runner::ModuleInstance>,
     placement: Placement,
     spawn: Spawn<D>,
     app_id: String,
@@ -297,6 +326,8 @@ impl<D: DataSource + 'static> Placed<D> {
             interrupt: source.interrupt(),
             native: source.native(),
             canvas_surfaces: source.canvas_surfaces(),
+            generation: source.module_identity("").map(|m| m.instance()),
+            identity: source.module_identity(""),
             inner: Some(source),
             placement,
             spawn,
@@ -353,13 +384,19 @@ impl<D: DataSource + 'static> Placed<D> {
             Recorded::Resume { fetch, .. } => *fetch,
             _ => None,
         };
+        let instance = match &recorded {
+            Recorded::Answer { instance, .. } | Recorded::Resume { instance, .. } => {
+                instance.clone()
+            }
+        };
         self.recorded.insert(token, recorded);
         self.stages
             .entry((k, fetch))
             .or_default()
-            .push_back(Stage::Turn);
+            .push_back(Stage::Turn(token));
         let mut request = Request::continuation(token);
         request.fetch = fetch;
+        request.module = instance;
         Ok(Answer::Later(request))
     }
 
@@ -373,9 +410,11 @@ impl<D: DataSource + 'static> Placed<D> {
         if self.inline() {
             return crate::answer(self.here()?, target, store, source, args);
         }
+        self.sync_generation();
         self.record(
             key(target, source, args),
             Recorded::Answer {
+                instance: self.generation.clone(),
                 target,
                 source: source.to_string(),
                 args: args.to_vec(),
@@ -417,14 +456,37 @@ impl<D: DataSource + 'static> Placed<D> {
         args: &[Value],
         outcome: Outcome,
     ) -> Result<Option<Answer>, DataError> {
+        self.parse_with_request(target, (fetch, None), store, source, args, outcome)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_with_request(
+        &mut self,
+        target: Option<Target>,
+        request: (Option<u64>, Option<u64>),
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let (fetch, continuation) = request;
         let call_key = key(target, source, args);
         let k = (call_key.clone(), fetch);
-        let stage = self.stages.get_mut(&k).and_then(VecDeque::pop_front);
+        let stage = self.stages.get_mut(&k).and_then(|stages| {
+            let pos = match continuation {
+                Some(token) => stages.iter().position(|s| match s {
+                    Stage::Turn(t) => *t == token,
+                    Stage::Yielded { outer, .. } => *outer == Some(token),
+                })?,
+                None => 0,
+            };
+            stages.remove(pos)
+        });
         if self.stages.get(&k).is_some_and(VecDeque::is_empty) {
             self.stages.remove(&k);
         }
         match stage {
-            Some(Stage::Turn) => {
+            Some(Stage::Turn(_)) => {
                 let mut more = Vec::new();
                 let answer = envelope::apply_optional(outcome, store, &mut self.logs, &mut more)?;
                 let Some(Answer::Later(request)) = answer else {
@@ -436,18 +498,22 @@ impl<D: DataSource + 'static> Placed<D> {
                         .into_iter()
                         .map(|r| self.yield_request(call_key.clone(), args, r))
                         .collect::<Result<Vec<_>, _>>()?;
-                    self.more.insert(target, more);
+                    if !more.is_empty() {
+                        self.more.insert(target, more);
+                    }
                 }
                 Ok(Some(Answer::Later(request)))
             }
-            Some(Stage::Yielded) => {
+            Some(Stage::Yielded { child, .. }) => {
                 if let Some(fetch) = fetch {
                     self.sent.remove(&(call_key.clone(), fetch));
                 }
                 self.record(
                     call_key,
                     Recorded::Resume {
+                        instance: self.generation.clone(),
                         fetch,
+                        continuation: child,
                         target,
                         source: source.to_string(),
                         args: args.to_vec(),
@@ -471,7 +537,8 @@ impl<D: DataSource + 'static> Placed<D> {
         }) {
             self.sent.insert((k.clone(), fetch));
         }
-        if let Some(child) = request.continuation {
+        let child = request.continuation;
+        if let Some(child) = child {
             if self
                 .inner
                 .as_ref()
@@ -484,7 +551,9 @@ impl<D: DataSource + 'static> Placed<D> {
         }
         if let Some(due) = request.due_ms {
             let resume = Recorded::Resume {
+                instance: self.generation.clone(),
                 fetch: request.fetch,
+                continuation: request.continuation,
                 target: k.0,
                 source: k.1.clone(),
                 args: args.to_vec(),
@@ -498,252 +567,11 @@ impl<D: DataSource + 'static> Placed<D> {
         self.stages
             .entry((k, request.fetch))
             .or_default()
-            .push_back(Stage::Yielded);
+            .push_back(Stage::Yielded {
+                outer: request.continuation,
+                child,
+            });
         Ok(request)
-    }
-
-    /// Start the owner (LLP 1027.002 D2): it obtains its instance, then runs
-    /// turns in order until this proxy drops its end of the channel.
-    fn spawn_owner(&mut self, obtain: Obtain<D>) -> Result<(), DataError> {
-        let (jobs, rx) = channel::<Job>();
-        let grants = self.grants.clone();
-        let storage_changed = self.storage_changed.clone();
-        let aborted = self.aborted.clone();
-        let abort_wake = self.abort_wake.clone();
-        std::thread::Builder::new()
-            .name("exact-owner".into())
-            .spawn(move || {
-                let mut source = obtain();
-                for job in rx {
-                    let (target, name, args, outcome, snapshot, clock, reply) = match job {
-                        Job::Keep {
-                            calls,
-                            snapshot,
-                            refused,
-                        } => {
-                            if let Ok(source) = &mut source {
-                                let decoded: Vec<_> = calls
-                                    .iter()
-                                    .filter_map(|((target, name, args), fetch)| {
-                                        Some((
-                                            *target,
-                                            name.as_str(),
-                                            decode_args(args).ok()?,
-                                            *fetch,
-                                        ))
-                                    })
-                                    .collect();
-                                let view: Vec<_> = decoded
-                                    .iter()
-                                    .map(|(target, name, args, fetch)| InFlight {
-                                        target: *target,
-                                        source: name,
-                                        args,
-                                        fetch: *fetch,
-                                        continuation: None,
-                                    })
-                                    .collect();
-                                source.keep_sent(&Store::new(&grants, snapshot), &view, refused);
-                            }
-                            continue;
-                        }
-                        Job::KeptReply {
-                            token,
-                            outcome,
-                            snapshot,
-                            clock,
-                            reply,
-                        } => {
-                            let mut local = Store::new(&grants, snapshot);
-                            local.set_clock_ms(clock);
-                            let result = match &mut source {
-                                Ok(source) => source
-                                    .module_landed(&mut local, token, outcome)
-                                    .map(|()| Answer::Now(Value::Unit)),
-                                Err(error) => Err(error.clone()),
-                            };
-                            if source.as_mut().is_ok_and(|s| s.take_storage_changed()) {
-                                storage_changed.store(true, std::sync::atomic::Ordering::Release);
-                            }
-                            let logs = source.as_mut().map(|s| s.take_logs()).unwrap_or_default();
-                            if let Ok(source) = source.as_mut() {
-                                publish_aborts(source.take_aborted(), &aborted, &abort_wake);
-                            }
-                            reply.send(envelope::encode(result, &mut local, logs));
-                            continue;
-                        }
-                        Job::Forgotten(slot) => {
-                            let retirement = slot.lock().unwrap().take();
-                            if let (Ok(source), Some((in_flight, snapshot))) =
-                                (&mut source, retirement)
-                            {
-                                forget(source, &Store::new(&grants, snapshot), &in_flight);
-                                // A let-go call's continuations run here, and
-                                // may abort another call's fetch.
-                                publish_aborts(source.take_aborted(), &aborted, &abort_wake);
-                            }
-                            continue;
-                        }
-                        Job::Answer {
-                            target,
-                            source,
-                            args,
-                            snapshot,
-                            clock,
-                            reply,
-                        } => (target, source, args, None, snapshot, clock, reply),
-                        Job::Resume {
-                            fetch,
-                            target,
-                            source,
-                            args,
-                            outcome,
-                            snapshot,
-                            clock,
-                            reply,
-                        } => (
-                            target,
-                            source,
-                            args,
-                            Some((fetch, outcome)),
-                            snapshot,
-                            clock,
-                            reply,
-                        ),
-                    };
-                    let mut local = Store::new(&grants, snapshot);
-                    local.set_clock_ms(clock);
-                    let result = match &mut source {
-                        Err(e) => Err(e.clone()),
-                        Ok(source) => decode_args(&args).and_then(|args| {
-                            turn(source, &mut local, target, &name, &args, outcome)
-                        }),
-                    };
-                    if source.as_mut().is_ok_and(|s| s.take_storage_changed()) {
-                        storage_changed.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    let logs = source.as_mut().map(|s| s.take_logs()).unwrap_or_default();
-                    if let Ok(source) = source.as_mut() {
-                        publish_aborts(source.take_aborted(), &aborted, &abort_wake);
-                    }
-                    let more = if matches!(result, Ok(Some(Answer::Later(_)))) {
-                        target
-                            .and_then(|target| source.as_mut().ok().map(|s| s.more_for(target)))
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    reply.send(envelope::encode_optional(result, more, &mut local, logs));
-                }
-                // Retired on its owner, after its last turn.
-                drop(source);
-            })
-            .map_err(|e| unavailable(format!("the owner thread could not start: {e}")))?;
-        self.owner = Some(Arc::new(Mutex::new(OwnerQueue {
-            sender: jobs,
-            pending: None,
-            unqueued: HashMap::new(),
-        })));
-        Ok(())
-    }
-}
-
-/// Tell the instance on its owner what is still in flight, without tokens:
-/// the proxy's mean nothing there. An argument that doesn't cross leaves its
-/// request out, which only lets its call go too.
-fn forget<D: DataSource>(source: &mut D, store: &Store, in_flight: &[Flight]) {
-    let decoded: Vec<_> = in_flight
-        .iter()
-        .filter_map(|((target, name, args), fetch)| {
-            Some((*target, name.as_str(), decode_args(args).ok()?, *fetch))
-        })
-        .collect();
-    let view: Vec<InFlight<'_>> = decoded
-        .iter()
-        .map(|(target, source, args, fetch)| InFlight {
-            target: *target,
-            source,
-            args,
-            fetch: *fetch,
-            continuation: None,
-        })
-        .collect();
-    source.forgotten(store, &view);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn parse_fetch<D: DataSource>(
-    source: &mut D,
-    target: Option<Target>,
-    fetch: Option<u64>,
-    store: &mut Store,
-    name: &str,
-    args: &[Value],
-    outcome: Outcome,
-) -> Result<Option<Answer>, DataError> {
-    match target {
-        Some(target) => source.parse_fetch_for(target, fetch, store, name, args, outcome),
-        None => source.parse(store, name, args, outcome).map(Some),
-    }
-}
-
-/// One turn (LLP 1027.002 D3, change 3): begin or resume; stay on the owner
-/// through every wait the source runs itself (its storage, its own worker
-/// closures); end at an answer, an error, or a request only the host can run
-/// (`fetch`, the portable storage protocol) — a yield.
-fn turn<D: DataSource>(
-    source: &mut D,
-    local: &mut Store,
-    target: Option<Target>,
-    name: &str,
-    args: &[Value],
-    outcome: Option<(Option<u64>, Outcome)>,
-) -> Result<Option<Answer>, DataError> {
-    let mut result = match outcome {
-        None => crate::answer(source, target, local, name, args).map(Some),
-        Some((fetch, outcome)) => parse_fetch(source, target, fetch, local, name, args, outcome),
-    };
-    loop {
-        match result {
-            // A long poll on the worker's own work (LLP 1016.000 D8): refused before that work runs.
-            Ok(Some(Answer::Later(request))) if request.long_poll_refusal().is_some() => {
-                if let Some(token) = request.continuation {
-                    source.discard(token);
-                }
-                return Err(unavailable(request.long_poll_refusal().unwrap_or_default()));
-            }
-            // A Rust source's two-way socket (`Request::socket`, LLP 1016.003): its turns
-            // are the main thread's, so it is refused rather than opened to only listen.
-            // A TypeScript module's socket, whose request names its fetch, listens as
-            // LLP 1016.000 D7 declares for a worker.
-            Ok(Some(Answer::Later(request)))
-                if request.socket
-                    && request.fetch.is_none()
-                    && request.listen.is_none()
-                    && !request.is_process() =>
-            {
-                return Err(unavailable(
-                    "Request::socket is unavailable in a worker-placed source; place it on main",
-                ));
-            }
-            // A wait for the answer's own timer is the runner's to keep
-            // until due (LLP 1027.000 D1): it yields, as a fetch does.
-            Ok(Some(Answer::Later(request)))
-                if request.continuation.is_some()
-                    && request.due_ms.is_none()
-                    && !source.host_continuation(request.continuation.expect("checked")) =>
-            {
-                let token = request.continuation.expect("checked");
-                let Some(work) = source.continuation(token) else {
-                    return Err(unavailable(format!(
-                        "`{name}`: a continuation with no work on its owner"
-                    )));
-                };
-                let outcome = work();
-                result = parse_fetch(source, target, request.fetch, local, name, args, outcome);
-            }
-            other => return other,
-        }
     }
 }
 
@@ -805,7 +633,34 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         *self.abort_wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
     }
 
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        if self.inline() {
+            return self
+                .here()?
+                .parse_tool(fetch, continuation, store, source, args, outcome);
+        }
+        self.parse_with_request(None, (fetch, continuation), store, source, args, outcome)?
+            .ok_or_else(|| unavailable("the tool has no reply in flight"))
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        if self.inline() {
+            self.inner.as_ref()?.module_identity(source)
+        } else {
+            self.identity.clone()
+        }
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
+        self.sync_generation();
         if self.owner.is_none() {
             if let Some(source) = &mut self.inner {
                 return DataSource::take_aborted(source);
@@ -1075,7 +930,8 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     /// key whose recorded call hasn't been dispatched.
     fn forgotten(&mut self, store: &exact_runner::Store, in_flight: &[InFlight<'_>]) {
         let tokens: HashSet<u64> = in_flight.iter().filter_map(|f| f.continuation).collect();
-        self.recorded.retain(|token, _| tokens.contains(token));
+        self.recorded
+            .retain(|token, call| recorded_key(call).0.is_none() || tokens.contains(token));
         self.hosted.retain(|token, _| tokens.contains(token));
         let live: HashMap<Key, Option<u64>> = in_flight
             .iter()
@@ -1091,7 +947,7 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         for ((k, _), stages) in self.stages.iter_mut() {
             if k.0.is_some() && newer(k) {
                 stages.clear();
-                stages.push_back(Stage::Turn);
+                stages.push_back(Stage::Turn(live[k].expect("a recorded call")));
             }
         }
         if let Some(owner) = &self.owner {
@@ -1168,19 +1024,28 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         let snapshot = envelope::snapshot(store, &self.grants);
         // Everything the closure carries is `Send`: names, bytes, the
         // outcome, the snapshot. The reply arrives on the host's I/O worker.
-        let (target, source, args, outcome) = match recorded {
+        let (instance, target, source, args, outcome) = match recorded {
             Recorded::Answer {
+                instance,
                 target,
                 source,
                 args,
-            } => (target, source, encode_args(&args), None),
+            } => (instance, target, source, encode_args(&args), None),
             Recorded::Resume {
+                instance,
                 fetch,
+                continuation,
                 target,
                 source,
                 args,
                 outcome,
-            } => (target, source, encode_args(&args), Some((fetch, outcome))),
+            } => (
+                instance,
+                target,
+                source,
+                encode_args(&args),
+                Some((fetch, continuation, outcome)),
+            ),
         };
         let clock = store.clock_ms();
         let key = target.map(|target| (target, source.clone(), args.clone()));
@@ -1191,6 +1056,7 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             let _guard = guard;
             let job = match outcome {
                 None => Job::Answer {
+                    instance,
                     target,
                     source,
                     args,
@@ -1198,8 +1064,10 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                     clock,
                     reply,
                 },
-                Some((fetch, outcome)) => Job::Resume {
+                Some((fetch, continuation, outcome)) => Job::Resume {
+                    instance,
                     fetch,
+                    continuation,
                     target,
                     source,
                     args,

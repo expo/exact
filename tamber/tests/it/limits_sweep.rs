@@ -1,8 +1,5 @@
-//! The checker bound's sweep (the lead's, after round 3): every pass over a
-//! design, an import or a re-import that was more than linear in its size,
-//! each now linear, charged to an import's budget, or capped. One hostile
-//! input each, which must finish in moments (the table is in the commit
-//! that made them so).
+//! Work bounds for imports, and timing sweeps for checker and editor passes
+//! over large designs.
 
 use crate::common::vocab;
 use exact_tamber::{check, parse, Op, Vocab};
@@ -165,23 +162,42 @@ fn long_whens_compare_in_moments() {
     });
 }
 
-/// The CSS importers' work is charged to an import's budget, as DTCG's is:
-/// many tokens land, or the import is refused with the budget's words.
+/// Colour alias walks stop at 256 links; probes and landing share a budget.
 #[test]
-fn a_large_tailwind_import_lands_or_is_refused_in_moments() {
+fn a_large_tailwind_import_has_bounded_work() {
+    use exact_tamber::import::{measure_work, tailwind, WORK_LIMIT};
     let mut css = String::from("@theme {\n");
-    // (each past the 256 links a chain may have is followed that far: a
-    // constant per token, about a quarter of a millisecond in a release
-    // build)
     for k in 0..10_000 {
         css += &format!("  --color-c{k}: var(--color-c{});\n", k + 1);
     }
     css += "  --color-c10000: #102030;\n}\n";
-    let _ = within(30, "tailwind", || {
-        exact_tamber::import::tailwind::import(&css, "tw", &parse("tamber app\n").unwrap())
-            .map(|i| i.ops.len())
-            .map_err(|d| d[0].id)
-    });
+    let design = parse("tamber app\n").unwrap();
+    let (got, spent) = measure_work(WORK_LIMIT, || tailwind::import(&css, "tw", &design));
+    let imported = got.unwrap();
+    assert_eq!(imported.counted.source, 10_001);
+    assert_eq!(imported.counted.mapped, 257);
+    assert_eq!(imported.counted.reported, 9_744);
+    assert_eq!(imported.ops.len(), 257);
+    assert_eq!(imported.unmapped.len(), 9_744);
+    assert!(imported
+        .unmapped
+        .iter()
+        .all(|u| u.why == "an alias chain longer than 256"));
+    // The alias walk's visit bound is checked in import::engine's unit test.
+    // The remaining work is the probes and landing, linear in mapped tokens.
+    assert!(
+        spent > 0 && spent <= 6 * (imported.counted.mapped as u64 + 1),
+        "{spent} steps"
+    );
+    let text = exact_tamber::apply_all("tamber app\n", &imported.ops, &vocab())
+        .unwrap()
+        .text;
+    let folded = check(&text, &vocab()).unwrap();
+    assert_eq!(folded.tokens.len(), 257);
+    assert!(folded
+        .tokens
+        .iter()
+        .all(|t| t.values.iter().all(|v| v.css() == "#102030ff")));
 }
 
 /// Astryx's other variables are grouped by token once.

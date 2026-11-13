@@ -1,4 +1,6 @@
-use super::{sources, Scratch};
+use super::{sources, stage_capture, Scratch};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[test]
 #[cfg(unix)]
@@ -820,4 +822,30 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
             && refused.contains("is not JSON: "),
         "{refused}"
     );
+}
+
+// A bake that removed a staged file and then failed a later write leaves
+// the stage short of what the capture held: the next bake neither stumbles
+// on the file already gone nor trusts a restored one to be on disk.
+#[test]
+fn a_stage_left_by_a_failed_write_is_finished_by_the_next_bake() {
+    let stage = Scratch::new(&std::env::temp_dir()).unwrap();
+    let capture = |files: &[(&str, &str)]| -> BTreeMap<PathBuf, Vec<u8>> {
+        files
+            .iter()
+            .map(|(name, text)| (PathBuf::from(name), text.as_bytes().to_vec()))
+            .collect()
+    };
+    let mut previous = BTreeMap::new();
+    stage_capture(&stage.0, &mut previous, &capture(&[("app.ts", "one")])).unwrap();
+    // A directory where the next file goes fails its write.
+    std::fs::create_dir_all(stage.0.join("blocked.ts")).unwrap();
+    assert!(stage_capture(&stage.0, &mut previous, &capture(&[("blocked.ts", "x")])).is_err());
+    assert!(!stage.0.join("app.ts").exists());
+    stage_capture(&stage.0, &mut previous, &capture(&[("app.ts", "one")])).unwrap();
+    assert_eq!(std::fs::read(stage.0.join("app.ts")).unwrap(), b"one");
+    assert_eq!(previous, capture(&[("app.ts", "one")]));
+    std::fs::remove_file(stage.0.join("app.ts")).unwrap();
+    stage_capture(&stage.0, &mut previous, &BTreeMap::new()).unwrap();
+    assert!(previous.is_empty());
 }

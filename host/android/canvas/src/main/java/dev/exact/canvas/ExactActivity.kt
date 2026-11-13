@@ -84,7 +84,11 @@ open class ExactActivity : Activity() {
         // platform's fade, to compare): the first frame is what shows.
         if (Build.VERSION.SDK_INT >= 31 && intent.getStringExtra("splashfade") != "1") Splash.quick(this)
         val arrived = Shares.arrived(intent, state != null)
-        if (!again) environment(arrived)
+        if (!again) {
+            environment(arrived)
+            try { FilePicker.start(applicationContext) }
+            catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
+        }
         edgeToEdge()
         // exact2's thread, made before the assets are checked: it loads exact2's library meanwhile.
         owner()

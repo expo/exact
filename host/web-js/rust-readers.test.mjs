@@ -198,13 +198,13 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   writeFileSync(resolve(dir, 'rt-link.js'), 'export const rt = {};\n');
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
   let capture = false;
-  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, method = 'GET', abi = 10;
+  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, method = 'GET', abi = 11;
   let held = false, heldTag;
   const scopes = [];
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(10); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(11); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
     memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
@@ -223,7 +223,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
         const names = Array.from({ length: u32() }, string), pairs = Array.from({ length: u32() }, () => [string(), string()]);
         scopes.push({ names, pairs });
         response(w => {
-          w.u8(2); w.u8(read ? 1 : 0); w.u32(writes ? 1 : 0);
+          w.u8(2); w.u8(read ? 1 : 0); w.u32(0); w.u32(0); w.u32(writes ? 1 : 0);
           if (writes) { w.string('k'); w.u8(1); w.string('private'); }
           w.u32(0); w.u8(0); w.string('');
           if (held) w.u8(15);
@@ -245,8 +245,8 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     const module = await import(`${pathToFileURL(resolve(dir, 'rust-data.js')).href}?readers=${Date.now()}`);
     const kept = [], data = { q: [] }, store = { map: new Map(), set(...write) { kept.push(write); } }, failed = { failed: 3, message: 'refused' };
     abi = 9;
-    await expect(module.install(data, { reader: '' }, async () => new ArrayBuffer(0))).rejects.toThrow('Rust module ABI 9 is not 10');
-    abi = 10;
+    await expect(module.install(data, { reader: '' }, async () => new ArrayBuffer(0))).rejects.toThrow('Rust module ABI 9 is not 11');
+    abi = 11;
     await module.install(data, { reader: '' }, async () => new ArrayBuffer(0));
     for (const mode of ['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached']) {
       cache = mode;
@@ -391,12 +391,12 @@ export function streamed(req, _grants, message) {
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
   let output = new Uint8Array();
   const exports = {
-    memory, exact_logic_abi: () => 10, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 11, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4], bytes = [];
       const u32 = v => bytes.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255), string = v => { const e = new TextEncoder().encode(v); u32(e.length); bytes.push(...e); };
-      u32(10);
+      u32(11);
       if (code === 0) { bytes.push(0); string('test.rust'); string(''); } else bytes.push(0, 0, 3);
       output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
       return 0;

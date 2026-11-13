@@ -994,6 +994,21 @@ fn the_grammars_words_each_answer_in_under_a_kilobyte() {
     assert!(stepper.contains("appearance=\"textfield\""), "{stepper}");
 }
 
+#[test]
+fn titlebar_vocab_explains_routes_that_withhold_their_bars() {
+    let answer = stdout(&vocab(&["titlebar"]));
+    assert!(answer.contains("navigationBar=\"none\""), "{answer}");
+    assert!(
+        answer.contains("single-location") && answer.contains("root header"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains("hides") && answer.contains("history"),
+        "{answer}"
+    );
+    assert!(answer.contains("window-controls-overlay"), "{answer}");
+}
+
 /// Each concept's answer holds the repair whole: the concepts D5.1 names
 /// each carry code, every `contract` block they print compiles with no
 /// diagnostic, and no name answers for two concepts.
@@ -1042,6 +1057,7 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
         "menubar",
         "::placeholder",
         "glass",
+        "titlebar",
         "haptics",
         "toast",
         "var",

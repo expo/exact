@@ -215,6 +215,7 @@ impl<D: DataSource> Runner<D> {
         self.hear_forgotten();
         // Every commit ends so: what the source set aside is kept or let go.
         self.keep_sent(refused);
+        self.hear_aborted();
         self.pin_canvas_captures();
         self.sample();
     }
@@ -387,7 +388,9 @@ impl<D: DataSource> Runner<D> {
             // a row action reads and writes its row through them.
             let mut env = self.env(&args, frames);
             env.geometry = geometry.as_ref();
-            vm::eval(self.plan.code(row.body), &env, &allowed)?
+            vm::eval(self.plan.code(row.body), &env, &allowed).map_err(|t| {
+                RunnerError::from(t).evaluated(|| format!("action {:?}", self.plan.str(row.name)))
+            })?
         };
         // Sends (LLP 1016 §4): each asks the source now. An answer lands in
         // the mutation's slot inside this commit; a request goes to the host
@@ -954,6 +957,10 @@ impl<D: DataSource> Runner<D> {
         self.note_send(ticket, &request.body);
         self.presence_noted(ticket, &request);
         self.pending.push(PendingReq {
+            module: request
+                .module
+                .clone()
+                .or_else(|| self.data.module_identity(&source).map(|m| m.instance())),
             inspection_generation: match target {
                 Target::Resource(i) => self.inspected_request(i),
                 Target::Mutation(_) | Target::Sent(..) => 0,
@@ -1025,8 +1032,12 @@ impl<D: DataSource> Runner<D> {
         target: Target,
         first: Request,
     ) -> Result<Vec<Request>, DataError> {
+        let module = first.module.clone();
         let mut requests = vec![first];
-        requests.extend(self.data.more_for(target));
+        requests.extend(self.data.more_for(target).into_iter().map(|mut request| {
+            request.module = module.clone();
+            request
+        }));
         if target.mutation().is_some() && requests.len() > 1 {
             for request in &requests {
                 self.discard_request(request);
@@ -1068,6 +1079,7 @@ impl<D: DataSource> Runner<D> {
     /// on this thread, after the commit that handed the request out, so a
     /// worker's snapshot is the store as committed then.
     pub fn dispatch_work(&mut self, token: u64) -> Dispatch {
+        self.hear_aborted();
         // A module request the runner holds for the agent (LLP 1133.002 §6).
         if let Some(dispatch) = self.module_dispatch(token).or(Self::held_dispatch(token)) {
             return dispatch;
@@ -1117,6 +1129,7 @@ impl<D: DataSource> Runner<D> {
     /// order, then the waits an answer's timer released (`data_timers.rs`);
     /// a host asks after every commit and advance.
     pub fn release_work(&mut self) -> Vec<(u64, Dispatch)> {
+        self.hear_aborted();
         let mut out = self.data.release(&self.store);
         out.extend(self.module_release());
         // A wait whose answer's timer came due (`data_timers.rs`).

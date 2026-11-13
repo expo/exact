@@ -45,6 +45,7 @@ component App
   // Before the board arrives it is drawn blank, at its size.
   derive tiles = board.tiles.length == 0 ? range(64).map(i => Tile(at=i, hue=0)) : board.tiles
   derive problem = match painted { case some(r) => r.error, case none => "" }
+  derive clearProblem = match cleared { case some(r) => r.error, case none => "" }
 
   // Keeping the connection (LLP 1157 D6). A closed socket is opened again after 1, 2, 4, 8,
   // then every 16 seconds; the wait starts over once results arrive. A socket that carries
@@ -97,6 +98,8 @@ component App
                   button press=paint(t.at) appearance="none" width="100%" aspect-ratio="1" border-radius=4 background-color=hueColor(t.hue) aria-label=`Tile ${t.at + 1}, ${hueName(t.hue)}` testId=`tile-${t.at}`
               if problem != "" and not pending(painted)
                 text problem font="-exact-footnote" color="-exact-system-red" testId="problem"
+              if clearProblem != "" and not pending(cleared)
+                text clearProblem font="-exact-footnote" color="-exact-system-red" testId="clear-problem"
               // The palette: a drawn radio group, since each choice is its colour.
               row role="radiogroup" appearance="none" aria-label="Hue" gap=8 justify-content="space-between"
                 for h in [1, 2, 3, 4, 5, 6, 0] key=h

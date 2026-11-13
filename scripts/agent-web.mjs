@@ -568,8 +568,11 @@ async function openWebUnlocked({
             clickCount: 1,
           });
         else if (contact) await call('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+        if (dragged)
+          await call('Input.dispatchDragEvent', { type: 'dragCancel', x: dragged.x, y: dragged.y, data: dragged.data });
         await frame();
         contact = null;
+        dragged = null;
         await evaluate('sessionStorage.clear()');
         if (!keep) await call('Storage.clearDataForOrigin', { origin: page.origin, storageTypes: 'all' });
         const destination = withEpoch(withFaults(keep ? await evaluate('location.href') : page.href, failFetch), epoch);
@@ -958,7 +961,12 @@ async function openWebUnlocked({
         // Frame and image callbacks can start GPU work after the first read.
         const settled = await readPicture();
         if (settled.error) throw new Error(settled.error);
-        const { data } = await call('Page.captureScreenshot', { format: 'png' });
+        // A viewport-only capture can retain a rounded background painted before its image became opaque.
+        const { cssVisualViewport: v } = await call('Page.getLayoutMetrics');
+        const { data } = await call('Page.captureScreenshot', {
+          format: 'png', captureBeyondViewport: true,
+          clip: { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: v.scale },
+        });
         writeFileSync(path, Buffer.from(data, 'base64'));
         return { ...tags, screenshot: path, w: size[0], h: size[1], ...(pending ? { imagesPending: pending } : {}) };
       },

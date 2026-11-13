@@ -382,15 +382,8 @@ impl Ink {
         for command in &drawing.commands {
             match command {
                 Command::Instances(range) => {
-                    for &(i, mut b) in &drawing.instances[range.clone()] {
-                        let blended = i.flags & flags::BLEND_MASK != 0;
-                        if blended {
-                            b.destination = self.destination()?;
-                        }
-                        self.emit(i.translated(offset), b)?;
-                        if blended {
-                            self.flush()?;
-                        }
+                    for &(i, b) in &drawing.instances[range.clone()] {
+                        self.blend_instance(i.translated(offset), b)?;
                     }
                 }
                 Command::Marker(marker) => match marker {

@@ -615,12 +615,12 @@ fn auth_reload_retires_old_reader_ids_before_reusing_a_runner_ticket() {
         assert!(p.host.runner_mut().take_request_refusal(true).is_none());
         let requests: Vec<_> = decode(p.take_requests())
             .into_iter()
-            .filter(|r| matches!(r.0, 17 | 18))
+            .filter(|r| matches!(r.0, 17 | 19))
             .collect();
         assert_eq!(requests.len(), 2);
         assert_eq!(
             (requests[0].0, requests[0].2.clone()),
-            (18, vec![old_id as i32])
+            (19, vec![old_id as i32])
         );
         assert_eq!((requests[1].0, requests[1].1), (17, id));
         assert_eq!(
@@ -658,7 +658,7 @@ fn auth_reader_recreation_keeps_only_acknowledged_waits() {
             assert!(!p.answer_request(id, Some("opened")));
             let requests = decode(p.take_requests());
             assert!(!requests.iter().any(|r| r.0 == 17), "the launch is retired");
-            assert!(requests.iter().any(|r| r.0 == 18 && r.2 == [id as i32]));
+            assert!(requests.iter().any(|r| r.0 == 19 && r.2 == [id as i32]));
         }
         let (_, exact_runner::Outcome::Response(response)) =
             p.host.runner_mut().take_request_refusal(true).unwrap()
@@ -726,6 +726,710 @@ fn auth_ephemeral_refuses_without_queuing_a_browser_launch() {
         } else {
             assert_eq!(requests.iter().filter(|r| r.0 == 17).count(), 1);
             assert!(p.host.runner_mut().take_request_refusal(true).is_none());
+        }
+    }
+}
+
+#[test]
+fn file_picker_requests_survive_reader_recreation() {
+    let mut p = file_picker("image/*,video/*");
+    p.serve_requests();
+    p.show_picker("attach");
+    let asked = decode(p.take_requests());
+    assert_eq!(asked.len(), 1, "a file picker must reach the shell");
+    let (kind, request, body) = &asked[0];
+    assert_eq!(*kind, 18);
+    assert_ne!(*kind, Request::AuthEnd(0).kind());
+    assert_eq!(body[..3], [id(&p, "attach") as i32, 1, 2]);
+    assert_eq!(strings(body, 3), ["image/*", "video/*"]);
+    p.show_picker("attach");
+    assert_eq!(p.take_requests(), None);
+    assert_eq!(says(&p, "picker: \"attach\" is already open"), 1);
+    p.reader_replaced(Box::new(crate::raster::Raster::new()));
+    assert!(p.answer_request(*request, None));
+    assert!(!p.answer_request(*request, None));
+    assert_eq!(says(&p, "picker: cancelled"), 1);
+    let request = file_ask(&mut p);
+    assert!(p.answer_request(request, Some("file picker: activity unavailable")));
+    assert_eq!(file_text(&p, "cancels"), "2");
+    assert_eq!(
+        says(&p, "picker: refused: file picker: activity unavailable"),
+        1
+    );
+    let request = file_ask(&mut p);
+    assert!(p.answer_request(request, None));
+    assert_eq!(file_text(&p, "cancels"), "3");
+}
+
+fn file_picker_plan(accept: &str) -> Vec<u8> {
+    let app = r#"component App
+  state paths = ""
+  state names = ""
+  state types = ""
+  state widths = ""
+  state heights = ""
+  state cancels = 0
+  action picked(files: Picked[])
+    paths = files.map(f => f.path).join("\n")
+    names = files.map(f => f.name).join(",")
+    types = files.map(f => f.type).join(",")
+    widths = files.map(f => match f.width { case some(w) => `${w}`, case none => "0" }).join(",")
+    heights = files.map(f => match f.height { case some(h) => `${h}`, case none => "0" }).join(",")
+  action cancelled
+    cancels = cancels + 1
+  view
+    column
+      input type="file" id="attach" testId="attach" accept="ACCEPT" multiple change=picked cancel=cancelled
+      text paths testId="paths"
+      text names testId="names"
+      text types testId="types"
+      text widths testId="widths"
+      text heights testId="heights"
+      text `${cancels}` testId="cancels"
+"#.replace("ACCEPT", accept);
+    crate::test_plan(&app)
+}
+
+fn file_picker(accept: &str) -> Presenter<Nothing> {
+    let mut p = Presenter::boot_with(
+        &file_picker_plan(accept),
+        Nothing,
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap()
+    .0;
+    static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(377000);
+    let mut place = p.host.runner().place().clone();
+    place.seed = SEED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as f64;
+    assert!(p.set_place(&place).is_none());
+    p
+}
+
+fn file_text(p: &Presenter<Nothing>, name: &str) -> String {
+    p.host
+        .kernel()
+        .node(id(p, name))
+        .unwrap()
+        .props
+        .str(PropId::Text)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn file_ask(p: &mut Presenter<Nothing>) -> u32 {
+    p.show_picker("attach");
+    decode(p.take_requests())
+        .into_iter()
+        .find(|r| r.0 == 18)
+        .unwrap()
+        .1
+}
+
+fn file_answer(paths: &[PathBuf]) -> String {
+    serde_json::Value::Array(
+        paths
+            .iter()
+            .map(|path| {
+                serde_json::json!({
+                    "path": path, "name": path.file_name().unwrap().to_string_lossy(), "type": null
+                })
+            })
+            .collect(),
+    )
+    .to_string()
+}
+
+#[test]
+fn file_picker_answers_copy_multiple_paths_and_cancel_empty_or_refused_results() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    let dir = std::env::temp_dir().join(format!(
+        "exact-files-{}-{}",
+        std::process::id(),
+        id(&p, "attach")
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sources = [dir.join("a.jpg"), dir.join("b.png")];
+    for (i, source) in sources.iter().enumerate() {
+        std::fs::write(source, [i as u8; 3]).unwrap();
+    }
+    let request = file_ask(&mut p);
+    assert!(answer_files(&mut p, request, Some(&file_answer(&sources))));
+    assert_eq!(file_text(&p, "names"), "a.jpg,b.png");
+    let paths = file_text(&p, "paths");
+    assert_eq!(paths.lines().count(), 2);
+    for (i, path) in paths.lines().enumerate() {
+        assert!(path.starts_with("app:/tmp/picked/"));
+        let path = crate::picker::resolve(path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [i as u8; 3]);
+        std::fs::remove_file(path).unwrap();
+    }
+    assert!(sources.iter().all(|p| !p.exists()));
+    for answer in [None, Some("null"), Some("[]"), Some("permission refused")] {
+        let request = file_ask(&mut p);
+        assert!(answer_files(&mut p, request, answer));
+    }
+    assert_eq!(file_text(&p, "cancels"), "4");
+    assert_eq!(file_text(&p, "names"), "a.jpg,b.png");
+    assert_eq!(says(&p, "picker: refused: permission refused"), 1);
+    let request = file_ask(&mut p);
+    let missing = dir.join("missing.png");
+    answer_files(&mut p, request, Some(&file_answer(&[missing])));
+    assert_eq!(file_text(&p, "cancels"), "5");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn file_picker_heic_uses_the_shared_conversion_rule_and_cleans_every_source() {
+    for (accept, kept) in [
+        ("image/*", true),
+        ("image/heic,image/jpeg,image/png", true),
+        ("image/heic", true),
+        ("image/jpeg,image/png", false),
+    ] {
+        let mut p = file_picker(accept);
+        p.serve_requests();
+        let dir = std::env::temp_dir().join(format!("exact-files-heic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = if accept == "image/heic" {
+            vec!["photo.HEIC"]
+        } else {
+            vec!["first.jpg", "photo.HEIC", "last.png"]
+        };
+        let sources: Vec<_> = names.iter().map(|name| dir.join(name)).collect();
+        for path in &sources {
+            std::fs::write(path, b"image bytes").unwrap();
+        }
+        let request = file_ask(&mut p);
+        let mut answer: serde_json::Value = serde_json::from_str(&file_answer(&sources)).unwrap();
+        for item in answer.as_array_mut().unwrap() {
+            if item["name"] == "photo.HEIC" {
+                item["type"] = "image/heic".into();
+            }
+        }
+        answer_files(&mut p, request, Some(&answer.to_string()));
+        assert!(sources.iter().all(|p| !p.exists()));
+        if !kept {
+            assert_eq!(file_text(&p, "cancels"), "1");
+            assert_eq!(file_text(&p, "paths"), "");
+            assert_eq!(says(&p, "image/heic to JPEG is unavailable on Android"), 1);
+            std::fs::remove_dir_all(dir).unwrap();
+            continue;
+        }
+        assert_eq!(file_text(&p, "cancels"), "0");
+        assert_eq!(file_text(&p, "names"), names.join(","));
+        assert_eq!(file_text(&p, "paths").lines().count(), names.len());
+        for path in file_text(&p, "paths").lines() {
+            assert!(path.starts_with("app:/tmp/picked/"));
+            std::fs::remove_file(crate::picker::resolve(path).unwrap()).unwrap();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn file_picker_stale_results_are_cleaned_and_agent_requests_are_held() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    for replaced in [false, true] {
+        let dir = std::env::temp_dir().join(format!("exact-picked-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("photo.jpg");
+        std::fs::write(&source, b"image bytes").unwrap();
+        let request = file_ask(&mut p);
+        if replaced {
+            p.picks_replaced();
+        } else {
+            p.picks_renewed(&[id(&p, "attach")]);
+        }
+        assert!(answer_files(
+            &mut p,
+            request,
+            Some(&file_answer(std::slice::from_ref(&source)))
+        ));
+        assert!(!source.exists());
+        assert!(!dir.exists());
+        assert_eq!(file_text(&p, "paths"), "");
+        assert_eq!(file_text(&p, "cancels"), "0");
+    }
+    p.agent = true;
+    p.show_picker("attach");
+    assert_eq!(p.take_requests(), None);
+    assert_eq!(says(&p, "held (agent)"), 1);
+}
+
+#[test]
+fn file_picker_unknown_id_is_journaled() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    p.show_picker("dni");
+    assert_eq!(
+        says(&p, "picker: refused: no file input with id \"dni\""),
+        1
+    );
+    assert_eq!(p.take_requests(), None);
+    assert_eq!(file_text(&p, "cancels"), "0");
+}
+
+#[test]
+fn file_picker_rejects_types_outside_accept() {
+    for (accept, name, mime) in [
+        ("image/jpeg,image/png", "animation.gif", "image/gif"),
+        (
+            ".jpg,.png,.unknown-exact",
+            "report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    ] {
+        let mut p = file_picker("");
+        p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+            id: id(&p, "attach"),
+            prop: PropId::Accept,
+            value: exact_kernel::PropValue::Str(accept.into()),
+        }]);
+        p.serve_requests();
+        let source =
+            std::env::temp_dir().join(format!("exact-filter-{}-{name}", std::process::id()));
+        std::fs::write(&source, b"file bytes").unwrap();
+        let request = file_ask(&mut p);
+        answer_files(
+            &mut p,
+            request,
+            Some(
+                &serde_json::json!([{
+                    "path": source, "name": name, "type": mime,
+                    "extensions": {".jpg": "image/jpeg", ".png": "image/png"}
+                }])
+                .to_string(),
+            ),
+        );
+        assert_eq!(file_text(&p, "cancels"), "1");
+        assert_eq!(file_text(&p, "paths"), "");
+        assert_eq!(says(&p, "is not among accept"), 1);
+        assert!(!source.exists());
+    }
+}
+
+#[test]
+fn file_picker_preserves_provider_metadata_instead_of_guessing_from_names() {
+    let mut p = file_picker("");
+    p.serve_requests();
+    let source = std::env::temp_dir().join(format!("exact-metadata-{}", std::process::id()));
+    for (bytes, mime, width, height) in [
+        (
+            include_bytes!("../../../../scripts/fixtures/picker/photo.png").as_slice(),
+            "image/png",
+            "160",
+            "106",
+        ),
+        (
+            include_bytes!("../../../../scripts/fixtures/picker/oriented-gps.jpg").as_slice(),
+            "image/jpeg",
+            "48",
+            "64",
+        ),
+    ] {
+        std::fs::write(&source, bytes).unwrap();
+        let request = file_ask(&mut p);
+        answer_files(
+            &mut p,
+            request,
+            Some(
+                &serde_json::json!([{
+                    "path": source, "name": "scan.v2", "type": mime
+                }])
+                .to_string(),
+            ),
+        );
+        assert_eq!(file_text(&p, "names"), "scan.v2");
+        assert_eq!(file_text(&p, "types"), mime);
+        assert_eq!(file_text(&p, "widths"), width);
+        assert_eq!(file_text(&p, "heights"), height);
+        let path = file_text(&p, "paths");
+        std::fs::remove_file(crate::picker::resolve(&path).unwrap()).unwrap();
+        assert!(!source.exists());
+    }
+    std::fs::write(&source, b"document bytes").unwrap();
+    let request = file_ask(&mut p);
+    let mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    answer_files(
+        &mut p,
+        request,
+        Some(
+            &serde_json::json!([{
+                "path": source, "name": "report.docx", "type": mime
+            }])
+            .to_string(),
+        ),
+    );
+    assert_eq!(file_text(&p, "names"), "report.docx");
+    assert_eq!(file_text(&p, "types"), mime);
+    assert_eq!(file_text(&p, "widths"), "0");
+    let path = file_text(&p, "paths");
+    std::fs::remove_file(crate::picker::resolve(&path).unwrap()).unwrap();
+    assert!(!source.exists());
+}
+
+fn finish_imports(p: &mut Presenter<Nothing>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !p.requests.importing.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "file import did not finish"
+        );
+        #[cfg(unix)]
+        woken(p, 100);
+        p.pump(p.host().now());
+    }
+}
+
+fn answer_files(p: &mut Presenter<Nothing>, request: u32, answer: Option<&str>) -> bool {
+    let accepted = p.answer_request(request, answer);
+    finish_imports(p);
+    accepted
+}
+
+#[test]
+fn file_picker_import_completes_on_a_later_owner_turn() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    let source = std::env::temp_dir().join(format!("exact-async-pick-{}.png", std::process::id()));
+    std::fs::write(
+        &source,
+        include_bytes!("../../../../scripts/fixtures/picker/photo.png"),
+    )
+    .unwrap();
+    let request = file_ask(&mut p);
+    assert!(p.answer_request(request, Some(&file_answer(&[source]))));
+    assert_eq!(
+        file_text(&p, "paths"),
+        "",
+        "import must not run on the owner turn"
+    );
+    assert!(
+        !p.answer_request(request, None),
+        "a second answer cannot cancel the import"
+    );
+    p.show_picker("attach");
+    assert_eq!(
+        p.take_requests(),
+        None,
+        "the import keeps the input's request open"
+    );
+    finish_imports(&mut p);
+    let path = file_text(&p, "paths");
+    assert!(!path.is_empty());
+    std::fs::remove_file(crate::picker::resolve(&path).unwrap()).unwrap();
+
+    let source =
+        std::env::temp_dir().join(format!("exact-stale-import-{}.png", std::process::id()));
+    std::fs::write(&source, b"image").unwrap();
+    let request = file_ask(&mut p);
+    assert!(p.answer_request(request, Some(&file_answer(std::slice::from_ref(&source)))));
+    p.picks_replaced();
+    finish_imports(&mut p);
+    assert!(!source.exists());
+    assert_eq!(
+        file_text(&p, "paths"),
+        path,
+        "a stale completion changes nothing"
+    );
+}
+
+#[test]
+fn file_picker_extension_filters_use_the_provider_mime_and_delivered_leaf_name() {
+    let mut p = file_picker("image/jpeg");
+    // The presenter sees the extension an app's file_handlers admitted at bake.
+    p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+        id: id(&p, "attach"),
+        prop: PropId::Accept,
+        value: exact_kernel::PropValue::Str(".jpg".into()),
+    }]);
+    p.serve_requests();
+    for name in [
+        "photo",
+        "../photo.jpeg",
+        "..\\photo\0.jpeg",
+        "photo.HEIC",
+        "scan.v2",
+    ] {
+        let source =
+            std::env::temp_dir().join(format!("exact-mime-pick-{}.jpg", std::process::id()));
+        std::fs::write(&source, b"image").unwrap();
+        let request = file_ask(&mut p);
+        answer_files(
+            &mut p,
+            request,
+            Some(
+                &serde_json::json!([{
+                    "path": source, "name": name, "type": "image/jpeg",
+                    "extensions": {".jpg": "image/jpeg"},
+                    "converted": matches!(name, "photo.HEIC" | "scan.v2")
+                }])
+                .to_string(),
+            ),
+        );
+        assert_eq!(
+            file_text(&p, "names"),
+            if matches!(name, "photo" | "photo.HEIC" | "scan.v2") {
+                name
+            } else {
+                "photo.jpeg"
+            }
+        );
+        assert_eq!(file_text(&p, "types"), "image/jpeg");
+        assert_eq!(file_text(&p, "cancels"), "0");
+        std::fs::remove_file(crate::picker::resolve(&file_text(&p, "paths")).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn file_picker_fallback_is_journaled_without_consuming_the_request() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    let request = file_ask(&mut p);
+    let reason = "file picker: photo picker unavailable; using document picker";
+    assert!(p.answer_request(request, Some(reason)));
+    assert_eq!(says(&p, reason), 1);
+    assert_eq!(file_text(&p, "cancels"), "0");
+    assert!(p.answer_request(request, None));
+    assert_eq!(file_text(&p, "cancels"), "1");
+}
+
+fn wait_for_import(p: &Presenter<Nothing>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while p.requests.files.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "import did not complete"
+        );
+        #[cfg(unix)]
+        woken(p, 100);
+    }
+}
+
+#[test]
+fn file_picker_overlapping_imports_survive_a_real_runner_replacement() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    let source = std::env::temp_dir().join(format!("exact-overlap-{}.jpg", std::process::id()));
+    std::fs::write(&source, b"old").unwrap();
+    let old_request = file_ask(&mut p);
+    assert!(p.answer_request(
+        old_request,
+        Some(&file_answer(std::slice::from_ref(&source)))
+    ));
+    wait_for_import(&p);
+    let old = p.requests.files.lock().unwrap().pop().unwrap();
+    assert!(p
+        .reload(&file_picker_plan("image/*"), Nothing)
+        .unwrap()
+        .is_none());
+    std::fs::write(&source, b"new").unwrap();
+    let new_request = file_ask(&mut p);
+    assert!(p.answer_request(
+        new_request,
+        Some(&file_answer(std::slice::from_ref(&source)))
+    ));
+    wait_for_import(&p);
+    p.finish_file_imports();
+    let new_path = crate::picker::resolve(&file_text(&p, "paths")).unwrap();
+    p.requests.files.lock().unwrap().push(old);
+    finish_imports(&mut p);
+    assert_eq!(std::fs::read(&new_path).unwrap(), b"new");
+    std::fs::remove_file(new_path).unwrap();
+}
+
+#[test]
+fn file_picker_gone_inputs_neither_allocate_nor_keep_copies() {
+    for during in [false, true] {
+        for removed in [false, true] {
+            let mut p = file_picker("image/*");
+            p.serve_requests();
+            let view = id(&p, "attach");
+            let source = std::env::temp_dir().join(format!(
+                "exact-gone-{}-{during}-{removed}.gif",
+                std::process::id()
+            ));
+            std::fs::write(&source, b"GIF89a").unwrap();
+            let request = file_ask(&mut p);
+            let before = p.host.runner_mut().picked_path("probe.gif");
+            if during {
+                assert!(
+                    p.answer_request(request, Some(&file_answer(std::slice::from_ref(&source))))
+                );
+                wait_for_import(&p);
+            }
+            p.host.apply_test_ops(&[if removed {
+                exact_kernel::Op::DestroyView { id: view }
+            } else {
+                exact_kernel::Op::SetProp {
+                    id: view,
+                    prop: PropId::Type,
+                    value: exact_kernel::PropValue::Str("text".into()),
+                }
+            }]);
+            if !during {
+                assert!(
+                    p.answer_request(request, Some(&file_answer(std::slice::from_ref(&source))))
+                );
+            }
+            finish_imports(&mut p);
+            assert!(!source.exists());
+            assert_eq!(file_text(&p, "paths"), "");
+            assert_eq!(file_text(&p, "cancels"), "0");
+            let after = p.host.runner_mut().picked_path("probe.gif");
+            let count = |path: &str| {
+                path.rsplit_once('-')
+                    .unwrap()
+                    .1
+                    .split('.')
+                    .next()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            };
+            assert_eq!(count(&after) - count(&before), if during { 2 } else { 1 });
+            let imported = before.replace(
+                &format!("-{}.", count(&before)),
+                &format!("-{}.", count(&before) + 1),
+            );
+            assert!(!crate::picker::resolve(&imported).unwrap().exists());
+        }
+    }
+}
+
+#[test]
+fn file_picker_storage_extensions_follow_delivered_mime() {
+    let mut p = file_picker("image/*");
+    p.serve_requests();
+    for name in ["photo", "photo.jpg", "photo.GIF"] {
+        let source = std::env::temp_dir().join(format!("exact-gif-{}.gif", std::process::id()));
+        std::fs::write(&source, b"GIF89a").unwrap();
+        let request = file_ask(&mut p);
+        answer_files(
+            &mut p,
+            request,
+            Some(
+                &serde_json::json!([{
+                    "path": source, "name": name, "type": "image/gif"
+                }])
+                .to_string(),
+            ),
+        );
+        assert_eq!(file_text(&p, "names"), name);
+        let path = file_text(&p, "paths");
+        assert!(path.ends_with(".gif"), "{path}");
+        std::fs::remove_file(crate::picker::resolve(&path).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn file_picker_uses_androids_extension_mapping_for_extensionless_documents() {
+    let mut p = file_picker("");
+    p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+        id: id(&p, "attach"),
+        prop: PropId::Accept,
+        value: exact_kernel::PropValue::Str(".docx".into()),
+    }]);
+    p.serve_requests();
+    let mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    let source = std::env::temp_dir().join(format!("exact-docx-{}.docx", std::process::id()));
+    std::fs::write(&source, b"document").unwrap();
+    let request = file_ask(&mut p);
+    answer_files(
+        &mut p,
+        request,
+        Some(
+            &serde_json::json!([{
+                "path": source, "name": "report", "type": mime, "extension": "docx", "extensions": {".docx": mime}
+            }])
+            .to_string(),
+        ),
+    );
+    assert_eq!(file_text(&p, "cancels"), "0");
+    assert_eq!(file_text(&p, "names"), "report");
+    assert_eq!(file_text(&p, "types"), mime);
+    assert!(file_text(&p, "paths").ends_with(".docx"));
+    std::fs::remove_file(crate::picker::resolve(&file_text(&p, "paths")).unwrap()).unwrap();
+}
+
+#[test]
+fn file_picker_extension_mime_fallback_does_not_override_a_different_suffix() {
+    for mapped in [false, true] {
+        for name in ["invoice.exe", "scan.png", "scan.v2"] {
+            let mut p = file_picker("image/jpeg");
+            p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+                id: id(&p, "attach"),
+                prop: PropId::Accept,
+                value: exact_kernel::PropValue::Str(".jpg".into()),
+            }]);
+            p.serve_requests();
+            let source = std::env::temp_dir().join(format!(
+                "exact-suffix-{}-{mapped}-{name}",
+                std::process::id()
+            ));
+            std::fs::write(&source, b"image").unwrap();
+            let request = file_ask(&mut p);
+            let mut answer = serde_json::json!([{
+                "path": source, "name": name, "type": "image/jpeg"
+            }]);
+            if mapped {
+                answer[0]["extensions"] = serde_json::json!({".jpg": "image/jpeg"});
+            }
+            answer_files(&mut p, request, Some(&answer.to_string()));
+            assert_eq!(file_text(&p, "cancels"), "1", "{mapped}: {name}");
+            assert_eq!(file_text(&p, "paths"), "");
+            assert!(!source.exists());
+        }
+    }
+}
+
+#[test]
+fn file_picker_android_suffix_mime_allows_jpe_but_rejects_png() {
+    for (name, suffix_mime, accepted) in [
+        ("photo.jpe", "image/jpeg", true),
+        ("photo.png", "image/png", false),
+    ] {
+        let mut p = file_picker("image/jpeg");
+        p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+            id: id(&p, "attach"),
+            prop: PropId::Accept,
+            value: exact_kernel::PropValue::Str(".jpg".into()),
+        }]);
+        p.serve_requests();
+        let source = std::env::temp_dir().join(format!(
+            "exact-android-suffix-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::write(&source, b"image").unwrap();
+        let request = file_ask(&mut p);
+        answer_files(
+            &mut p,
+            request,
+            Some(
+                &serde_json::json!([{
+                    "path": source, "name": name, "type": "image/jpeg",
+                    "name_type": suffix_mime, "extensions": {".jpg": "image/jpeg"}
+                }])
+                .to_string(),
+            ),
+        );
+        assert_eq!(
+            file_text(&p, "cancels"),
+            if accepted { "0" } else { "1" },
+            "{name}"
+        );
+        assert!(!source.exists());
+        if accepted {
+            assert_eq!(file_text(&p, "names"), name);
+            assert_eq!(file_text(&p, "types"), "image/jpeg");
+            std::fs::remove_file(crate::picker::resolve(&file_text(&p, "paths")).unwrap()).unwrap();
+        } else {
+            assert_eq!(file_text(&p, "paths"), "");
         }
     }
 }

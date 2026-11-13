@@ -155,28 +155,53 @@ impl<D: DataSource> Runner<D> {
         &self,
         i: usize,
         env: &Env<'_>,
-    ) -> Result<Result<Vec<(String, Value)>, RunnerError>, Trap> {
+    ) -> Result<Vec<(String, Value)>, RunnerError> {
         let (list, key) = self
             .plan
             .resource_each(self.resource_row(i))
             .expect("a family");
-        let Value::List(items) = vm::eval(self.plan.code(list), env, &[])?.value else {
-            return Err(Trap::TypeMismatch {
+        let Value::List(items) = vm::eval(self.plan.code(list), env, &[])
+            .map_err(|t| {
+                RunnerError::from(t).evaluated(|| {
+                    format!(
+                        "resource {:?} each subject",
+                        self.plan.str(self.resource_row(i).name)
+                    )
+                })
+            })?
+            .value
+        else {
+            return Err(RunnerError::from(Trap::TypeMismatch {
                 pc: 0,
                 op: exact_plan::Opcode::LoadResource,
-            });
+            })
+            .evaluated(|| {
+                format!(
+                    "resource {:?} each subject",
+                    self.plan.str(self.resource_row(i).name)
+                )
+            }));
         };
         let mut out = Vec::with_capacity(items.len());
         for item in items.iter() {
             let params = std::slice::from_ref(item);
-            let key = vm::eval(self.plan.code(key), &Env { params, ..*env }, &[])?.value;
+            let key = vm::eval(self.plan.code(key), &Env { params, ..*env }, &[])
+                .map_err(|t| {
+                    RunnerError::from(t).evaluated(|| {
+                        format!(
+                            "resource {:?} each key",
+                            self.plan.str(self.resource_row(i).name)
+                        )
+                    })
+                })?
+                .value;
             let Some(key) = crate::instance::key_text(&key) else {
                 let resource = self.plan.str(self.resource_row(i).name).to_string();
-                return Ok(Err(RunnerError::ResourceKey { resource }));
+                return Err(RunnerError::ResourceKey { resource });
             };
             out.push((key, item.clone()));
         }
-        Ok(Ok(out))
+        Ok(out)
     }
 
     /// The members of family `i` for `elements`, in their order (an element

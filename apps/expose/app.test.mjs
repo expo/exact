@@ -341,6 +341,19 @@ test('a body that fails after its headers ends the turn, and Clear aborts one st
     expect(thread().messages.length).toBe(1);
     expect(await asked).toMatchObject({ done: true, error: '' });
     expect(thread().messages.length).toBe(1);
+
+    // A turn asked while one is answering is refused, and the thread says so
+    // until the answer ends.
+    let end;
+    globalThis.fetch = () => new Promise(resolve => { end = () => resolve(new Response('', { status: 500 })); });
+    const first = answer('ask', ['expose', 'one', '', 0], store);
+    const refused = answer('ask', ['expose', '', 'a1', 0], store);
+    expect(refused).toMatchObject({ done: false, error: 'Expose is still answering.' });
+    expect(thread()).toMatchObject({ streaming: true, error: 'Expose is still answering.' });
+    expect(thread().messages.map(m => m.body).slice(1)).toEqual(['one', '']);
+    end();
+    await first;
+    expect(thread().error).not.toBe('Expose is still answering.');
   } finally {
     globalThis.fetch = fetch;
     if (native === undefined) delete globalThis.__exact_message;

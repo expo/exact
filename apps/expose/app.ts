@@ -159,6 +159,7 @@ function finish(thread: string, error = ''): Turn {
   streaming.set(thread, false);
   answering.delete(thread);
   if (error) errors.set(thread, error);
+  else errors.delete(thread);
   const rows = threads.get(thread) ?? [];
   const last = rows[rows.length - 1];
   if (last && last.role === 'assistant') {
@@ -174,7 +175,13 @@ function ask(thread: string, text: string, article: string, epochMs: number, sto
   const body = text.trim();
   const rows = threads.get(thread);
   if (!rows || thread !== 'expose') return turn(true, 'This thread is authored; only Expose answers.');
-  if (streaming.get(thread)) return turn(false, 'Expose is still answering.');
+  if (streaming.get(thread)) {
+    // Said on the thread, where the person looks, until the answer ends.
+    const refused = 'Expose is still answering.';
+    errors.set(thread, refused);
+    revision++;
+    return turn(false, refused);
+  }
   const piece = article ? articles.find((a) => a.id === article) : undefined;
   if (!body && !piece) return turn(true);
   errors.delete(thread);

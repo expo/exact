@@ -206,3 +206,156 @@ fn shadow_exclusion_packs_device_pixel_radii() {
     assert_eq!(i.clip1, [20., 20., 80., 80.]);
     assert_eq!(i.clip_radii[2] & 65535, 235);
 }
+
+#[test]
+fn clipped_backdrops_keep_the_unclipped_filter_samples() {
+    use exact_kernel::style::{BackdropFilter, BackdropOp};
+    let Some(mut ink) = open() else { return };
+    let ts = Transform::identity();
+    for scale in [1., 1.5] {
+        for transform in [ts, Transform::from_row(0.9, 0.2, -0.15, 1., 8., -7.)] {
+            let filters = std::iter::once(BackdropFilter(vec![])).chain(
+                [0., 1., 4., 11., 13., 25., 50.]
+                    .into_iter()
+                    .flat_map(|sigma| {
+                        [
+                            BackdropFilter(vec![
+                                BackdropOp::Blur(sigma),
+                                BackdropOp::Saturate(0.4),
+                            ]),
+                            BackdropFilter(vec![
+                                BackdropOp::Saturate(1.8),
+                                BackdropOp::Blur(sigma),
+                            ]),
+                        ]
+                    }),
+            );
+            for filter in filters {
+                for clip in [
+                    (40., 32., 16., 12.),
+                    (0., 0., 12., 10.),
+                    (146., 108., 14., 12.),
+                ] {
+                    let mut frames = Vec::new();
+                    for mode in 0..3 {
+                        ink.begin(160., 120., scale);
+                        ink.push_opacity(0.73);
+                        for n in 0..20 {
+                            ink.fill(
+                                &Shape::rect((n as f32 * 8., 0., 8., 120.)),
+                                [(n * 51) as u8, (n * 17) as u8, 190, 210],
+                                ts,
+                            );
+                        }
+                        if mode == 2 {
+                            ink.push_clip(&Shape::rect(clip), ts);
+                        }
+                        if mode != 0 {
+                            ink.backdrop_filter(
+                                &Shape::new((5.25, -3.5, 150.5, 120.), [13.; 4]),
+                                &filter,
+                                transform,
+                            );
+                        }
+                        if mode == 2 {
+                            ink.pop_clip();
+                        }
+                        ink.pop_opacity();
+                        frames.push(ink.finish().unwrap());
+                    }
+                    let [base, full, clipped] = frames.as_slice() else {
+                        unreachable!()
+                    };
+                    let mut maximum = 0;
+                    for y in 0..clipped.height() {
+                        for x in 0..clipped.width() {
+                            let inside = x >= (clip.0 * scale) as u32
+                                && x < ((clip.0 + clip.2) * scale) as u32
+                                && y >= (clip.1 * scale) as u32
+                                && y < ((clip.1 + clip.3) * scale) as u32;
+                            let expected = if inside { full } else { base };
+                            let at = ((y * clipped.width() + x) * 4) as usize;
+                            for c in 0..4 {
+                                maximum = maximum
+                                    .max(clipped.data()[at + c].abs_diff(expected.data()[at + c]));
+                            }
+                        }
+                    }
+                    assert!(
+                        maximum <= 1,
+                        "scale {scale}, {transform:?}, {filter:?}, clip {clip:?}: {maximum}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn overlapping_blends_match_cpu_with_transforms_clips_and_opacity() {
+    let Some(mut ink) = open() else { return };
+    let mut cpu = Raster::new();
+    let mut pixels = Pixmap::new(2, 2).unwrap();
+    pixels.fill(tiny_skia::Color::from_rgba8(180, 90, 130, 170));
+    let pixels = Arc::new(pixels);
+    for scale in [1., 2.] {
+        for ts in [
+            Transform::identity(),
+            Transform::from_row(0.9, 0.3, -0.2, 1.1, 8., -9.),
+            Transform::from_row(-1., 0., 0., 1., 95., 0.),
+        ] {
+            for b in [&mut cpu as &mut dyn Backend, &mut ink] {
+                b.begin(100., 80., scale);
+                b.push_opacity(0.7);
+                b.fill(
+                    &Shape::rect((0., 0., 100., 80.)),
+                    [70, 140, 230, 160],
+                    Transform::identity(),
+                );
+                b.push_clip(
+                    &Shape::new((7., 5., 87., 71.), [9.; 4]),
+                    Transform::identity(),
+                );
+                for (n, mode) in [1, 2, 3, 10].into_iter().enumerate() {
+                    b.island_image(
+                        pixels.clone(),
+                        (-3.5 + n as f32 * 13., 4.25 + n as f32 * 9., 58.5, 43.5),
+                        ts,
+                        mode,
+                    );
+                }
+                b.pop_clip();
+                b.pop_opacity();
+            }
+            compare(&cpu.finish().unwrap(), &ink.finish().unwrap());
+        }
+    }
+}
+
+#[test]
+fn moving_blends_reuse_completed_snapshot_storage() {
+    let Some(mut ink) = open() else { return };
+    let mut pixels = Pixmap::new(1, 1).unwrap();
+    pixels.fill(tiny_skia::Color::from_rgba8(180, 90, 130, 255));
+    let pixels = Arc::new(pixels);
+    let mut peak_bytes = 0;
+    let mut peak_targets = 0;
+    for x in 2..=121 {
+        ink.begin(1920., 1080., 1.);
+        ink.island_image(
+            pixels.clone(),
+            (0., 0., 1920., 1080.),
+            Transform::from_translate(x as f32, 0.),
+            1,
+        );
+        let frame = ink.finish().unwrap();
+        assert_eq!(&frame.data()[0..4], &[255; 4]);
+        let inside = (540 * 1920 + 960) * 4;
+        assert_eq!(&frame.data()[inside..inside + 4], &[180, 90, 130, 255]);
+        peak_bytes = peak_bytes.max(ink.pool.bytes());
+        peak_targets = peak_targets.max(ink.pool.retained());
+    }
+    println!("moving blend: {peak_targets} snapshot targets, {peak_bytes} peak bytes");
+    assert_eq!(peak_targets, 1);
+    assert!(peak_bytes <= 1920 * 1080 * 4);
+}

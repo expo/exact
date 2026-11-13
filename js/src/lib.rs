@@ -71,6 +71,7 @@ mod phase_cost_tests;
 mod pure;
 mod reply;
 mod resume;
+mod retirement;
 mod secrets;
 mod socket;
 mod source;
@@ -321,6 +322,8 @@ pub struct Module {
     preloads: &'static [exact_runner::request::Preload],
     revision: std::sync::OnceLock<String>, // the bytecode's SHA-256, when first asked
     engine: Option<Watched>,
+    retirement: retirement::Retirement,
+    identity: exact_runner::ModuleIdentity,
     /// What an interrupt from another thread reaches; a built worker
     /// instance shares its template's.
     watch: Arc<Watch>,
@@ -421,6 +424,8 @@ impl Module {
             grants,
             preloads: &[],
             engine: None,
+            retirement: Default::default(),
+            identity: Default::default(),
             watch: Arc::default(),
             storage: None,
             directories: None,
@@ -533,6 +538,7 @@ impl Module {
         let max_heap = template.max_heap;
         let document_owner = template.document_owner;
         let agent_seed = template.agent_seed;
+        let identity = template.identity.clone();
         let watch = template.watch.clone();
         let native_slot = template.native_slot.clone();
         let secrets = template.host.secrets.clone();
@@ -546,6 +552,7 @@ impl Module {
             // The template's interrupt reaches the instance on its owner, and
             // its native handle finds the instance's long-call handler.
             module.watch = watch;
+            module.identity = identity;
             module.host.secrets = secrets;
             module.native_slot = native_slot;
             if let Some(factory) = native_factory {
@@ -605,7 +612,7 @@ impl Module {
         if engine.string("grants")?.trim() != self.grants.trim() {
             return Err("exact-js: the module's grants differ from what the bake recorded".into());
         }
-        self.install(engine);
+        self.install(engine)?;
         let took_ms = started.elapsed().as_secs_f64() * 1e3;
         if took_ms > SLOW_LOAD_MS {
             self.logs.push(format!(
@@ -647,16 +654,19 @@ impl Module {
         // host that cannot parse the grants holds none of them.
         ibex2::grant::GrantSet::parse(&exact_runner::io_grants(&module.grants))
             .map_err(|e| format!("exact-js: app.ts `grants`: {e}"))?;
-        module.install(engine);
+        module.install(engine)?;
         Ok(module)
     }
 
     /// `load`'s and `inspect`'s last step: the overlay is decided once, here, alike (a failed read keeps it asked).
-    fn install(&mut self, mut engine: Watched) {
-        self.has_overlay = engine
-            .call("__exact_has_overlay", ["", "", ""])
-            .map_or(true, |t| !t.is_empty());
+    fn install(&mut self, mut engine: Watched) -> Result<(), String> {
+        let overlay = engine.call("__exact_has_overlay", ["", "", ""]);
+        if engine.out_of_memory() {
+            return Err(overlay.expect_err("terminal OOM fails the call"));
+        }
+        self.has_overlay = overlay.map_or(true, |t| !t.is_empty());
         self.engine = Some(engine);
+        Ok(())
     }
 
     fn load_engine(&mut self) -> Result<Watched, String> {
@@ -776,10 +786,29 @@ impl Module {
         if !self.snapshot {
             self.finish_background(std::time::Duration::from_secs(1));
         }
+        self.drop_runtime();
+        self.retirement = Default::default();
+    }
+
+    fn drop_runtime(&mut self) {
         if let Some(mut engine) = self.engine.take() {
             self.logs.extend(engine.take_log());
         }
         self.host.keys.clear();
+        self.host.codecs.clear();
+        self.host.codec_out.clear();
+        self.host.binary.clear();
+        self.host.socket_ops.clear();
+        self.host.answer_ops.clear();
+        self.host.socket_buffered.clear();
+        self.host.store = None;
+        self.host.canvas = None;
+        self.host.between_answers = false;
+        self.streams.clear();
+        self.waiters.clear();
+        for (_, retired) in self.retired.drain() {
+            retired.store(true, std::sync::atomic::Ordering::Release);
+        }
         self.host.secrets.clear();
         self.storage = None;
         self.host.native = None;
@@ -790,7 +819,6 @@ impl Module {
         self.parked.clear();
         self.work = Default::default();
         self.host.requests.clear();
-        // A fresh engine numbers its fetches from 1 again.
         self.host.aborted.clear();
         self.background = Default::default();
         // Module work ends with the engine (LLP 1146 D2).
@@ -861,11 +889,9 @@ impl Module {
     /// §8.4 Q5). `None` when the module is not loaded.
     pub fn calls_open(&mut self) -> Option<usize> {
         let engine = self.engine.as_mut()?;
-        engine
-            .call("__exact_calls_open", ["", "", ""])
-            .ok()?
-            .parse()
-            .ok()
+        let count = engine.call("__exact_calls_open", ["", "", ""]);
+        self.retire_oom();
+        count.ok()?.parse().ok()
     }
 
     fn take_request(&mut self, ticket: u64) -> Option<Request> {
@@ -889,6 +915,7 @@ impl Module {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
+        self.reload_after_oom()?;
         if self.engine.is_none() {
             return Err(DataError::Unavailable(
                 "exact-js: the engine is not loaded".into(),
@@ -963,6 +990,9 @@ impl Module {
             Ok(Module::step(sig, engine, source, reply, self.host.baking))
         })();
         self.host.store = None;
+        if let Some(error) = self.retire_oom() {
+            return Err(error);
+        }
         // An interrupt may stop __exact_call before it returns its id.
         if result.is_err() && begun.is_none() {
             begun = self
@@ -1047,12 +1077,12 @@ impl Module {
                     fetch_timer(request, due)
                 };
                 let key = Module::key(target, source, args);
-                // A new call replaces one parked on its key. Not a targeted
-                // continuation's: the runner names which of two is in flight
-                // by its token (`forgotten`) or drops the new one (`discard`),
-                // and the call it would replace may be the one the runner
-                // keeps (files F18: a re-read dropped by a refused pass).
-                let replaced = if target.is_none() || request.continuation.is_none() {
+                // Tool invocations are independent even with equal arguments.
+                // A targeted continuation also stays until `forgotten` or
+                // `discard` identifies which call the runner kept after commit.
+                let replaced = if !source.starts_with(TOOL)
+                    && (target.is_none() || request.continuation.is_none())
+                {
                     self.replace_on(&key)
                 } else {
                     Vec::new()
@@ -1067,7 +1097,7 @@ impl Module {
         // with no store, so its file writes land and its Store writes do not
         // (LLP 1097; a934686a0). Not while this answer's store is installed.
         self.finish_let_go();
-        answer
+        self.after_oom(answer)
     }
 
     /// The module's `overlay` for `source(args)`: `answer` with `writes`

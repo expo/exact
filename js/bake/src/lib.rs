@@ -1028,6 +1028,47 @@ enum BakeMode<'a> {
     },
 }
 
+/// Brings `stage` from the capture `previous` names to `captured`: removes
+/// what left, writes what changed. `previous` names what the stage holds
+/// after each file's update, so a bake that fails partway leaves it true of
+/// the disk and the next one finishes the work rather than trusting it done.
+fn stage_capture(
+    stage: &Path,
+    previous: &mut BTreeMap<PathBuf, Vec<u8>>,
+    captured: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), String> {
+    let gone: Vec<PathBuf> = previous
+        .keys()
+        .filter(|name| !captured.contains_key(*name))
+        .cloned()
+        .collect();
+    for name in gone {
+        let path = stage.join(&name);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
+        }
+        previous.remove(&name);
+        let mut parent = path.parent();
+        while let Some(directory) = parent.filter(|directory| *directory != stage) {
+            if std::fs::remove_dir(directory).is_err() {
+                break;
+            }
+            parent = directory.parent();
+        }
+    }
+    for (name, bytes) in captured {
+        let target = stage.join(name);
+        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        if previous.get(name) != Some(bytes) {
+            previous.remove(name);
+            std::fs::write(target, bytes).map_err(|e| e.to_string())?;
+            previous.insert(name.clone(), bytes.clone());
+        }
+    }
+    Ok(())
+}
+
 fn bake_in(
     app: &Path,
     tools: &Tools,
@@ -1073,25 +1114,7 @@ fn bake_in(
     {
         return Err("__exact_* and app.js (the bundle) are reserved for the producer".into());
     }
-    for name in previous.keys().filter(|name| !captured.contains_key(*name)) {
-        let path = stage.join(name);
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        let mut parent = path.parent();
-        while let Some(directory) = parent.filter(|directory| *directory != stage) {
-            if std::fs::remove_dir(directory).is_err() {
-                break;
-            }
-            parent = directory.parent();
-        }
-    }
-    for (name, bytes) in &captured {
-        let target = stage.join(name);
-        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
-        if previous.get(name) != Some(bytes) {
-            std::fs::write(target, bytes).map_err(|e| e.to_string())?;
-        }
-    }
-    *previous = captured.clone();
+    stage_capture(stage, previous, &captured)?;
     // The Contract is compiled where it lives, as the web build compiles it
     // (LLP 1091 D10): its uses, packages and links resolve as they do for
     // every other reader, with no staged copy to tell apart from the

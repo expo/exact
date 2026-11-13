@@ -26,9 +26,14 @@ impl<D: DataSource> Runner<D> {
             if !row.gated && !row.keyed {
                 continue;
             }
-            let on = self.eval(row.gate, &[], &[])? == Value::Bool(true);
+            let on = self
+                .eval(row.gate, &[], &[])
+                .map_err(|e| e.evaluated(|| format!("task {:?} gate", self.plan.str(row.name))))?
+                == Value::Bool(true);
             let key = if row.keyed && on {
-                let value = self.eval(row.key, &[], &[])?;
+                let value = self.eval(row.key, &[], &[]).map_err(|e| {
+                    e.evaluated(|| format!("task {:?} key", self.plan.str(row.name)))
+                })?;
                 match crate::instance::key_text(&value) {
                     Some(k) => Some(k),
                     None => {

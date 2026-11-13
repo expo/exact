@@ -28,7 +28,6 @@
     var idleRefusal = binary.idleRefusal,
       socketOwner = env.sockets.socketOwner,
       listenOwner = env.sockets.listenOwner;
-    var nextTicket = 1;
     // Capture the browser's composition before app code can replace it.
     var PlatformAbortSignal = global.AbortSignal, composeSignals = PlatformAbortSignal.any;
     function watchAbort(signal, aborted) {
@@ -277,7 +276,7 @@
         timeout = Math.min(left, 3600000);
         timed = left <= 3600000;
       }
-      var ticket = nextTicket++;
+      var ticket = env.nextId();
       // A WebSocket stream owns a two-way socket (LLP 1016.000 D7); an HTTP one's body that is not events is bytes.
       var socket = stream && (!!listen || !!own || /^wss?:/i.test(String(url)));
       var protocols;

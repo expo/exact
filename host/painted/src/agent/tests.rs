@@ -10,6 +10,8 @@ mod exit;
 // A re-ask after a turn over its budget, which `clock settle` waits for.
 mod overrun;
 mod polls;
+// A canvas input's samples across a seek.
+mod sensors;
 
 #[test]
 fn a_seek_past_the_discrete_instant_cap_reports_where_it_stopped() {

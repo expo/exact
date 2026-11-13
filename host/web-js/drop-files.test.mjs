@@ -2,6 +2,7 @@ import { test, expect } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
+import { reloadWeb } from '../../scripts/agent-test.mjs';
 import { webCompiler } from './module.mjs';
 import { need } from '../../scripts/coverage.mjs';
 
@@ -80,6 +81,16 @@ test('a column hears a file drag over its textarea, its drop and a paste of file
     await browser.type('composer', { clipboard: 'paste', text: 'hello' });
     expect(await browser.carrier.evaluate('document.querySelector("[data-testid=composer]").value')).toBe('hello');
     expect((await slots()).pasted).toBe('doc:/3/image.png');
+    // A reload is a new document with no gesture held: a contact down and a file drag over the page end with the old
+    // one, so the next press goes down and the next drag of the same file enters.
+    await browser.tap('column', { down: true });
+    await browser.tap('column', { dragenter: [resolve(files, 'notes.xyz')] });
+    await reloadWeb(browser);
+    await browser.tap('column', { down: true });
+    await browser.pointer('up');
+    await browser.tap('column', { drop: [resolve(files, 'notes.xyz')] });
+    await browser.clock('settle');
+    expect(await slots()).toMatchObject({ enters: 1, got: 'doc:/1/notes.xyz' });
   } finally {
     await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
   }

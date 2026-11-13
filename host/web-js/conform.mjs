@@ -198,7 +198,11 @@ function serve(dir) {
 // only as refused or not (the steps' state). A refusal repeated by a host's own deliveries counts once: a list's edge
 // is asked again at each report, and the Linux host reports a settling list more often than a page does.
 const BOUND = /Instance\(Trap\((?:IterationLimit|StringTooLong|ValueTooLarge|ValueTooDeep) \{ pc: \d+ \}\)\)|Trap\((?:IterationLimit|StringTooLong|ValueTooLarge|ValueTooDeep) \{ pc: \d+ \}\)|StringTooLong \{ name: "(?:[^"\\]|\\.)*" \}/;
-const boundReasons = lines => lines.flatMap(l => BOUND.exec(l)?.[0] ?? []).filter((r, i, all) => r !== all[i - 1]);
+const boundReasons = lines => lines.flatMap(l => {
+  const m = BOUND.exec(l); if (!m) return [];
+  const suffix = l.slice(m.index + m[0].length).replace(/; unset$/, '').replace(/ \}$/, '');
+  return (m[0] + suffix).replace(/ in view \d+ \(site (\d+)\)/, ' in site $1');
+}).filter((r, i, all) => r !== all[i - 1]);
 // The voice table's journal (LLP 1096 D5): every `sound …` and `sounds …` line, stamped, the same on every target, and
 // a sequence's `sequence …`, `haptic …` and `haptics …` lines (LLP 1125 D3); the JS target never refuses one of its
 // three commands (they are the runtime's own, not a host's).

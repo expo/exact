@@ -212,15 +212,21 @@ component Expose
   action write(value)
     draft = value
   // `field` is the sending visit's composer: a covered conversation keeps its own.
+  // One turn at a time: while Expose answers, Send waits and the draft stays.
+  // A second send would also take `reply` from the turn still streaming.
   action sendDraft(field: string)
-    if draft.trim() != ""
+    if draft.trim() != "" and not pending(reply)
       send reply = ask("expose", draft, "", epoch)
       draft = ""
       focus(field)
   action askAbout(id: string)
-    send reply = ask("expose", "", id, epoch)
+    if pending(reply)
+      toast = "Expose is still answering"
+      toastAt = performanceNow()
+    else
+      send reply = ask("expose", "", id, epoch)
+      draft = ""
     nav = push(nav, path("thread", "expose"))
-    draft = ""
   action clearChat
     send cleared = clearThread("expose")
   action openDetail(url: string)
@@ -448,7 +454,7 @@ component Expose
                   row flex=1 min-width=0 min-height=36 border-radius=18 border-style="solid" border-width=1 border-color="fieldRim" align-items="center" padding-left=14 padding-right=4 gap=6
                     input appearance="none" id=`composer-${e.id}` testId="composer" value=draft input=write submit=sendDraft(`composer-${e.id}`) placeholder=(chat.kind == "assistant" ? "Ask Expose" : "Message") aria-label="Message" flex=1 min-width=0 height=34 border-width=0 font-size=(17 * scale) color="fore" disabled=(chat.kind != "assistant")
                     if draft.trim() != "" and chat.kind == "assistant"
-                      button press=sendDraft(`composer-${e.id}`) testId="send" aria-label="Send" -exact-press-scale=0.9 width=28 height=28 border-radius=14 background-color="signal" display="flex" flex-direction="row" align-items="center" justify-content="center"
+                      button press=sendDraft(`composer-${e.id}`) testId="send" aria-label="Send" disabled=pending(reply) -exact-press-scale=0.9 width=28 height=28 border-radius=14 background-color="signal" display="flex" flex-direction="row" align-items="center" justify-content="center"
                         svg viewBox="0 0 24 24" width=16 height=16
                           path d="M12 19V6M6 12l6-6 6 6" fill="none" stroke="signalInk" stroke-width=2.6 stroke-linecap="round" stroke-linejoin="round"
                 HomeBar(tone="statusInk", press=go(path("home")))

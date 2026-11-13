@@ -143,6 +143,7 @@ impl<D: DataSource> Runner<D> {
             }
             false
         });
+        self.match_failed_requests();
     }
 
     /// Collect the module's aborted fetches now: a host calls this after the
@@ -203,12 +204,24 @@ impl<D: DataSource> Runner<D> {
     pub fn take_aborted_answer(&mut self) -> Option<(u64, Outcome)> {
         while !self.module_aborts.is_empty() {
             let ticket = self.module_aborts.remove(0);
+            // A pump may answer the abort before it takes queued requests.
+            self.requests.retain(|r| r.ticket != ticket);
             self.explicit_aborts.push(ticket);
             // Kept module work is answered aborted too: its cancelled reply
             // never comes, and the let-go answer's continuation hears this
             // (LLP 1146 D2) as a browser's aborted fetch rejects.
-            if !self.pending.iter().any(|p| p.ticket == ticket) && !self.is_module_work(ticket) {
+            if !self.holds(ticket) {
+                self.failed_tickets.remove(&ticket);
                 continue;
+            }
+            if let Some(message) = self.failed_tickets.get(&ticket) {
+                return Some((
+                    ticket,
+                    Outcome::Failed {
+                        kind: FailureKind::Refused,
+                        message: message.clone(),
+                    },
+                ));
             }
             return Some((
                 ticket,

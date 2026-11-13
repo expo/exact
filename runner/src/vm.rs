@@ -1050,3 +1050,16 @@ thread_local! {
 
 #[cfg(test)]
 mod tests;
+
+impl Trap {
+    /// The bound in diagnostic text, after the unchanged trap token.
+    pub fn bound(&self) -> &'static str {
+        match self {
+            Self::IterationLimit { .. } => ": past the 65,536 list steps one evaluation may take",
+            Self::StringTooLong { .. } => ": past the 64 MiB a string may hold",
+            Self::ValueTooLarge { .. } => ": past the 16,777,216 nodes or 64 MiB a value may hold",
+            Self::ValueTooDeep { .. } => ": past 64 levels",
+            _ => "",
+        }
+    }
+}

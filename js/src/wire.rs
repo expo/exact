@@ -20,6 +20,7 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
         }
     }
     let request = Request {
+        module: None,
         http: match j.get("max_response_bytes") {
             None => exact_runner::HttpScheduling::Ordered,
             Some(value) => exact_runner::HttpScheduling::Independent {
