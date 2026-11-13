@@ -60,3 +60,19 @@ test('a view repeats with `for`, which is a control keyword and indents; the ret
   assert.ok(indents.test(line('for')));
   assert.ok(!indents.test(line('each')));
 });
+
+test('`.contract` is registered with the TypeScript 7 extension when it is installed, and nothing happens without it', async () => {
+  const manifest = JSON.parse(readFileSync(resolve(import.meta.dir, 'package.json'), 'utf8'));
+  assert.ok(existsSync(resolve(import.meta.dir, manifest.main)) && manifest.files.includes('extension.js'));
+  assert.deepEqual(manifest.activationEvents, ['onLanguage:exact-contract']);
+  const { register } = await import('./extension.js');
+  const calls = [], registration = { dispose() {} }, context = { subscriptions: [] };
+  const typescript = { activate: async () => ({ registerContentMappers: (...args) => { calls.push(args); return registration; } }) };
+  assert.equal(await register({ getExtension: id => id === 'TypeScriptTeam.native-preview' ? typescript : undefined }, context), true);
+  assert.deepEqual(calls, [['exact.exact-contract', [{ extensions: ['.contract'] }]]]);
+  assert.deepEqual(context.subscriptions, [registration]);
+  // No TypeScript 7 extension, or one before content mappers.
+  assert.equal(await register({ getExtension: () => undefined }, context), false);
+  assert.equal(await register({ getExtension: () => ({ activate: async () => ({}) }) }, context), false);
+  assert.equal(context.subscriptions.length, 1);
+});
