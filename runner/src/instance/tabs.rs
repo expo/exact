@@ -476,7 +476,9 @@ fn open_panel(
             });
             let v = match carried.filter(|v| v.conforms(plan, s.ty)) {
                 Some(v) => v,
-                None => u.eval(s.init, &inner)?,
+                None => u.eval_named(s.init, &inner, || {
+                    format!("state {:?} initializer", plan.str(s.name))
+                })?,
             };
             if !v.conforms(plan, s.ty) {
                 return Err(InstanceError::slot_type(plan, &v, s.ty, name));
@@ -582,7 +584,7 @@ fn open_in(
                     Ok(())
                 };
                 u.theme = saved;
-                done?;
+                done.map_err(|e| e.at_view(n.view, n.node))?;
             }
             Child::Region(r) => match &mut r.active {
                 Active::Arm { roots, frame, .. } => {

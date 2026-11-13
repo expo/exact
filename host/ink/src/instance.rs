@@ -77,10 +77,12 @@ pub struct Instance {
     pub mask_rect: [f32; 4],
     pub mask_uv: [f32; 4],
     /// Normalized x/y/width/height; Ring: inner rect; Shadow: unblurred rect.
+    /// Blur/ColorPass: source offset in device pixels in xy.
     pub uv: [f32; 4],
     /// Ring: inner radii; Shadow: sigma; Layer: opacity in x.
     /// Gradient: linear endpoints, radial center/radii, or conic center/angle.
     /// Pattern: tile x/y/width/height in local coordinates.
+    /// Blend/replace: destination origin in xy, replacement image origin in zw.
     pub param: [f32; 4],
 }
 
@@ -190,6 +192,26 @@ pub struct Scissor {
 }
 
 impl Scissor {
+    pub fn from_rect([x, y, w, h]: [f32; 4]) -> Self {
+        let left = x.floor().max(0.) as u32;
+        let top = y.floor().max(0.) as u32;
+        Self {
+            x: left,
+            y: top,
+            width: ((x + w).ceil().max(0.) as u32).saturating_sub(left),
+            height: ((y + h).ceil().max(0.) as u32).saturating_sub(top),
+        }
+    }
+
+    pub fn rect(self) -> [f32; 4] {
+        [
+            self.x as f32,
+            self.y as f32,
+            self.width as f32,
+            self.height as f32,
+        ]
+    }
+
     pub fn intersect(self, other: Self) -> Self {
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
@@ -276,6 +298,9 @@ impl Encoder {
     /// Replace the effective clip with its rasterized intersection, saving the parent.
     pub fn push_combined_clip(&mut self, coverage: CoverageClip) {
         self.stack.push(self.state);
+        self.state.scissor = self
+            .clip_bounds()
+            .intersect(Scissor::from_rect(coverage.rect));
         self.state.rounded = [None; 2];
         self.state.coverage = Some(coverage);
         self.state.needs_layer = false;
@@ -297,6 +322,49 @@ impl Encoder {
 
     pub fn scissor(&self) -> Scissor {
         self.state.scissor
+    }
+
+    /// Conservative pixel bounds of the effective clips, including antialiasing.
+    pub fn clip_bounds(&self) -> Scissor {
+        let mut bounds = self.state.scissor;
+        for clip in self.state.rounded.into_iter().flatten() {
+            let [x, y, w, h] = clip.rect;
+            // The shader's derivative-based coverage reaches just over one pixel.
+            bounds = bounds.intersect(Scissor::from_rect([x - 2., y - 2., w + 4., h + 4.]));
+        }
+        if let Some(clip) = self.state.coverage {
+            bounds = bounds.intersect(Scissor::from_rect(clip.rect));
+        }
+        bounds
+    }
+
+    /// The vertex shader expands rounded quads in local space before transforming.
+    pub fn bounds(&self, instance: &Instance) -> Scissor {
+        let kind = instance.kind_brush & 65535;
+        let mut rect = instance.rect;
+        if kind != Kind::Coverage as u32 {
+            let [a, b, c, d, tx, ty] = instance.xform;
+            if kind <= Kind::Ring as u32 {
+                let determinant = (a * d - b * c).abs().max(0.000001);
+                let fx = c.hypot(d) / determinant;
+                let fy = a.hypot(b) / determinant;
+                rect = [
+                    rect[0] - fx,
+                    rect[1] - fy,
+                    rect[2] + 2. * fx,
+                    rect[3] + 2. * fy,
+                ];
+            }
+            let [x, y, w, h] = rect;
+            let points = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+                .map(|(x, y)| (a * x + c * y + tx, b * x + d * y + ty));
+            let left = points.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+            let top = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+            let right = points.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+            let bottom = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+            rect = [left, top, right - left, bottom - top];
+        }
+        self.clip_bounds().intersect(Scissor::from_rect(rect))
     }
 
     pub fn new(width: u32, height: u32) -> Self {

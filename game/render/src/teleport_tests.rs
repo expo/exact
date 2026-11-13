@@ -63,3 +63,52 @@ fn teleport_from_preserves_post_landing_motion_for_mesh_camera_and_light() {
         (50., 50.)
     );
 }
+
+/// A socketed prop's owner chain starts a `teleport_from` at its landing, as
+/// the owner's own mesh does: through the frame it moves from the landing to
+/// where the tick's motion took it.
+#[test]
+fn a_socket_follows_teleport_from_from_its_landing() {
+    struct Rig;
+    impl Game for Rig {
+        type Args = ();
+        const ID: &'static str = "landing-motion-socket";
+        fn setup(w: &mut World, _: &()) {
+            let mesh = w
+                .generated_model("posed.model", crate::test_model::posable_model())
+                .unwrap();
+            let actor = w.spawn_named("actor", (Transform::default(), mesh));
+            w.spawn_named(
+                "charm",
+                (
+                    Transform::default(),
+                    exact_game::SocketFollow::new(actor, "hand"),
+                ),
+            );
+        }
+        fn tick(_: &mut World, _: &Input, _: &()) {}
+    }
+    let mut sim = Sim::<Rig>::new(()).unwrap();
+    let mut attachments = crate::world::scene::Attachments::default();
+    attachments.feed(sim.world(), true, false, false, true);
+    sim.advance(0., Clock::Seekable);
+    sim.advance_with(17., Clock::Seekable, |w, _| {
+        attachments.feed(w, false, true, false, false)
+    });
+    let actor = sim.world().named("actor").unwrap();
+    sim.world_mut().teleport_from(
+        actor,
+        Transform::at(20., 0., 0.),
+        Transform::at(24., 0., 0.),
+    );
+    attachments.feed(sim.world(), false, false, false, false);
+    let charm = sim.world().named("charm").unwrap();
+    let mut at = |alpha: f32| {
+        attachments.frame(alpha);
+        let shown = attachments.output.iter().find(|a| a.entity == charm);
+        shown.expect("the charm follows its socket").matrix.w_axis.x
+    };
+    let (start, middle, end) = (at(0.), at(0.5), at(1.));
+    assert!((end - start - 4.).abs() < 1e-4, "{start} → {end}");
+    assert!((middle - start - 2.).abs() < 1e-4, "{start} → {middle}");
+}

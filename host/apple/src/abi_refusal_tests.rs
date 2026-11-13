@@ -664,3 +664,36 @@ fn a_clock_only_change_refuses_a_candidate_that_would_rewind_time() {
     assert_ne!(output(&bridge, len)["pending"], true);
     assert_eq!(bridge.host.as_ref().unwrap().carry().now_ms, latest.now_ms);
 }
+
+#[test]
+fn a_pick_after_preparation_refuses_a_candidate_that_would_reuse_its_path() {
+    let plan = contract::compile("component App\n  view\n    text \"Pick\"\n")
+        .unwrap()
+        .encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, Dot, Hooks::none(), 390., 844.);
+    bridge.input_write(&plan);
+    bridge.prepare_plan(plan.len(), Dot, Hooks::none(), 390., 844.);
+    let path = bridge
+        .host
+        .as_mut()
+        .unwrap()
+        .runner_mut()
+        .picked_path("photo.jpg");
+    let len = bridge.check_prepared();
+    assert_eq!(output(&bridge, len)["pending"], true);
+    assert!(bridge.prepared.is_none());
+    bridge.input_write(&plan);
+    bridge.prepare_plan(plan.len(), Dot, Hooks::none(), 390., 844.);
+    let len = bridge.commit_plan();
+    assert_ne!(output(&bridge, len)["pending"], true);
+    assert_ne!(
+        bridge
+            .host
+            .as_mut()
+            .unwrap()
+            .runner_mut()
+            .picked_path("photo.jpg"),
+        path
+    );
+}

@@ -729,7 +729,14 @@ impl<D: DataSource> Runner<D> {
         }
         for i in 0..self.slots.len() {
             if self.plan.slots[i].persist {
-                let initial = self.eval(self.plan.slots[i].init, &[], &[])?;
+                let initial = self.eval(self.plan.slots[i].init, &[], &[]).map_err(|e| {
+                    e.evaluated(|| {
+                        format!(
+                            "state {:?} initializer",
+                            self.plan.str(self.plan.slots[i].name)
+                        )
+                    })
+                })?;
                 self.slots[i] = self.restore_persisted(i, initial);
             }
         }

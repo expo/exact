@@ -1232,7 +1232,7 @@ test('an argument or a write past MAX_STRING is refused by name, and a trapping 
   for (const [row, binding, trap] of bindings) {
     const m = sig(0, 'm'), start = journal.length;
     const el = {}, text = () => binding(m());
-    const lines = () => journal.slice(start).filter(l => l.endsWith(`site 4: ${row} trapped Trap(${trap} { pc: 5 }); unset`)).length;
+    const lines = () => journal.slice(start).filter(l => l.endsWith(`site 4: ${row} trapped Trap(${trap} { pc: 5 })${trap === 'IterationLimit' ? ': past the 65,536 list steps one evaluation may take' : ''}; unset`)).length;
     let shown, painted;
     effect(() => { shown = tg(el, 4, row, text)(); });
     effect(() => { painted = tg(el, 4, row, text)(); });
@@ -1406,4 +1406,19 @@ test('focus handlers stop bubbling while a view transition holds their commit', 
       expect(ev.$stopped).toBe(true);
     }
   } finally { delete globalThis.document; delete globalThis.requestAnimationFrame; }
+});
+
+test('a trap names its evaluation and bound, and preserves an upstream evaluation', async () => {
+  const { Trap, $E } = await import(resolve(dir, 'budget.js'));
+  for (const [kind, words] of [
+    ['IterationLimit', 'the 65,536 list steps one evaluation may take'],
+    ['StringTooLong', 'the 64 MiB a string may hold'],
+    ['ValueTooLarge', 'the 16,777,216 nodes or 64 MiB a value may hold'],
+    ['ValueTooDeep', '64 levels'],
+  ]) {
+    const trap = new Trap(kind, 17);
+    expect(() => $E(trap, 'derive "visible"', 0)).toThrow(`Trap(${kind} { pc: 17 }) in derive "visible": past ${words}`);
+    expect(() => $E(trap, 'action "grow"', 0)).toThrow(`Trap(${kind} { pc: 17 }) in derive "visible": past ${words}`);
+    expect(() => $E(new Trap(kind, 17), 'site 58 each subject', 1)).toThrow(`Instance(Trap(${kind} { pc: 17 })) in site 58 each subject: past ${words}`);
+  }
 });

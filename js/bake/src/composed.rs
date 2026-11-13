@@ -198,6 +198,23 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn take_logs(&mut self) -> Vec<String> {
         self.0.take_logs()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.0
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.0.module_identity(source)
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.0.take_aborted()
     }

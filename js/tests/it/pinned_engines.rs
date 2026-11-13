@@ -4,6 +4,8 @@
 
 #[path = "../../engine_os.rs"]
 mod engine_os;
+#[path = "../../engine_receipt.rs"]
+mod engine_receipt;
 
 use engine_os::ENGINE_OS;
 

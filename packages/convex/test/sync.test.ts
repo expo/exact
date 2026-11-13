@@ -155,9 +155,10 @@ test('connecting again ends what the last connection had not answered, and sends
   globalThis.fetch = ((_: string, init: { exactStream: (typeof mappers)[number] }) => { mappers.push(init.exactStream); return new Promise(() => {}); }) as never;
   try {
     const client = convex('https://example.convex.cloud', { getFunctionName: (name: unknown) => name as string, ...JSON_ONLY });
+    const closed: number[] = [];
     const open = (n: number) => {
       const sent: string[] = [];
-      mappers[n]({ type: 'open', data: '' }, { send: (data: string) => sent.push(JSON.parse(data).type), close() {} });
+      mappers[n]({ type: 'open', data: '' }, { send: (data: string) => sent.push(JSON.parse(data).type), close() { closed.push(n); } });
       return sent;
     };
     client.live();
@@ -167,6 +168,7 @@ test('connecting again ends what the last connection had not answered, and sends
     const acknowledged = client.mutation('messages:send' as never, {});
     mappers[0]({ type: 'message', data: JSON.stringify({ type: 'MutationResponse', requestId: 2, success: true, result: 3, ts: T2, logLines: [] }) });
     client.live();
+    expect(closed).toEqual([0]);
     const ended = (p: Promise<unknown>) => settled(p.then(value => ({ ok: true, value }), (e: ConvexFailure) => ({ ok: false, message: e.message, again: e.again })));
     const replaced = 'The connection to Convex closed before it answered (a new connection replaced it)';
     expect(await ended(action)).toEqual({ ok: false, message: `${replaced}; the action may have run.`, again: undefined });

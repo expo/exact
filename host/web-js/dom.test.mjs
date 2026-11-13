@@ -1,4 +1,5 @@
 import { test, expect } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDocument } from './dom.js';
@@ -350,3 +351,57 @@ component Pages
     expect([html('detail').includes('alt="1 &gt; 0"'), html('detail').includes('="1 > 0"')]).toEqual([true, false]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 180000);
+
+test('a generated concatenated row key reuses unchanged rows on an item update', async () => {
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/each-key-test-'));
+  const previous = globalThis.document, render = globalThis.__exactRender;
+  globalThis.__exactRender = true;
+  globalThis.document = createDocument();
+  try {
+    const source = resolve(dir, 'app.contract');
+    writeFileSync(source, `shape Item
+  id: string
+  value: number
+component App
+  state items = range(1000).map(n => Item(id=\`\${n}\`, value=n))
+  view
+    column
+      for item in items key="row-" + item.id
+        text \`\${item.value}\`
+`);
+    const compiler = webCompiler();
+    expect(compiler.cmd).not.toBe('cargo');
+    const built = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', dir], { cwd: root, encoding: 'utf8' });
+    expect({ status: built.status, error: built.status ? built.stdout + built.stderr : '' }).toEqual({ status: 0, error: '' });
+    const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js', 'rows.js', 'router.js', 'route-pattern.js', 'schedule.js'];
+    for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
+    for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
+    const rows = resolve(dir, 'rows.js');
+    writeFileSync(rows, readFileSync(rows, 'utf8').replace('export function inOrder(list) {',
+      'export let orderingPasses = 0; export function inOrder(list) { orderingPasses++;'));
+    writeFileSync(resolve(dir, 'counted-rt.js'), `export * from './rt.js';
+import { each as realEach } from './rt.js';
+export let keyEvaluations = 0;
+export function each(p, list, key, row, pure) {
+  return realEach(p, list, (...args) => { keyEvaluations++; return key(...args); }, row, pure);
+}`);
+    const program = resolve(dir, 'app.js');
+    writeFileSync(program, readFileSync(program, 'utf8').replace('from"./rt.js"', 'from"./counted-rt.js"'));
+    const rt = await import(resolve(dir, 'rt.js'));
+    const counts = await import(resolve(dir, 'counted-rt.js'));
+    const ordering = await import(rows);
+    const [slots] = (await import(program)).default();
+    expect(counts.keyEvaluations).toBe(1000);
+    const passes = ordering.orderingPasses, keys = counts.keyEvaluations;
+    const items = slots[0], next = items().slice();
+    next[500] = ['500', -1];
+    expect(rt.commit(() => rt.W(items, next))).not.toBe(false);
+    expect(counts.keyEvaluations - keys).toBe(1);
+    expect(ordering.orderingPasses - passes).toBe(0);
+    expect(globalThis.document.getElementById('exact-root').textContent.split('-1')).toHaveLength(2);
+  } finally {
+    globalThis.document = previous;
+    if (render === undefined) delete globalThis.__exactRender; else globalThis.__exactRender = render;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

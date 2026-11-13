@@ -115,6 +115,14 @@ impl<D: DataSource> Runner<D> {
             &p.args,
             outcome,
         );
+        let parsed = parsed.map(|answer| {
+            answer.map(|mut answer| {
+                if let Answer::Later(request) = &mut answer {
+                    request.module = p.module.clone();
+                }
+                answer
+            })
+        });
         self.store.end_socket_call(parsed)
     }
 

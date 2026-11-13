@@ -16,16 +16,30 @@ pub(super) fn clock_framed<D: DataSource>(
     to: f64,
     deadline: std::time::Instant,
 ) -> (f64, Option<String>) {
+    framed(p, to, |p, step| clock_hatched(p, step, deadline))
+}
+
+/// [`Presenter::clock`] to `to`, as a contact's hold seeks it, framed as
+/// [`clock_framed`] is: a hold may not leave a world's samples unposted.
+pub(super) fn hold_framed<D: DataSource>(p: &mut Presenter<D>, to: f64) -> (f64, Option<String>) {
+    framed(p, to, |p, step| p.clock(step))
+}
+
+fn framed<D: DataSource>(
+    p: &mut Presenter<D>,
+    to: f64,
+    mut seek: impl FnMut(&mut Presenter<D>, f64) -> (f64, Option<String>),
+) -> (f64, Option<String>) {
     loop {
         if !p.host().runner().surface_sensor_inputs() {
-            return clock_hatched(p, to, deadline);
+            return seek(p, to);
         }
         // The frame's samples reach the world before the frame does: a
         // world steps as its host's clock moves, and takes each queued
         // event in the tick its stamp falls in.
         let step = (p.host().now() + FRAME).min(to);
         post_samples(p, step);
-        let (landed, e) = clock_hatched(p, step, deadline);
+        let (landed, e) = seek(p, step);
         if e.is_some() || landed < step || landed >= to {
             return (landed, e);
         }

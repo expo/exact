@@ -101,6 +101,7 @@ mod real {
         );
         fn exact_js_free(p: *mut c_char);
         fn exact_js_destroy(h: *mut c_void);
+        fn exact_js_out_of_memory(h: *mut c_void) -> bool;
     }
 
     /// One runtime with one module evaluated into it, and the bytecode
@@ -143,6 +144,11 @@ mod real {
     }
 
     impl Engine {
+        pub fn out_of_memory(&self) -> bool {
+            // SAFETY: reads only the shim's terminal flag, never the runtime.
+            unsafe { exact_js_out_of_memory(self.0) }
+        }
+
         pub fn new(
             max_heap_bytes: u32,
             host: HostFn,
@@ -489,6 +495,10 @@ mod real {
     const NONE: &str = "this binary links no engine (built without a lean Hermes; see js/build.rs)";
 
     impl Engine {
+        pub fn out_of_memory(&self) -> bool {
+            false
+        }
+
         pub fn new(
             _max_heap_bytes: u32,
             _host: HostFn,

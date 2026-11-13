@@ -60,6 +60,8 @@ const STREAMS = {
   upload: ['https://example.test/upload', { method: 'POST', body: 'x', exactUploadProgress: true }],
   rejected: ['https://example.test/rejected', { method: 'POST', body: 'x', exactUploadProgress: true }],
   socket: ['wss://example.test/socket', {}],
+  requestEvents: [new Request('https://example.test/events', { method: 'POST', body: 'hello' }), {}],
+  requestUpload: [new Request('https://example.test/upload', { method: 'POST', body: 'hello' }), { exactUploadProgress: true }],
 };
 const tried = run => { try { return Promise.resolve(run()).then(() => 'ran', e => e.message); } catch (e) { return Promise.resolve(e.message); } };
 export function answer(name, args, store, storage) {
@@ -104,6 +106,14 @@ async function mapped(kind) {
   const end = await r.stream(o => calls.push(o), controller);
   return [...calls, end].map(o => o.error ? { error: o.error } : JSON.parse(o.v));
 }
+test("a stream refuses a Request's own body rather than send none", async () => {
+  for (const kind of ['requestEvents', 'requestUpload']) {
+    const answer = data.answer('feed', [kind], new Map());
+    const end = await answer.stream(() => {}, Object.assign(new AbortController(), { resource: true }));
+    expect(end.error).toBe("fetch: a Request's body is a ReadableStream, which a stream cannot send; pass its bytes as init.body (await request.arrayBuffer())");
+  }
+});
+
 test('a TypeScript upload transport rejection answers with a failure outcome', async () => {
   const answer = data.answer('feed', ['rejected'], new Map());
   expect(await answer.stream(() => {}, new AbortController()))

@@ -1456,9 +1456,9 @@ test.skipIf(!existsSync('/bin/sh'))('EAS recipes have valid shell syntax after j
 test('an installed command opens the bundle it names, whatever the name holds', async () => {
   const { shimText: shimScript } = await import('./exact-install.mjs');
   const target = "/Users/o'neil $HOME/Applications/Budget $5 `id` 'q'.app";
-  const files = ['a b.txt', '$x', '-n', "it's"];
+  const files = ['a b.txt', '$x', '-n', '-notes.md', "it's"];
   const script = shimScript({ displayName: 'Budget', name: 'budget' }, target).replace('exec /usr/bin/open', "exec printf '%s\\n'");
   const run = spawnSync('/bin/sh', ['-c', script, 'budget', ...files], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(run.stdout.split('\n').slice(0, -1), ['-a', target, ...files]);
+  assert.deepEqual(run.stdout.split('\n').slice(0, -1), ['-a', target, '--', ...files]);
 });

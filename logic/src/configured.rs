@@ -210,6 +210,33 @@ macro_rules! configured {
             fn take_logs(&mut self) -> Vec<String> {
                 $crate::exact_runner::DataSource::take_logs(&mut self.0)
             }
+            fn parse_tool(
+                &mut self,
+                fetch: Option<u64>,
+                continuation: Option<u64>,
+                store: &mut $crate::exact_runner::Store,
+                source: &str,
+                args: &[$crate::exact_plan::Value],
+                outcome: $crate::exact_runner::Outcome,
+            ) -> Result<$crate::exact_runner::Answer, $crate::exact_runner::DataError> {
+                $crate::exact_runner::DataSource::parse_tool(
+                    &mut self.0,
+                    fetch,
+                    continuation,
+                    store,
+                    source,
+                    args,
+                    outcome,
+                )
+            }
+
+            fn module_identity(
+                &self,
+                source: &str,
+            ) -> Option<$crate::exact_runner::ModuleIdentity> {
+                $crate::exact_runner::DataSource::module_identity(&self.0, source)
+            }
+
             fn take_aborted(&mut self) -> Vec<u64> {
                 $crate::exact_runner::DataSource::take_aborted(&mut self.0)
             }

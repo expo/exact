@@ -949,3 +949,14 @@ URL Standard's constructor removes, and a URL's query excludes its own, so
 a second removal made `??a=1` the name `a` rather than `?a`. `url.rs`
 tests the parse; `js/tests/it/pure.rs` compares construction, a URL's
 view, lookup and mutation with Chrome. Replay on a refresh.
+
+## Terminal heap exhaustion
+
+The borrowed adapter propagates native engine exceptions through installation,
+checkpoints and task delivery. These changes adopt the consumer contract from
+upstream `6ce0bf09495cee43fdc9fb2ee00ca5520796d2ef`: Hermes heap OOM requires
+immediate adapter and runtime destruction, without JavaScript, job draining or
+collection. Exact's shim recognizes that exception only when the bundle receipt
+enables exception-on-OOM and RTTI. The v5 release pins remain unchanged.
+Exact's heap tests exercise retirement and replacement with the local v6 bundle,
+including timers, stream mappers, worker placement and in-flight storage.

@@ -1080,9 +1080,9 @@ impl<D: DataSource> Runner<D> {
             let action = handler.action;
             let _ = write!(what, " ({})", self.plan.str(self.plan.action(action).name));
             let mut args = Vec::new();
-            for a in handler.args.iter() {
+            for (k, a) in handler.args.iter().enumerate() {
                 let code = self.plan.arg(a).expr;
-                args.push(self.eval(code, &[], &frames)?);
+                args.push(self.eval_argument(code, &frames, (view, node, name, k))?);
             }
             let before = super::collection::EdgeState::capture(self, &frames);
             let receipt = self.run_action(action, args, &frames)?;
@@ -1381,7 +1381,7 @@ impl<D: DataSource> Runner<D> {
         };
         // A package view's declared event (`view_event.rs`).
         if let Event::Message(text) = &event {
-            if let Some(done) = self.view_event(node, text, &frames, what) {
+            if let Some(done) = self.view_event(view, node, text, &frames, what) {
                 return done;
             }
         }
@@ -1394,9 +1394,9 @@ impl<D: DataSource> Runner<D> {
             .cloned()
             .ok_or(RunnerError::NoHandler { view, event: name })?;
         let mut args = Vec::new();
-        for a in handler.args.iter() {
+        for (k, a) in handler.args.iter().enumerate() {
             let code = self.plan.arg(a).expr;
-            let value = match self.eval(code, &[], &frames) {
+            let value = match self.eval_argument(code, &frames, (view, node, name, k)) {
                 Ok(value) => value,
                 Err(error) => {
                     let name = self.plan.action(handler.action).name;

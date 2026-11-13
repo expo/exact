@@ -27,6 +27,7 @@ mod native_storage;
 mod network;
 mod no_store;
 mod nul_byte;
+mod oom;
 mod outlive;
 mod overlay;
 mod overrun;

@@ -46,7 +46,9 @@ public final class HealthModule: ExactPackage {
     private lazy var agentStore = AgentHealth()
     private var told: [String: String] = [:]
     private var facts: [String: [String: Any]] = [:]
-    private var observers: [String: HKObserverQuery] = [:]
+    /// Each observed type's query, and the sources that read the type: a
+    /// query stops when the last of them is released.
+    private var observers: [String: (query: HKObserverQuery, sources: Set<String>)] = [:]
     private var announcing = false
     private var shown = true
 
@@ -83,13 +85,20 @@ public final class HealthModule: ExactPackage {
     }
 
     public func release(_ name: String) {
-        guard name != "healthStatus" else { return }
-        for q in observers.values { store.stop(q) }
-        observers = [:]
+        for (key, observer) in observers where observer.sources.contains(name) {
+            let sources = observer.sources.subtracting([name])
+            if sources.isEmpty {
+                store.stop(observer.query)
+                observers[key] = nil
+            } else {
+                observers[key] = (observer.query, sources)
+            }
+        }
     }
 
     public func destroy(_ done: @escaping () -> Void) {
-        release("healthStatistics")
+        for observer in observers.values { store.stop(observer.query) }
+        observers = [:]
         done()
     }
 
@@ -252,7 +261,7 @@ public final class HealthModule: ExactPackage {
                 reply(answer(buckets))
             }
             store.execute(q)
-            observe(type, qt)
+            observe(type, qt, for: "healthStatistics")
         }, reply)
     }
 
@@ -276,13 +285,16 @@ public final class HealthModule: ExactPackage {
         }
     }
 
-    private func observe(_ key: String, _ type: HKSampleType) {
-        guard observers[key] == nil else { return }
+    private func observe(_ key: String, _ type: HKSampleType, for source: String) {
+        if let observer = observers[key] {
+            observers[key] = (observer.query, observer.sources.union([source]))
+            return
+        }
         let q = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completion, _ in
             DispatchQueue.main.async { self?.announce() }
             completion()
         }
-        observers[key] = q
+        observers[key] = (q, [source])
         store.execute(q)
     }
 
@@ -309,7 +321,7 @@ public final class HealthModule: ExactPackage {
                 reply(page(all))
             }
             store.execute(q)
-            observe("workouts", .workoutType())
+            observe("workouts", .workoutType(), for: "healthWorkouts")
         }, reply)
     }
 

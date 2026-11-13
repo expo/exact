@@ -40,7 +40,16 @@ impl RegionInst {
                 let want = if !subject_stale {
                     *arm
                 } else {
-                    match u.eval(row.subject, frames)? {
+                    match u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            match row.kind {
+                                RegionKind::When => "when",
+                                RegionKind::Match => "match",
+                                RegionKind::Each => "each",
+                            }
+                        )
+                    })? {
                         Value::Bool(true) => Some(0),
                         Value::Bool(false) => Some(1),
                         _ => {
@@ -65,7 +74,16 @@ impl RegionInst {
                 let (want, new_frame) = if !subject_stale {
                     (*arm, frame.clone())
                 } else {
-                    match u.eval(row.subject, frames)? {
+                    match u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            match row.kind {
+                                RegionKind::When => "when",
+                                RegionKind::Match => "match",
+                                RegionKind::Each => "each",
+                            }
+                        )
+                    })? {
                         Value::Option(Some(v)) => (
                             Some(0),
                             ArmFrame {
@@ -87,7 +105,16 @@ impl RegionInst {
                 let body = &deps.bodies[index];
                 let keys_stale = fresh || u.stale_outside(&deps.keys[index], 1);
                 let subject = if subject_stale || keys_stale {
-                    Some(u.eval(row.subject, frames)?)
+                    Some(u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            match row.kind {
+                                RegionKind::When => "when",
+                                RegionKind::Match => "match",
+                                RegionKind::Each => "each",
+                            }
+                        )
+                    })?)
                 } else {
                     None
                 };
@@ -179,7 +206,7 @@ impl RegionInst {
                         ..Default::default()
                     };
                     *inner.last_mut().unwrap() = frame.clone();
-                    let key = u.eval(row.key, &inner)?;
+                    let key = u.eval_named(row.key, &inner, || "each key".into())?;
                     // Equal scalar keys have the same canonical spelling,
                     // including +0/-0. An old key is already validated. Delay
                     // spelling and sorting until the key sequence changes.
@@ -428,7 +455,9 @@ pub(super) fn init_owned(
     let plan = u.env.plan;
     for (i, s) in plan.slots.iter().enumerate() {
         if s.owner == Some(arm) {
-            let v = u.eval(s.init, frames)?;
+            let v = u.eval_named(s.init, frames, || {
+                format!("state {:?} initializer", plan.str(s.name))
+            })?;
             if !v.conforms(plan, s.ty) {
                 return Err(InstanceError::slot_type(plan, &v, s.ty, plan.str(s.name)));
             }

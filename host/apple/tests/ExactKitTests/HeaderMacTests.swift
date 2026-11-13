@@ -1042,14 +1042,14 @@ final class HeaderMacTests: XCTestCase {
 
     """
 
-    private func boot(size: CGSize) throws -> ExactSession {
+    private func boot(size: CGSize, source: String? = nil) throws -> ExactSession {
         _ = NSApplication.shared
         let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("../../target/header-test-" + UUID().uuidString).standardizedFileURL
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let contract = dir.appendingPathComponent("app.contract"), plan = dir.appendingPathComponent("app.plan")
-        try app.write(to: contract, atomically: true, encoding: .utf8)
+        try (source ?? app).write(to: contract, atomically: true, encoding: .utf8)
         let compiler = Process(), said = Pipe()
         compiler.executableURL = URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_CONTRACT"]))
         compiler.arguments = ["build", contract.path, "-o", plan.path]
@@ -1063,6 +1063,28 @@ final class HeaderMacTests: XCTestCase {
     }
     private func named(_ testId: String) throws -> NodeView {
         try XCTUnwrap(session?.presenter.views.values.first { $0.props["testId"] == testId }, testId)
+    }
+
+    func testASingleLocationRootHeaderDoesNotRetainItsToolbarWithoutHistory() throws {
+        let source = app.replacingOccurrences(of: "    book \"/book\"\n", with: "")
+            .replacingOccurrences(of: "go(nav, \"/book\")", with: "go(nav, \"/\")")
+        let session = try boot(size: CGSize(width: 600, height: 400), source: source)
+        let p = session.presenter, view = ExactView(session: session)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        XCTAssertTrue(p.navigation.oneLocation)
+        XCTAssertFalse(p.navigation.backPossible)
+        XCTAssertTrue(view.attachWindowToolbar(to: window))
+        XCTAssertNotNil(window.toolbar, "the root header supplies the toolbar")
+        let header = try named("header"), route = try named("route-library")
+        p.apply(wireBatch([["op": "style", "id": Int(header.id), "style": ["display": "none"]]]))
+        XCTAssertNil(window.toolbar, "a hidden root header removes its toolbar before history retains it")
+        p.apply(wireBatch([["op": "style", "id": Int(header.id), "style": ["display": "flex"]]]))
+        XCTAssertNotNil(window.toolbar)
+        p.apply(wireBatch([["op": "props", "id": Int(route.id), "set": ["navigationBar": "none"]]]))
+        XCTAssertNil(window.toolbar, "a single-location route can withhold its header's toolbar")
     }
 
     /// The kernel behind it: the page is laid out without the header while

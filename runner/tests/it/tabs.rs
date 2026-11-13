@@ -488,3 +488,70 @@ fn a_host_builds_named_tabs_without_selecting_them() {
     r.build_tabs(&[c, 0]).unwrap();
     assert_eq!(r.unopened_tabs().len(), 1);
 }
+
+#[test]
+fn selecting_a_tab_names_the_panel_when_its_initializer_traps() {
+    selected_panel_trap(
+        "Broken()",
+        "component Broken\n  state rows = range(65537)\n  view\n    text `${rows.length}`\n",
+        "state \"rows#1\" initializer",
+    );
+}
+
+#[test]
+fn selecting_a_tab_names_the_panel_when_its_direct_region_traps() {
+    selected_panel_trap(
+        "for n in range(65537) key=n\n          text `${n}`",
+        "",
+        "each subject",
+    );
+}
+
+fn selected_panel_trap(contents: &str, component: &str, evaluation: &str) {
+    let source = format!(
+        r#"component App
+  state selected = "a"
+  action pick
+    selected = "b"
+  view
+    column navigationKey=selected navigationBack="back"
+      row role="tablist"
+        button "A" role="tab" aria-controls="panel-a" aria-selected=(selected == "a")
+        button "B" role="tab" aria-controls="panel-b" aria-selected=(selected == "b") press=pick testId="tab-b"
+      column role="tabpanel" id="panel-a"
+        column navigationKey="a"
+          text "A"
+      column role="tabpanel" id="panel-b" testId="panel-b"
+        {contents}
+        column navigationKey="b"
+          text "B"
+{component}"#
+    );
+    let mut r = boot(&source, "/");
+    let tree = agent::tree(&r);
+    let id = |target: &str| -> u32 {
+        nodes(&tree)
+            .into_iter()
+            .find(|n| n.contains(&format!("\"testId\":\"{target}\"")))
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let view = id("panel-b");
+    let button = id("tab-b");
+    let error = r.dispatch(button, Event::Press).unwrap_err();
+    let text = format!("{error:?}");
+    assert!(text.contains("Trap(IterationLimit { pc: "), "{text}");
+    assert!(text.contains(&format!(" in view {view} (site ")), "{text}");
+    assert!(
+        text.contains(&format!(
+            ") {evaluation}: past the 65,536 list steps one evaluation may take"
+        )),
+        "{text}"
+    );
+    assert!(r.is_poisoned(), "{text}");
+    assert!(r.journal().any(|line| line.contains(&text)), "{text}");
+}
