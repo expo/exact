@@ -352,25 +352,16 @@ extension NavigationHost {
     /// production bake.
     static let checksOwnership = !ExactEnv.productionBake
 
-    /// Record the controllers Exact set on a stack.
-    func recordOwned(_ nav: UINavigationController) {
-        stacks[ObjectIdentifier(nav)]?.written = nav.viewControllers.map(ObjectIdentifier.init)
-    }
-
-    /// UIKit completed a transition (`didShow`): a pop the user made (UIKit's
-    /// back button, the edge swipe) leaves a prefix of what Exact wrote, and
-    /// is recorded; any other change is not Exact's and stays to be reported.
-    func recordPop(_ nav: UINavigationController) {
-        guard let stack = stacks[ObjectIdentifier(nav)] else { return }
-        let now = nav.viewControllers.map(ObjectIdentifier.init)
-        if now.count <= stack.written.count, Array(stack.written.prefix(now.count)) == now { stack.written = now }
-    }
-
     /// Before each batch: compare what Exact owns on each hatched object with
-    /// what Exact last wrote, and journal a difference once, by name. It is
-    /// detection, not enforcement; a change made and undone between two
-    /// batches is not seen.
+    /// what Exact last wrote, and UIKit's stacks and selection at rest with
+    /// the router's (`restDifference`), and journal a difference once, by
+    /// name. It is detection, not enforcement; a change made and undone
+    /// between two batches is not seen.
     func checkOwned() {
+        if NavigationHost.checksOwnership, let difference = restDifference {
+            let line = "navigation: at rest, \(difference)"
+            if ownedReported.insert(line).inserted { presenter.session?.log(line) }
+        }
         guard NavigationHost.checksOwnership, !changing, !syncing, presenter.session?.natives.hatchesConnected == true else { return }
         func say(_ what: String, _ property: String) {
             let line = "\(what): \(property) changed outside Exact, which owns it"
@@ -382,7 +373,6 @@ extension NavigationHost {
             guard let stack = stacks[ObjectIdentifier(nav)], stack.hatched else { continue }
             if nav.delegate !== stack.proxy { say("navigation \(stack.label)", "delegate") }
             if nav.transitionCoordinator == nil, !searching(nav.topViewController as? RouteController), nav.isNavigationBarHidden == topShowsBar(nav) { say("navigation \(stack.label)", "navigation bar visibility") }
-            if nav.viewControllers.map(ObjectIdentifier.init) != stack.written { say("navigation \(stack.label)", "viewControllers") }
             #if !os(tvOS)
             if let pop = nav.interactivePopGestureRecognizer, pop.delegate !== self { say("navigation \(stack.label)", "the pop gesture's delegate") }
             if #available(iOS 26.0, tvOS 26.0, *), let pop = nav.interactiveContentPopGestureRecognizer, pop.delegate !== self {

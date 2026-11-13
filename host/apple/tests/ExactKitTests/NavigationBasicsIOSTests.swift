@@ -87,10 +87,6 @@ final class NavigationBasicsIOSTests: XCTestCase {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
-    private func tapNode(_ session: ExactSession, _ testId: String) throws {
-        _ = Agent(session: session).tap(["id": Int(try node(session, testId).id)])
-    }
-
     private func journal(_ session: ExactSession) -> String { session.agent(#"{"op":"logs","since":0}"#) }
 
     private func text(_ session: ExactSession, _ testId: String) -> String? {

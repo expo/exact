@@ -983,7 +983,7 @@ package final class Presenter {
                 // Out of the map before out of the window: the editing-ended
                 // notification removal fires finds no view to send for.
                 let gone = release(id) { $0.forget() }
-                if let gone, !modals.retainsRemovedView(gone) { gone.removeFromSuperview() }
+                if let gone, !modals.retainsRemovedView(gone), !navigation.retainsRemovedView(gone) { gone.removeFromSuperview() }
             case .roots:
                 root.subviews.forEach { $0.removeFromSuperview() }
                 ApplyProfile.time("roots.attach") { accent.attach(op.ids.compactMap { views[UInt32($0)] }) { for r in $0 { root.addSubview(r); regrid(r) } } }

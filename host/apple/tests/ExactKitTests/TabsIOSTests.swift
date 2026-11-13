@@ -138,6 +138,46 @@ final class TabsIOSTests: XCTestCase {
                        "the router followed the pop")
     }
 
+    /// A tab selected in code, as an app's own code may select one: on the
+    /// UITab path UIKit sends `didSelectTab` for it (LLP 1141.002 §6), which
+    /// is `followUIKit`, so the router follows within the selection, before
+    /// the tab's route appears (LLP 1075.003 §3.7).
+    func testATabSelectedInCodeIsFollowedWithinTheSelection() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("UITab is iOS 18") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        XCTAssertFalse(tabs.tabs.isEmpty)
+        tabs.selectedTab = tabs.tabs[1]
+        XCTAssertEqual(navigation.routerTab, 1, "the router follows within the selection")
+        until("Saved shown") { self.topRoute(session) == "route-saved" }
+        XCTAssertNil(navigation.restDifference, "UIKit and the router agree")
+    }
+
+    /// Home popped and Saved selected in code in one turn, on the UITab
+    /// path, where the app declines Saved: `didSelectTab` comes before the
+    /// pop's `willShow`, so the pop reaches the router there first, as
+    /// Home's Back, and Saved's press after it leaves the router on Home,
+    /// which UIKit selects again.
+    func testAPopAndADeclinedSelectionInCodeInOneTurn() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("UITab is iOS 18") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let home = try XCTUnwrap(navigation.primaryNavigation)
+        let agent = Agent(session: session)
+        _ = agent.tap(["id": Int(try node(session, "hold").id)])
+        _ = agent.tap(["id": Int(try node(session, "open-detail").id)])
+        until("Detail pushed") { self.topRoute(session) == "route-detail" && !navigation.inTransition }
+        let root = try XCTUnwrap(home.viewControllers.first as? RouteController)
+        home.popViewController(animated: false)
+        tabs.selectedTab = tabs.tabs[1]
+        until("UIKit selects Home again") { tabs.selectedTab === tabs.tabs[0] && !navigation.inTransition }
+        XCTAssertEqual(navigation.routerTab, 0, "the app declined Saved")
+        XCTAssertEqual(navigation.selectedKey, root.key, "Home's Back reached the router")
+        XCTAssertNil(navigation.restDifference, "UIKit and the router agree")
+    }
+
     /// LLP 1116.004 D1.1: on an iPad, the root tab bar whose placement the
     /// author left unsaid is UIKit's sidebar-adaptable bar. Where UIKit shows
     /// the sidebar (a landscape window), the selected route clears it as it

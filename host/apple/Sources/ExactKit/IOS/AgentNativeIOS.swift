@@ -383,7 +383,7 @@ extension Presenter {
         if !kernel.complete { report.incomplete("frames-cap") }
         if inFlight { report.incomplete("in-flight") }
         let kept = keptTrees()
-        let retiringRoots = modals.inspectionRetiring
+        let retiringRoots = modals.inspectionRetiring + (navigation.retiringRoots as [UIView])
         report.walked = roots.map(\.1)
         var seen: [UInt32: NodeView] = [:]
         var stack: [(UIView, NodeView?)] = roots.reversed().map { ($0.0, nil) }
@@ -422,7 +422,8 @@ extension Presenter {
                     }
                     if kept.parked.members.contains(ObjectIdentifier(n)) || kept.leaving.contains(ObjectIdentifier(n)) { continue }
                     // A retiring modal keeps its removed route on screen until
-                    // UIKit's dismissal ends (`ModalIOS.swift`): kept on purpose.
+                    // UIKit's dismissal ends, and a removed route its views until
+                    // UIKit's transition ends: kept on purpose.
                     if retiringRoots.contains(where: { n === $0 || n.isDescendant(of: $0) }) { continue }
                     // An unmapped node view is a leak wherever it hangs, an
                     // opaque controller interior included (D3: nodes there are matched).
