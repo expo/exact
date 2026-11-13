@@ -706,6 +706,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
         guard let refusal else {
             serving = true
+            browser?.cancelRecovery()
             webView.load(URLRequest(url: src.flatMap(GuestURL.web) ?? URL(string: "about:blank")!))
             return
         }

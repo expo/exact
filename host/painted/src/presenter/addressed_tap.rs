@@ -19,6 +19,7 @@ impl<D: DataSource> Presenter<D> {
     /// refused; one without never presses a control inside it.
     pub fn tap_at(&mut self, id: ViewId, at: Option<(f32, f32)>) -> Result<String, String> {
         self.boxes();
+        self.touched();
         // An open surface of the top layer takes the tap: its own row is
         // chosen, and the page under it is inert.
         if let Some(result) = self.surface_tap(id) {

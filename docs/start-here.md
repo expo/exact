@@ -73,8 +73,15 @@ DejaVu Sans with no frame; `verify windows` also captures the app as it opens on
 judge the look from that one. Windows uses ink by default, or CPU when the manifest declares `game`; `host.windows.painter: "ink"` or `"cpu"` selects either painter. `EXACT_PAINTER` overrides either choice. Headless drives explicitly use CPU unless overridden ([painter choices](reference.md#windows-painter)). A screenshot path with a space is quoted: `"screenshot 'C:\a b\x.png'"`. A screen you
 want checked or captured is a test's end; a drive takes any others (`resize`, `prefer …`, `screenshot`).
 Create seam types once with `bun exact.mjs contract types app.contract -o app.contract.d.ts`.
-`contract build` refreshes that declaration after a successful compile and reports
-the change on stderr. `contract types --check app.contract` checks freshness without writing.
+`contract build`, development web builds, and native development builds (`ios`,
+`mac`, `linux`, `windows`, `android`, and `verify android`) refresh that declaration
+when its source signatures change. `test` and `agent` build and refresh it on
+`ios`, `mac` and `windows` without `--device`. On Linux and Android, `test` and
+`agent` do not build; run a build after a Contract edit there. Native bakes with
+`EXACT_UPDATE_TRUST=production` keep declarations in the build stage, except mixed
+Rust/TypeScript apps with a composer (such as Fieldnotes), which also refresh the
+editor copy before type-checking. `contract build` reports a refresh on stderr.
+`contract types --check app.contract` checks freshness without writing.
 `bun exact.mjs update` reports lock drift after this checkout moves; `bun exact.mjs lock`
 refreshes it. `contract migrate app.contract` rewrites retired Contract syntax;
 [the Snapback upgrade note](../snapback4/README.md#updating-an-inherited-app) covers

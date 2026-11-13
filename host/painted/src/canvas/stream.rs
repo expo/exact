@@ -329,7 +329,7 @@ component App
         )
         .unwrap();
         assert!(error.is_none(), "{error:?}");
-        (p.brush.touch_mode, p.brush.keyless) = (true, true);
+        (p.brush.touch_mode, p.brush.pointer_modality) = (true, true);
         p.set_pointer_kind(PointerKind::Touch);
         let id = |p: &Presenter<()>, name: &str| {
             let k = p.host().kernel();

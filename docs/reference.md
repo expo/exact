@@ -136,6 +136,19 @@ state through its native segment, UIKit bar item or title, or AppKit menu item.
 UIKit menu rows and alert actions remain selectable but read as enabled: their
 public disabled states also stop selection.
 
+## Grouped section shadows
+
+A grouped list section's `box-shadow`, including class and state values, paints
+around its card, excluding the header and footer. A section without a card
+(`background-color="transparent"`) refuses a shadow. Shadow changes support
+`transition`; keyframe shadow animation on a grouped section is not supported
+yet and fails the build. If shadow keyframes are declared, a grouped section's
+animation must name its keyframes with a literal or a choice of literals so the
+compiler can check them; their timing may be computed, and an animation may
+be absent. Animations that do not set `box-shadow` remain on the section. On
+iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
+forwarding from UIKit’s visible cells, header and footer is not implemented yet.
+
 ## Serve RealWorld
 
 RealWorld's public pages can be served by the native renderer:
@@ -1549,6 +1562,14 @@ none set, `formatLocale` is the locale),
 normalizes POSIX names to BCP 47 (`C`/`POSIX` use `en-US`), and reads the zone from
 `TZ` when it names a zoneinfo entry, otherwise the system's IANA zone (UTC fallback).
 
+`bun scripts/agent.mjs trace --pid <pid> --out snapshot.json` asks a running development
+Mac or simulator app to save its trace without taking ownership of the process.
+The file includes `tree`, `state`, `layout` and `observation`. Tree and state read the
+runner directly, without guest DOM inspection or the carrier's drain; layout reads
+mounted host geometry. Each read is labelled passive. The frame ring ends before
+these observations, and their wall-clock bounds, clock mode, scheduling and substitutions
+are recorded. This path never seeks or settles the app.
+
 ### Inspect work and native presentation
 
 `perf <target> during "<operation>"`
@@ -1560,12 +1581,15 @@ Missing coverage is not a zero.
 
 On Apple, `"perf frames live 500"` observes display-link callbacks for 500 ms without
 advancing or changing the current clock. Its reply identifies scheduling, substitutions
-and dropped records. A normal Mac event loop is available through
-`const session = await open({host: 'macos', env: {EXACT_AGENT: 'live'}, storage: 'my-scratch-store'})` in a
-driver script importing `open` from `scripts/agent.mjs`; call
-`await session.perf(null, {live: 500})` and close the session afterward.
-This carrier still substitutes storage and secret presence. `--timing platform` alone
-keeps agent execution substitutions. Neither establishes production-equivalent performance,
+and dropped records. A normal Mac event loop is available with
+`bun scripts/agent.mjs macos --live --storage latency "tap change-station" "type station-search Palo" state`.
+The driver launches and closes this process and keeps input available. `--live` uses
+normal scheduling and the wall clock; `--storage` chooses its scratch store. Set
+`EXACT_STORE=real` in the launch environment to use the app's real secret and preference
+stores and secret presence. App files still follow the drive's scratch-store setting
+(`--storage`) and are unavailable when no scratch store is configured. `state.storage` and the observation's `store` describe those
+app files. `state.observation` reports clock mode, scheduling and substitutions.
+`--timing platform` alone keeps agent execution substitutions. A substituted run does not establish production-equivalent performance,
 and callback timing does not prove compositor presentation. `layout` distinguishes target
 and presented geometry; an unavailable presentation remains explicit.
 

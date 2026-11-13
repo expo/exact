@@ -245,7 +245,7 @@ pub struct Presenter<D: DataSource> {
     window_focuser: Option<Box<dyn Fn()>>,
     window_hider: Option<Box<dyn Fn()>>,
     /// The desktop portal's answers to document pickers (`portal.rs`).
-    portal: crate::portal::Inbox,
+    pub(crate) portal: crate::portal::Inbox,
     /// The modifier keys held, each side a bit (Shift, Control, Alt, Meta,
     /// left then right): a `key` event's flags (`KeyboardEvent.shiftKey`…).
     pub(crate) held: u8,

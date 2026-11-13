@@ -437,7 +437,6 @@ impl<D: DataSource> Presenter<D> {
         by: (f32, f32),
         rev: u32,
     ) -> Option<((f32, f32), (f32, f32))> {
-        self.person_scrolls += 1;
         self.restore_scroll_anchors();
         if !self.reader.tracked.contains_key(&id) {
             return None;
@@ -456,7 +455,13 @@ impl<D: DataSource> Presenter<D> {
             Completion::Reader,
             Some(by),
         )?;
-        Some(((to.0 - from.0, to.1 - from.1), movement))
+        let moved = (to.0 - from.0, to.1 - from.1);
+        // Only a sample that moves counts as the person's scroll: a dropped
+        // one must not cancel a fragment scroll or a load's hold.
+        if moved != (0., 0.) || movement != (0., 0.) {
+            self.person_scrolls += 1;
+        }
+        Some((moved, movement))
     }
 
     /// An agent's phased wheel supplies one reader sample on the existing clock.

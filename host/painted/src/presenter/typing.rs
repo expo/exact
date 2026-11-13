@@ -290,6 +290,7 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         let text = if kind == EventKind::Paste { text } else { "" };
+        let from = self.commands.len();
         if let Some(target) = target {
             let error = self.host.dispatch_at(
                 target,
@@ -302,9 +303,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // The paste's default action: the text in at the field's selection
         // (x2apps codeedit #2), after its listeners, as the web's.
-        let queued = self.commands.len();
-        self.commands.retain(|c| c.name != "preventDefault");
-        if field && queued == self.commands.len() {
+        if !self.prevented_since(from) && field {
             self.paste_field(id, text, now);
         }
         Ok(format!(
@@ -690,7 +689,7 @@ impl<D: DataSource> Presenter<D> {
             || (!(held.ctrl || held.alt || held.meta)
                 && !matches!(name, "Control" | "Alt" | "Meta" | "AltGraph"))
         {
-            self.brush.keyless = false;
+            self.brush.pointer_modality = false;
             if self.brush.ringless.take().is_some() {
                 self.dirty = true;
             }
@@ -826,7 +825,7 @@ impl<D: DataSource> Presenter<D> {
             && matches!(name, " " | "Enter")
             || role == Some("link") && name == "Enter"
         {
-            self.note_press(id, true);
+            self.note_press(id);
             self.activate_with(id, now_ms, false);
             return;
         }

@@ -140,6 +140,12 @@ impl<D: DataSource> Host<D> {
         self.finish(batch, None)
     }
 
+    /// The presenter let the decoded `src` go: a canvas that draws it again
+    /// asks for it again (LLP 1056 D9).
+    pub fn canvas_image_released(&mut self, src: &str) {
+        self.runner.canvas_image_released(src);
+    }
+
     /// The display changed: canvases redraw at this session's new scale (a
     /// new generation, LLP 1056 D4).
     pub fn canvas_display(&mut self, scale: f64) -> String {

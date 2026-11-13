@@ -21,12 +21,12 @@ impl CameraPointer {
         camera: Option<Entity>,
         next_tick: bool,
         structure: bool,
-        parent_changed: bool,
+        chains: Option<&ParentChanges>,
     ) {
         let look = camera.and_then(|e| w.get::<MouseLook>(e).map(|p| *p));
         let pan = camera.and_then(|e| w.get::<PointerPan>(e).map(|p| *p));
         let changed = self.camera != camera;
-        if changed || camera.is_some_and(|e| snap(w, e, parent_changed)) {
+        if changed || camera.is_some_and(|e| snap_in(w, e, chains)) {
             self.pan_interpolates = false;
         } else if next_tick {
             self.pan_interpolates = true;
@@ -39,7 +39,7 @@ impl CameraPointer {
             self.kids.clear();
             return;
         };
-        if changed || newly_active || structure || parent_changed {
+        if changed || newly_active || structure || chains.is_some() {
             let old = std::mem::take(&mut self.kids);
             for (e, _) in w.query::<&Parent>().iter() {
                 let mut at = e;
@@ -63,7 +63,7 @@ impl CameraPointer {
             }
         }
         for history in &mut self.kids {
-            history.update(w, next_tick, parent_changed);
+            history.update(w, next_tick, chains);
         }
     }
     pub fn frame(

@@ -325,29 +325,39 @@ fn a_stale_record_ends_no_group_that_is_not_the_apps() {
 
 #[test]
 fn a_quit_ends_every_group() {
-    quit_ends_every_group(false);
+    quit_ends_every_group("a_quit_ends_every_group", false);
 }
 
 #[test]
 #[ignore = "async lane: measures the five-second quit grace on the wall clock"]
 fn a_quit_keeps_its_five_second_grace() {
-    quit_ends_every_group(true);
+    quit_ends_every_group("a_quit_keeps_its_five_second_grace", true);
 }
 
-fn quit_ends_every_group(check_latency: bool) {
+/// The escalation waits on the caller when its thread cannot start.
+#[test]
+fn a_quit_without_its_escalation_thread_ends_every_group() {
+    quit_ends_every_group(
+        "a_quit_without_its_escalation_thread_ends_every_group",
+        false,
+    );
+}
+
+fn quit_ends_every_group(test: &str, check_latency: bool) {
     use std::io::{BufRead, Read, Write};
     use std::process::{Command, Stdio};
 
     const CHILD: &str = "EXACT_PROCESS_QUIT_TEST";
     if std::env::var_os(CHILD).is_none() {
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--exact", "--include-ignored", "--nocapture"])
-            .arg(if check_latency {
-                "process::real::tests::a_quit_keeps_its_five_second_grace"
-            } else {
-                "process::real::tests::a_quit_ends_every_group"
-            })
-            .env(CHILD, "1")
+            .arg(format!("process::real::tests::{test}"))
+            .env(CHILD, "1");
+        if test.contains("without_its_escalation_thread") {
+            command.env("EXACT_TEST_FAIL_QUIT_THREAD", "1");
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -717,4 +727,69 @@ fn writes_to_a_child_that_closed_its_stdin_are_dropped_and_drain() {
     }
     core.forget(|_| false);
     until_gone(leader, "the group outlived its release");
+}
+
+/// A child whose waiter, a pipe's reader or its stdin writer cannot start
+/// fails its call: nothing would reap it or end its output, so the call
+/// would never answer. The child is ended rather than left to run.
+#[test]
+fn a_child_whose_thread_cannot_start_fails_its_call() {
+    let (core, woke, dir) = core("process.spawn /bin/sh");
+    for (ticket, role) in [(1, "pipe"), (2, "stdin"), (3, "wait")] {
+        let mark = dir.join(format!("ran-{role}"));
+        let script = format!("sleep 0.2; touch {}", mark.display());
+        let call = serde_json::json!({ "kind": "execFile", "program": "/bin/sh",
+            "args": ["-c", script], "input": exact_runner::agent::base64(b"in"),
+            "env": [["PATH", "/usr/bin:/bin"], ["EXACT_TEST_FAIL_THREAD", role]] });
+        core.run(request(ticket, call, false), None).unwrap();
+        let out = collect(&core, &woke, |o| !o.is_empty());
+        let Outcome::Failed { message, .. } = &out[0] else {
+            panic!("{role}: {out:?}")
+        };
+        assert!(
+            message.contains("cannot start its thread"),
+            "{role}: {message}"
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!mark.exists(), "{role}: the child ran on");
+    }
+}
+
+/// Under the agent, an `execFile` whose child exited with its output still
+/// open closes that output when the agent's clock reaches the drain, not
+/// when the wall does.
+#[test]
+fn an_exec_files_drain_runs_on_the_agents_clock() {
+    let (wake, woke) = channel();
+    let core = Core::under_agent(&[("/bin/sh", "real")], || {
+        Core::start(
+            None,
+            "process.spawn /bin/sh",
+            Box::new(move || {
+                let _ = wake.send(());
+            }),
+        )
+    });
+    let clock = core.work_clock().expect("under the agent");
+    let call = serde_json::json!({ "kind": "execFile", "program": "/bin/sh",
+        "args": ["-c", "sleep 30 & echo left"], "encoding": "utf8" });
+    core.run(request(1, call, false), None).unwrap();
+    // The shell exits; `sleep` keeps its output open until the drain, 5 s on.
+    let deadline = Instant::now() + BOUND;
+    let due = loop {
+        if let Some(due) = clock.due() {
+            break due;
+        }
+        assert!(Instant::now() < deadline, "the drain is not on the clock");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    core.begin_pump();
+    assert!(core.drain().is_empty(), "answered before the drain");
+    clock.advance(due);
+    let out = collect(&core, &woke, |o| !o.is_empty());
+    let Outcome::Response(r) = &out[0] else {
+        panic!("{out:?}")
+    };
+    let reply: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    assert_eq!(text(&reply["stdout"]), "left\n");
 }

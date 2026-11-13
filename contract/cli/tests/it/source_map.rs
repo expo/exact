@@ -230,6 +230,57 @@ component App
 }
 
 #[test]
+fn grouped_sections_keep_class_origins_on_the_section() {
+    grouped_class_origin(false);
+}
+
+#[test]
+fn grouped_sections_keep_class_origins_on_the_card() {
+    grouped_class_origin(true);
+}
+
+fn grouped_class_origin(shadow: bool) {
+    let app = App::new(if shadow {
+        "grouped-shadow"
+    } else {
+        "grouped-class"
+    });
+    let source = format!(
+            "style Typography\n  color=\"#123456\"\n{}component App\n  view\n    list appearance=\"auto\"\n      section class=Typography testId=\"section\"\n        row testId=\"row\"\n          text \"Profile\"\n",
+            if shadow { "  box-shadow=\"0 4px 14px #0008\"\n" } else { "" }
+        );
+    app.write("app.contract", &source);
+    let (plan, map) = app.compile();
+    let runner = boot(plan);
+    let check = |site: &Json, name: &str, attr: &str, line: u32| {
+        let binding = site["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["row"] == name)
+            .unwrap();
+        assert_eq!(binding["origin"], "class:Typography", "{binding}");
+        assert_eq!(binding["attr"], attr);
+        assert_eq!(binding["at"]["line"], line);
+    };
+    if !shadow {
+        check(at(&runner, &map, "section"), "text_color", "color", 2);
+    } else {
+        let row = runner
+            .kernel()
+            .node_by_key(runner.kernel().find_by_test_id("row")[0])
+            .unwrap();
+        let (site, _) = runner.site_of(row.parent.unwrap()).unwrap();
+        check(
+            &map["nodes"][site.0 as usize],
+            "box_shadow",
+            "box-shadow",
+            3,
+        );
+    }
+}
+
+#[test]
 fn router_slot_and_lifted_declarations_keep_aligned_locations() {
     let app = App::new("router");
     let path = app.write(

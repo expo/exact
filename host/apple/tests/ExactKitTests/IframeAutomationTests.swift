@@ -295,6 +295,24 @@ final class IframeAutomationTests: XCTestCase {
         XCTAssertEqual(value(arm, "String(window.sure)") as? String, "false")
     }
 
+    /// A clipped picture reads the frame's viewport with a script first. A
+    /// dialog holding that script when the frame unmounts leaves the call
+    /// to end with the frame (`NotFoundError`).
+    func testAClippedPictureHeldByADialogEndsWithItsFrame() throws {
+        let arm = try arm(), seen = Seen()
+        let (handle, _) = mount(arm, seen)
+        XCTAssertNil(run(arm, "releaseActions")["error"], "an acting call takes the frame")
+        _ = call(arm, "evaluate", ["expression": "setTimeout(() => alert('Held'), 0), 1"])
+        spin { seen.records.contains { $0.event == "userpromptopened" } }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-automation-\(ProcessInfo.processInfo.processIdentifier)/held.png")
+        let shot = call(arm, "captureScreenshot", ["path": "app:/tmp/held.png", "pathFile": file.path, "clip": ["x": 0, "y": 0, "width": 100, "height": 50]])
+        pause(0.2)
+        XCTAssertNil(shot.value, "the dialog holds the viewport's script")
+        arm.destroy(handle)
+        let ended = answered(shot, 5)
+        XCTAssertEqual(ended["error"] as? String, "NotFoundError", "\(ended)")
+    }
+
     /// An agent-controlled frame's download goes to the folder, with no panel.
     func testDownloadsGoToTheFolder() throws {
         let arm = try arm(), seen = Seen()

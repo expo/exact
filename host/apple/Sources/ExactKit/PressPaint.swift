@@ -118,6 +118,9 @@ extension NodeView {
         restyleForPress(pressPainted(looked(base)))
         inkLooks()
         refreshPressOpacity()
+        #if os(iOS) || os(tvOS)
+        if groupedShadowCard != nil { presenter?.requestProjectionSync() }
+        #endif
     }
 
     /// AppKit's layer is optional, UIKit's not.

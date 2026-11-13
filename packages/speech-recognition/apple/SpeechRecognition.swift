@@ -673,6 +673,10 @@ final class RecognizerEngine: RecognitionEngine {
     /// Under `lock`: the reader reads no further once the recognition stops, aborts or ends.
     private var halted = false
     private var segmentStart = 0.0
+    /// Under `lock`: a live request's audio was ended at a seam, and `held` is what the track heard since, for the
+    /// next request.
+    private var seaming = false
+    private var held: [AVAudioPCMBuffer] = []
 
     init(_ r: Recognition, _ args: [String: Any], file: URL?) {
         self.r = r; self.args = args; self.file = file
@@ -694,8 +698,12 @@ final class RecognizerEngine: RecognitionEngine {
         if let punctuation = apple["addsPunctuation"] as? Bool { request.addsPunctuation = punctuation }
         let hints: [String: SFSpeechRecognitionTaskHint] = ["unspecified": .unspecified, "dictation": .dictation, "search": .search, "confirmation": .confirmation]
         if let hint = (apple["taskHint"] as? String).flatMap({ hints[$0] }) { request.taskHint = hint }
-        lock.lock(); self.request = request; lock.unlock()
+        lock.lock()
+        self.request = request
+        for buffer in held { request.append(buffer) }
+        held = []; seaming = false
         let offset = segmentStart
+        lock.unlock()
         task = recognizer?.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async { self?.answered(result, error, offset) }
         }
@@ -713,8 +721,10 @@ final class RecognizerEngine: RecognitionEngine {
             if result.isFinal { segmentEnded() }
         } else if let error {
             let code = (error as NSError).code
+            lock.lock(); let seamed = seaming; lock.unlock()
             // 1110: no speech detected; 301: the request was canceled. A file runs to its end (D9), so a silent request of one is a seam.
-            if code == 1110, r.continuous || file != nil, !stopping { return segmentEnded() }
+            // A live request ended at a seam goes on in the next, whatever its task answered.
+            if seamed || (code == 1110 && (r.continuous || file != nil) && !stopping) { return segmentEnded() }
             end(code == 1110 ? "no-speech" : code == 301 ? "aborted" : r.leavesDevice ? "network" : "audio-capture", error.localizedDescription)
         }
     }
@@ -722,7 +732,16 @@ final class RecognizerEngine: RecognitionEngine {
     /// A request ended: the recognition goes on in a new one, or ends.
     private func segmentEnded() {
         guard let r, r.state != "ended" else { return }
-        if stopping || (!r.continuous && file == nil) { return end(nil) }
+        if stopping {
+            // What the track heard between a seam and the stop is recognized in a last request.
+            lock.lock(); let rest = !held.isEmpty; lock.unlock()
+            guard rest else { return end(nil) }
+            begin()
+            lock.lock(); let request = request; lock.unlock()
+            request?.endAudio()
+            return
+        }
+        if !r.continuous && file == nil { return end(nil) }
         lock.lock(); let readDone = readDone; lock.unlock()
         if file != nil, readDone { return end(nil) }
         r.seam("the request ended")
@@ -761,12 +780,27 @@ final class RecognizerEngine: RecognitionEngine {
         request?.endAudio()
     }
 
+    /// The track's buffers, on the audio thread. A continuous recognition's request ends its audio after a segment's
+    /// worth, as the file reader's does, and what is heard until the next request begins is held for it.
     func live(_ source: ExactAudioSource) {
         guard tap == nil else { return }
+        let continuous = r?.continuous == true
+        var inSegment = 0.0
         tap = source.tap { [weak self] buffer, _ in
             guard let self else { return }
-            self.lock.lock(); let request = self.request; self.lock.unlock()
-            request?.append(buffer)
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard let request = self.request else {
+                if self.seaming, !self.halted { self.held.append(buffer) }
+                return
+            }
+            request.append(buffer)
+            inSegment += Double(buffer.frameLength) / buffer.format.sampleRate
+            guard continuous, inSegment >= Self.segment else { return }
+            self.segmentStart += inSegment * 1000
+            inSegment = 0
+            self.request = nil
+            self.seaming = true
+            request.endAudio()
         }
     }
 

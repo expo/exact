@@ -1403,6 +1403,16 @@ documentation requires (LLP 1146; the IDs are `packages/oauth/test/PROVIDERS.md`
 | ForgeRock (PingAM) | `issuer`: the realm's, `…/oauth2/realms/root/realms/<realm>`, as its discovery document names it. An app with its own sign-in screens answers the authentication tree (FR-1), then passes `signIn` an `authorize` that POSTs the authorization request with the SSO token (FR-2; below), natively only. A gateway that answers 403 for an expired access token: `expiredStatus: [401, 403]` (FR-4) |
 | Sign in with Apple | not supported: its token exchange needs a server-signed client secret |
 
+`signOut` forgets and revokes the session, but the browser keeps the
+provider's own sign-in, so the next sign-in returns as the same account
+without showing a page. To let the person choose another account,
+`signOut(store, { endSession: true })` also opens the provider's end-session
+endpoint (OpenID Connect RP-Initiated Logout 1.0): send it from a press,
+register the callback as a post-logout redirect URI, and set
+`logoutRedirectParam` for a provider that does not call that parameter
+`post_logout_redirect_uri`. A browser step that does not finish still signs
+out, answered `ok` with code `end_session` and a sentence in `error`.
+
 Every option, with what it does, is in `@exact/oauth`'s `index.d.ts`.
 
 **Tokens outside HTTP.**
@@ -2187,6 +2197,17 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | a pushed route with no such `header` | a bar holding the system Back button alone (LLP 1115.000 D5.2) |
 | a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back |
 | a route with `navigationPresentation="modal"` | a sheet |
+
+A grouped list section's `box-shadow`, including class and state values, paints
+around its card, excluding the header and footer. A section without a card
+(`background-color="transparent"`) refuses a shadow. Shadow changes support
+`transition`; keyframe shadow animation on a grouped section is not supported
+yet and fails the build. If shadow keyframes are declared, a grouped section's
+animation must name its keyframes with a literal or a choice of literals so the
+compiler can check them; their timing may be computed, and an animation may
+be absent. Animations that do not set `box-shadow` remain on the section. On
+iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
+forwarding from UIKit’s visible cells, header and footer is not implemented yet.
 
 On macOS, date, time and datetime-local controls are default Tab stops whatever
 the system's Keyboard navigation setting, as `NSDatePicker` is; a select is one

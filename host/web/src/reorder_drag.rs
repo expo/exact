@@ -108,7 +108,13 @@ impl Input {
             let count = r.u32()? as usize;
             let flags = r.u32()?;
             // 21 is `reorder-preview-into` and 22 `reorder-step` (LLP 1094 D5).
-            if !(flags == 0 || op == 15 && flags <= 2 || op == 22 && (1..=4).contains(&flags))
+            // A step is one of four; a begin says whether the keys drive it.
+            let flags_ok = match op {
+                15 => flags <= 2,
+                22 => (1..=4).contains(&flags),
+                _ => flags == 0,
+            };
+            if !flags_ok
                 || count > MAX_WRAPPERS
                 || bytes.len() != 176 + count * 32
                 || !(15..=22).contains(&op)

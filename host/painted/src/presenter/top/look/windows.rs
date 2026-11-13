@@ -360,6 +360,7 @@ mod tests {
                 dark,
                 font_scale: 1.,
                 window: (1100., 760.),
+                room: 752.,
             };
             let mut layout = Layout::desktop(
                 &mut engine.borrow_mut(),
@@ -435,6 +436,7 @@ mod tests {
                         dark,
                         font_scale,
                         window: (width, 500.),
+                        room: 492.,
                     };
                     let mut layout = Layout::desktop(
                         &mut engine.borrow_mut(),
@@ -492,6 +494,7 @@ mod tests {
                 dark,
                 font_scale: 1.,
                 window: (1100., 760.),
+                room: 752.,
             };
             let layout = Layout::desktop(
                 &mut engine.borrow_mut(),
@@ -542,6 +545,7 @@ mod tests {
             dark: false,
             font_scale: 1.,
             window: (1100., 760.),
+            room: 752.,
         };
         let layout = Layout::desktop(
             &mut engine.borrow_mut(),

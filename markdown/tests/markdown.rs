@@ -265,6 +265,27 @@ fn malformed_angle_destinations_do_not_become_bare_destinations() {
     }
 }
 
+/// CommonMark 0.31.2 §6.3: a link's parts "may be separated by spaces, tabs,
+/// and up to one line ending", so a line ending ends the destination
+/// (example 490) and may come before a title (example 510).
+#[test]
+fn a_line_ending_ends_a_link_destination() {
+    for source in ["[link](foo\nbar)", "[label](http://example.com\nmore)"] {
+        let styled = style(source, None);
+        assert!(styled.links.is_empty(), "{source}");
+        assert!(styled.hidden.is_empty(), "{source}");
+    }
+    for source in ["[link](   /uri\n  \"title\"  )", "[link](\n/uri)"] {
+        let styled = style(source, None);
+        assert_eq!(spans(source, None), [("link".into(), LINK)], "{source}");
+        assert_eq!(styled.spans[0].href, "/uri", "{source}");
+        assert_eq!(styled.links.len(), 1, "{source}");
+        // A closer across the line break stays shown: hidden, the break
+        // would draw an empty line.
+        assert_eq!(hidden(source, None), Vec::<String>::new(), "{source}");
+    }
+}
+
 #[test]
 fn lists_tasks_quotes_and_rules() {
     let source = "- one\n  - nested\n    continued\n1. first\n- [x] done\n- [ ] todo\n> quoted **text**\n> > deeper\n\n---\n";

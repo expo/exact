@@ -641,7 +641,7 @@ impl Store {
             return Ok(());
         }
         self.record.failures += 1;
-        self.write_boot_mark()
+        self.write_boot_mark(&self.record)
     }
 
     /// First pixel: the bundle that booted is good (LLP 1026 D11). Clears the
@@ -651,9 +651,12 @@ impl Store {
         if self.read_only().is_some() || *generation != self.generation() {
             return Ok(());
         }
-        self.record.failures = 0;
-        self.record.last_good.clone_from(&self.running);
-        self.write_boot_mark()
+        let mut record = self.record.clone();
+        record.failures = 0;
+        record.last_good.clone_from(&self.running);
+        self.write_boot_mark(&record)?;
+        self.record = record;
+        Ok(())
     }
 
     /// The selected entry was refused before it could run and this process
@@ -878,7 +881,13 @@ impl Store {
         }
         let roster = envelope.assets()?;
         let current = match &self.view {
-            _ if self.record.pending.as_deref() == Some(envelope.digest.as_str()) => true,
+            // A held entry's plan is first read by `prepare_activation`, so a
+            // plan damaged since staging is written again, not reported current.
+            _ if self.record.pending.as_deref() == Some(envelope.digest.as_str()) => self
+                .validate(Some(envelope.digest.clone()))
+                .is_some_and(|view| {
+                    read_card(&self.entry_dir(&view.sha).join("app.plan"), &view.plan).is_ok()
+                }),
             Some(view) => view.sha == envelope.digest,
             // Entry zero is current when the head names the plan the binary
             // embeds and exactly the same complete asset roster — removal
@@ -952,20 +961,32 @@ impl Store {
         })
     }
 
-    /// Verify and pin a staged candidate without changing the record or
-    /// running generation. Every clone shares its lazy, immutable asset bytes.
-    pub fn prepare_activation(&self) -> Result<Option<PreparedSelection>, String> {
+    /// Verify and pin a staged candidate without changing the running
+    /// generation. Every clone shares its lazy, immutable asset bytes. A
+    /// candidate whose plan does not match its card is no longer staged, so
+    /// the next check of its head writes it again.
+    pub fn prepare_activation(&mut self) -> Result<Option<PreparedSelection>, String> {
         let Some(staged) = self.staged() else {
             return Ok(None);
         };
         let view = self.read_view(&staged.entry)?;
+        let plan = match read_card(&staged.plan, &view.plan) {
+            Ok(plan) => plan,
+            Err(mut reason) => {
+                self.clear_entry_references(&staged.entry);
+                if let Err(write) = self.write_record() {
+                    reason.push_str(&format!("; could not persist the refusal: {write}"));
+                }
+                return Err(reason);
+            }
+        };
         let generation = Generation {
             entry: Some(view.sha.clone()),
             seq: view.seq,
         };
         Ok(Some(PreparedSelection {
             generation: generation.clone(),
-            plan: Arc::from(read_card(&staged.plan, &view.plan)?),
+            plan: Arc::from(plan),
             assets: AssetSet::stored(generation, staged.assets_dir, view.assets),
         }))
     }
@@ -1215,12 +1236,13 @@ impl Store {
     /// syncs cost 12–16 ms (2026-09-23, this Mac at load 74–122). A process
     /// crash keeps the write (the page cache has it); a power loss that loses
     /// the record loses only the mark, since `open` recovers the floor from
-    /// the signed entries and the accepted head stages again.
-    fn write_boot_mark(&self) -> Result<(), String> {
+    /// the signed entries and the accepted head stages again. `boot_succeeded`
+    /// assigns memory only after it returns, so a retry can still write it.
+    fn write_boot_mark(&self, record: &Record) -> Result<(), String> {
         if self.read_only().is_some() {
             return Ok(());
         }
-        write_atomic(&self.record_path(), self.record.to_json().as_bytes(), false)
+        write_atomic(&self.record_path(), record.to_json().as_bytes(), false)
     }
 
     /// Build one entry under a temporary name and rename it into place. Whole

@@ -768,6 +768,9 @@ impl DataSource for Module {
         let mut next = Self::new(&self.app, &self.grants, revision);
         next.id = id;
         next.placement = self.placement;
+        // The roster comes from the binary's bake, which a swap does not
+        // change; `Placed` snapshots it from this module.
+        next.canvas_surfaces.clone_from(&self.canvas_surfaces);
         Ok(next)
     }
 
@@ -1014,6 +1017,20 @@ mod tests {
             Store::new("secret.keep token", [("token".to_string(), vec![0xff])]).get("token"),
             None
         );
+    }
+
+    /// A live swap keeps the Canvas 2D roster: a canvas named in it is still
+    /// drawn in 2D, not sent to the GPU path.
+    #[test]
+    fn a_replacement_keeps_the_canvas_2d_roster() {
+        let module = Module::new("test", "", "revision").with_canvas_surfaces(&[("chart", 1)]);
+        let plan = b"plan";
+        let receipt = format!(
+            r#"{{"version":1,"abi":1,"appId":"test","grants":"","plan":{{"bytes":4,"sha256":"{:x}"}},"module":{{"sha256":"next"}}}}"#,
+            Sha256::digest(plan)
+        );
+        let next = module.replacement(plan, &receipt, b"7".to_vec()).unwrap();
+        assert_eq!(next.canvas_surfaces(), vec![("chart".to_string(), 1)]);
     }
 
     #[test]

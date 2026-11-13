@@ -566,4 +566,36 @@ fn the_element_hears_what_the_portal_answered() {
         journal(&p)
     );
     let _ = std::fs::remove_file(file);
+
+    // A pick whose element is made again (a list row given another item)
+    // answers nothing, whether its answer came before the renewal or after.
+    for renew_first in [true, false] {
+        p.ask_portal(
+            picker(Kind::Open, false, ""),
+            view,
+            None,
+            Duration::from_secs(1),
+        );
+        if !renew_first {
+            let answered = |p: &Presenter<Nothing>| !p.portal.lock().unwrap().answered.is_empty();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !answered(&p) && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(answered(&p), "the portal answered");
+        }
+        p.picks_renewed(&[view]);
+        for _ in 0..20 {
+            p.pump(p.host().now());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(text(&p, "cancels"), "1", "renewed first: {renew_first}");
+    }
+    assert!(
+        journal(&p)
+            .iter()
+            .any(|l| l.ends_with("was made again; its answer is dropped")),
+        "{:?}",
+        journal(&p)
+    );
 }

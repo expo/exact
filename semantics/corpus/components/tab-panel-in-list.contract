@@ -1,0 +1,22 @@
+component App
+  state selected = "a"
+  action pick
+    selected = "b"
+  view
+    main navigationKey=selected navigationBack="back" height=400
+      row role="tablist"
+        button "A" role="tab" aria-controls="a" aria-selected=(selected == "a")
+        button "B" role="tab" aria-controls="b" aria-selected=(selected == "b") press=pick testId="pick"
+        column role="tabpanel" id="a"
+          column navigationKey="a"
+            text "first" testId="first"
+        column role="tabpanel" id="b"
+          column navigationKey="b"
+            text "second" testId="second"
+
+test "a panel inside its tablist waits until its tab is chosen"
+  expect tree has "first"
+  expect tree missing "second"
+  tap "pick"
+  expect state selected == "b"
+  expect tree has "second"

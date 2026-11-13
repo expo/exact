@@ -84,10 +84,10 @@ export function exitBinding(element, property, unit, binding) {
   }
 }
 
-export function lt(element, declaring, binding) {
+export function lt(element, parse, binding) {
   const own = owner();
   Bound.set(element, () => {
-    try { return read(() => present(own) && declaring.includes(binding())); } catch { return false; }
+    try { return read(() => present(own) && parse(binding())?.css != null); } catch { return false; }
   });
   onEnd(() => Bound.delete(element));
   pr(element);
