@@ -145,8 +145,11 @@ function writeGame(destination, directory, options, {name, local}) {
   try { prepareGame(destination, gameDefaults(destination).game, directory); }
   catch (error) {
     // Ask the cache directly (sdkFetch, as exact setup --check does): Cargo's offline wording for a missing crate
-    // is also what a stale SDK lock says. Only when the SDK lock's crates are not all there is the graph deferred.
-    if (!/^game Cargo graph: /.test(error?.message ?? '') || sdkFetch({offline:true, source:directory}).ok) throw error;
+    // is also what a stale SDK lock says. Only when fetching the SDK lock offline fails for a missing crate (no Cargo,
+    // a broken Cargo config or anything else is thrown as it was) is the graph deferred.
+    if (!/^game Cargo graph: /.test(error?.message ?? '')) throw error;
+    const cache = sdkFetch({offline:true, source:directory});
+    if (cache.ok || !/no matching package named|attempting to make an HTTP request|in the offline mode|--offline was specified|failed to download/.test(cache.message ?? '')) throw error;
     uncached = `Cargo's cache lacks the game SDK's crates. A build service fetches its own; to build or test here first, run:\n  cargo fetch --manifest-path ${quote(resolve(destination, '.shells/Cargo.toml'))}`;
   }
 
