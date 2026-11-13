@@ -81,9 +81,9 @@ extension NodeView {
 
     /// `background-clip: text`: the background colour and gradients inside
     /// the paragraph's glyphs, before the glyphs themselves paint.
-    func paintBackgroundThroughText(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, in box: CGRect) {
+    func paintBackgroundThroughText(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, in box: CGRect, lines: Range<Int>? = nil) {
         guard backgroundClip == "text", !cssVisibilityHidden else { return }
-        let glyphs = TextEngine.glyphPath(paragraph, spec: spec, in: box, scale: TextEngine.deviceScale(ctx))
+        let glyphs = TextEngine.glyphPath(paragraph, spec: spec, in: box, scale: TextEngine.deviceScale(ctx), lines: lines)
         guard !glyphs.isEmpty else { return }
         ctx.saveGState()
         ctx.addPath(glyphs)
@@ -100,9 +100,9 @@ extension NodeView {
 extension TextEngine {
     /// The outlines of a paragraph's glyphs where `draw` paints them, in
     /// the view's y-down space (LLP 1077 D6).
-    static func glyphPath(_ p: Paragraph, spec: Spec, in bounds: CGRect, scale: CGFloat = 1) -> CGPath {
+    static func glyphPath(_ p: Paragraph, spec: Spec, in bounds: CGRect, scale: CGFloat = 1, lines: Range<Int>? = nil) -> CGPath {
         let path = CGMutablePath()
-        for index in p.lines.indices {
+        for index in p.lines.indices where lines?.contains(index) != false {
             let line = spec.ellipsis ? p.ellipsized(index, spec: spec, width: bounds.width) : p.lines[index]
             let origin = CGPoint(x: bounds.minX + p.origin(index, align: spec.align, width: bounds.width),
                                  y: paintedLine(p.baselines[index], top: bounds.minY, scale: scale, lineScale: p.lineScale))

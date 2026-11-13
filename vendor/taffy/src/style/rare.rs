@@ -23,11 +23,16 @@ impl core::fmt::Debug for CalcOwner {
     }
 }
 
-/// Grid and multi-column fields stored apart from the common style fields.
+/// Fields stored apart from ordinary block and flex styles.
 #[derive(Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
+    /// EXACT PATCH 75 (LLP 1123 D3): native clearance inside this container's
+    /// padding box, excluded from its absolutely positioned descendants' containing block.
+    pub absolute_clearance: Rect<f32>,
+    /// Insets referencing the same edge's safe area: top 1, right 2, bottom 4, left 8.
+    pub inset_credit: u8,
     /// Keeps the custom identifier type when grid layout is disabled.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub dummy: core::marker::PhantomData<S>,
@@ -88,6 +93,8 @@ impl<S: CheapCloneStr> RareStyle<S> {
 
     /// Initial values, without allocating.
     pub const DEFAULT: Self = Self {
+        absolute_clearance: Rect::ZERO,
+        inset_credit: 0,
         dummy: core::marker::PhantomData,
         #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
         calc_owners: crate::sys::Vec::new(),

@@ -86,7 +86,7 @@ impl Machine {
             Event::Ended(..) | Event::ReaderEnded(_) | Event::Released(_) => {
                 self.apply(state, lane, event)
             }
-            Event::Read(run, Ok(bytes)) => self.read(state, lane, run, Ok(bytes)),
+            Event::Read(run, Ok(prepared)) => self.read(state, lane, run, Ok(prepared)),
             event => {
                 state.book.trash.push(Box::new(event));
                 None
