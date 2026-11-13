@@ -52,14 +52,17 @@ pub const MAX_WARNINGS: usize = 20;
 /// Every warning the checked file earns, in source order of its checks.
 pub fn warnings(checked: &Checked<'_>) -> Vec<LowerError> {
     crate::control_roles::unlowered();
-    with_text_styles(checked, &TextStyles::new())
+    with_text_styles(checked, &TextStyles::new(), Vec::new())
 }
 
 pub(crate) use text_styles::{TextStyle, TextStyles};
 
-pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> Vec<LowerError> {
+pub(crate) fn with_text_styles(
+    checked: &Checked<'_>,
+    lowered: &TextStyles,
+    mut out: Vec<LowerError>,
+) -> Vec<LowerError> {
     let root = &checked.expanded.root;
-    let mut out = Vec::new();
     routeless_header::check(checked, &mut out);
     // Track the navigation root (the outermost `navigationKey`) and its `navigationBack`.
     crate::menu_rows::notes(&root.view, &mut out);

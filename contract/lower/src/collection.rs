@@ -166,7 +166,7 @@ impl Lowerer<'_> {
         let [Node::Each { body, .. }] = children else {
             return err(
                 "lower-collection-template",
-                "a virtualized list initially supports exactly one direct `for`",
+                "a virtualized list holds exactly one direct `for` and nothing beside it; a header, footer, loading or streaming row is a row of that `for`'s collection, appended by a derive (docs/recipes/long-lists.md)",
                 span,
             );
         };

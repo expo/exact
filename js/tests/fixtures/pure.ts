@@ -452,6 +452,30 @@ export function exercise(source: string): string {
     changing.maximumFractionDigits=3;
     kept.push((1.23456).toLocaleString('en-US',changing),(1.23456).toLocaleString(['de-DE'],changing),(1.23456).toLocaleString('de-DE',changing),(1234.5).toLocaleString('en-US'));
     out['en-US toLocaleString kept']=kept;
+    // A formatter reads its options once: changing the object after
+    // construction changes neither its output nor its resolved options.
+    const shared:Intl.NumberFormatOptions={notation:'compact',maximumFractionDigits:1};
+    const made=new Intl.NumberFormat('en-US',shared), before=made.format(12345);
+    shared.maximumFractionDigits=0; shared.minimumFractionDigits=0;
+    out['en-US compact options kept']=[before,made.format(12345),made.format(12000),String(made.resolvedOptions().maximumFractionDigits)];
+    // A compact formatter's signDisplay, applied after rounding: 0.4 rounds
+    // to a zero that "exceptZero" prints unsigned. sv-SE's minus is U+2212.
+    const signed=[0,-0,0.5,999,12345,-12345,1234567,-1e12,0.00001,-0.00001];
+    for(const locale of ['en-US','de-DE','ja-JP','sv-SE']) for(const signDisplay of ['always','exceptZero','never','auto'] as const)
+      out[locale+' compact '+signDisplay]=signed.map(v=>new Intl.NumberFormat(locale,{notation:'compact',signDisplay}).format(v))
+        .concat([0.4,-0.4].map(v=>new Intl.NumberFormat(locale,{notation:'compact',signDisplay,maximumFractionDigits:0}).format(v)));
+    // Every signDisplay, "negative" too, of a decimal, a currency and a
+    // percent: -0.0001 rounds to a negative zero, and NaN and ∞ take signs.
+    const signs=[0,-0,0.5,-0.5,12345,-12345,-0.0001,NaN,Infinity,-Infinity];
+    const signedFormat=(locale:string,options:object,v:number)=>{try{return new Intl.NumberFormat(locale,options).format(v);}catch(e){return (e as Error).name;}};
+    for(const locale of ['en-US','de-DE','ja-JP','sv-SE']) for(const signDisplay of ['always','exceptZero','never','auto','negative'])
+      for(const [style,options] of [['decimal',{}],['currency',{style:'currency',currency:'USD'}],['percent',{style:'percent'}]] as [string,object][])
+        out[locale+' '+style+' '+signDisplay]=signs.map(v=>signedFormat(locale,{...options,signDisplay},v));
+    // An accounting negative has no minus for a plus to replace: `+$0.50`, `($0.50)`.
+    for(const signDisplay of ['always','exceptZero','never','auto','negative'])
+      out['en-US accounting '+signDisplay]=signs.map(v=>signedFormat('en-US',{style:'currency',currency:'USD',currencySign:'accounting',signDisplay},v));
+    out['en-US signDisplay resolved']=['always','negative',undefined].map(signDisplay=>String(new Intl.NumberFormat('en-US',{signDisplay} as Intl.NumberFormatOptions).resolvedOptions().signDisplay))
+      .concat([(12.5).toLocaleString('en-US',{signDisplay:'always'}),(-12.5).toLocaleString('en-US',{signDisplay:'negative'}),signedFormat('en-US',{signDisplay:'sometimes'},1)]);
     // A DateTimeFormat with an explicit timeZone and the same locales and
     // options shares an engine formatter, each `new` an object of its own; a Date's
     // toLocale…String adds its default fields when the options name none.

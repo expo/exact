@@ -48,6 +48,11 @@ fn part(node: &Node) -> Part {
     if role == Some("tablist") {
         return Part::Tablist;
     }
+    // A heading that presses is still the heading, as the kernel's bar
+    // takes it (`exact_kernel::bars`).
+    if tag == "text" && role == Some("heading") {
+        return Part::Heading;
+    }
     // A link navigates, given the benefit as a pressed thing; a disabled button is a dimmed item.
     let disabled = |a: &Attr| a.name == "disabled" && !matches!(a.value, Expr::Bool(false, _));
     // A command that opens what it names (`Invocation::opens`); a computed one is given the benefit.
@@ -67,7 +72,6 @@ fn part(node: &Node) -> Part {
         return Part::Status;
     }
     match tag.as_str() {
-        "text" if role == Some("heading") => Part::Heading,
         "text" => Part::Text,
         "input" if computed(attrs, "type") => Part::Doubt,
         "input" if literal(attrs, "type") == Some("search") => Part::Search,

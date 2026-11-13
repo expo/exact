@@ -53,7 +53,9 @@ pub fn css(kind: Kind, value: &str) -> String {
             let medium = relative::MEDIUM;
             format!(
                 "{}rem",
-                exact_web::css::num(n * unit.basis(medium, medium, 1.0) / medium)
+                exact_web::css::num(
+                    n * unit.basis(medium, medium, 1.0, &exact_kernel::Env::default()) / medium
+                )
             )
         }
         Some((unit @ Unit::TextStyleAtMost(_), n)) => unit.capped_css(n),

@@ -541,7 +541,8 @@ fn read_events(
 /// in, dispatched events out. Lines end at CR, LF, or CRLF, even split
 /// across reads; `data` lines join with LF; `id` persists as the cursor;
 /// comments and `retry` are read and dropped (the host never reconnects).
-/// One event, or one line, over `limit` bytes is refused, never truncated.
+/// An event whose data is over `limit` bytes, or a line over `limit` and 64
+/// more, is refused, never truncated.
 pub struct EventStream {
     line: Vec<u8>,
     after_cr: bool,
@@ -629,7 +630,10 @@ impl EventStream {
         };
         match field {
             "data" => {
-                if self.data.len() + value.len() + 1 > self.limit {
+                // The line feed stored after a value is the event's only
+                // when another field follows, so it is counted then, as part
+                // of `self.data`.
+                if self.data.len() + value.len() > self.limit {
                     return Err("an event exceeds the response ceiling");
                 }
                 self.data.push_str(value);

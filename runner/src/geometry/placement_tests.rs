@@ -172,3 +172,106 @@ fn a_top_layer_route_replaces_its_ordinary_placement() {
     scrolled.top_layer_frames(r.kernel(), &[(route, rect, None)], Some(0));
     read(&r, &scrolled, 130.0, 270.0, &["target", "route"]);
 }
+
+#[test]
+fn an_allocation_without_a_block_clips_without_moving_or_resizing_its_subtree() {
+    let (r, mut scrolled) = fixture("", "");
+    let owner = view_of(r.kernel(), "owner").unwrap();
+    let page = view_of(r.kernel(), "page").unwrap();
+    let target = view_of(r.kernel(), "target").unwrap();
+    for (sx, sy) in [(0., 0.), (10., 15.)] {
+        scrolled.note(r.kernel(), Some(page), sx, sy);
+        scrolled.place(
+            r.kernel(),
+            owner,
+            Some(([20. - sx, 30. - sy, 40., 200.], page, None)),
+        );
+        let frame = kernel_frame(r.kernel(), &scrolled, target);
+        assert_eq!(
+            (frame.x, frame.y, frame.width, frame.height),
+            (40. - sx, 180. - sy, 40., 100.)
+        );
+        assert_eq!(intersection(r.kernel(), &scrolled, target).3, 0.25);
+        read(
+            &r,
+            &scrolled,
+            50. - sx,
+            190. - sy,
+            &["target", "route", "owner", "page"],
+        );
+        read(&r, &scrolled, 70. - sx, 190. - sy, &["page"]);
+        scrolled.place(r.kernel(), owner, None);
+        assert_eq!(intersection(r.kernel(), &scrolled, target).3, 0.5);
+        read(
+            &r,
+            &scrolled,
+            70. - sx,
+            190. - sy,
+            &["target", "route", "owner", "page"],
+        );
+    }
+}
+
+#[test]
+fn a_released_block_does_not_leave_a_clip_on_its_ordinary_subtree() {
+    let (mut r, mut scrolled) = fixture("", "");
+    let route = view_of(r.kernel(), "route").unwrap();
+    let stack = view_of(r.kernel(), "stack").unwrap();
+    scrolled.place(r.kernel(), route, Some(([0., 0., 40., 80.], stack, None)));
+    let slot = r.kernel().arena().slot_of(route).unwrap();
+    assert!(scrolled.placed_block(r.kernel(), slot).is_some());
+    assert!(block_clip(
+        r.kernel(),
+        &scrolled,
+        slot,
+        r.kernel().node(route).unwrap().frame
+    )
+    .is_some());
+    r.kernel_mut().set_host_block(route, None).unwrap();
+    assert!(scrolled.placed_block(r.kernel(), slot).is_none());
+    assert!(block_clip(
+        r.kernel(),
+        &scrolled,
+        slot,
+        r.kernel().node(route).unwrap().frame
+    )
+    .is_none());
+}
+
+#[test]
+fn an_allocation_without_a_block_keeps_agent_absolute_in_layout_space() {
+    let source = r#"component App
+  view
+    box id="page" width=600 height=400
+      box id="list" width=600 height=400 overflow-y="auto" translate="-100px 0"
+        box id="row" position="absolute" left=400 top=180 width=100 height=100 translate="0 20px"
+"#;
+    let mut r = Runner::boot(
+        contract::compile(source).unwrap(),
+        (),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let root = r.roots()[0];
+    r.kernel_mut()
+        .compute_layout(root, Offer::definite(600., 400.))
+        .unwrap();
+    let page = view_of(r.kernel(), "page").unwrap();
+    let list = view_of(r.kernel(), "list").unwrap();
+    let row = view_of(r.kernel(), "row").unwrap();
+    let mut scrolled = Scrolled::default();
+    scrolled.note(r.kernel(), Some(list), 0., 100.);
+    for placement in [None, Some(([0., 0., 320., 400.], page, None)), None] {
+        scrolled.place(r.kernel(), list, placement);
+        let frame = r.kernel().node(row).unwrap().frame;
+        let shown = kernel_frame(r.kernel(), &scrolled, row);
+        let absolute = scrolled.agent_frame(r.kernel(), row, frame);
+        assert_eq!((shown.x, shown.y), (300., 100.));
+        assert_eq!((absolute.x, absolute.y), (400., 180.));
+        let (_, _, inside, ratio) = intersection(r.kernel(), &scrolled, row);
+        assert!(inside);
+        assert_eq!(ratio, if placement.is_some() { 0.2 } else { 1. });
+    }
+}

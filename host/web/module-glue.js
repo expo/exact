@@ -93,9 +93,8 @@ export async function baked() {
   return { receipt: artifact(0), script: artifact(1) };
 }
 export async function prepare(payload, admitted, id = nextId++) {
-  const ceiling = new Set(admitted.grants.split('\n').map(s=>s.trim()).filter(Boolean));
   const meta = JSON.parse(decoder.decode(payload.receipt));
-  if (meta.version !== 1 || (meta.abi !== 1 && meta.abi !== 2) || meta.appId !== admitted.appId || typeof meta.grants !== 'string' || meta.grants.split('\n').map(s=>s.trim()).filter(Boolean).some(s=>!ceiling.has(s))
+  if (meta.version !== 1 || (meta.abi !== 1 && meta.abi !== 2) || meta.appId !== admitted.appId || typeof meta.grants !== 'string'
       || meta.web?.file !== 'app.js' || meta.web.bytes !== payload.script.length || meta.web.sha256 !== await hash(payload.script)
       || !/^[0-9a-f]{64}$/.test(meta.module?.sha256)) throw new Error('module integrity, ABI, identity, or grants mismatch');
   const childGrantSet = scopedGrantSet(admitted.grantSet, meta.grants);

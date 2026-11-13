@@ -162,10 +162,10 @@ Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreg
     body: `Compiles first, a compile error said as contract build says it, so no contract build before
 it: web builds the app (web-build); ios, macos and windows build when the build is missing or
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
-store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags.
+store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags. Exit 1 when a test fails.
 Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
-Server   runs server.ts on DB=.exact/test/db.sqlite; refuses a live server or an entry ignoring DB.
-Runs     to completion, exit 1 when a test fails; nothing is left running.
+Server   runs server.ts once a run on DB=.exact/test/db.sqlite, empty at the start and shared by its tests: a reset per
+         test is docs/recipes/rest-backend.md's; refuses a live server or an entry ignoring DB. Nothing is left running.
 Backend  test web never starts a Snapback backend: start snapback4 dev on app.ts’s selected origin’s port
          first; checked before launch. The app's own server.ts is managed as above. EXACT_PORT is the page’s.
 Lines    tap, type, expect text|tree|state|disabled|refusal, clock data|settle|+<ms>|until state …, reload, back, fail|pass

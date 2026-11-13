@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { boundedHttpBody, request, streamed } from './http-body.js';
 import { deferredFulfill, refusal } from './navigation/requests.js';
-import { admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
+import { admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, grantWords, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
 import { createRequestExecutor, createSecretFacade, fetchWith, redirectOf } from '../web-js/admission.js';
 import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
 import { need } from '../../scripts/coverage.mjs';
@@ -803,28 +803,25 @@ chromeTest('an app:/data image shows from the page\'s store, after a reload too'
 test("glue.js's grants arm keeps auth lines from a malformed I/O declaration and freezes the set", async () => {
   const source = hostFixtureFile(new URL('./glue.js', import.meta.url), 'utf8');
   const arm = glueCase(source, 'grants');
-  const run = new Function('op', 'createGrantSet', 'rawGrantText', 'grantError', `
+  const run = new Function('op', 'createGrantSet', 'rawGrantText', 'grantError', 'grantWords', `
     const host = { grantSet: null, grants: [], unparsed: "", authHost: null };
     const loads = [], afterNativePaint = () => Promise.resolve();
     const loadAfterPaint = file => { loads.push(file); return Promise.resolve({ file }); };
     switch (op.op) { ${arm} }
     return Promise.resolve(host.authHost).then(() => ({ ...host, loads }));
   `);
-  const set = normalized('auth.session https://login.example\nsecret.keep camelCase');
-  const state = await run({ op: 'grants', set }, createGrantSet, set => set.entries.map(entry => entry[1]).join('\n'), grantError);
-  expect(state.unparsed).toContain('line 2');
-  expect(state.grants).toContain('auth.session https://login.example');
-  expect(state.loads).toEqual(['./auth-glue.js']);
-  expect([Object.isFrozen(state.grantSet), Object.isFrozen(state.grantSet.entries)]).toEqual([true, true]);
-});
-test("glue.js surface admission uses a valid raw child line even when another I/O line is malformed", () => {
-  const source = hostFixtureFile(new URL('./glue.js', import.meta.url), 'utf8');
-  const declaration = source.match(/function surfaceGranted\(op\) \{[^]*?\n\}/)[0];
-  const admitted = new Function('grants', 'op', `const host = { grants }; ${declaration};return surfaceGranted(op);`);
-  const grants = ['secret.keep camelCase', 'surface.read world'];
-  expect(admitted(grants, { mode: 'capture', name: 'world', scope: 'surface.read world' })).toBe(true);
-  expect(admitted(grants, { mode: 'capture', name: 'world', scope: null })).toBe(true);
-  expect(admitted(grants, { mode: 'capture', name: 'world', scope: 'surface.read elsewhere' })).toBe(false);
+  for (const [line, loads] of [
+    ['auth.session https://login.example', ['./auth-glue.js']],
+    ['auth.session\u0085https://login.example', ['./auth-glue.js']],
+    ['\ufeffauth.session https://login.example', []],
+  ]) {
+    const set = normalized(`${line}\nsecret.keep camelCase`);
+    const state = await run({ op: 'grants', set }, createGrantSet, set => set.entries.map(entry => entry[1]).join('\n'), grantError, grantWords);
+    expect(state.unparsed).toContain('line 2');
+    expect(state.grants).toContain(line);
+    expect(state.loads).toEqual(loads);
+    expect([Object.isFrozen(state.grantSet), Object.isFrozen(state.grantSet.entries)]).toEqual([true, true]);
+  }
 });
 test('rust-data decodes an ABI child scope before the production executor refuses its parent-granted origin', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-data-'));
@@ -1096,37 +1093,6 @@ globalThis.exact = { answer: (form, name) => { try { forms[form](name); return '
   } finally {
     delete globalThis.exact;
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('module-glue prepare accepts normalized formatting and exact-only grants', async () => {
-  const set = createGrantSet(structuredClone(normalized('net.fetch https://api.example\nauth.session https://login.example')));
-  const formatted = ' net.fetch https://api.example\n\n  auth.session https://login.example  ';
-  const win = { Error, SyntaxError, Function, Promise, structuredClone, crypto: { subtle: {} }, indexedDB: null, addEventListener() {},
-    exact: { abi: 1, appId: 'test.module', grants: formatted, answer() {} }, __exact_install_storage() {}, __exact_has_overlay: () => '0',
-    document: { createElement: () => ({}), head: { append() {} } } };
-  const frame = { hidden: false, contentWindow: win, setAttribute() {}, remove() {} };
-  const descriptors = Object.fromEntries(['fetch', 'document', 'location'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
-  Object.defineProperties(globalThis, {
-    fetch: { configurable: true, writable: true, value: async () => { const response = new Response(''); Object.defineProperty(response, 'url', { value: 'http://127.0.0.1/module-prelude.js' }); return response; } },
-    document: { configurable: true, value: { createElement: () => frame, body: { append() {} } } },
-    location: { configurable: true, value: { href: 'http://127.0.0.1/module', origin: 'http://127.0.0.1' } },
-  });
-  globalThis.exact = { moduleDigest: async () => 'a'.repeat(64) };
-  const script = new TextEncoder().encode('module');
-  const receipt = new TextEncoder().encode(JSON.stringify({ version: 1, abi: 1, appId: 'test.module', grants: formatted,
-    web: { file: 'app.js', bytes: script.length, sha256: 'a'.repeat(64) }, module: { sha256: 'b'.repeat(64) } }));
-  try {
-    const { call, prepare } = await import(`./module-glue.js?prepare=${Date.now()}`);
-    const realm = await prepare({ receipt, script }, { appId: 'test.module', grants: 'net.fetch https://api.example\nauth.session https://login.example', grantSet: set, placement: 'main' });
-    expect(realm.meta.grants).toBe(formatted);
-    expect(call({ op: 'activate', id: realm.id, appId: 'test.module', grants: 'net.fetch https://api.example\nauth.session https://login.example', revision: 'b'.repeat(64) })).toEqual({ ok: true });
-    realm.dispose();
-  } finally {
-    for (const [name, descriptor] of Object.entries(descriptors)) {
-      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
-    }
-    delete globalThis.exact;
   }
 });
 

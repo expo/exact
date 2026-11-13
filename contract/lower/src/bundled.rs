@@ -7,15 +7,53 @@
 //! the app's; a bare word is `lower-image-source`'s warning.
 
 use crate::LowerError;
-use contract_syntax::{Expr, Node, Span};
+use contract_syntax::{Expr, File, Node, Span};
+use std::path::Path;
 
 /// The folders the build bundles into the app.
 const BUNDLED: &[&str] = &["assets", "deck"];
 
-/// `lower-asset-path`: each literal source or poster in `view` that names a
-/// file outside [`BUNDLED`], once per place written.
-pub(crate) fn outside(view: &[Node]) -> Vec<LowerError> {
-    let mut out: Vec<LowerError> = Vec::new();
+/// Literal bundled paths, and SVG image files checked by the native parser
+/// (LLP 1011.001 D5), once per place written.
+pub(crate) fn check(view: &[Node], root: &Path) -> (Vec<LowerError>, Vec<LowerError>) {
+    let (mut out, mut warnings) = (Vec::new(), Vec::new());
+    let native = crate::icons::shipped_targets(root)
+        .iter()
+        .any(|t| t != "web");
+    let mut images = Vec::new();
+    sources(view, |what, source, span| {
+        if what == "image source" && !images.contains(&(source.clone(), span)) {
+            images.push((source.clone(), span));
+            image_svg(root, native, &source, span, &mut out, &mut warnings);
+        }
+        if let Some(e) = refusal(what, &source, span) {
+            // A component used twice is inlined twice: one refusal for its source.
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
+    });
+    (out, warnings)
+}
+
+/// Literal bundled SVG images the build may read, including files not yet
+/// present. Watchers use the same path and expression rules as lowering.
+pub fn image_svg_paths(file: &File) -> Vec<String> {
+    let mut paths = Vec::new();
+    let view = contract_syntax::inline(file).unwrap_or_default();
+    sources(&view, |what, source, _| {
+        if what == "image source" {
+            if let Some(path) = svg_path(&source) {
+                if !paths.iter().any(|p| p == path) {
+                    paths.push(path.to_string());
+                }
+            }
+        }
+    });
+    paths
+}
+
+fn sources(view: &[Node], mut visit: impl FnMut(&str, String, Span)) {
     let mut stack: Vec<&Node> = view.iter().rev().collect();
     while let Some(node) = stack.pop() {
         let children: Vec<&Node> = match node {
@@ -49,12 +87,7 @@ pub(crate) fn outside(view: &[Node]) -> Vec<LowerError> {
                     let mut found = Vec::new();
                     literals(e, &mut found);
                     for (source, span) in found {
-                        if let Some(e) = refusal(what, &source, span) {
-                            // A component used twice is inlined twice: one refusal for its source.
-                            if !out.contains(&e) {
-                                out.push(e);
-                            }
-                        }
+                        visit(what, source, span);
                     }
                 }
                 children.iter().collect()
@@ -69,7 +102,87 @@ pub(crate) fn outside(view: &[Node]) -> Vec<LowerError> {
         };
         stack.extend(children.into_iter().rev());
     }
-    out
+}
+
+fn svg_path(source: &str) -> Option<&str> {
+    let mut path = source;
+    while let Some(relative) = path.strip_prefix("./") {
+        path = relative;
+    }
+    (exact_plan::is_portable_asset_path(path)
+        && path.to_ascii_lowercase().ends_with(".svg")
+        && path
+            .split_once('/')
+            .is_some_and(|(dir, _)| BUNDLED.contains(&dir)))
+    .then_some(path)
+}
+
+/// A literal SVG under a bundled folder; remote, mutable and computed
+/// sources and files unavailable at build are the host's to check at run time.
+fn image_svg(
+    root: &Path,
+    native: bool,
+    source: &str,
+    span: Span,
+    errors: &mut Vec<LowerError>,
+    warnings: &mut Vec<LowerError>,
+) {
+    let Some(path) = svg_path(source) else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(root.join(path)) else {
+        return;
+    };
+    // Native loaders identify raster formats by bytes, regardless of the suffix.
+    if raster(&bytes) {
+        return;
+    }
+    let parsed = String::from_utf8(bytes)
+        .map_err(|e| e.to_string())
+        .and_then(|text| exact_svg_file::parse(&text).map_err(|e| e.to_string()));
+    let diagnostic = |reason: &str, fix: &str| LowerError {
+        id: "lower-image-svg",
+        message: format!("image source `{source}` on native hosts: {reason}. To fix it, {fix}"),
+        span,
+    };
+    match parsed {
+        Ok(document) => {
+            for reason in document.warnings {
+                warnings.push(diagnostic(
+                    &reason,
+                    "rewrite the named construct as static SVG shapes or use a raster image; use inline SVG for animation",
+                ));
+            }
+        }
+        Err(reason) => {
+            let error = diagnostic(
+                &format!("the SVG parser refuses this file: {reason}"),
+                "correct the SVG or use a raster image",
+            );
+            if native {
+                errors.push(error);
+            } else {
+                warnings.push(error);
+            }
+        }
+    }
+}
+
+fn raster(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(b"\xff\xd8\xff")
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+        || bytes.starts_with(b"BM")
+        || bytes.starts_with(b"II*\0")
+        || bytes.starts_with(b"MM\0*")
+        || bytes.starts_with(b"\0\0\x01\0")
+        || (bytes.get(4..8) == Some(b"ftyp")
+            && matches!(
+                bytes.get(8..12),
+                Some(b"avif" | b"avis" | b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1")
+            ))
 }
 
 /// The literal strings `e` can be: a string, a template of literals, either

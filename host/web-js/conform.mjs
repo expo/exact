@@ -4,7 +4,7 @@
 // `open`). After every step it compares the runner's typed state, including
 // the document head, the tree (depth, type, testId, text, value, label, handlers,
 // focus), layout boxes by testId, a screenshot, and the reason of each refusal for passing one of
-// the runner's evaluation bounds (LLP 1090 D7). `app.test.contract` files run on both.
+// the runner's evaluation bounds (LLP 1090 D7). `app.test.contract` files run on each executor.
 // Every failure is reported in one run; the exit code is 0 unless `--strict`,
 // which exits 1 on any failure and prints each as a `FAIL <target> <step>:`
 // line (the async lane's check, scripts/async.mjs).
@@ -13,7 +13,7 @@
 // wasm-vs-JS differences under a marker in report.json (`marked`) and report.md,
 // counted, not failed; their other failures fail.
 //
-// usage: bun host/web-js/conform.mjs [app …] [--synthetic] [--only <synthetic>] [--build] [--strict] [--linux] [--browser firefox|webkit] [--wasm-root /tmp/e3-wasm] [--out /tmp/exact-web-js-conform] [--steps 10] [--jobs 4] [--js-from <an earlier run's --out> | --build-js]
+// usage: bun host/web-js/conform.mjs [app …] [--synthetic] [--only <synthetic>] [--build] [--strict] [--linux] [--browser firefox|webkit|firefox,webkit] [--wasm-root /tmp/e3-wasm] [--out /tmp/exact-web-js-conform] [--steps 10] [--jobs 4] [--js-from <an earlier run's --out> | --build-js]
 //   (the JS builds go to <out>/dist/<target>)
 //   --jobs drives that many targets at once (default 4), each with its own
 //   browsers, servers and Linux host; the report is in target order.
@@ -54,11 +54,11 @@
 //   Every page freezes media time (`mediaClock: 'frozen'`: rate 0 from a
 //   media element's first load): a playing video would otherwise follow the
 //   wall clock, so two pages read different positions; play, pause and seeks
-//   still happen as the app drives them. In --browser mode both engines also
+//   still happen as the app drives them. In --browser mode all engines also
 //   take a fixed body line height (scripts/agent-launch.mjs `parityScript`),
 //   since `line-height: normal` is each engine's own font metric; authored
 //   line heights still compare.
-//   Wheel steps first hover the target on both pages: Playwright positions its
+//   Wheel steps first hover the target on every page: Playwright positions its
 //   mouse to deliver a wheel, so these compare hover followed by wheel at the
 //   same viewport point, even if hovering changes the target's box.
 //   --linux adds a second reference beside the wasm page: the Rust runner
@@ -76,7 +76,9 @@
 //   phases, a wheel, a list's `into`, the browser's history) or that
 //   `LINUX_APART` names; a `drag` it takes.
 //   --browser runs a cross-browser comparison of the JS target instead:
-//   Chrome is the oracle and Firefox or WebKit takes the identical steps.
+//   Chrome is the oracle and each named engine takes the identical steps.
+//   --browser firefox,webkit shares one live Chrome drive between both engines;
+//   each engine keeps its own findings and stops independently if it diverges.
 //   In this mode --build compiles a plan directly for a TypeScript data app;
 //   the comparison needs no Rust wasm reference. It drives the JS builds of a
 //   Chrome run, named by --js-from (a target whose build there is missing or
@@ -131,6 +133,7 @@ const wasmRoot = resolve(options['--wasm-root']);
 const out = resolve(options['--out']);
 const maxSteps = Number(options['--steps']);
 const crossBrowser = options['--browser'];
+const crossBrowsers = crossBrowser == null ? [] : crossBrowser.split(',');
 // `--js-from <out>`: an earlier step's JS build of a target (the lane's Chrome step), driven instead of building it
 // again when it was completed from the same plan, data module and source tree. A cross-browser run names where its
 // JS comes from, so a lane that stops passing the Chrome run's builds fails rather than quietly building them again
@@ -146,20 +149,27 @@ const sourceTree = process.env.EXACT_CONFORM_SOURCE_TREE ?? (() => {
   return `${head} ${createHash('sha256').update(changes).digest('hex')}`;
 })();
 const fileDigest = path => existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null;
-if (crossBrowser != null && !['firefox', 'webkit'].includes(crossBrowser)) throw new Error(`--browser: firefox or webkit, not ${crossBrowser}`);
-const known = crossBrowser ? JSON.parse(readFileSync(resolve(here, 'conformance', `known-${crossBrowser}.json`), 'utf8')) : [];
-// An entry names one difference exactly, or a class of them: `*` in app, step or
-// field matches any run of characters, and `pattern` (a regular expression)
-// must then match the difference's text — an engine convention such as
-// WebKit not focusing a clicked button is one rule, not an entry per step.
-const glob = s => new RegExp(`^${s.split('*').map(p => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
-const exact = known.filter(entry => ![entry.app, entry.step, entry.field].some(s => s.includes('*')) && !entry.pattern);
-const knownByKey = new Map(exact.map(entry => [`${entry.app}\0${entry.step}\0${entry.field}`, entry]));
-const knownClasses = known.filter(entry => !exact.includes(entry)).map(entry => ({ entry, app: glob(entry.app), step: glob(entry.step), field: glob(entry.field), pattern: entry.pattern ? new RegExp(entry.pattern) : null }));
-const knownFor = (app, step, field, what) => knownByKey.get(`${app}\0${step}\0${field}`)
-  ?? knownClasses.find(c => c.app.test(app) && c.step.test(step) && c.field.test(field) && (!c.pattern || c.pattern.test(what)))?.entry;
-if (known.some(entry => !entry.app || !entry.step || !entry.field || !entry.reason)) throw new Error(`known-${crossBrowser}.json: every entry needs app, step, field, and reason`);
-if (knownByKey.size !== exact.length) throw new Error(`known-${crossBrowser}.json: duplicate app + step + field`);
+if (crossBrowsers.some(b => !['firefox', 'webkit'].includes(b)) || new Set(crossBrowsers).size !== crossBrowsers.length) throw new Error(`--browser: firefox, webkit or firefox,webkit, not ${crossBrowser}`);
+const knownFor = (() => {
+  const engines = new Map();
+  for (const browser of crossBrowsers) {
+    const known = JSON.parse(readFileSync(resolve(here, 'conformance', `known-${browser}.json`), 'utf8'));
+    // An entry names one difference exactly, or a class of them: `*` in app, step or
+    // field matches any run of characters, and `pattern` (a regular expression)
+    // must then match the difference's text — an engine convention such as
+    // WebKit not focusing a clicked button is one rule, not an entry per step.
+    const glob = s => new RegExp(`^${s.split('*').map(p => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+    const exact = known.filter(entry => ![entry.app, entry.step, entry.field].some(s => s.includes('*')) && !entry.pattern);
+    const knownByKey = new Map(exact.map(entry => [`${entry.app}\0${entry.step}\0${entry.field}`, entry]));
+    const knownClasses = known.filter(entry => !exact.includes(entry)).map(entry => ({ entry, app: glob(entry.app), step: glob(entry.step), field: glob(entry.field), pattern: entry.pattern ? new RegExp(entry.pattern) : null }));
+    const find = (app, step, field, what) => knownByKey.get(`${app}\0${step}\0${field}`)
+      ?? knownClasses.find(c => c.app.test(app) && c.step.test(step) && c.field.test(field) && (!c.pattern || c.pattern.test(what)))?.entry;
+    if (known.some(entry => !entry.app || !entry.step || !entry.field || !entry.reason)) throw new Error(`known-${browser}.json: every entry needs app, step, field, and reason`);
+    if (knownByKey.size !== exact.length) throw new Error(`known-${browser}.json: duplicate app + step + field`);
+    engines.set(browser, find);
+  }
+  return (app, step, field, what, browser) => engines.get(browser)?.(app, step, field, what);
+})();
 const only = options['--only'];
 mkdirSync(out, { recursive: true });
 mkdirSync(wasmRoot, { recursive: true }); // --build renames each app's dist into it
@@ -351,17 +361,17 @@ const addSession = s => {
 // ---------------------------------------------------------------- one target
 async function target(t, report) {
   // `difference`: a wasm-vs-JS comparison that differed, which WASM_UNBOUND's targets record under its marker (conform-marked.mjs)
-  const fail = (step, what, field = null, difference = false) => {
-    const entry = field == null ? null : knownFor(t.name, step, field, what);
+  const fail = (step, what, field = null, difference = false, browser = crossBrowsers.length === 1 ? crossBrowser : null) => {
+    const entry = field == null ? null : knownFor(t.name, step, field, what, browser);
     if (entry) {
-      const key = `${t.name}\0${step}\0${field}`;
+      const key = `${browser}\0${t.name}\0${step}\0${field}`;
       if (!report.known.some(x => x.key === key)) {
-        report.known.push({ key, target: t.name, step, field, what, reason: entry.reason });
-        process.stderr.write(`\nKNOWN ${crossBrowser} ${t.name} ${step} ${field}: ${what} — ${entry.reason}\n`);
+        report.known.push({ key, browser, target: t.name, step, field, what, reason: entry.reason });
+        process.stderr.write(`\nKNOWN ${browser} ${t.name} ${step} ${field}: ${what} — ${entry.reason}\n`);
       }
       return true;
     }
-    report.failures.push({ target: t.name, step, what, ...(field == null ? {} : { field }), ...(difference ? { difference: true } : {}) });
+    report.failures.push({ target: t.name, step, what, ...(browser ? { browser } : {}), ...(field == null ? {} : { field }), ...(difference ? { difference: true } : {}) });
     return false;
   };
   const dir = resolve(out, t.name); mkdirSync(dir, { recursive: true });
@@ -370,8 +380,8 @@ async function target(t, report) {
     report.targets[t.name] = { jsBuild: true, warnings: 0 };
     await drive(t, report, fail, dir, { url: t.urls[0], close() {} }, { url: t.urls[1], close() {} });
     for (const url of new Set(t.urls)) {
-      await activation(t, report, fail, url, 'chrome');
-      if (crossBrowser) await activation(t, report, fail, url, crossBrowser);
+      await activation(t, report, (step, what) => fail(step, what, null, false, crossBrowser ? 'chrome' : null), url, 'chrome');
+      for (const browser of readyBrowsers) await activation(t, report, (step, what) => fail(step, what, null, false, browser), url, browser);
     }
     return;
   }
@@ -401,7 +411,10 @@ async function target(t, report) {
   // serves it: a press and an edit on the boot document (below). Its data
   // app's module is not swapped under a wasm page (a paired generation).
   if (t.contract && /\bpaint=boot\b/.test(readFileSync(t.contract, 'utf8'))) {
-    if (crossBrowser) { await bootPress(t, report, fail, t.dist, 'chrome'); return bootPress(t, report, fail, t.dist, crossBrowser); }
+    if (crossBrowser) {
+      for (const browser of ['chrome', ...readyBrowsers]) await bootPress(t, report, (step, what) => fail(step, what, null, false, browser), t.dist, browser);
+      return;
+    }
     return bootPress(t, report, fail, t.dist, 'chrome');
   }
   const [ws, js] = await Promise.all([serve(t.wasm), serve(t.dist)]);
@@ -410,16 +423,45 @@ async function target(t, report) {
   // reader's first press or edits, before the runtime (below).
   if (/data-activate="interaction"/.test(readFileSync(resolve(t.dist, 'index.html'), 'utf8'))) {
     const page = await serve(t.dist);
-    await activation(t, report, fail, page.url, 'chrome');
-    if (crossBrowser) await activation(t, report, fail, page.url, crossBrowser);
+    await activation(t, report, (step, what) => fail(step, what, null, false, crossBrowser ? 'chrome' : null), page.url, 'chrome');
+    for (const browser of readyBrowsers) await activation(t, report, (step, what) => fail(step, what, null, false, browser), page.url, browser);
     page.close();
   }
 }
 
-async function drive(t, report, fail, dir, ws, js) {
-  let W, J, L;
+async function drive(t, report, targetFail, dir, ws, js) {
+  let W, J, L, current;
+  let peers = [], diverged = false;
+  const live = () => peers.filter(p => p.active);
+  const fail = (step, what, field = null, difference = false) => {
+    if (!crossBrowser) return targetFail(step, what, field, difference);
+    const browsers = current ? [current.browser] : live().map(p => p.browser);
+    for (const browser of browsers.length ? browsers : readyBrowsers) targetFail(step, what, field, difference, browser);
+  };
+  const recordStep = entry => {
+    if (!crossBrowser) return report.steps.push(entry);
+    for (const peer of current ? [current] : live()) report.steps.push({ ...entry, browser: peer.browser });
+  };
+  const eachPeer = async (step, run) => {
+    driveAt = step;
+    try {
+      for (const peer of live()) {
+        current = peer; J = peer.session; other = peer.browser;
+        try { await run(peer); }
+        catch (e) {
+          if (!crossBrowser) throw e;
+          fail(driveAt, e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
+          peer.active = false;
+        }
+      }
+    } finally { current = null; }
+    diverged = !live().length;
+  };
+  // A checkpoint and a journal cursor are read once, then compared with each engine.
+  const once = run => { let pending; return () => pending ??= run(); };
   let driveAt = 'open';
-  const reference = crossBrowser ? 'chrome' : 'wasm', other = crossBrowser ?? 'js';
+  const reference = crossBrowser ? 'chrome' : 'wasm';
+  let other = crossBrowser ?? 'js';
   // Worker placement keeps storage in the answer (LLP 1097 D11), with no background record.
   const storageParity = /^\/\/ storage: background$/m.test(readFileSync(t.contract ?? resolveApp(t.app).dir + '/app.contract', 'utf8'));
   const stateKeys = STATE_KEYS.filter(k => k !== 'background' || storageParity);
@@ -439,12 +481,17 @@ async function drive(t, report, fail, dir, ws, js) {
     const scaled = facts.scale ? { env: { EXACT_SCALE: String(facts.scale) } } : {}; delete facts.scale;
     const storageFor = side => storageParity ? { storage: side, env: { ...scaled.env, XDG_CACHE_HOME: resolve(dir, 'stores'), EXACT_AGENT_STORAGE_FRESH: '1' } } : {};
     if (crossBrowser) {
-      // Both engines hold media time and the default line height equal (agent-launch.mjs `parityScript`):
+      // All engines hold media time and the default line height equal (agent-launch.mjs `parityScript`):
       // `line-height: normal` is each engine's own font metric (Firefox 20 px where Chrome is 18 at 16px
       // system-ui, in plain HTML), so the comparison measures what the page does, not the font's metric.
       const parity = { mediaClock: 'frozen', lineHeight: '1.2' };
-      try { J = await open({ host: 'web', browser: crossBrowser, app: t.app, ...facts, url: js.url, ...parity, ...storageFor(other) }); }
-      catch (e) { return fail(`${other}-open`, e.message.replace(/\s+/g, ' ').trim()); }
+      for (const browser of readyBrowsers) {
+        try {
+          const session = await open({ host: 'web', browser, app: t.app, ...facts, url: js.url, ...parity, ...storageFor(browser) });
+          peers.push({ browser, session, active: true });
+        } catch (e) { targetFail(`${browser}-open`, e.message.replace(/\s+/g, ' ').trim(), null, false, browser); }
+      }
+      if (!peers.length) return;
       try { W = await open({ host: 'web', browser: 'chrome', app: t.app, ...facts, url: t.urls ? ws.url : js.url, ...parity, ...storageFor(reference) }); }
       catch (e) { return fail(`${reference}-open`, e.message.replace(/\s+/g, ' ').trim()); }
     } else {
@@ -453,6 +500,7 @@ async function drive(t, report, fail, dir, ws, js) {
       try { J = await open({ host: 'web', browser: 'chrome', app: t.app, ...facts, ...scaled, url: js.url , mediaClock: 'frozen', ...storageFor(other) }); }
       catch (e) { return fail(`${other}-open`, e.message.split('\n')[0]); }
     }
+    if (!crossBrowser) peers = [{ browser: 'js', session: J, active: true }];
     const linux = crossBrowser || t.urls ? null : linuxFor(t);
     // An app runs its own binary's plan (the web dist's names the web's Rust module); a synthetic plan is swapped in.
     // `fresh` false relaunches on the store the last launch left (a `reload` step).
@@ -472,7 +520,7 @@ async function drive(t, report, fail, dir, ws, js) {
     };
     if (linux?.why) {
       if (storageParity) fail('linux', linux.why);
-      report.steps.push({ target: t.name, step: 'linux', skipped: linux.why });
+      recordStep({ target: t.name, step: 'linux', skipped: linux.why });
     }
     else if (linux) {
       try { L = await launchLinux(true); }
@@ -493,20 +541,28 @@ async function drive(t, report, fail, dir, ws, js) {
             if (got !== said.value) fail(step, `linux slots.${said.slot}: ${JSON.stringify(got)}, where ${JSON.stringify(said.value)} is specified (${apart[1]})`);
           } catch (e) { fail(step, `linux: ${e.message.split('\n')[0]}`); }
         }
-        report.steps.push({ target: t.name, step, linux: 'stopped', skipped: `linux: ${apart[1]}` }); await L.close?.().catch(() => {}); L = null; return;
+        recordStep({ target: t.name, step, linux: 'stopped', skipped: `linux: ${apart[1]}` }); await L.close?.().catch(() => {}); L = null; return;
       }
       try { await fn(L); } catch (e) {
         if (storageParity) fail(step, `linux: ${e.message.split('\n')[0]}`);
-        report.steps.push({ target: t.name, step, linux: 'stopped', skipped: `linux: ${e.message.split('\n')[0]}` }); await L?.close?.().catch(() => {}); L = null;
+        recordStep({ target: t.name, step, linux: 'stopped', skipped: `linux: ${e.message.split('\n')[0]}` }); await L?.close?.().catch(() => {}); L = null;
       }
     };
     const compare = async step => {
+      const state = once(() => W.state()), tree = once(() => comparisonTree(W)), layout = once(() => comparisonLayout(W, !!crossBrowser));
+      const slug = step.replace(/[^a-z0-9]+/gi, '-');
+      const screenshot = once(() => W.screenshot(resolve(dir, `${slug}-${reference}.png`), false, undefined, true));
+      let referenceTree;
+      await eachPeer(`${step} compare`, async () => { referenceTree = await comparePeer(step, state, tree, layout, screenshot); });
+      return referenceTree;
+    };
+    const comparePeer = async (step, state, tree, layout, screenshot) => {
       let st = 0;
       let linuxLayout = null;
       let linuxTree = null;
       let linuxReport = null;
       driveAt = `${step} state`;
-      const [sw, sj] = await pair(() => W.state(), () => J.state().catch(e => ({ error: e.message })));
+      const [sw, sj] = await pair(async () => structuredClone(await state()), () => J.state().catch(e => ({ error: e.message })));
       // A write's id orders it within one runtime; each numbers them apart (the Linux host's too), so the mutations and states compare.
       const plainWrites = s => { if (s?.writes) s.writes = s.writes.map(w => ({ mutation: w.mutation, landed: w.landed })); };
       plainWrites(sw); plainWrites(sj);
@@ -518,7 +574,7 @@ async function drive(t, report, fail, dir, ws, js) {
         o.forEach(x => fail(step, x.what, x.field)); st += o.length;
       } else { const o = []; for (const k of [...stateKeys, 'session']) diffJSON(sw[k], sj[k], k, o, other, reference); o.forEach(x => differ(step, 'state ' + x)); st += o.length; }
       driveAt = `${step} tree`;
-      const [tw, tj] = await pair(() => comparisonTree(W), () => comparisonTree(J));
+      const [tw, tj] = await pair(tree, () => comparisonTree(J));
       const o2 = diffLists(norm(tw), norm(tj), 'tree', other, reference); o2.forEach((x, i) => differ(step, x, crossBrowser ? `tree.${i}` : null)); st += o2.length;
       await onLinux(step, async L => {
         const [sl, tl] = await Promise.all([L.state(), L.tree()]), o = [];
@@ -530,15 +586,19 @@ async function drive(t, report, fail, dir, ws, js) {
         if (linux.layout) { linuxLayout = await L.layout(); linuxTree = tl; }
         o.forEach(x => fail(step, 'linux ' + x));
         linuxReport = { target: t.name, step, reference: 'linux', differences: o.length };
-        report.steps.push(linuxReport);
+        recordStep(linuxReport);
       });
       driveAt = `${step} layout`;
       const [[lw, documentW], [lj, documentJ]] = await pair(
-        () => comparisonLayout(W, !!crossBrowser),
+        layout,
         () => comparisonLayout(J, !!crossBrowser),
       );
       const o3 = diffLayout(lw, lj, tw, tj, !!crossBrowser, reference, other, documentW, documentJ); o3.forEach(x => differ(step, x.what, crossBrowser ? x.field : null)); st += o3.length;
-      if (crossBrowser) report.targets[t.name].maxLayoutDelta = Math.max(report.targets[t.name].maxLayoutDelta ?? 0, o3.maxDelta);
+      if (crossBrowser) {
+        const info = report.targets[t.name];
+        info.maxLayoutDelta = Math.max(info.maxLayoutDelta ?? 0, o3.maxDelta);
+        (info.browsers ??= {})[other] = { maxLayoutDelta: Math.max(info.browsers?.[other]?.maxLayoutDelta ?? 0, o3.maxDelta) };
+      }
       if (linuxLayout) {
         const ol = diffLayout(lw, linuxLayout, tw, linuxTree, false, reference, 'kernel');
         ol.forEach(x => fail(step, x.what));
@@ -554,7 +614,7 @@ async function drive(t, report, fail, dir, ws, js) {
       // Cross-browser pictures are never compared (each engine rasterizes text its own way): both are kept only as
       // evidence for a checkpoint that differed
       if (crossBrowser && st === 0) {
-        report.steps.push({ target: t.name, step, differences: st, maxLayoutDelta: o3.maxDelta });
+        recordStep({ target: t.name, step, differences: st, maxLayoutDelta: o3.maxDelta });
         return tw;
       }
       driveAt = `${step} screenshot`;
@@ -571,16 +631,16 @@ async function drive(t, report, fail, dir, ws, js) {
         // Preserve the other engine's picture even when Chrome's oracle
         // cannot capture (for example a broken GPU process on Linux).
         for (const [session, path, label] of [[J, pj, other], [W, pw, reference]]) {
-          try { await session.screenshot(path, false, undefined, true); }
+          try { if (session === W) await screenshot(); else await session.screenshot(path, false, undefined, true); }
           catch (error) { fail(step, `${label} screenshot: ${error.message.split('\n')[0]}`); st++; }
         }
-      } else await pair(() => W.screenshot(pw, false, undefined, true), () => J.screenshot(pj, false, undefined, true));
+      } else await pair(screenshot, () => J.screenshot(pj, false, undefined, true));
       // A playing video's frames and controls are the browser's clock, not the runner's.
       if (!crossBrowser) {
         const share = diffPng(pw, pj, resolve(dir, `${slug}-side-by-side.png`), lw.nodes.filter(n => n.type === 'Video'));
         if (share > 0.002) { differ(step, `screenshot: ${(share * 100).toFixed(2)}% of pixels differ (${slug}-side-by-side.png)`); st++; }
       }
-      report.steps.push({ target: t.name, step, differences: st, ...(crossBrowser ? { maxLayoutDelta: o3.maxDelta } : {}) });
+      recordStep({ target: t.name, step, differences: st, ...(crossBrowser ? { maxLayoutDelta: o3.maxDelta } : {}) });
       return tw;
     };
     // A scripted scenario (`conformance/<app>.steps`): one agent operation
@@ -603,39 +663,51 @@ async function drive(t, report, fail, dir, ws, js) {
     const clockAll = async (step, arg, linuxStep) => {
       driveAt = step === `clock ${arg}` ? step : `${step} clock ${arg}`;
       const apart = LINUX_APART[t.name]?.[0] === linuxStep;
-      const v = await clockOnAll(arg, [[reference, W], [other, J]], apart ? null : L, pair);
-      if (v.failure) throw new Error(`clock ${arg}: ${v.failure}`);
-      if (!v.refused || apart) { await onLinux(linuxStep, L => L.clock(arg)); if (!v.refused) return v; }
-      if (v.linux) {
-        fail(step, `clock ${arg}: ${v.linux}`);
-        report.steps.push({ target: t.name, step: linuxStep, linux: 'stopped', skipped: `linux: clock ${arg} did not refuse as the pages did` });
-        await L.close?.().catch(() => {}); L = null;
-      } else report.steps.push({ target: t.name, step: step === `clock ${arg}` ? step : `${step}: clock ${arg}`, refused: `${v.refused} on ${v.compared.join(', ')}`, differences: 0 });
-      return v;
+      const clock = once(() => W.clock(arg)), results = [];
+      await eachPeer(driveAt, async () => {
+        const v = await clockOnAll(arg, [[reference, { clock }], [other, J]], apart ? null : L, pair);
+        if (v.failure) throw new Error(`clock ${arg}: ${v.failure}`);
+        if (!v.refused || apart) { await onLinux(linuxStep, L => L.clock(arg)); if (!v.refused) { results.push([other, v]); return; } }
+        if (v.linux) {
+          fail(step, `clock ${arg}: ${v.linux}`);
+          recordStep({ target: t.name, step: linuxStep, linux: 'stopped', skipped: `linux: clock ${arg} did not refuse as the pages did` });
+          await L.close?.().catch(() => {}); L = null;
+        } else recordStep({ target: t.name, step: step === `clock ${arg}` ? step : `${step}: clock ${arg}`, refused: `${v.refused} on ${v.compared.join(', ')}`, differences: 0 });
+        results.push([other, v]);
+      });
+      return results;
     };
-    const settle = async step => { const { answered } = await clockAll(step, 'settle', 'settle'); for (const [side, r] of [[reference, answered?.[0]], [other, answered?.[1]]]) if (r?.reason === 'scroll-event') fail(step, `${side}: clock settle was not settled: a list's reader's scroll event still owed or still running`); };
+    const settle = async step => {
+      const results = await clockAll(step, 'settle', 'settle');
+      for (const [browser, { answered }] of results) for (const [side, r] of [[reference, answered?.[0]], [browser, answered?.[1]]]) {
+        if (r?.reason === 'scroll-event') targetFail(step, `${side}: clock settle was not settled: a list's reader's scroll event still owed or still running`, null, false, crossBrowser ? browser : null);
+      }
+    };
     driveAt = 'boot settle';
     await settle('boot');
     // Each step's bound refusals, on every target (the journals read from here on).
     const bounds = async step => {
-      const [{ bounds: rw, sounds: sw, storage: dw }, { bounds: rj, sounds: sj, storage: dj }] = await pair(() => journal(W), () => journal(J));
-      const say = r => r.join(' | ') || '—';
-      if (say(rw) !== say(rj)) differ(step, `bound refusals: ${reference} «${say(rw)}» ${other} «${say(rj)}»`);
-      if (say(sw) !== say(sj)) differ(step, `sound lines: ${reference} «${say(sw).slice(-400)}» ${other} «${say(sj).slice(-400)}»`);
-      if (storageParity && say(dw) !== say(dj)) differ(step, `storage lines: ${reference} «${say(dw)}» ${other} «${say(dj)}»`);
-      await onLinux(step, async L => {
-        const { bounds: rl, sounds: sl, storage: dl } = await journal(L);
-        if (say(rl) !== say(rw)) fail(step, `linux bound refusals: ${reference} «${say(rw)}» linux «${say(rl)}»`);
-        if (say(sl) !== say(sw)) fail(step, `linux sound lines: ${reference} «${say(sw).slice(-400)}» linux «${say(sl).slice(-400)}»`);
-        if (storageParity && say(dl) !== say(dw)) fail(step, `linux storage lines: ${reference} «${say(dw)}» linux «${say(dl)}»`);
+      const read = once(() => journal(W));
+      await eachPeer(`${step} journal`, async () => {
+        const [{ bounds: rw, sounds: sw, storage: dw }, { bounds: rj, sounds: sj, storage: dj }] = await pair(read, () => journal(J));
+        const say = r => r.join(' | ') || '—';
+        if (say(rw) !== say(rj)) differ(step, `bound refusals: ${reference} «${say(rw)}» ${other} «${say(rj)}»`);
+        if (say(sw) !== say(sj)) differ(step, `sound lines: ${reference} «${say(sw).slice(-400)}» ${other} «${say(sj).slice(-400)}»`);
+        if (storageParity && say(dw) !== say(dj)) differ(step, `storage lines: ${reference} «${say(dw)}» ${other} «${say(dj)}»`);
+        await onLinux(step, async L => {
+          const { bounds: rl, sounds: sl, storage: dl } = await journal(L);
+          if (say(rl) !== say(rw)) fail(step, `linux bound refusals: ${reference} «${say(rw)}» linux «${say(rl)}»`);
+          if (say(sl) !== say(sw)) fail(step, `linux sound lines: ${reference} «${say(sw).slice(-400)}» linux «${say(sl).slice(-400)}»`);
+          if (storageParity && say(dl) !== say(dw)) fail(step, `linux storage lines: ${reference} «${say(dw)}» linux «${say(dl)}»`);
+        });
       });
     };
     await bounds('boot');
     let tree = await compare('boot');
     // Once only the reference took a step, the two pages differ by that step:
     // later compares would report its consequences, not new differences.
-    let diverged = false;
     if (existsSync(script)) for (const line of readFileSync(script, 'utf8').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))) {
+      if (diverged) break;
       let step;
       try { step = parseStep(line, { hoverWheel: !!crossBrowser }); } catch (e) { fail(line, e.message); continue; }
       const { op, mustRefuse, run } = step;
@@ -643,14 +715,15 @@ async function drive(t, report, fail, dir, ws, js) {
       // Skip before resolving a target or touching either page; the carrier's
       // named, side-effect-free refusals are exercised by agent.test.mjs.
       if (crossBrowser && ['drag', 'down', 'move', 'up', 'pinch'].includes(op)) {
-        report.steps.push({ target: t.name, step: line, skipped: `${other}: ${op} unsupported: Playwright cannot produce trusted phased touches; synthetic dispatchEvent input is not equal input` });
+        await eachPeer(line, async () => recordStep({ target: t.name, step: line, skipped: `${other}: ${op} unsupported: Playwright cannot produce trusted phased touches; synthetic dispatchEvent input is not equal input` }));
         continue;
       }
       // Every executor restarts on its store, after the storage it still owes, as an authored test's `reload`
       // waits for it (LLP 1097 D9); what the restart kept and what it reset are then compared.
       if (op === 'reload') {
         driveAt = line;
-        try { await pair(() => reloadWeb(W), () => reloadWeb(J)); } catch (e) { fail(line, e.message.split('\n')[0]); diverged = true; break; }
+        try { await reloadWeb(W); } catch (e) { fail(line, e.message.split('\n')[0]); diverged = true; break; }
+        await eachPeer(line, () => reloadWeb(J));
         await onLinux(line, async () => {
           const owed = (await L.state()).background;
           if (owed?.queued + owed?.inFlight && (await L.clock('data'))?.settled === false) throw new Error('reload: pending storage did not settle');
@@ -669,12 +742,15 @@ async function drive(t, report, fail, dir, ws, js) {
       try { await run(W); } catch (e) { if (e.malformed === true) { fail(line, e.message); continue; } if (!mustRefuse && op !== 'clock') { fail(line, `${reference}: ${e.message.split('\n')[0]}`); continue; } refused = e.message.split('\n')[0]; }
       const answered = who => { if (mustRefuse) fail(line, `${who}: answered where refusal was required`); else if (refused !== null) fail(line, `${who}: answered where ${reference} refused (${refused})`); };
       if (mustRefuse && refused === null) answered(reference);
-      let jsRefused = null;
-      try { await run(J); } catch (e) { if (e.malformed === true) { fail(line, e.message); diverged = true; break; } jsRefused = e.message.split('\n')[0]; }
-      if (!mustRefuse && jsRefused !== null && refused === null) { fail(line, `${other}: ${jsRefused}`); diverged = true; break; }
-      if (jsRefused === null) answered(other);
-      if ((refused === null) !== (jsRefused === null)) { diverged = true; break; }
-      if (mustRefuse && refused !== null && jsRefused !== null && refused !== jsRefused) fail(line, `refusal: ${reference} «${refused}» ${other} «${jsRefused}»`);
+      await eachPeer(line, async peer => {
+        let jsRefused = null;
+        try { await run(J); } catch (e) { if (e.malformed === true) { fail(line, e.message); peer.active = false; return; } jsRefused = e.message.split('\n')[0]; }
+        if (!mustRefuse && jsRefused !== null && refused === null) { fail(line, `${other}: ${jsRefused}`); peer.active = false; return; }
+        if (jsRefused === null) answered(other);
+        if ((refused === null) !== (jsRefused === null)) { peer.active = false; return; }
+        if (mustRefuse && refused !== null && jsRefused !== null && refused !== jsRefused) fail(line, `refusal: ${reference} «${refused}» ${other} «${jsRefused}»`);
+      });
+      if (diverged) break;
       // A page-only operation a page took ends the Linux comparison. If both
       // pages refused, neither moved: Linux skips a page-only operation and
       // comparison continues. If Linux takes a step both pages refused as marked,
@@ -691,9 +767,12 @@ async function drive(t, report, fail, dir, ws, js) {
       if (!next) break;
       const id = next.props.testId; tapped.add(id);
       let ok = true;
-      try { await W.tap(id); } catch (e) { ok = false; referenceTapRefused({ target: t.name, step: `tap ${id}`, why: `${reference}: ${e.message.split('\n')[0]}`, crossBrowser, fail, report }); }
+      try { await W.tap(id); } catch (e) { ok = false; referenceTapRefused({ target: t.name, step: `tap ${id}`, why: `${reference}: ${e.message.split('\n')[0]}`, crossBrowser, fail, report: { steps: { push: recordStep } } }); }
       if (!ok) continue;
-      try { await J.tap(id); } catch (e) { fail(`tap ${id}`, `${other}: ${e.message.split('\n')[0]}`); diverged = true; break; }
+      await eachPeer(`tap ${id}`, async peer => {
+        try { await J.tap(id); } catch (e) { fail(`tap ${id}`, `${other}: ${e.message.split('\n')[0]}`); peer.active = false; }
+      });
+      if (diverged) break;
       await onLinux(`tap ${id}`, L => L.tap(id));
       // What the press sent lands on both first (a fetch races the compare otherwise).
       await settle(`tap ${id}`);
@@ -707,7 +786,10 @@ async function drive(t, report, fail, dir, ws, js) {
   } catch (e) {
     fail(driveAt, e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
   } finally {
-    await W?.close?.(); await J?.close?.(); await L?.close?.(); ws.close(); js.close();
+    await W?.close?.();
+    for (const peer of peers) await peer.session.close?.();
+    if (!peers.length) await J?.close?.();
+    await L?.close?.(); ws.close(); js.close();
   }
   // The app's own tests on each executor.
   const tests = resolve(root, 'apps', t.app, 'app.test.contract');
@@ -718,7 +800,8 @@ async function drive(t, report, fail, dir, ws, js) {
       child.on('error', error => ok({ output: output + error.message, status: 127 })); child.on('exit', status => ok({ output, status: status ?? 128 }));
     });
     const [w2, j2] = await Promise.all([serve(crossBrowser ? t.dist : t.wasm), serve(t.dist)]);
-    const [rw, rj] = await Promise.all([run(w2.url), run(j2.url, crossBrowser ?? 'chrome')]);
+    const browsers = crossBrowser ? readyBrowsers : ['chrome'];
+    const [rw, ...results] = await Promise.all([run(w2.url), ...browsers.map(browser => run(j2.url, browser))]);
     w2.close(); j2.close();
     const lines = s => s.split('\n').filter(l => l.startsWith('test '));
     const failedTests = output => {
@@ -730,17 +813,23 @@ async function drive(t, report, fail, dir, ws, js) {
       }
       return found;
     };
-    const [lw, lj] = [lines(rw.output), lines(rj.output)];
-    report.targets[t.name].tests = crossBrowser ? { chrome: rw.output.trim().split('\n').at(-1), [crossBrowser]: rj.output.trim().split('\n').at(-1) } : { wasm: rw.output.trim().split('\n').at(-1), js: rj.output.trim().split('\n').at(-1) };
+    const lw = lines(rw.output);
+    report.targets[t.name].tests = { [reference]: rw.output.trim().split('\n').at(-1) };
     const recordTests = (result, label) => {
       if (result.status === 0) return;
       const details = failedTests(result.output);
       if (details.length) for (const detail of details) fail('tests', `${label} ${detail}`);
       else fail('tests', `${label} app.test.contract exited ${result.status}: ${result.output.trim().split('\n').slice(-12).map(line => line.trim()).filter(Boolean).join(' | ')}`);
     };
-    recordTests(rw, crossBrowser ? 'chrome' : 'wasm');
-    recordTests(rj, crossBrowser ?? 'js');
-    diffLists(lw, lj, 'app.test.contract', crossBrowser ?? 'js', crossBrowser ? 'chrome' : 'wasm').forEach(x => fail('tests', x));
+    for (const [i, browser] of browsers.entries()) {
+      current = { browser: crossBrowser ? browser : 'js' };
+      const rj = results[i], other = current.browser;
+      report.targets[t.name].tests[other] = rj.output.trim().split('\n').at(-1);
+      recordTests(rw, reference);
+      recordTests(rj, other);
+      diffLists(lw, lines(rj.output), 'app.test.contract', other, reference).forEach(x => fail('tests', x));
+    }
+    current = null;
     if (storageParity && linuxRef && !linuxFor(t)?.why) {
       const rl = await run(null, null, 'linux');
       recordTests(rl, 'linux');
@@ -804,7 +893,7 @@ async function activation(t, report, fail, url, browser) {
       }
     }
     out.forEach(x => fail(step, x));
-    report.steps.push({ target: t.name, step, policy: r.policy, paint: r.paint, boot: r.boot, differences: out.length });
+    report.steps.push({ target: t.name, step, ...(crossBrowser ? { browser } : {}), policy: r.policy, paint: r.paint, boot: r.boot, differences: out.length });
   } catch (e) {
     fail(step, e.message.split('\n')[0]);
   } finally {
@@ -882,7 +971,7 @@ async function bootPress(t, report, fail, dist, browser) {
         if (got?.startsWith(want)) break;
       }
       if (!got?.startsWith(want)) fail(pass, `after adoption: ${got}, not ${want}… (state|field|focus|roots|title)`);
-      report.steps.push({ target: t.name, step: pass, differences: got?.startsWith(want) ? 0 : 1 });
+      report.steps.push({ target: t.name, step: pass, ...(crossBrowser ? { browser } : {}), differences: got?.startsWith(want) ? 0 : 1 });
     }
   } catch (e) {
     fail(step, e.message.split('\n')[0]);
@@ -960,7 +1049,7 @@ async function typescriptFixture(t, report, fail) {
   delete env.EXACT_APP_DIR; delete env.EXACT_WEB_DIST;
   const run = await spawned(process.execPath, ['host/web-js/conform.mjs', t.app,
     ...(argv.includes('--build') ? ['--build'] : []), ...(linuxRef ? ['--linux'] : []),
-    ...(crossBrowser ? ['--browser', crossBrowser, ...(prior ? ['--js-from', resolve(prior, 'comparison')] : ['--build-js'])] : []),
+    ...(crossBrowser ? ['--browser', readyBrowsers.join(','), ...(prior ? ['--js-from', resolve(prior, 'comparison')] : ['--build-js'])] : []),
     '--strict', '--steps', '0', '--jobs', '1', '--wasm-root', resolve(prior ?? carrier, 'wasm'), '--out', destination], {
     cwd: source, env, onOutput: text => appendFileSync(resolve(carrier, 'drive.log'), text),
   });
@@ -974,14 +1063,14 @@ async function typescriptFixture(t, report, fail) {
 
 // ---------------------------------------------------------------- the run
 const report = { at: new Date().toISOString(), targets: {}, steps: [], failures: [], known: [], wheelInput: crossBrowser ? 'hover then wheel on both pages' : 'wheel' };
-let engineReady = true;
-if (crossBrowser) {
-  try { await probePlaywrightBrowser(crossBrowser); }
+const readyBrowsers = [];
+for (const browser of crossBrowsers) {
+  try { await probePlaywrightBrowser(browser); readyBrowsers.push(browser); }
   catch (error) {
-    engineReady = false;
-    report.failures.push({ target: 'engine', step: 'launch', what: error.message.replace(/\s+/g, ' ').trim() });
+    report.failures.push({ target: 'engine', step: 'launch', ...(crossBrowsers.length > 1 ? { browser } : {}), what: error.message.replace(/\s+/g, ' ').trim() });
   }
 }
+const engineReady = !crossBrowser || readyBrowsers.length > 0;
 // `--urls <app> <a> <b>`: two served pages of one app, compared the same way
 // (a fresh JavaScript render against an adopted one, one renderer against another).
 const urls = argv.indexOf('--urls');
@@ -1096,16 +1185,17 @@ const byTarget = {};
 for (const f of report.failures) (byTarget[f.target] ??= []).push(f);
 const testsHeading = crossBrowser ? `app tests (Chrome / ${crossBrowser})` : `app tests (wasm / js${linuxRef ? ' / linux' : ''})`;
 const lines = [`# JS target ${crossBrowser ? `cross-browser conformance (Chrome / ${crossBrowser})` : 'conformance'} — ${report.at}`, '', `| target | JS build | steps compared | steps equal | failures | ${testsHeading} |${crossBrowser ? ' max box delta |' : ''}${linuxRef ? ' Linux reference (equal / compared) |' : ''}`, `|---|---|---|---|---|---|${crossBrowser ? '---|' : ''}${linuxRef ? '---|' : ''}`];
-for (const t of targets) {
-  const mine = report.steps.filter(x => x.target === t.name), s = mine.filter(x => x.differences != null && !x.reference), info = report.targets[t.name] ?? {};
+const rows = targets.flatMap(t => (crossBrowsers.length > 1 ? crossBrowsers : [crossBrowser]).map(browser => ({ t, browser })));
+for (const { t, browser } of rows) {
+  const mine = report.steps.filter(x => x.target === t.name && (!x.browser || x.browser === browser || x.browser === 'chrome')), s = mine.filter(x => x.differences != null && !x.reference), info = report.targets[t.name] ?? {};
   const lx = mine.filter(x => x.reference === 'linux'), lskip = mine.find(x => x.step === 'linux' || x.linux === 'stopped');
   const lcell = (lskip && !lx.length ? lskip.skipped.replace(/^not compared on Linux: /, 'not compared: ') : `${lx.filter(x => x.differences === 0).length} / ${lx.length}${lskip ? ` (stopped at ${lskip.step})` : ''}`);
-  const testCell = info.tests ? crossBrowser ? `${info.tests.chrome} / ${info.tests[crossBrowser]}` : `${info.tests.wasm} / ${info.tests.js}${linuxRef ? ` / ${info.tests.linux ?? '—'}` : ''}` : '—';
-  lines.push(`| ${t.name} | ${info.jsBuild === false ? 'refused' : info.jsBuild ? 'ok' : '—'} | ${s.length} | ${s.filter(x => x.differences === 0).length} | ${(byTarget[t.name] ?? []).length}${report.marked?.[t.name] ? ` (+${report.marked[t.name].differences} marked)` : ''} | ${testCell} |${crossBrowser ? ` ${(info.maxLayoutDelta ?? 0).toFixed(3)} px |` : ''}${linuxRef ? ` ${lcell} |` : ''}`);
+  const testCell = info.tests ? crossBrowser ? `${info.tests.chrome} / ${info.tests[browser] ?? '—'}` : `${info.tests.wasm} / ${info.tests.js}${linuxRef ? ` / ${info.tests.linux ?? '—'}` : ''}` : '—';
+  lines.push(`| ${t.name}${crossBrowsers.length > 1 ? ` / ${browser}` : ''} | ${info.jsBuild === false ? 'refused' : info.jsBuild ? 'ok' : '—'} | ${s.length} | ${s.filter(x => x.differences === 0).length} | ${(byTarget[t.name] ?? []).filter(f => !f.browser || f.browser === browser || f.browser === 'chrome').length}${report.marked?.[t.name] ? ` (+${report.marked[t.name].differences} marked)` : ''} | ${testCell} |${crossBrowser ? ` ${(info.browsers?.[browser]?.maxLayoutDelta ?? 0).toFixed(3)} px |` : ''}${linuxRef ? ` ${lcell} |` : ''}`);
 }
 if (crossBrowser) lines.push('', 'Wheel input: hover then wheel on both pages.');
 lines.push('', '## Failures', '');
-for (const [t, fs] of Object.entries(byTarget)) { lines.push(`### ${t}`); for (const f of fs) lines.push(`- **${f.step}** — ${f.what}`); lines.push(''); }
+for (const [t, fs] of Object.entries(byTarget)) { lines.push(`### ${t}`); for (const f of fs) lines.push(`- **${f.browser ? `${f.browser} / ` : ''}${f.step}** — ${f.what}`); lines.push(''); }
 for (const reason of new Set(marked.map(([, m]) => m.reason))) {
   lines.push(`## Marked: ${reason}`, '', 'Interim (theme2 + the lead, 2026-10-30): these wasm-vs-JS differences are recorded and counted, not failures; any other failure on these targets still fails.', '');
   for (const [t, m] of marked.filter(([, m]) => m.reason === reason)) {
@@ -1118,16 +1208,16 @@ for (const reason of new Set(marked.map(([, m]) => m.reason))) {
 const refusals = report.steps.filter(x => x.refused);
 if (refusals.length) {
   lines.push('## Clock refusals compared', '');
-  for (const x of refusals) lines.push(`- **${x.target} / ${x.step}** — refused: ${x.refused}`);
+  for (const x of refusals) lines.push(`- **${x.browser ? `${x.browser} / ` : ''}${x.target} / ${x.step}** — refused: ${x.refused}`);
   lines.push('');
 }
 if (report.known.length) {
   lines.push('## Known engine differences', '');
-  for (const item of report.known) lines.push(`- **${item.target} / ${item.step} / ${item.field}** — ${item.what}; ${item.reason}`);
+  for (const item of report.known) lines.push(`- **${item.browser} / ${item.target} / ${item.step} / ${item.field}** — ${item.what}; ${item.reason}`);
   lines.push('');
 }
 writeFileSync(resolve(out, 'report.md'), lines.join('\n'));
-console.log(lines.slice(0, targets.length + 4).join('\n'));
+console.log(lines.slice(0, rows.length + 4).join('\n'));
 if (jsFrom) {
   const shared = Object.values(report.targets).filter(t => t.sharedFrom).length, builds = Object.values(report.targets).filter(t => t.jsBuild != null).length;
   console.log(`\nJS builds: ${shared} shared from ${jsFrom}, ${builds - shared} built here`);
@@ -1137,7 +1227,7 @@ console.log(`\n${report.failures.length} failures across ${targets.length} targe
 if (argv.includes('--strict') && report.failures.length) {
   for (const f of report.failures) {
     const what = f.what.replace(/\s+/g, ' ').trim();
-    console.log(`FAIL ${crossBrowser ? `${crossBrowser} ` : ''}${f.target} ${f.step}: ${f.target === 'engine' && f.step === 'launch' ? what : what.slice(0, 200)}`);
+    console.log(`FAIL ${crossBrowser ? `${f.browser ?? crossBrowser} ` : ''}${f.target} ${f.step}: ${f.target === 'engine' && f.step === 'launch' ? what : what.slice(0, 200)}`);
   }
   process.exit(1);
 }

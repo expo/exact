@@ -57,11 +57,19 @@ impl Fixture {
             "compress" => "fs.compressImage",
             _ => return Err(DataError::Unavailable(format!("no image call {call}"))),
         };
-        let mut record: Json = if options.is_empty() {
-            json!({})
-        } else {
-            serde_json::from_str(&options)
-                .map_err(|e| DataError::Unavailable(format!("options: {e}")))?
+        // Options are an object; empty text and `null` are none.
+        let mut record: Json = match options.as_str() {
+            "" => json!({}),
+            text => match serde_json::from_str(text) {
+                Ok(Json::Null) => json!({}),
+                Ok(object @ Json::Object(_)) => object,
+                Ok(_) => {
+                    return Err(DataError::Unavailable(
+                        "options: a JSON object of the call's options".into(),
+                    ))
+                }
+                Err(e) => return Err(DataError::Unavailable(format!("options: {e}"))),
+            },
         };
         self.edits += 1;
         let extension = match record["type"].as_str() {

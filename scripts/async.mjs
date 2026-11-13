@@ -251,10 +251,10 @@ export function checks(sha, since, selection = {}) {
     // host's presence preload and zero-viewport recovery, over this commit's
     // Caltrain dists; a missing dist fails it.
     ...when(selection.webAx, [['web-ax-test', 'env', [...required, ...distEnv, 'bun', 'test', ...WEB_AX]]]),
-    // The JS target in the other browser engines, with Chrome as its oracle.
+    // The JS target in both other engines, sharing one live Chrome oracle per target.
     // These remain async-only; a missing Playwright browser is a named failure
     // whose log gives the exact outside-the-repo install command.
-    ...when(conform.length, ['firefox', 'webkit'].map(browser => [`conform-${browser}`, 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--browser', browser, '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--js-from', resolve(STATE_DIR, 'conform'), '--out', resolve(STATE_DIR, `conform-${browser}`)]])),
+    ...when(conform.length, [['conform-browsers', 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--browser', 'firefox,webkit', '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--js-from', resolve(STATE_DIR, 'conform'), '--out', resolve(STATE_DIR, 'conform-browsers')]]]),
     // The paint walk's pixels against Chrome's (Charlie, 2026-11-11; LLP 1159.000 D6): each gallery on the Linux
     // host, whose walk Windows and Android paint with too. Seconds once the gallery is built; no window, no simulator.
     ...selection.parity.map(smoke => [`parity-${smoke}`, 'sh', ['-c', parityLeg(smoke)]]),

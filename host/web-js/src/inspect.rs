@@ -213,7 +213,7 @@ pub fn table(plan: &Plan, sites: &Sites) -> Result<String, String> {
                 json!({ "tuples": values })
             };
             // A length relative to the element's or the root's font (`em`,
-            // `rem`) or to the display (a hairline), as the kernel parses it:
+            // `rem`), the viewport or the display (a hairline), as the kernel parses it:
             // the page reads it from the element, whose font and display are
             // the instance's. (A text style's size is its ramp at the 16 px
             // root: a limit.)
@@ -224,6 +224,7 @@ pub fn table(plan: &Plan, sites: &Sites) -> Result<String, String> {
                         exact_kernel::style::relative::Unit::Em
                             | exact_kernel::style::relative::Unit::Rem
                             | exact_kernel::style::relative::Unit::Hairline
+                            | exact_kernel::style::relative::Unit::Viewport(_)
                             | exact_kernel::style::relative::Unit::Ramp(_),
                         _
                     ))

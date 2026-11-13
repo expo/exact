@@ -92,6 +92,54 @@ fn a_matching_declaration_transitions_from_the_current_value() {
 }
 
 #[test]
+fn an_unchanged_target_keeps_its_curve_only_while_transition_property_covers_it() {
+    for curve in ["opacity 1s linear", "opacity -exact-spring()"] {
+        for played in [false, true] {
+            for (next, covered) in [
+                ("none", false),
+                ("scale 1s", false),
+                ("all 0s", true),
+                ("opacity 0s", true),
+            ] {
+                let mut engine = engine_with(Transitions::parse(curve).unwrap().0);
+                engine.observe(opacity(0.0)).unwrap();
+                if played {
+                    engine.play_transition(NODE, Property::Opacity).unwrap();
+                }
+                engine.advance(0.1).unwrap();
+                engine.frame();
+                let end = engine.settle_time();
+                let shown = engine.value(NODE, Property::Opacity);
+                engine
+                    .set_transitions(NODE, Transitions::parse(next).unwrap())
+                    .unwrap();
+                engine.observe(opacity(0.0)).unwrap();
+                assert_eq!(
+                    engine.is_active(NODE, Property::Opacity),
+                    covered,
+                    "{curve} → {next}, played={played}"
+                );
+                assert_eq!(engine.is_played(NODE, Property::Opacity), played && covered);
+                if covered {
+                    assert_eq!(engine.settle_time(), end);
+                    assert_eq!(engine.value(NODE, Property::Opacity), shown);
+                    assert!(engine.frame().is_empty());
+                } else {
+                    assert_eq!(engine.settle_time(), None);
+                    assert!(engine.quiescent());
+                    assert_eq!(engine.value(NODE, Property::Opacity), Some(Value::ZERO));
+                    let frame = engine.frame();
+                    assert_eq!(frame.len(), 1);
+                    assert_eq!(frame[0].value, Value::ZERO);
+                    engine.advance(2.0).unwrap();
+                    assert!(engine.frame().is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn the_clock_is_a_seek() {
     let run = |steps: &[f64]| {
         let mut engine = engine_with(vec![ease(TransitionProperty::All, 1.0, Easing::EaseInOut)]);

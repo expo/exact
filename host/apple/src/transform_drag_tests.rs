@@ -218,6 +218,41 @@ fn binding_follows_complete_tree_and_fractional_geometry_is_deduplicated() {
 }
 
 #[test]
+fn geometry_keeps_running_transforms_when_the_transition_is_unset() {
+    for easing in ["400ms linear", "-exact-spring(180, 12, 1)"] {
+        let source = SOURCE
+            .replace("  state zoom = 1", &format!("  state curve = \"all {easing}\"\n  state zoom = 1"))
+            .replace("    zoom = 2", "    zoom = 2\n    x = 100")
+            .replace("  action unbind", "  action clear\n    curve = \"unset\"\n  action unbind")
+            .replace("      button testId=\"zoom\"", "      button \"Clear\" testId=\"clear\" press=clear\n      button testId=\"zoom\"")
+            .replace("transition=\"translate -exact-spring(180, 12, 1), scale -exact-spring(180, 12, 1)\"", "transition=curve");
+        let (mut host, mut packet, _) = boot_source(&source);
+        accepted(&packet.send(&mut host));
+        press(&mut host, "zoom", 0.);
+        host.tick(100.);
+        let node = packet.identity[2];
+        let before = current(&host, node);
+        let ends = host.engine().settle_time();
+        assert!(ends.is_some());
+        press(&mut host, "clear", 100.);
+        assert_eq!(current(&host, node), before);
+        packet.identity[4] += 1;
+        packet.now = 100.;
+        accepted(&packet.send(&mut host));
+        assert_eq!(current(&host, node), before, "{easing}: geometry");
+        assert_eq!(host.engine().settle_time(), ends);
+        host.tick(200.);
+        assert_ne!(current(&host, node), before);
+        host.tick(ends.unwrap() * 1000.);
+        assert_eq!(
+            current(&host, node),
+            [MotionValue::new(100., 0.), MotionValue::scalar(2.)]
+        );
+        assert!(host.engine().quiescent());
+    }
+}
+
+#[test]
 fn begin_requires_positive_current_geometry_and_invalidations_do_not_fake_actions() {
     let (mut host, mut p, _) = boot();
     p.op = 11;

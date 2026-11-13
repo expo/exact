@@ -217,3 +217,22 @@ test("a kept key's name holds its new handle only once the pair is kept, and the
   await older;
   expect(await store.key('token')).toBe(second);
 });
+
+test('secret names and values use the native string conversion', () => {
+  const granted = { version: 1, entries: [[1, 'secret.keep token', ['secret-keep', 'token'], null]], error: null, seal: 'b22a759eedfe6bc2' };
+  const backing = new Map(), store = createSecretFacade(backing, granted, () => Promise.resolve({}));
+  const name = { toString: () => 'token' };
+  store.set(name, 42);
+  expect(backing.get('token')).toBe('42');
+  expect(store.get(name)).toBe('42');
+  store.forget(name);
+  expect(store.get('token')).toBeNull();
+});
+
+test('denied secret writes throw ordinary errors', () => {
+  const granted = { version: 1, entries: [[1, 'secret.keep token', ['secret-keep', 'token'], null]], error: null, seal: 'b22a759eedfe6bc2' };
+  const store = createSecretFacade(new Map(), granted, () => Promise.resolve({}));
+  const denied = (() => { try { store.set('missing', 'x'); } catch (error) { return error; } })();
+  expect(denied).toBeInstanceOf(Error);
+  expect(denied.refuse).toBeUndefined();
+});

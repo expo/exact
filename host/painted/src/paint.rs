@@ -91,6 +91,16 @@ pub use svg::{resolve_with, Ink, SvgPaint};
 // Only an explicit row makes a raster a template; motion may supply its ink.
 // `currentcolor` is the node's `color` (feed F1).
 fn image_tint(node: &NodeRef<'_>, presented: &Presented, dark: bool) -> Option<[u8; 4]> {
+    // Icon lowering supplies a currentcolor tint for symbol sources. A
+    // non-template icon keeps the file's paint, as on the web.
+    if node
+        .props
+        .str(PropId::ImageSource)
+        .and_then(crate::image::file_icon)
+        .is_some()
+    {
+        return None;
+    }
     let style = node.style;
     style.mask.has(StyleId::TintColor).then(|| {
         presented
@@ -422,6 +432,8 @@ pub use frame::Frame;
 
 /// The painter: the walk over one backend.
 pub struct Painter {
+    /// Module replies from a replaced kernel must not name its new allocations.
+    pub(crate) native_session: u64,
     pub(crate) split: Option<crate::presenter::split::Split>,
     pub(crate) window_canvas: Option<ViewId>,
     pub(crate) direct_canvases: std::collections::BTreeSet<ViewId>,
@@ -553,6 +565,7 @@ impl Painter {
     }
 
     pub(crate) fn replaced(&mut self) {
+        self.native_session = native::new_session();
         // A fresh kernel can reuse both epochs and node keys.
         self.paint_epoch = None;
         self.svg_warned.clear();
@@ -563,6 +576,7 @@ impl Painter {
     /// A painter over a backend.
     pub fn new(text: Shared, scale: f32, backend: Box<dyn Backend>) -> Painter {
         Painter {
+            native_session: native::new_session(),
             split: None,
             window_canvas: None,
             direct_canvases: Default::default(),
@@ -798,7 +812,9 @@ impl Painter {
         self.viewport = viewport;
         self.backend.page(page_color(self.dark));
         let partial = if let Some(previous) = self.damage.pixels.as_ref().filter(|_| {
-            !self.damage.next.is_empty() && self.top_surface.is_none() && !self.scrollbars.enabled
+            !self.damage.next.is_empty()
+                && self.top_surface.is_none()
+                && (!self.scrollbars.enabled || self.split.is_some())
         }) {
             self.backend.begin_damage(
                 viewport.0,
@@ -892,6 +908,7 @@ impl Painter {
                     .any(|p| !p.fragments().is_empty())
         });
         self.damage.dark = self.dark;
+        self.damage.scrollbars = self.scrollbars.ink();
         self.damage.focus_ink = damage::field_focus_ink(scene.kernel, scene.focus);
         Ok(Frame {
             pixmap,
@@ -1131,7 +1148,7 @@ impl Painter {
                 if node
                     .props
                     .str(exact_kernel::PropId::ImageSource)
-                    .is_some_and(|s| s.starts_with("symbol:"))
+                    .is_some_and(crate::image::is_symbol)
                 {
                     // Its `color` as presented, through a transition or a press (LLP 1081
                     // stage 2), unless the platform's sheet tinted it: a grouped row's leading

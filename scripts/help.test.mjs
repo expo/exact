@@ -163,6 +163,8 @@ test('a first build\'s helps are short, and --help all has every flag', () => {
   // LLP 1116.008 D2: web's help does not teach a background dev server (builders followed it into five steps).
   assert.match(helpText('web', { all: true }), /The dev loop is for a person watching\n\s+the app change: verify, test and agent build and serve their own copy, so checking\n\s+the app needs no dev server\./);
   assert.doesNotMatch(helpText('web', { all: true }), /web\.log| &\s|background|\$!/);
+  // The server's database is the run's, not each test's (LLP 1156.001 D5): test's help says so and where the reset is.
+  assert.match(helpText('test'), /^Server +runs server\.ts once a run .* shared by its tests: a reset per\n\s+test is docs\/recipes\/rest-backend\.md's/m);
   // LLP 1116.007 D2: a builder parses `agent` output, so the short text says --json is one object per line.
   assert.match(helpText('agent'), /^ {2}--json +one compact JSON object per op reply, one per line/m);
   // LLP 1116.007 D3.9: `state <name>` is a state or resource read down a dotted path; a big one prints its sizes.

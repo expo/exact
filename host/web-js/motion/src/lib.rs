@@ -29,7 +29,7 @@ pub const TARGETS: [Property; 4] = [
 pub struct Motion {
     engine: Engine,
     holds: BTreeMap<u64, HoldToken>,
-    playing: BTreeMap<(u64, Property), SpringDescriptor>,
+    playing: BTreeMap<(u64, Property), (SpringDescriptor, f64)>,
     pan: Option<(u32, VelocityTracker)>,
     /// Transform pairs by their translate serial.
     pairs: BTreeMap<u64, TransformHold>,
@@ -62,15 +62,19 @@ impl Motion {
         self.engine.advance(now.max(self.engine.now()))
     }
 
-    /// A node's `transition` row as CSS text; text the grammar refuses is
-    /// no transition, as an invalid CSS declaration is.
+    /// A node's `transition` row as CSS text. Empty, unset and invalid rows
+    /// take CSS's initial `all 0s` coverage.
     pub fn transitions(&mut self, node: u64, text: &str) -> bool {
-        let parsed = Transitions::parse(text);
+        let parsed = if text.trim().is_empty() || text.trim().eq_ignore_ascii_case("unset") {
+            Ok(Transitions::initial())
+        } else {
+            Transitions::parse(text)
+        };
         let was = self.engine.has_spring_transition(node, Property::Translate);
         let ok = parsed.is_ok();
         let applied = self
             .engine
-            .set_transitions(node, parsed.unwrap_or_default())
+            .set_transitions(node, parsed.unwrap_or_else(|_| Transitions::initial()))
             .is_ok();
         if !was && self.engine.has_spring_transition(node, Property::Translate) {
             self.enabled_translate.insert(node);
@@ -280,7 +284,7 @@ impl Motion {
 
     /// Seek to `now` and lower what changed, as the wasm host's batch ops
     /// (`Springs::lower_current`, `Host::emit_lowered`): a spring that
-    /// started is its frames, one that stopped short of its target is
+    /// started is its frames, one that stopped before its end is
     /// cancelled. Each op is numbers in `out`: `[1, node, property, at,
     /// delay, duration, n, x0, y0, …]` (seconds) or `[2, node, property]`.
     pub fn lower(&mut self, now: f64, out: &mut Vec<f64>) -> Result<(), EngineError> {
@@ -295,13 +299,14 @@ impl Motion {
             }
             match self.engine.spring_descriptor(p.node, p.property) {
                 Some(descriptor) => {
-                    if self.playing.get(&key) == Some(&descriptor) {
+                    if self.playing.get(&key).map(|(d, _)| d) == Some(&descriptor) {
                         continue;
                     }
                     let Some(frames) = self.engine.spring_frames(p.node, p.property) else {
                         continue;
                     };
-                    self.playing.insert(key, descriptor);
+                    self.playing
+                        .insert(key, (descriptor, frames.start + frames.duration));
                     out.extend([
                         1.0,
                         p.node as f64,
@@ -318,8 +323,8 @@ impl Motion {
                     }
                 }
                 None => {
-                    if let Some(previous) = self.playing.remove(&key) {
-                        if p.value != previous.target {
+                    if let Some((previous, end)) = self.playing.remove(&key) {
+                        if now < end || p.value != previous.target {
                             out.extend([2.0, p.node as f64, index(p.property)]);
                         }
                     }

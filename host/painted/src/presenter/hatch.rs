@@ -532,7 +532,8 @@ impl<D: DataSource> Presenter<D> {
                 let heard = (self.host.runner().handlers_of(id)).contains(&EventKind::Input);
                 let error = match heard {
                     true => {
-                        let event = Event::Input(ControlValue::Field(value.clone(), caret));
+                        // A hatch's input replaces the whole value: insertReplacementText.
+                        let event = Event::Input(ControlValue::Replacement(value.clone(), caret));
                         self.host.dispatch_at(id, event, now)
                     }
                     false => None,

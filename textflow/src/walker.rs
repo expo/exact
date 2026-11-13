@@ -42,7 +42,9 @@ pub enum OverflowWrap {
 /// nowrap, `pre-line` preserve-breaks × wrap. @ref LLP 1053 §0 G5
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WhiteSpace {
-    /// Collapse spaces, tabs and segment breaks to one hanging space.
+    /// Collapse spaces, tabs, carriage returns and line feeds to one hanging
+    /// space. Form feeds and the other Unicode breaks are text, as
+    /// [`crate::collapse`] keeps them.
     #[default]
     Normal,
     /// Preserve spaces/tabs and break at segment breaks; trailing spaces hang.
@@ -52,7 +54,7 @@ pub enum WhiteSpace {
     /// Collapse spaces and tabs like `normal`, but a line feed is a forced
     /// break, and the spaces around it go. As in Chrome, only U+000A is a
     /// segment break: a carriage return is a space, and U+2028 and the other
-    /// Unicode breaks collapse as under `normal`.
+    /// Unicode breaks are text as under `normal`.
     PreLine,
     /// Preserve like `pre-wrap` with no soft wrap opportunity: each forced
     /// break ends a line and nothing else does; spaces at a line's end are
@@ -192,13 +194,14 @@ impl Prepared {
         };
         let preserve = options.white_space.preserves();
         // A forced break: every Unicode hard break when preserving, only a line
-        // feed under `pre-line`; any other break character is collapsible space.
+        // feed under `pre-line`. Of the rest, only a carriage return or a line
+        // feed collapses; a form feed, NEL, U+2028 or U+2029 is text.
         let forced = |ch| match options.white_space {
             WhiteSpace::PreWrap | WhiteSpace::Pre => hard_break(ch),
             WhiteSpace::PreLine => ch == '\n',
             WhiteSpace::Normal | WhiteSpace::Nowrap => false,
         };
-        let whitespace = |ch| space(ch) || (hard_break(ch) && !forced(ch));
+        let whitespace = |ch| collapsible(ch) && !forced(ch);
         let mut start = 0;
         for end in opportunities(text, words) {
             if end == start {
@@ -307,7 +310,7 @@ impl Prepared {
         if self.options.white_space.preserves() {
             range.start..range.start + raw.trim_end_matches(|ch| space(ch) || hard_break(ch)).len()
         } else {
-            let trim = |ch| space(ch) || hard_break(ch);
+            let trim = collapsible;
             let leading = raw.len() - raw.trim_start_matches(trim).len();
             let start = range.start + leading;
             start..start + raw.trim_matches(trim).len()
@@ -628,7 +631,7 @@ fn collapsed_advance(text: &str, range: Range<usize>, measure: &mut dyn Measure)
     let mut from = range.start;
     let mut chars = source.char_indices().peekable();
     while let Some((offset, ch)) = chars.next() {
-        if !(space(ch) || hard_break(ch)) {
+        if !collapsible(ch) {
             continue;
         }
         let at = range.start + offset;
@@ -637,10 +640,7 @@ fn collapsed_advance(text: &str, range: Range<usize>, measure: &mut dyn Measure)
         }
         total += advance(measure.advance(at..at + ch.len_utf8())) as f64;
         from = at + ch.len_utf8();
-        while chars
-            .peek()
-            .is_some_and(|(_, ch)| space(*ch) || hard_break(*ch))
-        {
+        while chars.peek().is_some_and(|(_, ch)| collapsible(*ch)) {
             let (offset, ch) = chars.next().unwrap();
             from = range.start + offset + ch.len_utf8();
         }
@@ -775,6 +775,11 @@ fn hyphenated(paint: f64, hyphen: bool, hyphen_advance: f64) -> f32 {
 }
 fn space(ch: char) -> bool {
     matches!(ch, ' ' | '\t')
+}
+/// What CSS collapses outside `pre` and `pre-wrap`: the set
+/// [`crate::collapse`] removes before shaping.
+fn collapsible(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r')
 }
 fn hard_break(ch: char) -> bool {
     matches!(

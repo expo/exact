@@ -317,6 +317,11 @@ extension NodeView {
     func dblclickTarget(_ event: NSEvent) -> NodeView? {
         guard event.clickCount == 2, let presenter, presenter.mouseChain.doubled !== event else { return nil }
         presenter.mouseChain.doubled = event
+        return dblclickListener
+    }
+    /// The innermost enabled `dblclick` from here up the authored tree.
+    var dblclickListener: NodeView? {
+        guard let presenter else { return nil }
         var next: NSView? = self
         while let view = next {
             if let node = view as? NodeView, !node.disabled, node.handlers.contains("dblclick") { return node }

@@ -5,8 +5,8 @@
 //! flattened: every arm's children under the region's parent node), with
 //! its literal bindings applied through the runner's own bridge
 //! (`exact_runner::bridge`). `exact_web::host::template::parts` then gives
-//! the tag, props and CSS the live host would compute. A binding that is an
-//! expression is left out, and emitted as an effect instead.
+//! the tag, props and CSS the live host would compute. A computed binding or
+//! a refused SVG length is left out and emitted as an effect instead.
 
 use exact_kernel::{
     Kernel, NodeType, Op, PropId, PropKind, PropValue, StyleCodec, StyleId, ViewId,
@@ -156,6 +156,7 @@ pub fn static_tree(
                         value,
                     }),
                     Err(bridge::BridgeError::Unset(_)) => {}
+                    Err(e) if crate::svg_lengths::refused(&e) => {}
                     Err(e) => return Err(format!("node {i}: {e:?}")),
                 },
                 (BindingKind::Prop, None) => {
@@ -671,7 +672,9 @@ fn ramp_rem(text: &str) -> Option<String> {
     };
     Some(format!(
         "{}rem",
-        exact_web::css::num(unit.basis(MEDIUM, MEDIUM, 1.0) / MEDIUM)
+        exact_web::css::num(
+            unit.basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default()) / MEDIUM
+        )
     ))
 }
 
@@ -771,7 +774,9 @@ pub static TEXT_STYLE_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::ne
     use exact_kernel::style::relative::{Unit, MEDIUM};
     let mut pairs = Vec::new();
     for (i, s) in exact_kernel::TEXT_STYLES.iter().enumerate() {
-        let rem = Unit::TextStyle(i as u8).basis(MEDIUM, MEDIUM, 1.0) / MEDIUM;
+        let rem =
+            Unit::TextStyle(i as u8).basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default())
+                / MEDIUM;
         let css = format!("{rem}rem");
         pairs.push(format!("{:?}:{css:?}", format!("-exact-{}", s.name)));
         if !s.alias.is_empty() {
@@ -848,6 +853,14 @@ pub fn corner_list(id: StyleId) -> String {
 fn invalid_unset(row: &str) -> String {
     format!("(()=>{{const e=globalThis.exact;e?.journal?.push(`t=${{e.now?.()??0}} invalid {row} value ${{JSON.stringify(v)}}; unset`);return \"unset\"}})()")
 }
+
+static Z_INDEX_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "v=>{{const z=({})(v);return Number.isNaN(z)?{}:z}}",
+        crate::paint::Z_INDEX,
+        invalid_unset("z-index")
+    )
+});
 
 // The bounded cursor vocabulary is the schema's, including dynamic bindings.
 static CURSOR_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -1003,7 +1016,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         }
         StyleId::TextAlign => vec![with("text-align", "v=>v"), with("--exact-button-align", "v=>v==null?v:({left:'start',start:'start',right:'end',end:'end'})[v]??'center'")],
         StyleId::Cursor => vec![with("cursor", &CURSOR_MAP)],
-        StyleId::ZIndex => vec![with("z-index", crate::paint::Z_INDEX)],
+        StyleId::ZIndex => vec![with("z-index", &Z_INDEX_MAP)],
         // @ref LLP 1055 D5/D7 — the browser runs it; its `@keyframes` are in
         // the stylesheet (emit.rs), under the author's names.
         StyleId::Animation if timeline => vec![
@@ -1225,6 +1238,7 @@ pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
             | StyleCodec::U16
             | StyleCodec::U32
             | StyleCodec::I32
+            | StyleCodec::AutoI32
     ) || matches!(
         row,
         StyleId::FontFamily

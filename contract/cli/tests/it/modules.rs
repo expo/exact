@@ -1055,3 +1055,367 @@ fn a_value_passed_whole_as_json_may_be_a_list_and_binds_in_rust_as_json() {
         );
     }
 }
+
+#[test]
+fn an_implementations_names_keep_their_owner_and_bind_through_the_interface() {
+    let app = App::new("implementation");
+    scratch_package(
+        &app,
+        "sensor",
+        r#"{"kind":"interface","name":"@scratch/sensor","grants":["device.sensor"],
+            "shapes":{"Shared":{"ok":"bool"}},"names":[{"source":"available","answers":"bool","substitute":{"default":false}}]}"#,
+    );
+    let package = app.0.join("node_modules/@scratch/sensor");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"@scratch/sensor","version":"1.0.0","exports":{
+            ".":"./exact.json","./apple":"./apple/exact.json"}}"#,
+    )
+    .unwrap();
+    std::fs::create_dir(package.join("apple")).unwrap();
+    std::fs::write(
+        package.join("apple/exact.json"),
+        r#"{"kind":"implementation","implements":"@scratch/sensor@^1.0","platform":"apple",
+            "targets":["ios","tvos"],"shapes":{"Reading":{"value":"number"}},
+            "names":[
+              {"source":"reading","live":true,"answers":"Reading","sync":{"name":"readingSync","from":"read"},
+               "substitute":{"default":{"value":0},"targets":{"ios":{"value":9}}}},
+              {"send":"sample","targets":["ios"],"answers":"Reading","options":{"count":"number"},
+               "substitute":{"unsupported":["web"]}},
+              {"source":"sharedReading","answers":"Shared","substitute":{"default":{"ok":true}}},
+              {"send":"raw","contract":false,"answers":"Reading"}]}"#,
+    )
+    .unwrap();
+    let path = app.0.join("app.contract");
+    let body = r#"component App
+  resource now = reading() as shape Reading
+  resource shared = sharedReading() as shape Shared
+  resource supported = available() as shape bool
+  mutation last as shape Reading
+  action sampleNow
+    send last = sample(count=2)
+  view
+    text `${now.value}`
+"#;
+    std::fs::write(
+        &path,
+        format!("use reading, sharedReading, sample, Reading from \"@scratch/sensor/apple\"\nuse Shared, available from \"@scratch/sensor\"\n{body}"),
+    )
+    .unwrap();
+    let (plan, _) = contract::compile_path_for_rust(&path).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        plan.package_extensions().get("sensor"),
+        Some(&"@scratch/sensor")
+    );
+    let row = plan
+        .modules
+        .iter()
+        .find(|m| plan.str(m.declared) == "reading")
+        .unwrap();
+    let sub: serde_json::Value = serde_json::from_str(plan.str(row.substitute)).unwrap();
+    assert_eq!(sub["owner"], "@scratch/sensor/apple");
+    assert_eq!(sub["grants"], serde_json::json!(["device.sensor"]));
+    assert_eq!(sub["targets"]["ios"]["value"], 9);
+    assert_eq!(
+        sub["implementationTargets"],
+        serde_json::json!(["ios", "tvos"])
+    );
+    assert_eq!(plan.str(row.sync), "readingSync");
+    let rust = contract::module_rust(&plan).unwrap();
+    assert!(rust.contains("pub mod sensor"), "{rust}");
+    assert!(rust.contains("pub count: ::core::primitive::f64"), "{rust}");
+    let mut runner = exact_runner::Runner::boot(
+        plan,
+        LocationData("device.sensor"),
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    runner.set_module_target("linux");
+    runner.bind_extensions(&["sensor"], &[]);
+    assert!(format!("{:?}", runner.resource("now")).contains("Number(0.0)"));
+    runner.act("sampleNow", Vec::new()).unwrap();
+    pump(&mut runner, &mut Vec::new());
+    assert!(
+        logs(&runner).contains("NotSupportedError"),
+        "{}",
+        logs(&runner)
+    );
+    assert!(runner.device_holds().is_empty());
+
+    std::fs::write(
+        &path,
+        format!("use reading, Reading from \"@scratch/sensor\"\n{body}"),
+    )
+    .unwrap();
+    let errors = contract::compile_path_all(&path, false)
+        .err()
+        .expect("interface import refused");
+    assert!(
+        errors.iter().any(|e| e.id == "contract-use-unknown"),
+        "{errors:?}"
+    );
+
+    std::fs::write(&path, "component App\n  view\n    text \"data only\"\n").unwrap();
+    std::fs::write(
+        app.0.join("app.ts"),
+        "import { raw } from '@scratch/sensor/apple';\n",
+    )
+    .unwrap();
+    let (plan, _) = contract::compile_path_all(&path, false).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(plan.modules.iter().any(|m| plan.str(m.declared) == "raw"));
+
+    scratch_package(
+        &app,
+        "sensor-fast",
+        r#"{
+        "kind":"implementation","implements":"@scratch/sensor@^1.0","targets":["ios"],
+        "names":[{"source":"fast","answers":"Shared","substitute":{"default":{"ok":true}}}]
+    }"#,
+    );
+    std::fs::remove_file(app.0.join("app.ts")).unwrap();
+    std::fs::write(
+        app.0.join("package.json"),
+        r#"{"dependencies":{"@scratch/sensor-fast":"1.0.0"}}"#,
+    )
+    .unwrap();
+    std::fs::write(&path, "use fast from \"@scratch/sensor-fast\"\nuse Shared from \"@scratch/sensor\"\ncomponent App\n  resource status = fast() as shape Shared\n  view\n    text \"fast\"\n").unwrap();
+    let (plan, _) = contract::compile_path_all(&path, false).unwrap_or_else(|e| panic!("{e:?}"));
+    let row = plan
+        .modules
+        .iter()
+        .find(|m| plan.str(m.declared) == "fast")
+        .unwrap();
+    let sub: serde_json::Value = serde_json::from_str(plan.str(row.substitute)).unwrap();
+    assert_eq!(sub["owner"], "@scratch/sensor-fast");
+    assert_eq!(plan.str(row.extension), "sensor");
+    assert_eq!(sub["implementationTargets"], serde_json::json!(["ios"]));
+}
+
+#[test]
+fn an_implementation_send_retains_primitive_interface_dependencies() {
+    let app = App::new("primitive-interface");
+    scratch_package(
+        &app,
+        "sensor",
+        r#"{"kind":"interface","name":"@scratch/sensor","names":[
+          {"source":"reading","answers":"number","substitute":{"default":3}}]}"#,
+    );
+    scratch_package(
+        &app,
+        "sensor-own",
+        r#"{"kind":"implementation","implements":"@scratch/sensor@^1.0","targets":["linux"],
+          "names":[{"send":"sample","answers":"number","substitute":{"answers":"reading"}}]}"#,
+    );
+    std::fs::write(
+        app.0.join("package.json"),
+        r#"{"dependencies":{"@scratch/sensor-own":"1.0.0"}}"#,
+    )
+    .unwrap();
+    let plan = app
+        .compile(
+            r#"use sample from "@scratch/sensor-own"
+component App
+  mutation last as shape number
+  action sampleNow
+    send last = sample()
+  view
+    text "sensor"
+"#,
+        )
+        .unwrap();
+    let mut runner = exact_runner::Runner::boot(
+        plan,
+        NoData,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    runner.set_module_target("linux");
+    runner.act("sampleNow", Vec::new()).unwrap();
+    pump(&mut runner, &mut Vec::new());
+    assert!(
+        format!("{:?}", runner.slot("last")).contains("Number(3.0)"),
+        "{}",
+        logs(&runner)
+    );
+}
+
+#[test]
+fn implementation_declarations_with_the_same_name_remain_distinct() {
+    let app = App::new("distinct-implementations");
+    scratch_package(
+        &app,
+        "sensor",
+        r#"{"kind":"interface","name":"@scratch/sensor","names":[{"source":"reading","answers":"number","substitute":{"default":3}}]}"#,
+    );
+    for (name, value) in [("first", 1), ("second", 2)] {
+        scratch_package(
+            &app,
+            name,
+            &format!(
+                r#"{{"kind":"implementation","implements":"@scratch/sensor@^1.0","targets":["ios"],
+            "names":[{{"source":"reading","answers":"number","sync":{{"name":"readingSync"}},"substitute":{{"default":{value}}}}}]}}"#
+            ),
+        );
+    }
+    // Both declarations are elsewhere on Linux; neither may select the other's default.
+    std::fs::write(
+        app.0.join("app.json"),
+        r#"{"app":{"id":"test.sensor","name":"Sensor"},"implementations":{"@scratch/sensor":{"ios":"@scratch/first"}}}"#,
+    )
+    .unwrap();
+    let path = app.0.join("app.contract");
+    std::fs::write(&path, "use reading as first from \"@scratch/first\"\nuse reading as second from \"@scratch/second\"\nuse reading as common from \"@scratch/sensor\"\ncomponent App\n  resource c = common() as shape number\n  resource a = first() as shape number\n  resource b = second() as shape number\n  view\n    text `${a} ${b}`\n").unwrap();
+    let (plan, _) = contract::compile_path_all(&path, false).unwrap();
+    let rust = contract::module_rust(&plan).unwrap();
+    let mut runner = exact_runner::Runner::boot(
+        plan,
+        NoData,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    fn call(runner: &mut exact_runner::Runner<NoData>, owner: Option<&str>) -> serde_json::Value {
+        let request = exact_runner::Request::native(
+            serde_json::json!({"extension":"sensor","owner":owner,"source":"reading","args":{}})
+                .to_string()
+                .into_bytes(),
+        );
+        let outcome = match runner.native_work(&request) {
+            exact_runner::Dispatch::Run(exact_runner::Work::Now(work)) => work(),
+            exact_runner::Dispatch::Run(exact_runner::Work::Later(work)) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                work(exact_runner::Reply::new(move |out| tx.send(out).unwrap()));
+                rx.recv().unwrap()
+            }
+            _ => panic!("a module response"),
+        };
+        let exact_runner::Outcome::Response(response) = outcome else {
+            panic!("a JSON response")
+        };
+        serde_json::from_slice(&response.body).unwrap()
+    }
+    runner.set_module_target("linux");
+    assert_eq!(call(&mut runner, None), 3);
+    for (name, expected) in [("first", 1), ("second", 2)] {
+        assert_eq!(
+            call(&mut runner, Some(&format!("@scratch/{name}"))),
+            expected
+        );
+    }
+    runner
+        .native_slot()
+        .host_call(Some(std::sync::Arc::new(|_| Ok(b"9".to_vec()))));
+    runner.advance(0.0).unwrap();
+    let synced = runner.native_slot().hosted_call().unwrap();
+    for (name, expected) in [("first", 1), ("second", 2)] {
+        let body = serde_json::json!({"extension":"sensor","owner":format!("@scratch/{name}"),"sync":"readingSync"}).to_string();
+        assert_eq!(
+            synced(body.as_bytes()).unwrap(),
+            expected.to_string().as_bytes()
+        );
+    }
+    runner
+        .native_slot()
+        .host(Some(std::sync::Arc::new(|_, reply| {
+            reply.send(exact_runner::Outcome::Response(exact_runner::Response {
+                status: 200,
+                headers: Vec::new(),
+                body: b"9".to_vec(),
+            }));
+        })));
+    runner.set_module_target("ios");
+    runner.bind_extensions(&["sensor"], &[]);
+    assert_eq!(call(&mut runner, Some("@scratch/first")), 9);
+    assert_eq!(call(&mut runner, Some("@scratch/second")), 2);
+    let state: serde_json::Value =
+        serde_json::from_str(&runner.extensions_json().unwrap()).unwrap();
+    assert_eq!(
+        state["sensor"]["names"]["reading#@scratch/second"]["route"],
+        "substitute"
+    );
+    for (name, expected) in [("first", 9), ("second", 2)] {
+        let body = serde_json::json!({"extension":"sensor","owner":format!("@scratch/{name}"),"sync":"readingSync"}).to_string();
+        assert_eq!(
+            synced(body.as_bytes()).unwrap(),
+            expected.to_string().as_bytes()
+        );
+    }
+    let functions: Vec<_> = rust
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("pub fn ")
+                .and_then(|line| line.split_once('(').map(|(name, _)| name))
+        })
+        .collect();
+    assert_eq!(functions.len(), 6, "{rust}");
+    assert_eq!(
+        functions
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        6,
+        "{rust}"
+    );
+    std::fs::remove_file(app.0.join("app.json")).unwrap();
+    std::fs::write(
+        app.0.join("package.json"),
+        r#"{"dependencies":{"@scratch/second":"1.0.0"}}"#,
+    )
+    .unwrap();
+    let errors = contract::compile_path_all(&path, false)
+        .err()
+        .expect("an unbound implementation import");
+    assert!(
+        errors.iter().any(|e| e.id == "bake-implementation-unbound"
+            && e.message.contains("binds `@scratch/second`")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_linked_packages_implementation_reads_its_own_interface() {
+    let app = App::new("linked-implementation");
+    let outside = app.0.with_extension("sensor");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(outside.join("apple")).unwrap();
+    std::fs::write(
+        outside.join("package.json"),
+        r#"{"name":"@scratch/sensor","version":"1.0.0","exports":{
+            ".":"./exact.json","./apple":"./apple/exact.json"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        outside.join("exact.json"),
+        r#"{"kind":"interface","name":"@scratch/sensor","shapes":{"Shared":{"ok":"bool"}},"names":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        outside.join("apple/exact.json"),
+        r#"{"kind":"implementation","implements":"@scratch/sensor@^1.0","platform":"apple",
+            "targets":["ios"],"names":[{"source":"reading","answers":"Shared","substitute":{"default":{"ok":true}}}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(app.0.join("node_modules/@scratch")).unwrap();
+    symlink_dir(&outside, app.0.join("node_modules/@scratch/sensor")).unwrap();
+    let compiled = app.compile(
+        r#"use reading from "@scratch/sensor/apple"
+use Shared from "@scratch/sensor"
+component App
+  resource now = reading() as shape Shared
+  view
+    text "sensor"
+"#,
+    );
+    let _ = std::fs::remove_dir_all(&outside);
+    let plan = compiled.unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(plan
+        .modules
+        .iter()
+        .any(|m| plan.str(m.declared) == "reading"));
+}

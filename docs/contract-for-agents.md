@@ -595,8 +595,9 @@ component App
   `localStorage` (`exact.state.<name>`), the app's `UserDefaults` domain on Apple
   (never the Keychain), or a file under the app's data directory on Linux. The key
   is the state's name, so renaming the state forgets what was kept.
-- Small settings only: a number, string or bool, or an option or list of one, at
-  most 16 KB as JSON. A longer value leaves the last stored value intact, and
+- Small settings only: a number, string (an `enum<…>` too) or bool, or an option or
+  list of one, at most 16 KB as JSON. A kept enum member a later version dropped is
+  of another shape: the initializer's value stands. A longer value leaves the last stored value intact, and
   `logs` reports it once until it changes. `persist` on a record, a list of records
   or a state holding an action is `type-persist-type`: keep app data in a source.
   A child component's state is `type-persist-child`; a derive, `syntax-persist-derive`.
@@ -925,6 +926,31 @@ component Water
 
 ## Data requests and side effects
 
+Import a module's shared sources and sends from its interface package. A
+platform's own names and types come from its implementation in both Contract
+and TypeScript. Tracking consent, for example, is `@exact/tracking-consent/apple`:
+elsewhere its status reads denied and unavailable, and its requests fail
+`NotSupportedError` (LLP 1133.028 D12–D13).
+
+An implementation import must name the implementation bound on the targets it
+covers. An implicit replacement fails the bake; an explicit selection in
+`app.json` makes the imported name use its declared default or refusal there.
+The agent identifies an implementation's own name as
+`<extension>.<name>#<import-path>` in `state.extensions` and `prefer extension`;
+shared names keep `<extension>.<name>`.
+
+`@exact/language-model` tools name functions in the data module's `tools`
+export, as its own properties: a class's methods are its prototype's and are
+not found. A handler receives the input object, `Store`, and `Storage`. Baking
+checks literal declarations it can resolve in Contract and the data module's
+runtime dependencies against that export and each declared input schema
+(`language-model-tool-handler`). Type-only dependencies introduce no tools.
+For Contract declarations, annotate `export const tools: LanguageModelTools`
+with the generated type from `./app.contract.d.ts` to infer each handler's input.
+Computed declarations, including objects that are mutated or escape to other
+code, and a `tools` value whose type has only an index signature keep their
+runtime checks.
+
 Choose the mechanism from its lifetime:
 
 | Requirement | Mechanism |
@@ -1139,9 +1165,16 @@ the turn, and the answer goes on in a new one with its own 100 ms. Yield every
 few thousand items in a parse or tree walk:
 
 ```ts
-for (let i = 0; i < nodes.length; i++) {
-  if (i % 2000 === 1999) await scheduler.yield();
-  comments.push(toComment(nodes[i]));
+type Node = { id: string; body: string };
+type Post = { id: string; text: string };
+
+export async function toPosts(nodes: Node[]): Promise<Post[]> {
+  const posts: Post[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (i % 2000 === 1999) await scheduler.yield();
+    posts.push({ id: nodes[i].id, text: nodes[i].body });
+  }
+  return posts;
 }
 ```
 
@@ -1778,6 +1811,11 @@ last twenty with their `door`:
   `person-required`.
 - `value` is what `returns` reads (null when refused), and `message` a
   sentence for the caller. The record adds `cancelled`.
+
+A refresh does not make a call `busy`: `returns` and `fails when` read a
+resource's standing value (its last answer, its placeholder, a family's
+gathered list), and `pending`, `failed`, `failure` and `current` answer at
+once.
 
 **A cancelled call.** A browser's agent aborting `execute`, or the system
 cancelling an intent's task, cancels the call (the door sends
@@ -2420,8 +2458,14 @@ sends, follows and accepts is LLP 1011's: macOS and iOS send no cookie and no
 `Referer`, follow redirects to any host (within App Transport Security), take a
 body up to 64 MiB whatever its `Content-Type` and its status, as a browser's `<img>` does
 (a 404 that is an image draws; one that is not is `HTTP 404`), and keep an HTTP cache on disk;
-the web is the browser's `<img>` (its cookies and `Referer` rules, no size cap). SVG
-draws on the web only; on Apple it is an `error`. A tinted remote image on the web
+the web is the browser's `<img>` (its cookies and `Referer` rules, no size cap). Apple
+and Linux also draw SVG images, with scripts, external references and animation dropped.
+The compiler checks literal `assets/…svg` and `deck/…svg` image sources with that parser:
+a dropped construct warns at the source; a refused file fails a build that ships a native
+target. Editing or creating a named file rebuilds the plan. Raster bytes keep their format
+even under an `.svg` name.
+Files unavailable at build, and remote, `app:/` or computed SVG sources, are checked at
+run time. A tinted remote image on the web
 needs CORS headers, or it is an `error` too. A terminal entry reads a PNG from a path
 beneath its own directory, an absolute path or a `data:` URL, a regular file of at most
 64 MiB; it downloads nothing and has no app directories yet, so an `http(s)` or `app:/`
@@ -4088,9 +4132,11 @@ of SVG text/tspan `x`/`y`/`dx`/`dy`. Relative units and function text such as
 `calc()`, `env()` and `var()` are refused in literals and literal template parts
 (LLP 1055.000 D4). Literal concatenations are checked together; an incomplete
 fragment that could finish an accepted unit is left to runtime. Literal choices in
-conditionals, matches and inlined derives are checked too. Bound values must use
-the same units. Marker `refX` also accepts `left`/`center`/`right`, and `refY`
-accepts `top`/`center`/`bottom`; native hosts currently place these keywords at 0.
+conditionals, matches and inlined derives are checked too. Bound values use the
+same grammar: an unsupported computed value clears the attribute and journals
+`runtime-svg-length` on every target. Marker `refX` also accepts
+`left`/`center`/`right`, and `refY` accepts `top`/`center`/`bottom`; native hosts
+currently place these keywords at 0.
 `foreignObject` renders directly on the web, but draws nothing through SVG `use`.
 The compiler warns at a `use` whose unambiguous, unconditional literal target contains
 one (`lower-svg-use-foreign-object`). Native hosts refuse `foreignObject` at run
@@ -5472,10 +5518,11 @@ Contract attributes. See [CSS Grid's track sizing](https://www.w3.org/TR/css-gri
 Dimension rows (width/height, their min/max, padding/margins, offsets and
 border radii) accept `vw`, `vh`, `vmin`, `vmax`, and `svw/svh/lvw/lvh/dvw/dvh`.
 On native, all viewport variants follow the window; on web, CSS resolves
-small/large/dynamic viewports. Scalar lengths such as font size and gap do
-not yet accept viewport units.
+small/large/dynamic viewports. Font size, line height, letter spacing, text indent,
+gaps, border widths, border spacing and shape margin accept these units too.
+Inherited font sizes and lengths in `em` follow the resolved font on resize.
 
-The same rows take `env(safe-area-inset-top|right|bottom|left)` and CSS's
+Dimension rows also take `env(safe-area-inset-top|right|bottom|left)` and CSS's
 `calc()`, `min()`, `max()` and `clamp()` over px (and in/cm/mm/q/pt/pc/ch/lh),
 percentages, those insets, viewport segments and viewport lengths. Functions
 can nest, add or subtract lengths, and multiply or divide by a number:
@@ -6314,11 +6361,15 @@ half on a Retina Mac, a pixel on a 1x screen), where `0.5` is one only at 2x:
 line with no margin of its own (space around it is the `gap` or `margin` you
 write). Between the rows of a `list` write neither: its children are rows, and
 the separator there is the platform's (LLP 1115.000 D16). A row whose value is a number and no text
-(`opacity`, `flex-grow`, `z-index`, `font-weight`, `column-count`,
+(`opacity`, `flex-grow`, `font-weight`, `column-count`,
 `column-rule-width`) takes a number where it is computed: a string-typed
 expression there is refused, since the native hosts read no text on it (the
 literal keywords and `px` of `column-count` and `column-rule-width` compile to
-their numbers). `max-width` and `max-height` take `none`, CSS's initial maximum, or `auto`, and the web writes
+their numbers). `z-index` takes an integer or `"auto"`, its initial value, including in
+a conditional (`z-index=(lifted ? 2 : "auto")`). An applicable integer,
+including zero, makes a stacking context; `auto` does not. Nonzero values
+stay within their parent's paint turn on every host (LLP 1083.000 §3.1).
+`max-width` and `max-height` take `none`, CSS's initial maximum, or `auto`, and the web writes
 `none` for either. A number field's (`input type="number"`, written so)
 `min`, `max` and `step` take numbers, as a range's do; its `value` is its text.
 On the Mac, Up/Down and accessibility increment/decrement step the number even with

@@ -9,7 +9,8 @@ use exact_kernel::ViewId;
 
 /// A placement records the block's rectangle in its holding view's local
 /// coordinates. A content offset names a scrollport, including at zero;
-/// an absent offset names a fixed allocation (`Scrolled::place`).
+/// an absent offset names a fixed allocation. Without a host block, it only
+/// clips the subtree in its direct parent's coordinates (`Scrolled::place`).
 pub type BlockPlacement = ([f64; 4], ViewId, Option<[f64; 2]>);
 
 impl<D: DataSource> Runner<D> {
@@ -30,7 +31,9 @@ impl<D: DataSource> Runner<D> {
     /// holds it in the host as in the document (`None` forgets one): what
     /// `frame`, `elementFromPoint` and the intersection observer read their
     /// subtrees through, each root keeping its place among its siblings
-    /// (`Scrolled::place`, LLP 1123 D2).
+    /// (`Scrolled::place`, LLP 1123 D2). A root without a host block keeps
+    /// its ordinary mapping and uses the rectangle only as a clip; its holder
+    /// must be its direct parent and its offset absent.
     pub fn place_blocks(&mut self, placements: &[(ViewId, Option<BlockPlacement>)]) {
         for &(view, placement) in placements {
             self.scrolled.place(&self.kernel, view, placement);

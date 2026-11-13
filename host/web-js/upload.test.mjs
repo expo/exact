@@ -234,7 +234,7 @@ test('an untraced async tool handler keeps its origin for fetches and nested mod
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-tool-origin-'));
   const kept = ['fetch', 'location', 'exact', '__exact_module', '__exact_async_context', '__exact_ordinary'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
   let sent = 0;
-  globalThis.fetch = async () => { sent++; return new Response('sent'); };
+  globalThis.fetch = async url => { sent++; return Object.defineProperty(new Response('sent'), 'url', { value: String(url) }); };
   globalThis.location = { hostname: 'public.example' };
   writeFileSync(resolve(dir, 'source.js'), `import {fetch} from './ts-fetch.js';
 const ask = () => fetch('https://127.0.0.1/').then(() => 'sent', e => e.message);
@@ -244,7 +244,7 @@ export const tools = { async probe() { const before = await ask(); await Promise
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes={};');
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
-  writeFileSync(resolve(dir, 'grant-admission.js'), `export {isCloudMetadata, isLocalNetwork, socketProtocols} from ${JSON.stringify(pathToFileURL(resolve(root, 'host/web/grant-admission.js')).href)};
+  writeFileSync(resolve(dir, 'grant-admission.js'), `export {isCloudMetadata, isLocalNetwork, socketProtocols, trimGrant, grantWords} from ${JSON.stringify(pathToFileURL(resolve(root, 'host/web/grant-admission.js')).href)};
 export const admitsNetwork=()=>true, admitsSecret=()=>false, coversPath=()=>false, createGrantSet=x=>x, grantError=()=>null, hasGrant=()=>false, rawGrantText=()=>'', scopedGrantSet=x=>x, unionGrantSets=x=>x, sameGrantDeclaration=()=>true;`);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet={};');
   for (const name of ['address-space.js', 'faults.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
