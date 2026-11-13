@@ -391,6 +391,12 @@ impl Checker {
         self.verdicts.get(key) == Some(&Verdict::Failed)
     }
 
+    /// Whether a whole build of the files under `key` passed, as last
+    /// polled.
+    pub fn seen_passed(&self, key: &str) -> bool {
+        self.verdicts.get(key) == Some(&Verdict::Passed)
+    }
+
     /// Whether a build was sent and its result not yet read (a test's).
     #[cfg(test)]
     pub fn busy(&mut self) -> bool {

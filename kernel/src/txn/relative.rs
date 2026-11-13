@@ -9,6 +9,8 @@
 //! `rem` inside a calculation or a grid track is no row of its own: it
 //! resolves at layout against the environment's root font size, which a
 //! change here writes, restyling the nodes that hold one.
+//! Scalar viewport lengths resolve with these rows; a changed viewport basis
+//! invalidates their owners through `Kernel::replace_env` before layout.
 use super::*;
 use crate::generated::StyleProps;
 use crate::style::env::root_font_readers;
@@ -255,7 +257,7 @@ pub(crate) fn resolve(
             if id != StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, parent, device);
+            let px = unit.px(n, root, parent, device, arena.env());
             if next.set_resolved(id, px) {
                 changed.set(id);
             }
@@ -267,7 +269,7 @@ pub(crate) fn resolve(
             if id == StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, font, device);
+            let px = unit.px(n, root, font, device, arena.env());
             if next.set_resolved(id, px) {
                 changed.set(id);
             }

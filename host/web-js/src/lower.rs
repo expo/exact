@@ -104,7 +104,7 @@ pub(crate) enum Refusal {
 /// `touch-action`, `scale`, `transform`, `top` and `left` are in GLUE.
 /// Left inline on purpose, not refused: agent.js and inspect-dev.js read a
 /// lowered node's arm rule (class-aware); dom.js 116 `font-size` is the
-/// render shim's, where lowered rows are written inline; said.js 22
+/// render shim's, where lowered rows are written inline; button-fill.js 14
 /// `background-color` is read on pressable buttons only (R1);
 /// navigation.js 1042 saves and restores `width`/`flex-shrink` around one
 /// synchronous measurement; presence-glue.js 314-318 writes an exiting

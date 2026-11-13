@@ -92,6 +92,41 @@ fn a_new_target_under_an_eased_transition_lowers_nothing() {
 }
 
 #[test]
+fn declaration_only_changes_cancel_browser_springs_before_their_end() {
+    for (next, covered) in [
+        ("", true),
+        ("unset", true),
+        ("all 0s", true),
+        ("none", false),
+        ("scale 1s", false),
+    ] {
+        for delay in ["", " 0s 500ms"] {
+            let mut m = Motion::new();
+            assert!(m.transitions(7, &format!("translate -exact-spring(){delay}")));
+            let mut values = [0., 0., 0., 0., 1., 0., 1.];
+            m.observe(7, values, None, 0.).unwrap();
+            lowered(&mut m, 0.);
+            values[0] = 100.;
+            m.observe(7, values, None, 0.).unwrap();
+            assert_eq!(lowered(&mut m, 0.)[0], 1.);
+            let end = m.settle_time();
+            assert!(m.transitions(7, next));
+            m.observe(7, values, None, 0.1).unwrap();
+            let ops = lowered(&mut m, 0.1);
+            if covered {
+                assert!(ops.is_empty(), "{next}: {ops:?}");
+                assert_eq!(m.settle_time(), end);
+                assert!(lowered(&mut m, end.unwrap()).is_empty());
+            } else {
+                assert_eq!(ops, [2., 7., 0.], "{next}{delay}");
+                assert_eq!(m.settle_time(), None);
+                assert!(lowered(&mut m, 0.2).is_empty());
+            }
+        }
+    }
+}
+
+#[test]
 fn a_pan_releases_at_its_speed_once() {
     let mut m = Motion::new();
     for i in 0..6 {

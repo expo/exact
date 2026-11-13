@@ -304,6 +304,7 @@ fn symbols_clear_rasters_without_loading_and_follow_font_size() {
         assert!(images.poll().is_empty());
         assert!(images.views[&1].source_id.is_none());
         assert!(images.views[&1].refusal.is_none());
+        assert!(!images.pending(), "a symbol has no image work to wait for");
         assert!(images.sync(&k, &k.roots()).is_empty());
     }
     let epoch = k.epoch();

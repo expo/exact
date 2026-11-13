@@ -278,6 +278,7 @@ pub struct Engine {
     start_on_frame: bool,
     // Keys whose running curve may be pending, for the frame that starts them.
     pending: BTreeSet<(u64, Property)>,
+    // Missing means `all 0s`; an empty list is explicit `none`.
     transitions: BTreeMap<u64, Transitions>,
     slots: slots::Slots,
     // Observed targets provide CSS's before-change style, but only live curves
@@ -360,8 +361,8 @@ impl Engine {
         })
     }
 
-    /// Set a node's `transition` row. Governs changes observed from now on;
-    /// a transition already running keeps its own declaration.
+    /// Set a node's `transition` row. An existing transition keeps its timing
+    /// while the row still covers its property; observation cancels it otherwise.
     pub fn set_transitions(
         &mut self,
         node: u64,
@@ -376,7 +377,7 @@ impl Engine {
         transitions: Transitions,
     ) -> Result<(), EngineError> {
         transitions.validate().map_err(EngineError::Transition)?;
-        if transitions.0.is_empty() {
+        if transitions.0.as_slice() == [Transition::INITIAL] {
             self.transitions.remove(&node);
         } else {
             self.transitions.insert(node, transitions);
@@ -441,7 +442,7 @@ impl Engine {
                 .is_none_or(|slot| slot.live.is_none());
         }
         settled
-            && !self.transitions.contains_key(&node)
+            && self.transitions.get(&node).is_none_or(|t| t.0.is_empty())
             && !self.layout.contains_key(&node)
             && !self.node_dark.contains_key(&node)
             && !self.animations.contains_key(&node)
@@ -534,15 +535,18 @@ impl Engine {
         // Layout moves only under `-exact-layout-transition`; a spring on a
         // property no spring drives as physics is its curve from rest (LLP
         // 1062 D3).
-        let declaration = if change.property == Property::Layout {
+        let matching = if change.property == Property::Layout {
             self.layout.get(&change.node)
         } else {
             self.transitions
                 .get(&change.node)
                 .and_then(|t| t.matching(change.property))
-        }
-        .filter(|t| t.starts() && !STILL.with(std::cell::Cell::get))
-        .map(|t| t.governing(change.property));
+        };
+        let covered = matching.is_some()
+            || change.property != Property::Layout && !self.transitions.contains_key(&change.node);
+        let declaration = matching
+            .filter(|t| t.starts() && !STILL.with(std::cell::Cell::get))
+            .map(|t| t.governing(change.property));
 
         // An unchanged settled slot (most of a touched node's) changes
         // nothing; asking for it mutably would make an entry of a bit.
@@ -592,10 +596,11 @@ impl Engine {
                 }
             }
             Some(running) => {
-                // An unchanged target leaves the transition as it is.
+                // Coverage survives a zero duration; timing changes do not
+                // rewrite a running curve (CSS Transitions §3).
                 // Compared as changes state it (the slot's target): a curve
                 // between colour spaces ends in Oklab
-                if after == slot.target {
+                if after == slot.target && covered {
                     slot.set_running(Some(running));
                     if played {
                         self.played.insert(key);

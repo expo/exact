@@ -19,6 +19,7 @@ contract-analyze = { path = "../analyze" }
 contract-syntax = { path = "../syntax" }
 contract-types = { path = "../types" }
 exact-kernel = { path = "../../kernel" }
+exact-svg-file = { path = "../../host/svg-file" }
 exact-plan = { path = "../../plan" }
 # The route table a warning matches locations against (`lower-replace-root`).
 exact-route = { path = "../../route" }

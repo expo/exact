@@ -73,6 +73,22 @@ fn a_matched_path_moves_under_d_and_all_and_settles_on_the_row() {
 }
 
 #[test]
+fn an_unchanged_path_keeps_its_curve_only_while_covered() {
+    for next in ["none", "opacity 1s", "all 0s", "d 0s"] {
+        let mut e = engine("d 400ms linear");
+        e.observe_path(NODE, Some(up()));
+        e.advance(0.1).unwrap();
+        e.frame();
+        e.set_transitions(NODE, Transitions::parse(next).unwrap())
+            .unwrap();
+        e.observe_path(NODE, Some(up()));
+        let covered = matches!(next, "all 0s" | "d 0s");
+        assert_eq!(e.is_active(NODE, Property::D), covered, "{next}");
+        assert_eq!(e.settle_time(), covered.then_some(0.4));
+    }
+}
+
+#[test]
 fn an_unmatched_path_or_no_declaration_changes_at_once() {
     let curve = path(&[(b'M', &[6.0, 9.0]), (b'Q', &[12.0, 2.0, 18.0, 9.0])]);
     let mut e = engine("d 400ms linear");

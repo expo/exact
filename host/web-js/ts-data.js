@@ -228,7 +228,7 @@ let watching = null, page = null, load = null;
 // D4, the runner's `changed`).
 const changed = (r, topic) => {
   const t = r.ticket;
-  if (!t || t.stream || t.req?.stream) return R(r);
+  if (!t || t.stream || t.req?.stream) return R(r, true);
   if (!t.again) journal.push(`t=${clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
   t.again = true;
 };
@@ -243,7 +243,7 @@ const moduleWatched = new Map(); // module key -> sources
 // Whether the answer that made the call still wants its reply is its call's `wanted`, its ticket's `held` (rt.js
 // `reply`), which a registration's reply reads (LLP 1133.011 D11).
 globalThis.__exact_module = body => {
-  const key = `${body.extension}.${body.source}`, call = activeCall(), before = answering.call;
+  const key = `${body.extension}.${body.source}${body.owner ? `#${body.owner}` : ''}`, call = activeCall(), before = answering.call;
   if (body.source && watching) (moduleWatched.get(key) ?? moduleWatched.set(key, new Set()).get(key)).add(watching);
   // A continuation keeps the least privileged pending call until its answer settles.
   const origin = call?.origin ?? 'app';
@@ -252,7 +252,8 @@ globalThis.__exact_module = body => {
   finally { answering.call = before; }
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
-globalThis.exact.moduleReaders = key => Resources.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
+// The readers whose data code read module source `key`, of `among`: the release scan passes only the awake ones.
+globalThis.exact.moduleReaders = (key, among = Resources) => among.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
 // The documents the answers watch, for the agent's `state.watches`, as the runner lists them: a development page
 // names it (build.mjs), since the agent drives only that, and a production page does not link it.
 export const watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {

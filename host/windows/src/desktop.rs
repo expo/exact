@@ -7,15 +7,20 @@
 //!   hears it ([RegisterHotKey](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey)).
 //!   One registration per chord serves every reader of it; a press raises
 //!   each reader's event as an activation (D11 item 3). `MOD_NOREPEAT`
-//!   keeps a held chord to one press. A modifier pair needs a low-level
-//!   keyboard hook, which is not built: it answers `not-allowed`.
+//!   keeps a held chord to one press unless a reader asked for repeat
+//!   (`windows.repeat`, D8): `WM_HOTKEY` does not mark a repeat, so while
+//!   any reader of a chord asks for one, the chord is registered without
+//!   the flag and every reader of it hears each repeat. The registration
+//!   is made again as readers attach and leave. A modifier pair needs a
+//!   low-level keyboard hook, which is not built: it answers `not-allowed`.
 //! - **Print Screen alone** can be consumed by Snipping Tool even when
 //!   `RegisterHotKey` succeeds (#195). A nonzero DWORD or an unreadable
 //!   `HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`
 //!   answers `reserved`. A missing value is reserved from build 22000,
 //!   or when the build cannot be read; an explicit zero permits registration.
 //! - **Attention** flashes the taskbar button until the window comes to
-//!   the front, or three times for an informational request
+//!   the front, or three times for an informational request, or the
+//!   author's `windows.count` times, which beats `critical`
 //!   ([FlashWindowEx](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-flashwindowex)).
 //!   A hidden window has no taskbar button, so nothing is asked.
 //! - **The login item** is a value under `HKCU\…\CurrentVersion\Run` named
@@ -47,6 +52,18 @@ fn chord(keys: &str) -> Result<(u32, u32), &'static str> {
         bits |= bit;
     }
     Ok((bits, virtual_key(key).ok_or("invalid")?))
+}
+
+/// How attention flashes, `(until the window comes to the front, flashes)`:
+/// the author's count when there is one (LLP 1133.025 D8), else until the
+/// front for a critical request and three times for an informational one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn flash(critical: bool, count: Option<u32>) -> (bool, u32) {
+    match count {
+        Some(n) => (false, n),
+        None if critical => (true, 0),
+        None => (false, 3),
+    }
 }
 
 /// `VK_SNAPSHOT`, the Print Screen key.
@@ -155,6 +172,7 @@ mod imp {
     struct Reader {
         session: String,
         id: String,
+        repeat: bool,
         extension: &'static str,
         event: &'static str,
     }
@@ -162,6 +180,8 @@ mod imp {
         keys: String,
         atom: i32,
         readers: Vec<Reader>,
+        /// Whether the chord is registered without `MOD_NOREPEAT`.
+        repeats: bool,
     }
 
     /// The host's one hot-key table, taskbar button and launch.
@@ -244,11 +264,10 @@ mod imp {
         }
 
         /// Registers `keys` under `atom`, or says why not.
-        fn register(&self, keys: &str, atom: i32) -> Result<(), Refusal> {
+        fn register(&self, keys: &str, atom: i32, repeat: bool) -> Result<(), Refusal> {
             let (modifiers, key) = self.available_chord(keys)?;
-            let ok = unsafe {
-                RegisterHotKey(std::ptr::null_mut(), atom, modifiers | MOD_NOREPEAT, key)
-            };
+            let modifiers = modifiers | if repeat { 0 } else { MOD_NOREPEAT };
+            let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), atom, modifiers, key) };
             if ok != 0 {
                 return Ok(());
             }
@@ -323,6 +342,26 @@ mod imp {
                 .then(|| String::from_utf16_lossy(&buffer[..(size as usize / 2).saturating_sub(1)]))
         }
 
+        /// Register `chord` again when its readers' repeat changed. If the
+        /// new registration fails, the old one is made again.
+        fn follow_repeat(&self, chord: &mut Chord) -> Result<(), Refusal> {
+            let repeat = chord.readers.iter().any(|r| r.repeat);
+            if repeat == chord.repeats {
+                return Ok(());
+            }
+            unsafe { UnregisterHotKey(std::ptr::null_mut(), chord.atom) };
+            match self.register(&chord.keys, chord.atom, repeat) {
+                Ok(()) => {
+                    chord.repeats = repeat;
+                    Ok(())
+                }
+                Err(reason) => {
+                    let _ = self.register(&chord.keys, chord.atom, chord.repeats);
+                    Err(reason)
+                }
+            }
+        }
+
         /// Whether Settings › Apps › Startup turned the value off: the
         /// first byte of its `StartupApproved` record is odd.
         fn turned_off(&self) -> bool {
@@ -350,34 +389,49 @@ mod imp {
             session: &str,
             id: &str,
             keys: &str,
+            repeat: bool,
             extension: &'static str,
             event: &'static str,
         ) -> Result<(), Refusal> {
             let reader = Reader {
                 session: session.into(),
                 id: id.into(),
+                repeat,
                 extension,
                 event,
             };
             let mut chords = self.chords.borrow_mut();
             if let Some(chord) = chords.iter_mut().find(|c| c.keys == keys) {
                 self.available_chord(keys)?;
-                if !chord
+                // A reader asking again takes its new repeat.
+                let at = chord
                     .readers
                     .iter()
-                    .any(|r| r.session == session && r.id == id)
-                {
-                    chord.readers.push(reader);
+                    .position(|r| r.session == session && r.id == id);
+                let was = match at {
+                    Some(i) => Some(std::mem::replace(&mut chord.readers[i], reader)),
+                    None => {
+                        chord.readers.push(reader);
+                        None
+                    }
+                };
+                if let Err(reason) = self.follow_repeat(chord) {
+                    match at.zip(was) {
+                        Some((i, was)) => chord.readers[i] = was,
+                        None => drop(chord.readers.pop()),
+                    }
+                    return Err(reason);
                 }
                 return Ok(());
             }
             let atom = self.next.get();
-            self.register(keys, atom)?;
+            self.register(keys, atom, repeat)?;
             self.next.set(atom + 1);
             chords.push(Chord {
                 keys: keys.into(),
                 atom,
                 readers: vec![reader],
+                repeats: repeat,
             });
             Ok(())
         }
@@ -390,6 +444,10 @@ mod imp {
                     .retain(|r| !(r.session == session && r.id == id));
                 if chord.readers.is_empty() {
                     unsafe { UnregisterHotKey(std::ptr::null_mut(), chord.atom) };
+                } else {
+                    // On a failure the chord keeps the registration it had,
+                    // which still serves every reader left.
+                    let _ = self.follow_repeat(chord);
                 }
             }
             chords.retain(|c| !c.readers.is_empty());
@@ -402,12 +460,12 @@ mod imp {
             }
             // An atom of its own, given back at once.
             let atom = 0xBFFF;
-            self.register(keys, atom)?;
+            self.register(keys, atom, false)?;
             unsafe { UnregisterHotKey(std::ptr::null_mut(), atom) };
             Ok(())
         }
 
-        fn attention(&self, critical: bool) -> Result<(), String> {
+        fn attention(&self, critical: bool, count: Option<u32>) -> Result<(), String> {
             let hwnd = self.hwnd.get() as HWND;
             if hwnd.is_null() || unsafe { IsWindowVisible(hwnd) } == 0 {
                 return Err("the window is hidden, so it has no taskbar button to flash".into());
@@ -415,11 +473,12 @@ mod imp {
             if unsafe { GetForegroundWindow() } == hwnd {
                 return Err("the window is in front".into());
             }
+            let (until_front, count) = super::flash(critical, count);
             let info = FLASHWINFO {
                 cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
                 hwnd,
-                dwFlags: FLASHW_TRAY | if critical { FLASHW_TIMERNOFG } else { 0 },
-                uCount: if critical { 0 } else { 3 },
+                dwFlags: FLASHW_TRAY | if until_front { FLASHW_TIMERNOFG } else { 0 },
+                uCount: count,
                 dwTimeout: 0,
             };
             unsafe { FlashWindowEx(&info) };
@@ -488,7 +547,16 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use super::{available_chord, chord, login_launch, run_value};
+    use super::{available_chord, chord, flash, login_launch, run_value};
+
+    #[test]
+    fn an_authors_count_is_the_flashes_even_for_a_critical_request() {
+        assert_eq!(flash(false, None), (false, 3));
+        assert_eq!(flash(true, None), (true, 0));
+        assert_eq!(flash(false, Some(1)), (false, 1));
+        assert_eq!(flash(false, Some(7)), (false, 7));
+        assert_eq!(flash(true, Some(7)), (false, 7));
+    }
 
     #[test]
     fn a_chord_is_its_modifier_bits_and_virtual_key() {

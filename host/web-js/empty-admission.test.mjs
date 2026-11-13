@@ -10,10 +10,10 @@ import { webCompiler } from './module.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 const root = resolve(import.meta.dir, '../..');
-// The parser's Rust whitespace class, the driver's fault table, a fetch option's refusal, the asset path's pattern and
+// The parser's validation refusal, the driver's fault table, a fetch option's refusal, the asset path's pattern and
 // an upload's refusal: text only admission, faults.js, ts-fetch.js's request paths, admission.js's asset check and
 // uploads.js carry.
-const PARSER = 'u1680', FAULTS = '__exactFaults', REQUESTS = 'exactLongPoll asks again', ASSETS = '\\/assets\\/', UPLOADS = 'already sent: the upload';
+const PARSER = 'the grant set was not validated', FAULTS = '__exactFaults', REQUESTS = 'exactLongPoll asks again', ASSETS = '\\/assets\\/', UPLOADS = 'already sent: the upload';
 
 test.each([false, true])('a production page with no grants, module or page module admits nothing without the parser (fetch: %s)', async usesFetch => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
@@ -65,6 +65,8 @@ export const answer: Answer = ${usesFetch ? `async () => {
     for (const [name, args] of [
       ['admitsNetwork', [empty, 'https://api.example/x', 'fetch']], ['admittingGrant', [empty, 'https://api.example/x', 'fetch']],
       ['admitsSecret', [empty, 'token']], ['coversPath', [empty, 'fs-read', 'app:/data/x']], ['hasGrant', [empty, 'net-fetch']],
+      ['trimGrant', ['\u0085auth.session https://login.example\u0085']], ['trimGrant', ['\ufeffauth.session']],
+      ['grantWords', ['secret.keep\u0085token user-presence optional']],
       ['grantError', [empty]], ['rawGrantText', [empty]], ['sameGrantDeclaration', [empty, 'app.ts']], ['sameGrantDeclaration', [empty, 42]],
     ]) expect(stub[name](...args), name).toEqual(parser[name](...args));
     for (const name of ['createGrantSet', 'scopedGrantSet', 'unionGrantSets']) expect(stub[name](empty, 'app.ts'), name).toEqual(empty);

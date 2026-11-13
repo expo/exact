@@ -129,48 +129,28 @@ fn typography(style: &StyleProps, scale: f32) -> StyleProps {
     out
 }
 
-pub(super) struct FaceLayout {
-    pub(super) title: Option<Rc<Paragraph>>,
-    pub(super) subtitle: Option<Rc<Paragraph>>,
-    pub(super) title_style: StyleProps,
-    pub(super) subtitle_style: Option<StyleProps>,
-    pub(super) symbol_style: StyleProps,
-    pub(super) padding: [f32; 4],
-    pub(super) text: (f32, f32),
-    pub(super) symbol: f32,
-    pub(super) symbol_box: (f32, f32),
-    pub(super) symbol_offset: (f32, f32),
-    pub(super) gap: f32,
-    pub(super) column: bool,
-    pub(super) leading: bool,
-    pub(super) width: f32,
-    pub(super) height: f32,
+fn declared(style: &StyleProps, id: StyleId) -> bool {
+    style.mask.union(style.written).has(id)
 }
 
-pub(super) fn face_layout(
-    engine: &mut TextEngine,
-    face: &exact_kernel::PressFace,
+fn tab_length(rows: &ButtonFaceStyle, id: usize, em: f32) -> f32 {
+    exact_kernel::style::metrics::length_in(
+        id,
+        exact_kernel::style::metrics::Column::Neutral,
+        em,
+        rows.neutral_tab_root.expect("admitted neutral tab"),
+    )
+    .expect("neutral tab metric")
+}
+
+fn face_typography(
     rows: &ButtonFaceStyle,
-    width: AxisOffer,
     filled: bool,
-    bordered: bool,
-) -> FaceLayout {
+) -> (StyleProps, Option<StyleProps>, StyleProps) {
     let neutral = look::neutral();
-    // A radio of a segmented group (`exact_kernel::segmented`): Material's
-    // segmented button, or the neutral look's segment.
     let segment = rows.segment.is_some() && look::material();
-    let neutral_segment = rows.segment.is_some() && neutral;
     let tab_root = rows.neutral_tab_root;
-    let tab_length = |id, em| {
-        exact_kernel::style::metrics::length_in(
-            id,
-            exact_kernel::style::metrics::Column::Neutral,
-            em,
-            tab_root.expect("admitted neutral tab"),
-        )
-        .expect("neutral tab metric")
-    };
-    let declared = |s: &StyleProps, id| s.mask.union(s.written).has(id);
+    let tab_length = |id, em| tab_length(rows, id, em);
     let scale = control_scale(rows.button.control_size);
     let said_size = rows.button.mask.has(StyleId::ControlSize).then(|| {
         let style = match rows.button.control_size {
@@ -224,6 +204,67 @@ pub(super) fn face_layout(
     if !symbol_style.mask.has(StyleId::FontWeight) {
         symbol_style.font_weight = title_style.font_weight;
     }
+    if let Some((_, size)) = rows.neutral_bar_symbol {
+        symbol_style.font_size = size;
+    }
+    (title_style, subtitle_style, symbol_style)
+}
+
+fn symbol_scale(face: &exact_kernel::PressFace, rows: &ButtonFaceStyle) -> f32 {
+    match face.symbol.as_deref() {
+        Some(role) if rows.neutral_bar_symbol.is_none() && !rows.neutral_role_floor => {
+            look::symbol_scale(role, true)
+        }
+        _ => 1.0,
+    }
+}
+
+/// A native button image has no layout frame: decode at its face's drawn size.
+pub(crate) fn image_size(kernel: &exact_kernel::Kernel, image: &NodeRef<'_>) -> Option<f32> {
+    let parent = kernel.node(image.parent?)?;
+    let rows = kernel.button_face_style(parent.id)?;
+    let face = kernel.press_face(parent.id)?;
+    face.symbol.as_ref()?;
+    let filled = material_filled(parent.props.str(PropId::ButtonStyle));
+    let (_, _, style) = face_typography(&rows, filled);
+    Some(style.font_size * symbol_scale(&face, &rows))
+}
+
+pub(super) struct FaceLayout {
+    pub(super) title: Option<Rc<Paragraph>>,
+    pub(super) subtitle: Option<Rc<Paragraph>>,
+    pub(super) title_style: StyleProps,
+    pub(super) subtitle_style: Option<StyleProps>,
+    pub(super) symbol_style: StyleProps,
+    pub(super) padding: [f32; 4],
+    pub(super) text: (f32, f32),
+    pub(super) symbol: f32,
+    pub(super) symbol_box: (f32, f32),
+    pub(super) symbol_offset: (f32, f32),
+    pub(super) gap: f32,
+    pub(super) column: bool,
+    pub(super) leading: bool,
+    pub(super) width: f32,
+    pub(super) height: f32,
+}
+
+pub(super) fn face_layout(
+    engine: &mut TextEngine,
+    face: &exact_kernel::PressFace,
+    rows: &ButtonFaceStyle,
+    width: AxisOffer,
+    filled: bool,
+    bordered: bool,
+) -> FaceLayout {
+    let neutral = look::neutral();
+    // A radio of a segmented group (`exact_kernel::segmented`): Material's
+    // segmented button, or the neutral look's segment.
+    let segment = rows.segment.is_some() && look::material();
+    let neutral_segment = rows.segment.is_some() && neutral;
+    let tab_root = rows.neutral_tab_root;
+    let tab_length = |id, em| tab_length(rows, id, em);
+    let scale = control_scale(rows.button.control_size);
+    let (title_style, subtitle_style, symbol_style) = face_typography(rows, filled);
     let mut column = matches!(
         face.placement,
         ButtonImagePlacement::Top | ButtonImagePlacement::Bottom
@@ -239,15 +280,7 @@ pub(super) fn face_layout(
         (face.symbol.is_some() || face.raster) && face.title.is_none() && face.subtitle.is_none();
     // A lone bar item's symbol is already at the bar's scaled size.
     let bar_symbol = rows.neutral_bar_symbol.filter(|_| face.symbol.is_some());
-    if let Some((_, size)) = bar_symbol {
-        symbol_style.font_size = size;
-    }
-    let symbol_scale = match face.symbol.as_deref() {
-        Some(role) if bar_symbol.is_none() && !rows.neutral_role_floor => {
-            look::symbol_scale(role, true)
-        }
-        _ => 1.0,
-    };
+    let symbol_scale = symbol_scale(face, rows);
     let offer = match width {
         AxisOffer::Definite(w) => Some(w),
         AxisOffer::MinContent => Some(0.0),
@@ -1093,6 +1126,11 @@ impl Painter {
             .as_ref()
             .filter(|_| !self.split_hides_symbol(node))
         {
+            let image = node
+                .children()
+                .into_iter()
+                .filter_map(|id| walk.scene.kernel.node(id))
+                .find(|n| n.node_type == exact_kernel::NodeType::Image);
             let tint = if layout.symbol_style.mask.has(StyleId::TintColor) {
                 layout
                     .symbol_style
@@ -1100,24 +1138,29 @@ impl Painter {
                     .map(|c| rgba(c.resolve(dark)))
                     .unwrap_or(ink)
             } else {
-                let image = children
-                    .iter()
-                    .filter_map(|id| walk.scene.kernel.node(*id))
-                    .find(|n| n.node_type == exact_kernel::NodeType::Image);
                 color(&layout.title_style, ink, presented_ink(image.as_ref()))
             };
-            self.symbol_face(
-                symbol,
-                &layout.symbol_style,
-                (
-                    sx + layout.symbol_offset.0,
-                    sy + layout.symbol_offset.1,
-                    layout.symbol,
-                    layout.symbol,
-                ),
-                tint,
-                ts,
+            let rect = (
+                sx + layout.symbol_offset.0,
+                sy + layout.symbol_offset.1,
+                layout.symbol,
+                layout.symbol,
             );
+            if let Some(image) = image.filter(|n| {
+                n.props
+                    .str(PropId::ImageSource)
+                    .and_then(crate::image::file_icon)
+                    .is_some()
+            }) {
+                let edge = Shape::rect(rect);
+                self.row_image(image.id, walk.scene.images.get(&image.id));
+                self.row_slot(image.id, rect, edge, ts);
+                self.backend.slot_begin(image.id);
+                self.picture(walk, &image, rect, edge, ts);
+                self.backend.slot_end();
+            } else {
+                self.symbol_face(symbol, &layout.symbol_style, rect, tint, ts);
+            }
         }
         if let (Some(badge), Some(root)) = (&face.badge, rows.neutral_tab_root) {
             // From the symbol's middle toward its trailing side, its top on

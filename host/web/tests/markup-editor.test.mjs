@@ -767,6 +767,39 @@ for (const engine of engines) for (const runtime of [false, true]) {
   }, 60000);
 }
 
+// The editor's element copies the textarea's attributes, `autofocus` included: it is the same field, offered once.
+engineTest.chromium('chromium: a Markdown field keeps its autofocus offer when the editor replaces it', async () => {
+  await editor('chromium', '', async page => {
+    await page.evaluate(async () => {
+      const rt = await import('./rt.js');
+      const root = rt.h(document.body, 'div', 0, { id: 'exact-root' }, 0);
+      rt.mount(() => {
+        for (const name of ['pending', 'offered']) {
+          const box = rt.h(root, 'div', 0, { id: name + '-box' }, 0);
+          box.hidden = name !== 'offered';
+          rt.mde(rt.h(box, 'textarea', 0, { id: name, markup: 'markdown', autofocus: 'true' }, 0));
+        }
+      });
+    });
+    await page.waitForFunction(() => ['pending', 'offered'].every(id => document.getElementById(id)?.exactMarkup));
+    const result = await page.evaluate(async () => {
+      const rt = await import('./rt.js');
+      const offered = document.getElementById('offered'), pending = document.getElementById('pending');
+      const initial = document.activeElement === offered;
+      offered.blur();
+      rt.commit(() => {});
+      const once = document.activeElement === document.body;
+      document.getElementById('pending-box').hidden = false;
+      rt.commit(() => {});
+      const revealed = document.activeElement === pending;
+      pending.blur();
+      rt.commit(() => {});
+      return { initial, once, revealed, done: document.activeElement === document.body };
+    });
+    expect(result).toEqual({ initial: true, once: true, revealed: true, done: true });
+  }, true);
+});
+
 // Chrome's input method, through CDP: a composition's events carry the DOM's
 // text and selection in source offsets, hidden syntax counted.
 engineTest.chromium('chromium: a composition reports source offsets as it composes', async () => {

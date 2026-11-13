@@ -42,6 +42,9 @@ fn target_os(triple: &str) -> &'static str {
         "ios"
     } else if triple.contains("-apple-tvos") {
         "tvos"
+    } else if triple.ends_with("-android") {
+        // Before Linux: an Android triple names `linux` too.
+        "android"
     } else if triple.contains("-linux-") {
         "linux"
     } else if triple.contains("-windows-") {
@@ -56,6 +59,10 @@ fn every_pinned_bundle_target_links_the_engine() {
     let targets = pinned_targets();
     assert!(
         targets.iter().any(|t| t == "aarch64-apple-tvos-sim"),
+        "{targets:?}"
+    );
+    assert!(
+        targets.iter().any(|t| target_os(t) == "android"),
         "{targets:?}"
     );
     let missing: Vec<_> = targets

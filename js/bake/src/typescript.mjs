@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { builtinModules, createRequire } from 'node:module';
 import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespacedPath } from 'node:path';
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
-import { moduleBinding } from './__exact_binding.mjs';
+import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
 import { envReads, inlineSettings } from './__exact_env.mjs';
 // And the check of what package code may use (resident.rs `PORTABLE`).
@@ -1060,7 +1060,7 @@ export function configure(stage, incremental=false, parse) {
 // "@exact/geolocation"` reaches a binding generated here from the package's
 // `exact.json`, never committed, so a published package and a `file:` one
 // read alike. Each interface installed above the app, the nearest first, is
-// written into the stage as `__exact_modules/<name>.ts` and mapped by
+// and its implementations are written as `__exact_modules/<name>.ts`, mapped by
 // `paths`, which the checker and Rolldown share. A call goes through the
 // runner's admission: the web runtime's `__exact_module`, else a native
 // request (`exact-native:`), whose answer the runner gives as the module's
@@ -1071,12 +1071,16 @@ function moduleBindings(stage, app) {
   // The target the build compiles, as an implementation's `targets` names it, or none (a loop serving several).
   const mapping=resolve(stage,'__exact_paths.json'), named=existsSync(mapping) ? JSON.parse(readFileSync(mapping,'utf8')).target : null;
   const target=['web','ios','macos','tvos','android','windows','linux'].includes(named) ? named : null, out=new Map();
-  const interfaces=moduleInterfaces(app); for (const {name,root,declaration,implementations} of interfaces) {
+  const packages=modulePackages(app), interfaces=packages.filter(i=>i.declaration.kind==='interface');
+  const declarations=[...packages, ...interfaces.flatMap(i=>i.implementations.map(impl=>({name:impl.name,root:impl.dir,declaration:impl.json,implementations:[impl]})))];
+  for (const {name,root,declaration,implementations} of declarations) {
     const file='__exact_modules/'+name.replace(/^@/,'').replace(/\//g,'__')+'.ts';
     mkdirSync(resolve(stage,'__exact_modules'),{recursive:true});
     // An interface the executor implements carries its own binding (LLP 1133.007 D12).
     const own=Array.isArray(declaration.executor) && typeof declaration.binding==='string' ? readFileSync(resolve(root,declaration.binding),'utf8') : null;
-    const text=own ?? moduleBinding(name,declaration,implementations.map(i=>i.json),names=>domDeclarations(app,names),membersOf(name,interfaces),target), at=resolve(stage,file);
+    const iface=declaration.kind==='implementation' ? interfaces.find(i=>i.name===String(declaration.implements).replace(/@[^@]*$/,'')) : null;
+    const spec=iface ? {...declaration,shapes:Object.assign({},iface.declaration.shapes,...iface.implementations.map(i=>i.json.shapes),declaration.shapes)} : declaration;
+    const text=own ?? moduleBinding(name,spec,declaration.kind==='implementation' ? [declaration] : implementations.map(i=>i.json),names=>domDeclarations(app,names),membersOf(name,interfaces),target), at=resolve(stage,file);
     if (!existsSync(at) || readFileSync(at,'utf8')!==text) writeFileSync(at,text);
     out.set(name,'./'+file);
   }
@@ -1088,6 +1092,10 @@ function moduleBindings(stage, app) {
  * its package carries (`exports` subpaths whose target is an
  * implementation's `exact.json`). */
 export function moduleInterfaces(app) {
+  return modulePackages(app).filter(i=>i.declaration.kind==='interface');
+}
+
+function modulePackages(app) {
   const out=new Map(), read=(path)=>{ try { return JSON.parse(readFileSync(path,'utf8')); } catch { return null; } };
   const entry=(exports, key)=>{
     const t=exports && typeof exports==='object' ? (Object.keys(exports).some(k=>k.startsWith('.')) ? exports[key] : key==='.' ? exports : null) : key==='.' ? exports : null;
@@ -1102,9 +1110,9 @@ export function moduleInterfaces(app) {
         const root=join(modules,name), pkg=read(join(root,'package.json')), main=entry(pkg?.exports,'.');
         if (!pkg || !main || !/(^|\/)exact\.json$/.test(main)) continue;
         const declaration=read(resolve(root,main));
-        if (declaration?.kind!=='interface') continue;
-        const implementations=Object.keys(pkg.exports).filter(k=>k!=='.').map(k=>entry(pkg.exports,k))
-          .filter(t=>t && /\/exact\.json$/.test(t)).map(t=>({dir:dirname(resolve(root,t)),json:read(resolve(root,t))})).filter(d=>d.json?.kind==='implementation');
+        if (!['interface','implementation'].includes(declaration?.kind)) continue;
+        const implementations=Object.keys(pkg.exports).filter(k=>k.startsWith('./')).map(k=>({name:name+k.slice(1),file:entry(pkg.exports,k)}))
+          .filter(i=>i.file && /\/exact\.json$/.test(i.file)).map(i=>({name:i.name,dir:dirname(resolve(root,i.file)),json:read(resolve(root,i.file))})).filter(d=>d.json?.kind==='implementation');
         out.set(name,{name,root,declaration,implementations});
       }
     }
@@ -1120,9 +1128,12 @@ export function moduleInterfaces(app) {
 export function implementationFor(app, iface, target) {
   const read=(path)=>{ try { return JSON.parse(readFileSync(path,'utf8')); } catch { return null; } };
   const located=(name)=>{
+    const parts=name.split('/'), take=name.startsWith('@') ? 2 : 1;
+    const packageName=parts.slice(0,take).join('/'), subpath=parts.slice(take).join('/');
+    const key=subpath ? `./${subpath}` : '.';
     for (let dir=app; ; dir=dirname(dir)) {
-      const root=join(dir,'node_modules',name), pkg=read(join(root,'package.json'));
-      const main=typeof pkg?.exports==='string' ? pkg.exports : pkg?.exports?.['.'];
+      const root=join(dir,'node_modules',packageName), pkg=read(join(root,'package.json'));
+      const main=typeof pkg?.exports==='string' && key==='.' ? pkg.exports : pkg?.exports?.[key];
       const at=typeof main==='string' ? main : main?.contract ?? main?.default;
       if (pkg && typeof at==='string' && /(^|\/)exact\.json$/.test(at)) { const json=read(resolve(root,at)); return json && {name,dir:dirname(resolve(root,at)),json}; }
       if (dirname(dir)===dir) return null;
@@ -1342,12 +1353,12 @@ function sourceNames(stage,diagnostics) {
 // (not an RSS cap); explicit user settings always win.
 const checkEnv={GOGC:'300',GOMEMLIMIT:'128MiB',GOMAXPROCS:'4',...process.env};
 
-/** Value exports of the configured module namespace, including CommonJS re-exports. */
-export async function valueExports(stage, libraries) {
+/** Value exports of the configured module namespace, including CommonJS re-exports; or what `inspect`, given the
+ * checker, the namespace's type and the checker API, makes of them. */
+export async function valueExports(stage, libraries, inspect) {
   const module = resolve(stage, 'app.ts');
   const compiler = createRequire(resolve(libraries, 'tsc')).resolve('typescript/unstable/async');
-  const { API } = await import(pathToFileURL(compiler).href);
-  const api = new API({ cwd: stage });
+  const checking = await import(pathToFileURL(compiler).href), api = new checking.API({ cwd: stage });
   try {
     const config = resolve(stage, '__exact_tsconfig.json');
     const snapshot = await api.updateSnapshot({ openProjects: [config] });
@@ -1356,6 +1367,7 @@ export async function valueExports(stage, libraries) {
       checkFiles(stage, libraries, await program.getSourceFileNames());
       const file = await program.getSourceFile(module);
       const type = await checker.getTypeAtLocation(file);
+      if (inspect) return await inspect(checker, type, checking);
       return (await checker.getPropertiesOfType(type)).map(symbol => symbol.name);
     } finally { await snapshot.dispose(); }
   } finally { await api.close(); }
@@ -1417,10 +1429,18 @@ export function nodeNote(diagnostics) {
   if (!modules.length && !names) return '';
   return `\nnote: ${modules.length ? `${modules.map(m=>`'${m}'`).join(', ')} ${modules.length>1 ? "are Node's built-ins" : "is Node's built-in"}` : "Node's globals are"}: a data module runs on Hermes and in the browser, which have no Node modules, so @types/node does not help; import a part of the package that needs none, or another package\n`;
 }
-export function check(stage, tsc, libraries) {
+export async function check(stage, tsc, libraries) {
   // TypeScript expands Windows short paths; compare the same physical names
   // for the capture, libraries and files, including directory junctions.
   stage=realpathSync.native(stage);
+  const entry=resolve(stage,'__exact_entry.ts'), declaration=resolve(stage,'app.contract.d.ts');
+  if (existsSync(declaration) && readFileSync(declaration,'utf8').includes('export type LanguageModelToolSchemas =')) {
+    const before=readFileSync(entry,'utf8').split(TOOL_CHECK)[0];
+    const tools=languageModelTools(readFileSync(declaration,'utf8'),await languageModelToolSources(stage,bundleOptions),(...a)=>createRequire(import.meta.url)('rolldown/utils').parseSync(...a));
+    const unowned=tools.length ? await valueExports(stage,libraries,(checker,type,api)=>unownedTools(checker,type,[...new Set(tools.map(t=>t.name))],api)) : [];
+    const after=before+languageModelToolCheck(tools,unowned);
+    if (readFileSync(entry,'utf8')!==after) writeFileSync(entry,after);
+  }
   // A package's JavaScript entry (`typescript/bin/tsc`, an `EXACT_TSC`
   // override) keeps its Node shebang: run it through Bun, as the one-shot
   // producer runs its tools (js/bake/src/lib.rs `run`).
@@ -1439,7 +1459,7 @@ export function check(stage, tsc, libraries) {
         const mutationFailure=/Type '(?:false|boolean)' is not assignable to type 'true'|SnapbackMutationSuccess/.test(diagnostics)
           && readFileSync(resolve(stage,'app.contract.d.ts'),'utf8').includes('type SnapbackMutationSuccess<');
         const refusal=mutationFailure ? "\nnote: a Snapback mutation returning {ok:false} leaves failure(slot) empty; throw refused({code: 'YOUR_CODE', message: 'Explain the refusal'}) instead. Annotate successful helpers with Result<'source'>, or keep ok:true literal with `as const`.\n" : '';
-        return fail(new Error(diagnostics+sourceNames(stage,diagnostics)+refusal+nodeNote(diagnostics)+String(stderr??'') || String(error.message)));
+        return fail(new Error(diagnostics+languageModelToolNote(readFileSync(entry,'utf8'),diagnostics)+sourceNames(stage,diagnostics)+refusal+nodeNote(diagnostics)+String(stderr??'') || String(error.message)));
       }
       try { checkFiles(stage, libraries, stdout.trim().split(/\r?\n/)); }
       catch (error) { return fail(error); }

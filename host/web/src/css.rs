@@ -33,7 +33,8 @@ pub struct Skipped {
 pub const HAIRLINE: &str = "var(--exact-hairline, 1px)";
 
 /// The `cssText` for a node's set rows, plus what was skipped.
-/// Keep `em` for the browser: a control's font can differ from the kernel's.
+/// Keep `em` and viewport units for the browser: its control fonts and viewport
+/// variants can differ from the kernel's.
 pub fn css_text(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
     css_text_in(style, font_names, false)
 }
@@ -55,7 +56,7 @@ fn css_text_in(
         let Some((unit, n)) = style
             .relative
             .get(id)
-            .filter(|(unit, _)| relative || *unit == Unit::Em)
+            .filter(|(unit, _)| relative || matches!(unit, Unit::Em | Unit::Viewport(_)))
         else {
             return false;
         };
@@ -68,12 +69,19 @@ fn css_text_in(
                 num_into(out, n);
                 out.push_str("em");
             }
+            Unit::Viewport(unit) => {
+                num_into(out, n);
+                out.push_str(unit.name());
+            }
             // @ref LLP 1115 D3 — a text style is the ramp's size at CSS's
             // `medium`, in `rem`, so it follows the browser's root size.
             // @ref LLP 1137 — a length ramp likewise.
             Unit::TextStyle(_) | Unit::Ramp(_) => {
                 let medium = exact_kernel::style::relative::MEDIUM;
-                num_into(out, n * unit.basis(medium, medium, 1.0) / medium);
+                num_into(
+                    out,
+                    n * unit.basis(medium, medium, 1.0, &exact_kernel::Env::default()) / medium,
+                );
                 out.push_str("rem");
             }
             Unit::TextStyleAtMost(_) => out.push_str(&unit.capped_css(n)),
@@ -945,6 +953,9 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
 /// play its curve from rest as `linear()`, as every native host does (LLP
 /// 1062 D3).
 pub fn transition_css(t: &Transitions) -> (String, bool) {
+    if t.0.is_empty() {
+        return ("none".into(), false);
+    }
     let mut text = String::new();
     let mut spring = false;
     let mut push = |name: &str, duration: f64, easing: &Easing, delay: f64| {
@@ -962,6 +973,13 @@ pub fn transition_css(t: &Transitions) -> (String, bool) {
     for tr in &t.0 {
         match &tr.timing {
             TimingFunction::Spring(config) => {
+                // CSS still needs the spring's property coverage, even when
+                // WAAPI plays its curve. Zero time starts no CSS transition.
+                if matches!(tr.property, TransitionProperty::All)
+                    || matches!(tr.property, TransitionProperty::Property(p) if p.springs())
+                {
+                    push(transition_property(tr), 0.0, &Easing::Ease, 0.0);
+                }
                 let names: Vec<&str> = match tr.property {
                     // Every property no spring drives as physics, the four
                     // sides as their shorthand.
@@ -1118,13 +1136,18 @@ mod flow_tests;
 mod writer_tests {
     use super::*;
 
-    /// The writers before they wrote in place: joined parts.
     fn transition_joined(t: &Transitions) -> (String, bool) {
+        if t.0.is_empty() {
+            return ("none".into(), false);
+        }
         let mut parts = Vec::new();
         let mut spring = false;
         for tr in &t.0 {
             match &tr.timing {
-                TimingFunction::Spring(_) => spring = true,
+                TimingFunction::Spring(_) => {
+                    spring = true;
+                    parts.push(format!("{} 0s ease 0s", transition_property(tr)));
+                }
                 TimingFunction::Easing(e) => parts.push(format!(
                     "{} {}s {} {}s",
                     transition_property(tr),
@@ -1140,6 +1163,7 @@ mod writer_tests {
     #[test]
     fn transitions_and_linear_easings_write_what_joining_wrote() {
         for text in [
+            "none",
             "opacity 1s",
             "opacity 250ms ease-in-out, all 0.5s cubic-bezier(0.4, 0, 0.2, 1) 100ms, translate -exact-spring(180, 12, 1)",
             "opacity 1s steps(4, jump-both), height 200ms linear 50ms",
@@ -1177,7 +1201,7 @@ mod writer_tests {
             .collect();
         assert_eq!(
             names.join(" "),
-            "opacity 1s ease 0s,stroke-dashoffset r color background-color fill stroke cx cy x y \
+            "opacity 1s ease 0s,all 0s ease 0s,stroke-dashoffset r color background-color fill stroke cx cy x y \
              rx ry border-color --exact-tint box-shadow font-weight font-stretch \
              font-variation-settings d "
         );

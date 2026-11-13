@@ -147,6 +147,8 @@ pub(super) struct AxesBefore {
     rows: Vec<(ViewId, Row, Shown)>,
     /// The rows the ops set on the node itself.
     own: BTreeSet<(ViewId, Row)>,
+    /// Views whose transition declaration changes, even without a font edit.
+    declarations: BTreeSet<ViewId>,
     /// The views the ops destroy, subtrees included.
     destroyed: Vec<ViewId>,
 }
@@ -166,6 +168,7 @@ impl AxesBefore {
         let mut first = first.unwrap_or(AxesBefore {
             rows: Vec::new(),
             own: BTreeSet::new(),
+            declarations: BTreeSet::new(),
             destroyed: Vec::new(),
         });
         let seen: BTreeSet<_> = first.rows.iter().map(|(v, r, _)| (*v, *r)).collect();
@@ -174,19 +177,21 @@ impl AxesBefore {
                 .filter(|(v, r, _)| !created.contains(v) && !seen.contains(&(*v, *r))),
         );
         first.own.extend(later.own);
+        first.declarations.extend(later.declarations);
         first.destroyed.extend(later.destroyed);
         Some(first)
     }
 }
 
 impl<D: DataSource> Runner<D> {
-    /// Before `ops` apply: the font rows they change, directly or through
-    /// inheritance on a watched node, with their presented values. Nothing
-    /// changes here, so a refused commit has nothing to undo.
+    /// Before `ops` apply: font edits with their presented values, inherited
+    /// changes on watched nodes, and transition declarations. Nothing changes
+    /// here, so a refused commit has nothing to undo.
     pub(super) fn prepare_text_axes(&self, ops: &[Op]) -> Option<AxesBefore> {
         self.links.text_axes?;
         let mut changed: BTreeSet<(ViewId, Row)> = BTreeSet::new();
         let mut own = BTreeSet::new();
+        let mut declarations = BTreeSet::new();
         let mut destroyed = Vec::new();
         for op in ops {
             let (id, mask, sets) = match op {
@@ -205,6 +210,13 @@ impl<D: DataSource> Runner<D> {
             if self.kernel.node(id).is_none() {
                 continue;
             }
+            if mask.has(StyleId::Transition)
+                && ROWS
+                    .iter()
+                    .any(|row| self.text_axes.moving.contains_key(&(id, *row)))
+            {
+                declarations.insert(id);
+            }
             for row in ROWS.into_iter().filter(|r| mask.has(r.id())) {
                 changed.insert((id, row));
                 if sets {
@@ -212,16 +224,32 @@ impl<D: DataSource> Runner<D> {
                 }
             }
         }
-        if changed.is_empty() && destroyed.is_empty() {
+        if changed.is_empty() && declarations.is_empty() && destroyed.is_empty() {
             return None;
         }
-        // A watched node below a changed one may inherit the change.
+        // A moving node still inherits target changes after its declaration
+        // becomes unset, even though it can no longer start a transition.
         let mut rows: BTreeSet<(ViewId, Row)> = changed.clone();
-        for &view in &self.text_axes.watched {
-            let mut cur = self.kernel.node(view).and_then(|n| n.parent);
+        let watched = self
+            .text_axes
+            .watched
+            .iter()
+            .copied()
+            .chain(self.text_axes.moving.keys().map(|(view, _)| *view));
+        for view in watched {
+            let Some(node) = self.kernel.node(view) else {
+                continue;
+            };
+            let mut cur = node.parent;
             while let Some(at) = cur {
                 for row in ROWS {
-                    if changed.contains(&(at, row)) {
+                    let inherits = !node.style.mask.has(row.id())
+                        || self
+                            .text_axes
+                            .moving
+                            .get(&(view, row))
+                            .is_some_and(|m| m.inherited);
+                    if inherits && changed.contains(&(at, row)) {
                         rows.insert((view, row));
                     }
                 }
@@ -238,6 +266,7 @@ impl<D: DataSource> Runner<D> {
         Some(AxesBefore {
             rows,
             own,
+            declarations,
             destroyed,
         })
     }
@@ -257,6 +286,7 @@ impl<D: DataSource> Runner<D> {
         let before = before.unwrap_or(AxesBefore {
             rows: Vec::new(),
             own: BTreeSet::new(),
+            declarations: BTreeSet::new(),
             destroyed: Vec::new(),
         });
         for view in &before.destroyed {
@@ -311,13 +341,8 @@ impl<D: DataSource> Runner<D> {
                     .map(|n| read(n.style, row))
                     .expect("live")
             };
-            let transitions = self
-                .kernel
-                .node(view)
-                .expect("live")
-                .style
-                .transition
-                .clone();
+            let transitions =
+                exact_kernel::motion::transitions(self.kernel.node(view).expect("live").style);
             let engine = self
                 .text_axes
                 .engine
@@ -333,6 +358,30 @@ impl<D: DataSource> Runner<D> {
                     },
                 );
                 dirty.insert((view, row));
+            }
+        }
+        for view in before.declarations {
+            let Some(node) = self.kernel.node(view) else {
+                continue;
+            };
+            let transitions = exact_kernel::motion::transitions(node.style);
+            let Some(engine) = self.text_axes.engine.as_mut() else {
+                continue;
+            };
+            let _ = engine.advance(now.max(engine.now()));
+            for row in ROWS {
+                if dirty.contains(&(view, row)) {
+                    continue;
+                }
+                let Some(moving) = self.text_axes.moving.get(&(view, row)) else {
+                    continue;
+                };
+                // The kernel holds presentation; a declaration edit observes
+                // the saved target so coverage alone decides cancellation.
+                let target = &moving.target;
+                if moves(engine, view, row, target, target, transitions.clone()) {
+                    dirty.insert((view, row));
+                }
             }
         }
         for view in animated {
@@ -414,7 +463,7 @@ impl<D: DataSource> Runner<D> {
 }
 
 /// Feed one row's change to the engine: whether the runner now presents
-/// it. A row the engine has not seen and no transition covers costs
+/// it. A row the engine has not seen and no transition can start costs
 /// nothing, so a frame task that sets a weight each frame stays cheap.
 fn moves(
     engine: &mut Engine,
@@ -425,7 +474,7 @@ fn moves(
     transitions: Transitions,
 ) -> bool {
     let property = row.property();
-    let covered = transitions
+    let starts = transitions
         .matching(property)
         .is_some_and(|t| t.governing(property).starts());
     let change = |node, value| Change {
@@ -438,7 +487,7 @@ fn moves(
         (Shown::Number(was), Shown::Number(now)) => {
             let node = key(view);
             let seen = engine.value(node, property).is_some();
-            if !covered && !seen {
+            if !starts && !seen {
                 return false;
             }
             if !seen {
@@ -453,7 +502,7 @@ fn moves(
                 .map(|(t, _)| *t)
                 .filter(|t| engine.value(axis_key(view, *t), property).is_some())
                 .collect();
-            if !covered && seen.is_empty() {
+            if !starts && seen.is_empty() {
                 return false;
             }
             // Different axes are a discrete step: no transition runs.
@@ -464,7 +513,7 @@ fn moves(
                     let at = was.get(&tag.to_be_bytes()).map_or(value.x, f64::from);
                     let _ = engine.observe(change(node, Value::axis(tag, at)));
                 }
-                let row = if same && covered {
+                let row = if same {
                     transitions.clone()
                 } else {
                     Transitions::default()
@@ -490,4 +539,95 @@ fn mask_of(row: Row) -> StyleMask {
     let mut mask = StyleMask::EMPTY;
     mask.set(row.id());
     mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoData;
+    impl DataSource for NoData {
+        fn query(
+            &mut self,
+            name: &str,
+            _: &[exact_plan::Value],
+        ) -> Result<exact_plan::Value, DataError> {
+            panic!("unexpected {name}")
+        }
+    }
+
+    #[test]
+    fn restated_font_targets_keep_curves_under_covering_zero_duration_rows() {
+        for declaration in [
+            None,
+            Some("all 0s"),
+            Some("font-weight 0s, font-stretch 0s, font-variation-settings 0s"),
+        ] {
+            let plan = contract::compile(r#"component App
+  view
+    text "Library" testId="title" font-weight=300 font-stretch="75%" font-variation-settings="'wght' 300" transition="all 400ms linear"
+"#).unwrap();
+            let mut r = Runner::boot(
+                plan,
+                NoData,
+                exact_kernel::Kernel::with_monospace(),
+                Default::default(),
+                "/",
+            )
+            .unwrap();
+            let id = r
+                .kernel
+                .node_by_key(r.kernel.find_by_test_id("title")[0])
+                .unwrap()
+                .id;
+            let mut target = StyleProps::default();
+            write(&mut target, Row::Weight, &Shown::Number(700.));
+            write(&mut target, Row::Stretch, &Shown::Number(125.));
+            write(
+                &mut target,
+                Row::Axes,
+                &Shown::Axes(FontVariations::from_axes(&[(
+                    u32::from_be_bytes(*b"wght"),
+                    700.,
+                )])),
+            );
+            let restate = Op::SetStyle {
+                id,
+                patch: Box::new(target),
+            };
+            r.apply(vec![restate.clone()]).unwrap();
+            r.advance(100.).unwrap();
+            let mut patch = StyleProps::default();
+            let op = if let Some(declaration) = declaration {
+                patch
+                    .set_dynamic(
+                        StyleId::Transition,
+                        &exact_kernel::StyleValue::Text(declaration.into()),
+                    )
+                    .unwrap();
+                Op::SetStyle {
+                    id,
+                    patch: Box::new(patch),
+                }
+            } else {
+                let mut mask = StyleMask::EMPTY;
+                mask.set(StyleId::Transition);
+                Op::ClearStyle {
+                    id,
+                    mask,
+                    written: false,
+                }
+            };
+            let shown =
+                |r: &Runner<NoData>| ROWS.map(|row| read(r.kernel.node(id).unwrap().style, row));
+            let before = shown(&r);
+            r.apply(vec![op]).unwrap();
+            assert_eq!(shown(&r), before, "{declaration:?}: declaration");
+            r.apply(vec![restate]).unwrap();
+            assert_eq!(shown(&r), before, "{declaration:?}: restatement");
+            assert_eq!(r.text_axes_settle_ms(), Some(400.));
+            r.advance(400.).unwrap();
+            assert!(!r.wants_frames());
+        }
+    }
 }

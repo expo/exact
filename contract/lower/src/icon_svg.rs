@@ -48,84 +48,6 @@ type Open = (
     bool,
 );
 
-/// A tag's name and attributes, entities decoded; `None` for a closing tag.
-#[allow(clippy::type_complexity)]
-fn tag(text: &str) -> Result<Option<(&str, Vec<(&str, String)>)>, String> {
-    if text.starts_with('/') {
-        return Ok(None);
-    }
-    let text = text.strip_suffix('/').unwrap_or(text);
-    let name_end = text.find(|c: char| c.is_whitespace()).unwrap_or(text.len());
-    let (name, mut rest) = (&text[..name_end], &text[name_end..]);
-    let mut attrs = Vec::new();
-    loop {
-        rest = rest.trim_start();
-        if rest.is_empty() {
-            return Ok(Some((name, attrs)));
-        }
-        let eq = rest
-            .find('=')
-            .ok_or_else(|| format!("`<{name}>` has an attribute with no value"))?;
-        let key = rest[..eq].trim();
-        let value = rest[eq + 1..].trim_start();
-        let q = value
-            .chars()
-            .next()
-            .filter(|q| *q == '"' || *q == '\'')
-            .ok_or_else(|| format!("`<{name}>`'s `{key}` is not quoted"))?;
-        let end = value[1..]
-            .find(q)
-            .ok_or_else(|| format!("`<{name}>`'s `{key}` is not closed"))?;
-        if key.is_empty() || key.contains(char::is_whitespace) {
-            return Err(format!("`<{name}>` has a malformed attribute"));
-        }
-        attrs.push((key, decode(&value[1..1 + end])));
-        rest = &value[end + 2..];
-        if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-            return Err(format!("`<{name}>`'s attributes are not apart"));
-        }
-    }
-}
-
-/// An attribute value with its entities decoded.
-fn decode(v: &str) -> String {
-    if !v.contains('&') {
-        return v.to_string();
-    }
-    let mut out = String::new();
-    let mut rest = v;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        let tail = &rest[at..];
-        let end = tail.find(';').unwrap_or(0);
-        let entity = &tail[1..end.max(1)];
-        let ch = match entity {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            e if e.starts_with("#x") => u32::from_str_radix(&e[2..], 16)
-                .ok()
-                .and_then(char::from_u32),
-            e if e.starts_with('#') => e[1..].parse().ok().and_then(char::from_u32),
-            _ => None,
-        };
-        match ch.filter(|_| end > 0) {
-            Some(c) => {
-                out.push(c);
-                rest = &tail[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &tail[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
 /// The fix for a template's `style` (C2, closed): a template reads only
 /// its presentation attributes.
 const FIX_STYLE: &str = "write the paint as attributes (`fill=\"currentColor\"`, `fill-rule=\"evenodd\"`) and drop the `style` attribute or the `<style>` block: a template reads neither";
@@ -251,63 +173,29 @@ pub(crate) fn read(text: &str) -> Result<Svg, String> {
     // Each path's fill rule after the cascade, in order: `true` even-odd.
     let mut rules: Vec<bool> = Vec::new();
     let mut stack: Vec<Open> = Vec::new();
-    let mut rest = text;
-    while let Some(open) = rest.find('<') {
-        rest = &rest[open..];
-        // Comments, CDATA, declarations and processing instructions draw nothing.
-        let skip = [
-            ("<!--", "-->"),
-            ("<![CDATA[", "]]>"),
-            ("<?", "?>"),
-            ("<!", ">"),
-        ]
-        .into_iter()
-        .find(|(start, _)| rest.starts_with(start));
-        if let Some((start, end)) = skip {
-            // A CDATA section or a DOCTYPE (whose internal subset's default
-            // attributes a parser would apply) is no template (C2, the last
-            // gaps); no repo template has either.
-            if start == "<![CDATA[" {
-                note(&mut why, || {
-                    ("it has a CDATA section".to_string(), FIX_PLAIN)
-                });
-            } else if start == "<!"
-                && rest
-                    .get(..9)
-                    .is_some_and(|d| d.eq_ignore_ascii_case("<!doctype"))
-            {
-                note(&mut why, || ("it has a DOCTYPE".to_string(), FIX_PLAIN));
+    let tokens = exact_svg_file::xml::tokenize(text).map_err(|e| e.to_string())?;
+    if tokens.has_cdata {
+        note(&mut why, || {
+            ("it has a CDATA section".to_string(), FIX_PLAIN)
+        });
+    }
+    if tokens.has_doctype {
+        note(&mut why, || ("it has a DOCTYPE".to_string(), FIX_PLAIN));
+    }
+    for event in tokens.events {
+        use exact_svg_file::xml::Event;
+        let (name, attrs, empty) = match &event {
+            Event::Start {
+                name, attrs, empty, ..
+            } => (name.as_str(), attrs, *empty),
+            Event::End { .. } => {
+                stack.pop();
+                continue;
             }
-            let close = rest[start.len()..]
-                .find(end)
-                .ok_or("an SVG comment or declaration is not closed")?;
-            rest = &rest[start.len() + close + end.len()..];
-            continue;
-        }
-        // The tag ends at the first `>` outside its attributes' quotes.
-        let mut quote = None;
-        let end = rest
-            .char_indices()
-            .find(|&(_, c)| match quote {
-                Some(q) if c == q => {
-                    quote = None;
-                    false
-                }
-                Some(_) => false,
-                None if c == '"' || c == '\'' => {
-                    quote = Some(c);
-                    false
-                }
-                None => c == '>',
-            })
-            .map(|(i, _)| i)
-            .ok_or("an SVG tag is not closed")?;
-        let raw = &rest[1..end];
-        rest = &rest[end + 1..];
-        let Some((name, attrs)) = tag(raw)? else {
-            stack.pop();
-            continue;
+            Event::Text(_) => continue,
         };
+        let attrs: Vec<(&str, String)> =
+            attrs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         // Namespaces (C2, the last gaps): a prefixed element or attribute,
         // or any namespace declaration but the root's default SVG one, is no
         // template (`<s:style xmlns:s=…>`, `<g xmlns="…xhtml">`). No repo
@@ -489,7 +377,7 @@ pub(crate) fn read(text: &str) -> Result<Svg, String> {
                 });
             }
         }
-        if !raw.ends_with('/') {
+        if !empty {
             stack.push((fill_here, stroke_here, color_here, rule_here, in_defs));
         }
     }
@@ -557,6 +445,31 @@ pub(crate) fn read(text: &str) -> Result<Svg, String> {
 #[cfg(test)]
 mod tests {
     use super::read;
+
+    #[test]
+    fn malformed_xml_and_declared_entities_are_refused() {
+        for (svg, reason) in [
+            (
+                "<svg viewBox='0 0 24 24'>\n<g><path d='M0 0h1'/></svg>",
+                "closes `<g>`",
+            ),
+            (
+                "<svg viewBox='0 0 24 24'><path d='M0 0h1'/>",
+                "never closed",
+            ),
+            (
+                "<!DOCTYPE svg [<!ENTITY a 'x'>]><svg viewBox='0 0 24 24'><path d='M0 0h1'/></svg>",
+                "entity declaration",
+            ),
+            (
+                "<svg viewBox='0 0 24 24' aria-label='&missing;'><path d='M0 0h1'/></svg>",
+                "&missing;",
+            ),
+        ] {
+            let error = read(svg).expect_err("malformed SVG must be refused");
+            assert!(error.contains(reason), "{error}");
+        }
+    }
 
     #[test]
     fn a_material_symbol_is_one_path_under_its_viewbox() {
@@ -683,6 +596,24 @@ mod tests {
             ("0 0 24 24", "M0 0h1")
         );
         assert!(read(r#"<svg viewBox="0 0 24 24"><path d="M0 0"fill="red"/></svg>"#).is_err());
+    }
+
+    #[test]
+    fn numeric_references_may_have_leading_zeroes() {
+        for zero in ["&#00000000000048;", "&#x00000000000030;"] {
+            let svg = read(&format!(
+                r#"<svg viewBox="0 0 24 24"><path d="M{zero} 0h1"/></svg>"#
+            ))
+            .unwrap();
+            assert_eq!(svg.not_template, None);
+            assert_eq!(svg.path, "M0 0h1");
+        }
+        for invalid in ["&#0000001114112;", "&#x00000000d800;", "&unknown;"] {
+            assert!(read(&format!(
+                r#"<svg viewBox="0 0 24 24"><path d="M{invalid} 0h1"/></svg>"#
+            ))
+            .is_err());
+        }
     }
 
     /// Stage 14 C2: a path's `fill-rule` from its attribute or inherited from

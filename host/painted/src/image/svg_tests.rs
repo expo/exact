@@ -182,6 +182,54 @@ fn a_picture_without_text_is_drawn_on_the_worker_at_the_boxs_pixels() {
 }
 
 #[test]
+fn a_file_icon_loads_selected_assets_and_keeps_its_source_identity() {
+    let source = "symbol:icon||0 0 20 10||mark.svg";
+    let mut k = kernel(source, 80.0, 40.0, ObjectFit::Fill);
+    let assets = Assets::selected(
+        PathBuf::new(),
+        Arc::new(|name| Ok((name == "assets/mark.svg").then(|| Arc::from(MARK.as_bytes())))),
+    );
+    let mut images = Images::with_assets(assets);
+    images.prepare_boot(&k, &k.roots(), 2.0);
+    assert!(
+        images.views.contains_key(&1),
+        "a file icon is prepared at boot"
+    );
+    images.enable_decode();
+    images.sync_visible(&k, &k.roots(), 2.0, |_| true);
+    assert_eq!(images.wait(WAIT), vec![(1, Some((20.0, 10.0)))]);
+    let bitmap = &images.bitmaps[&1];
+    assert_eq!((bitmap.width(), bitmap.height()), (160, 80));
+    assert_eq!(rgba(bitmap, 40, 40), [255, 0, 0, 255]);
+    assert_eq!(rgba(bitmap, 120, 40), [0, 0, 255, 255]);
+    assert_eq!(images.load_events.len(), 1);
+    assert_eq!(images.load_events[0].source, source);
+    assert_eq!(images.load_events[0].error, None);
+    assert!(images.renew(&k, &[1]).is_empty());
+    k.apply(
+        0,
+        2,
+        &[
+            Op::CreateView {
+                id: 2,
+                node_type: NodeType::Image,
+            },
+            Op::SetProp {
+                id: 2,
+                prop: PropId::ImageSource,
+                value: "symbol:add".into(),
+            },
+            Op::AttachRoot { id: 2 },
+        ],
+    )
+    .unwrap();
+    assert!(
+        images.prepare_metadata(&k, &k.roots(), Duration::ZERO),
+        "a path symbol has no asset metadata to prepare"
+    );
+}
+
+#[test]
 fn a_picture_with_text_waits_for_the_paint_thread_and_draws_with_its_fonts() {
     let k = kernel("label.svg", 40.0, 20.0, ObjectFit::Fill);
     let mut images = Images::with_assets(assets());

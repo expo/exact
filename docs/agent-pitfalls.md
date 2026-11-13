@@ -477,11 +477,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the scroller right after the route's `header`. Fix: a `scroll flex=1 min-height=0`
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
-  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route whose
-  content is a plain `list` (its rows built in slices) still opens its large title
-  collapsed (issues/20261112-pushed-screen-large-title-bar-is-54-points.md).
-  The compiler refuses a name nothing in the
-  route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
+  (docs/contract-for-agents.md, "Routes and web documents"). The compiler refuses
+  a name nothing in the route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
   compiler could refuse a named scroller that is not right after the `header` (an
   iOS-only rule today, so not refused); the hosts could journal a route whose
   content overflows with nothing to scroll it (QUEUE.md).
@@ -1992,7 +1989,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `/usr/bin/openssl`, macOS's LibreSSL, comes first on `PATH`; it writes the run's EC
   key with explicit curve parameters, which Bun cannot read back (`startNet` in
   `host/web-js/conformance/net.mjs`), so every `conform.mjs` run fails, the async
-  lane's `conform`, `conform-firefox` and `conform-webkit` steps included. Fix: put
+  lane's `conform` and `conform-browsers` steps included. Fix: put
   Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (#1148, 2026-10-30.)
 - **An `EXACT_WEB_DIST` build compiles, then fails renaming its stage.** The
   destination's parent directory does not exist. Create that parent before

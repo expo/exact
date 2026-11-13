@@ -64,6 +64,26 @@ impl Layout {
         true
     }
 
+    /// Widen the menu to `width`, its rows with it: a select's menu is no
+    /// narrower than its select, as Material's exposed dropdown menu and
+    /// WinUI's `ComboBox` list are no narrower than their field.
+    pub(in crate::presenter) fn widen(&mut self, width: f32) {
+        let more = width - self.size.0;
+        if more <= 0. {
+            return;
+        }
+        self.size.0 = width;
+        for target in &mut self.targets {
+            target.rect.2 += more;
+            target.layer.0.rect.2 += more;
+        }
+        for item in &mut self.items {
+            if let Item::Rule(rect, _) = item {
+                rect.2 += more;
+            }
+        }
+    }
+
     pub(in crate::presenter) fn reveal_menu_target(&mut self, index: usize) -> bool {
         let Some((_, top, _, height)) = self.menu_clip() else {
             return false;

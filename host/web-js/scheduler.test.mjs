@@ -81,16 +81,16 @@ test('live tool deadlines refresh time and arm a wake without unrelated commits;
   const runtime = readFileSync(resolve(ROOT, 'host/web-js/clock.js'), 'utf8');
   const advance = runtime.slice(runtime.indexOf('export function advance('), runtime.indexOf('let driving ='));
   expect(advance).toContain('function fire(');
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};
+export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};
 const Link={},Poisoned=false;let Timing=false,Instant=null,start=0;
 export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\n${advance}`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
   try {
     globalThis.exact = {};
     const { tools } = await import(pathToFileURL(resolve(dir, 'calls.js')).href);
-    const { clock, wall, After, advance } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
-    const { Counting } = await import(pathToFileURL(resolve(dir, 'held.js')).href);
-    tools({ run: [() => () => Counting.add({}), {}, 'reads', [false, true, true], 'run'] });
+    const { clock, wall, After, advance, Resources, Invocation } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
+    tools({ run: [() => () => Resources.push({ ticket: { invocation: Invocation.id } }), {}, 'reads', [false, true, true], 'run'] });
     const calls = globalThis.exact.calls;
     const first = calls.call({ tool: 'run' }); await Promise.resolve();
     expect(clock.timers.map(t => t.due)).toEqual([10000]);
@@ -102,7 +102,7 @@ export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\
     expect(clock.timers.map(t => t.due)).toEqual([15001]);
     wall.now = 15002; clock.timers.shift().action();
     expect(calls.called(queued.call)).toMatchObject({ outcome: 'refused', reason: 'busy' });
-    waking = false; Counting.clear(); clock.agent = true;
+    waking = false; Resources.length = 0; clock.agent = true;
     const driven = calls.call({ tool: 'run' }); await Promise.resolve();
     wall.now = 1000000;
     for (const f of After) f(); await Promise.resolve();
@@ -120,18 +120,18 @@ export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\
 test('a queued tool call waits at most five seconds behind a running call', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-call-wait-')), old = globalThis.exact;
   cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:true,timers:[]},data={},After=[],Clocked=[],Mutations=[],Origin={now:()=>'app'},say=()=>{},order=()=>0,drive=()=>{},time=()=>{};`);
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:true,timers:[]},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},say=()=>{},order=()=>0,drive=()=>{},time=()=>{};
+export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
   try {
     globalThis.exact = {};
     const { tools } = await import(pathToFileURL(resolve(dir, 'calls.js')).href);
-    const { clock } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
-    const { Counting } = await import(pathToFileURL(resolve(dir, 'held.js')).href);
+    const { clock, Resources, Invocation } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
     let runs = 0;
-    tools({ run: [() => () => { runs++; Counting.add({}); }, {}, 'reads', [false, true, true], 'run'] });
+    tools({ run: [() => () => { runs++; Resources.push({ ticket: { invocation: Invocation.id } }); }, {}, 'reads', [false, true, true], 'run'] });
     const calls = globalThis.exact.calls;
     const fire = async now => { clock.now = now; clock.timers.splice(0).forEach(t => t.action()); await Promise.resolve(); };
-    const release = async () => { Counting.clear(); clock.timers.splice(0).forEach(t => t.action()); await Promise.resolve(); };
+    const release = async () => { Resources.length = 0; clock.timers.splice(0).forEach(t => t.action()); await Promise.resolve(); };
     // Behind a call that settles after the wait: refused at 5 s, never run.
     const first = calls.call({ tool: 'run' }), second = calls.call({ tool: 'run' }), third = calls.call({ tool: 'run' });
     await Promise.resolve();

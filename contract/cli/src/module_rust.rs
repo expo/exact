@@ -65,8 +65,13 @@ pub fn module_rust(plan: &Plan) -> Result<String, String> {
             let json = whole.get(name).map(Vec::as_slice).unwrap_or_default();
             record(plan, name, *ty, json, &mut out)?;
         }
+        let owned = rows.iter().any(|row| {
+            let sub: serde_json::Value =
+                serde_json::from_str(plan.str(row.substitute)).unwrap_or_default();
+            sub["owner"].is_string()
+        });
         for row in rows {
-            call(plan, extension, row, &mut out)?;
+            call(plan, extension, row, owned, &mut out)?;
         }
         out.push_str("}\n");
     }
@@ -208,7 +213,13 @@ fn record(
 }
 
 /// A name's request builder and reply parser.
-fn call(plan: &Plan, extension: &str, row: &ModulesRow, out: &mut String) -> Result<(), String> {
+fn call(
+    plan: &Plan,
+    extension: &str,
+    row: &ModulesRow,
+    owned: bool,
+    out: &mut String,
+) -> Result<(), String> {
     let declared = plan.str(row.declared);
     let (verb, kind) = if row.send {
         ("send", "a send")
@@ -217,7 +228,20 @@ fn call(plan: &Plan, extension: &str, row: &ModulesRow, out: &mut String) -> Res
     } else {
         ("source", "a source")
     };
-    let (f, at) = (field_name(declared), format!("{extension}.{declared}"));
+    let sub: serde_json::Value = serde_json::from_str(plan.str(row.substitute)).unwrap_or_default();
+    let owner = sub["owner"].as_str();
+    let local = if owned {
+        plan.str(plan.sources[row.source.0 as usize].name)
+    } else {
+        declared
+    };
+    let (f, at) = (field_name(local), format!("{extension}.{declared}"));
+    let request = |args: &str| {
+        match owner {
+        Some(owner) => format!("::exact_runner::Request::native(::exact_data::modules::serde_json::json!({{\"extension\": {extension:?}, \"owner\": {owner:?}, {verb:?}: {declared:?}, \"args\": {args}}}).to_string().into_bytes())"),
+        None => format!("::exact_data::modules::request({extension:?}, {verb:?}, {declared:?}, {args})"),
+    }
+    };
     let ty = plan.sources[row.source.0 as usize].ty;
     // A send that answers nothing (LLP 1133.004 D5): its reply is `()`.
     let nothing = plan.types[ty.0 as usize].kind == TypeKind::Unit;
@@ -231,23 +255,27 @@ fn call(plan: &Plan, extension: &str, row: &ModulesRow, out: &mut String) -> Res
     match params(plan, row).next() {
         Some(options) => {
             let options = rust_type(plan, options)?;
+            let request = request("args.unwrap_or_default()");
             writeln!(
                 out,
                 "\n    /// `{declared}` ({kind}): its request, with the keyword arguments `options` writes; an omitted one\n    \
                  /// stays the platform's. `TypeError` for a value an option cannot take.\n    \
                  pub fn {f}(options: &{options}) -> ::core::result::Result<::exact_runner::Request, ::exact_data::modules::ModuleError> {{\n        \
                  let args = ::exact_data::modules::ModuleValue::encode(options).map_err(|e| ::exact_data::modules::ModuleError::new(\"TypeError\", format!(\"{at}: {{e}}\")))?;\n        \
-                 Ok(::exact_data::modules::request({extension:?}, {verb:?}, {declared:?}, args.unwrap_or_default()))\n    }}"
+                 Ok({request})\n    }}"
             )
             .unwrap();
         }
-        None => writeln!(
-            out,
-            "\n    /// `{declared}` ({kind}): its request.\n    \
+        None => {
+            let request = request("::exact_data::modules::serde_json::json!({})");
+            writeln!(
+                out,
+                "\n    /// `{declared}` ({kind}): its request.\n    \
              pub fn {f}() -> ::exact_runner::Request {{\n        \
-             ::exact_data::modules::request({extension:?}, {verb:?}, {declared:?}, ::exact_data::modules::serde_json::json!({{}}))\n    }}"
-        )
-        .unwrap(),
+             {request}\n    }}"
+            )
+            .unwrap()
+        }
     }
     if nothing {
         writeln!(

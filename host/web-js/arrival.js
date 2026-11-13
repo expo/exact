@@ -74,7 +74,7 @@ const settings = args => JSON.stringify({
  */
 export function arrivals({ rows, held, preferred, release, raise, say, valueOf }) {
   const extensionOf = row => row.key.slice(0, row.key.indexOf("."));
-  const declaredOf = row => row.key.slice(row.key.indexOf(".") + 1);
+  const declaredOf = row => row.key.slice(row.key.indexOf(".") + 1).split("#")[0];
   const arrivalOf = row => row?.sub?.arrival && typeof row.sub.arrival === "object" ? row.sub.arrival : null;
   const byExtension = new Map();
   for (const row of rows()) { const a = arrivalOf(row); if (a && !byExtension.has(extensionOf(row))) byExtension.set(extensionOf(row), a); }

@@ -184,7 +184,13 @@ fn state(r: &mut Runner<Oracle>, plan: &Plan, out: &mut Vec<String>) {
             continue;
         };
         if let Some(t) = n.props.str(PropId::TestId) {
-            let text = n.props.str(PropId::Text).map_or("-".to_string(), quote);
+            // A `time`'s text is the runner's live time (LLP 1126 D6), a
+            // presentation the semantics leaves out (`OMITTED_KINDS`).
+            let live = n.props.str(PropId::SemanticTag) == Some("time")
+                && n.props.get(PropId::Datetime).is_some();
+            let text = (n.props.str(PropId::Text))
+                .filter(|_| !live)
+                .map_or("-".to_string(), quote);
             out.push(format!("view {} {text}", quote(t)));
         }
     }

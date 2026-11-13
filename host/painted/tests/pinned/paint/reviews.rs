@@ -3,6 +3,36 @@ use super::*;
 use exact_painted::paint::{Backend, Ink as Paint, Shape, SvgPaint};
 use tiny_skia::Transform;
 
+#[test]
+fn auto_and_integer_z_index_keep_chromes_paint_and_hit_order() {
+    let mut p = compiled(
+        include_str!("../../../../../contract/corpus/z-index.contract"),
+        1.,
+        PainterChoice::Cpu,
+    );
+    for step in 0..=4 {
+        for scene in ["flex", "grid", "positioned", "nested"] {
+            let front = step == 2 || step == 1 && matches!(scene, "flex" | "grid");
+            let (color, rgb) = if !front {
+                ("blue", (0, 0, 255))
+            } else if scene == "nested" {
+                ("green", (0, 255, 0))
+            } else {
+                ("red", (255, 0, 0))
+            };
+            let (x, y, _, _) = rect(&mut p, scene);
+            assert_eq!(px(&p.frame(), x + 50., y + 50.), rgb, "{scene} step {step}");
+            assert_eq!(
+                p.hit(x + 50., y + 50.),
+                Some(view(&p, &format!("{scene}-{color}"))),
+                "{scene} step {step}"
+            );
+        }
+        let advance = view(&p, "advance");
+        p.tap(advance).unwrap();
+    }
+}
+
 fn pair(size: (f32, f32), draw: impl Fn(&mut dyn Backend)) -> (Pixmap, Pixmap) {
     let mut cpu = exact_painted::raster::Raster::new();
     let mut ink = exact_painted::ink::Ink::new().expect("native Ink adapter");

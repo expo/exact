@@ -50,7 +50,22 @@ and stop it after; start none of your own for them. They find it this way:
   `commands` to omit `DB` and skip scratch database creation and removal; otherwise
   an entry that does not read `DB` is refused.
 
-The database is empty when a run starts and shared by its tests, while each test starts from
-empty client storage: a test that needs no earlier rows makes its own.
+The server runs once a run: its database is empty when the run starts and shared by its tests,
+while each test starts from empty client storage. A test that needs no earlier rows makes its
+own. One that counts rows or expects an empty list empties the database first, through a route
+the server adds only on the scratch database `test` and `verify` give it (`DB` under `.exact/`),
+then reloads:
+
+```ts
+// In Bun.serve's routes, beside the app's own.
+...(process.env.DB?.includes('.exact') ? { '/test/reset': { POST: () => { db.run('DELETE FROM items'); return send({ ok: true }); } } } : {}),
+```
+
+```contract-test
+test "a new list is empty"
+  request POST "/test/reset"
+  reload
+  expect tree missing "item-0"
+```
 
 A dev server already on that port makes them stop and name its pid: stop it first.

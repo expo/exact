@@ -19,6 +19,7 @@ android {
             "../../../packages/contacts/android", "../../../packages/contacts/test",
             "../../../packages/gamepad/android", "../../../packages/gamepad/test",
             "../../../packages/geofencing/android", "../../../packages/geofencing/test",
+            "../../../packages/geocoding/android", "../../../packages/geocoding/test",
             "../../../packages/geolocation/android", "../../../packages/geolocation/test",
             "../../../packages/text-detection/android", "../../../packages/text-detection/test",
             "../../../packages/language-model/android", "../../../packages/language-model/test",

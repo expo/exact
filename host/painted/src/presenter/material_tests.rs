@@ -27,7 +27,7 @@ const APP: &str = r##"component App
 
 /// Whether this is the child process that shows the Material look; the
 /// parent runs the test there and returns false.
-fn material_process() -> bool {
+pub(super) fn material_process() -> bool {
     const CHILD: &str = "EXACT_MATERIAL_LOOK_TEST";
     if std::env::var_os(CHILD).is_some() {
         crate::app::show_material_look();
@@ -63,7 +63,7 @@ fn boot() -> Presenter<()> {
     p
 }
 
-fn id(p: &Presenter<()>, name: &str) -> ViewId {
+pub(super) fn id(p: &Presenter<()>, name: &str) -> ViewId {
     let k = p.host().kernel();
     k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
 }
@@ -234,7 +234,7 @@ const MARKS: &str = r##"component App
         input type="checkbox" checked=ghost change=haunt testId="turned"
 "##;
 
-fn said(p: &Presenter<()>) -> String {
+pub(super) fn said(p: &Presenter<()>) -> String {
     let k = p.host().kernel();
     let node = k.node_by_key(k.find_by_test_id("said")[0]).unwrap();
     node.props.str(PropId::Text).unwrap_or_default().to_owned()

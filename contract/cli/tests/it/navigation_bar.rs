@@ -193,4 +193,17 @@ fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
             && m.contains("a header of buttons alone is the bar"),
         "{m}"
     );
+    // A heading that presses is still the heading, as the kernel's bar
+    // reads it: one is the title, the text after it its subtitle, and two
+    // are two headings.
+    let heading = "  text \"Inbox\" role=\"heading\" press=go\n";
+    let subtitle = format!("{heading}  text \"3 unread\"\n");
+    assert_eq!(crate::warnings::warned(&route(&subtitle)), []);
+    let (_, warnings) = contract::compile_warned(&route(&heading.repeat(2)));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].message.contains("holds 2 headings"),
+        "{}",
+        warnings[0].message
+    );
 }

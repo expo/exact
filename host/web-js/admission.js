@@ -1,8 +1,8 @@
 import { rt } from './rt-link.js';
-import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
+import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { faultMessage, takeFault } from '../web/faults.js';
 import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';
-export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
+export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, trimGrant, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 
 // Captured while the entry graph loads. App source injection never replaces
 // the page global, so separately loaded host modules retain browser authority.
@@ -131,6 +131,11 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
     // held the event loop past the deadline fire no timer first.
     if (until && performance.now() >= until.at) throw new FetchError('Timeout', `the request timed out after ${until.ms} ms`);
     const response = await browserFetch(typeof Request === 'function' && input instanceof Request ? input : value, { ...rest, ...(signal ? { signal } : {}), redirect });
+    // A no-cors response hides its destination; a manual redirect is the browser's opaque-redirect result.
+    if (!response.url && response.type !== 'opaqueredirect') {
+      response.body?.cancel().catch(() => {});
+      throw new FetchError('Refused', "outside the app's grants (net.fetch): response URL is unavailable");
+    }
     // A redirect that left the grants names where it led (podcast F5), as
     // the native executor does; the browser followed it to this last hop.
     if (response.url && (asset
@@ -222,7 +227,7 @@ const effect = api => { if (overlaying.on) throw inOverlay(api); };
 // The `secret.keep` names whose line carries a presence policy (LLP 1133.010 D4), each with whether the person may
 // leave it plain (`optional`). The web keeps no locked secret (D15): a name that must be locked is never kept here.
 const mustLock = (set, name) => (set?.entries ?? []).some(([, source, grant]) => {
-  const words = source.split(/\s+/);
+  const words = grantWords(source);
   return grant?.[0] === 'secret-keep' && words[1] === String(name) && words.length > 2 && words[3] !== 'optional';
 });
 // Each backing store's names with a `keepKey` writing its pair, to the newest call's handle. By store, not facade:
@@ -241,18 +246,18 @@ export function createSecretFacade(store, admitted, keys) {
   };
   const allowed = name => {
     if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
-    if (!admitsSecret(admitted, name)) throw Object.assign(new Error(refused(name)), { refuse: true });
+    if (!admitsSecret(admitted, name)) throw new Error(refused(name));
   };
   const seen = {
     read: false,
     get(name) {
-      effect('store.get()');
-      if (String(name).startsWith('exact.kept.')) return null;
+      effect('store.get()'); name = String(name);
+      if (name.startsWith('exact.kept.')) return null;
       seen.read = true;
       return !globalThis.__exactRender && admitsSecret(admitted, name) && !mustLock(admitted, name) ? store.get(name) ?? null : null;
     },
     async exclusive(name, work) {
-      effect('store.exclusive()'); allowed(name);
+      effect('store.exclusive()'); name = String(name); allowed(name);
       if (mustLock(admitted, name)) return Promise.reject(unsupported(name));
       const context = globalThis.__exact_async_context, owner = context?.current();
       return store.exclusive(name, () => {
@@ -265,13 +270,22 @@ export function createSecretFacade(store, admitted, keys) {
     unlock(name) { try { return Promise.resolve(seen.get(name)); } catch (e) { return Promise.reject(e); } },
     protect(name) { return overlaying.on ? Promise.reject(inOverlay('store.protect()')) : Promise.reject(unsupported(name)); },
     unprotect() { return overlaying.on ? Promise.reject(inOverlay('store.unprotect()')) : Promise.resolve(); },
-    set(name, value) { effect('store.set()'); allowed(name); if (mustLock(admitted, name)) throw unsupported(name); store.set(name, String(value)); keeping(store).delete(String(name)); },
-    forget(name) { effect('store.forget()'); allowed(name); store.set(name, null); keeping(store).delete(String(name)); },
+    set(name, value) {
+      effect('store.set()');
+      name = String(name); value = String(value);
+      allowed(name);
+      if (mustLock(admitted, name)) throw unsupported(name);
+      store.set(name, value); keeping(store).delete(name);
+    },
+    forget(name) {
+      effect('store.forget()'); name = String(name); allowed(name);
+      store.set(name, null); keeping(store).delete(name);
+    },
     // The name holds the new handle only once the key service has the pair, so a refused write leaves the key it
     // held; a later keepKey, set or forget of the name while the pair is written supersedes it.
     async keepKey(name, pair) {
       if (overlaying.on) throw inOverlay('store.keepKey()');
-      allowed(name);
+      name = String(name); allowed(name);
       if (mustLock(admitted, name)) throw unsupported(name);
       const handle = 'exact.key:' + crypto.randomUUID(), latest = keeping(store), key = String(name);
       latest.set(key, handle);

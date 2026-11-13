@@ -1032,6 +1032,8 @@ function pushAssets() {
     rows.push(row);
   }
   if (!rows.length) return;
+  // A checked SVG (or icon) is a compiler input as well as a shipped file.
+  if (rows.some(row => readinessContracts.has(resolve(app.dir, row.name)))) needsRebuild = true;
   if (needsRebuild) {
     assetsNeedRebuild = true;
     for (const [name] of edits) changed.add(name);

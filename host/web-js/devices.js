@@ -21,7 +21,7 @@ export function devices(env) {
   const keep = () => { try { globalThis.localStorage?.setItem(KEPT, JSON.stringify(Object.fromEntries(remembered))); } catch { /* not kept */ } };
   let next = 0;
   const extensionOf = row => row.key.slice(0, row.key.indexOf("."));
-  const declaredOf = row => row.key.slice(row.key.indexOf(".") + 1);
+  const declaredOf = row => row.key.slice(row.key.indexOf(".") + 1).split("#")[0];
   const roleOf = row => row.sub.device?.role ? row.sub.device : null;
   const fixtures = row => preferred.get(`${extensionOf(row)}.${row.sub.devices?.word ?? "devices"}`) ?? [];
   const fixture = (row, id) => fixtures(row).find(d => d.id === id);

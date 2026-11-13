@@ -1,7 +1,7 @@
 import { capturePrivacyManifest } from './privacy.mjs';
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import { encodePng } from '../../scripts/png.mjs';
@@ -333,6 +333,21 @@ test('production links what the plan uses, the manifest names and the grants ope
   assert.deepEqual(appleComposition({ uses: ['tips'] }, false).products.at(-1), 'ExactTips');
   assert.ok(!appleComposition(graph, false).products.includes('ExactTips'));
   assert.equal(appleComposition(undefined, false).link, 'all');
+});
+
+// The production hello bake that `metrics.mjs --long` measures (`IOS_HELLO_BYTES`), when one is on disk:
+// `EXACT_UPDATE_TRUST=production EXACT_UPDATE_GENESIS=1 bun host/apple/build.mjs hello-apple --ios`.
+const helloBake = () => {
+  const clients = resolve(import.meta.dir, '../../target/clients');
+  if (!existsSync(clients)) return [];
+  return readdirSync(clients).map((d) => join(clients, d, 'com.exact.hello/ios-simulator/aarch64-apple-ios-sim/embedded/production/standalone/Hello.dSYM/Contents/Resources/DWARF/Hello')).filter(existsSync);
+};
+// The executor's cache, which parses URLs and grants, and the process's launch work stay out of it.
+test.skipIf(process.platform !== 'darwin' || helloBake().length === 0)('an app whose plan and grants open no I/O links no launch preloads (LLP 1047.001)', () => {
+  for (const symbols of helloBake()) {
+    const names = spawnSync('nm', [symbols], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    assert.deepEqual(names.split('\n').filter((s) => /14exact_executor5cache|15launch_preloads6Launch/.test(s)), []);
+  }
 });
 
 test('the load commands are read from the file, each slice of a universal one; a binary with no capability framework passes the check', () => {

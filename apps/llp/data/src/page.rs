@@ -104,8 +104,8 @@ impl<'a> Build<'a> {
                         self.links
                             .push((r.text.clone(), r.href.clone(), id.clone()));
                     }
-                    split(&id, r, false, self.find, &mut self.hits, &mut out);
                 }
+                split(&id, &runs, false, self.find, &mut self.hits, &mut out);
                 self.marks
                     .extend(std::iter::repeat_n(id.clone(), self.hits - before));
                 self.blocks.push(Value::record(vec![
@@ -136,8 +136,8 @@ impl<'a> Build<'a> {
                     if collect_links && !r.href.is_empty() && !r.text.trim().is_empty() {
                         links.push((r.text.clone(), r.href.clone(), id.clone()));
                     }
-                    split(prefix, r, mono, find, hits, &mut out);
                 }
+                split(prefix, runs, mono, find, hits, &mut out);
                 Value::list(out)
             };
             match b.kind {
@@ -327,8 +327,8 @@ fn reference_value(path: &Path, doc: &Document, place: &Place<'_>, message: &str
                     if !r.href.is_empty() && !r.text.trim().is_empty() {
                         links.push((r.text.clone(), r.href.clone(), id.clone()));
                     }
-                    split(&id, r, false, &find, &mut hits, &mut out);
                 }
+                split(&id, &runs, false, &find, &mut hits, &mut out);
                 marks.extend(std::iter::repeat_n(id.clone(), hits - before));
                 blocks.push(Value::record(vec![
                     Value::str(&id),
@@ -353,8 +353,8 @@ fn reference_value(path: &Path, doc: &Document, place: &Place<'_>, message: &str
                 if !r.href.is_empty() && !r.text.trim().is_empty() {
                     links.push((r.text.clone(), r.href.clone(), id.clone()));
                 }
-                split(prefix, r, mono, &find, &mut hits, &mut out);
             }
+            split(prefix, runs, mono, &find, &mut hits, &mut out);
             Value::list(out)
         };
         let (spans, cells) = match b.kind {
@@ -669,6 +669,12 @@ fn matches(text: &str, find: &str) -> Vec<Range<usize>> {
     out
 }
 
+/// Whether `runs`, read as one text as `split` reads them, hold `find`.
+fn runs_match(runs: &[Run], find: &str) -> bool {
+    let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+    !find.is_empty() && fold(&text).contains(find)
+}
+
 fn text_matches(text: &str, find: &str) -> bool {
     !find.is_empty() && fold(text).contains(find)
 }
@@ -678,26 +684,28 @@ fn text_matches(text: &str, find: &str) -> bool {
 /// deliberately does no `Value` construction.
 fn block_matches(i: usize, b: &markdown_parse::Block, find: &str) -> bool {
     if let Some(fields) = metadata(i, b) {
-        return fields
-            .iter()
-            .flat_map(|(_, runs)| runs)
-            .any(|run| text_matches(&run.text, find));
+        return fields.iter().any(|(_, runs)| runs_match(runs, find));
     }
     match b.kind {
         Kind::Code | Kind::Html | Kind::Image => text_matches(&b.text, find),
-        Kind::TableRow => b
-            .cells
-            .iter()
-            .flatten()
-            .any(|run| text_matches(&run.text, find)),
-        _ => b.runs.iter().any(|run| text_matches(&run.text, find)),
+        Kind::TableRow => b.cells.iter().any(|runs| runs_match(runs, find)),
+        _ => runs_match(&b.runs, find),
     }
 }
 
-/// One run as spans: the stretches between matches, and each match with its
-/// ordinal (from 1).
-fn split(prefix: &str, run: &Run, mono: bool, find: &str, hits: &mut usize, out: &mut Vec<Value>) {
-    let push = |text: &str, hit: usize, out: &mut Vec<Value>| {
+/// `runs` as spans, each match of `find` its own span with its ordinal. A
+/// match is found in the runs' text as one, so a phrase that crosses a
+/// change of style is found; each run's part of it is a span with that
+/// run's style and the match's ordinal.
+fn split(
+    prefix: &str,
+    runs: &[Run],
+    mono: bool,
+    find: &str,
+    hits: &mut usize,
+    out: &mut Vec<Value>,
+) {
+    let push = |run: &Run, text: &str, hit: usize, out: &mut Vec<Value>| {
         if text.is_empty() {
             return;
         }
@@ -711,14 +719,26 @@ fn split(prefix: &str, run: &Run, mono: bool, find: &str, hits: &mut usize, out:
             Value::Number(hit as f64),
         ]));
     };
-    let mut at = 0;
-    for found in matches(&run.text, find) {
-        push(&run.text[at..found.start], 0, out);
-        *hits += 1;
-        push(&run.text[found.clone()], *hits, out);
-        at = found.end;
+    let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+    let found = matches(&text, find);
+    let first = *hits;
+    *hits += found.len();
+    let mut start = 0;
+    for run in runs {
+        let end = start + run.text.len();
+        let mut at = start;
+        for (k, m) in found.iter().enumerate() {
+            if m.end <= start || m.start >= end {
+                continue;
+            }
+            let (from, to) = (m.start.max(start), m.end.min(end));
+            push(run, &text[at..from], 0, out);
+            push(run, &text[from..to], first + k + 1, out);
+            at = to;
+        }
+        push(run, &text[at..end], 0, out);
+        start = end;
     }
-    push(&run.text[at..], 0, out);
 }
 
 #[cfg(test)]
@@ -856,6 +876,94 @@ kernel();
         // U+2126 OHM SIGN folds one byte shorter and `İ` one longer.
         assert_eq!(matches("\u{2126}İ", "i"), vec![3..5]);
         assert!(matches(text, "").is_empty());
+    }
+
+    #[test]
+    fn find_reads_a_paragraph_across_its_styles() {
+        // Each hit span as (text, weight, mono, href, ordinal).
+        let hits = |source: &str, find: &str| {
+            let local = |_: &str| None;
+            let page = value(
+                Path::new("/corpus/0001-a.md"),
+                &document(source),
+                &place(find, &local),
+                "",
+            );
+            let mut out = Vec::new();
+            for block in blocks(&page).iter() {
+                let Value::Record(block) = block else {
+                    panic!("block is a record")
+                };
+                let Value::List(spans) = &block[6] else {
+                    panic!("spans are a list")
+                };
+                for span in spans.iter() {
+                    let Value::Record(s) = span else {
+                        panic!("span is a record")
+                    };
+                    let hit = s[6].as_number().expect("a span's hit");
+                    if hit > 0.0 {
+                        out.push((
+                            s[1].as_str().expect("a span's text").to_string(),
+                            s[2].as_number().expect("a span's weight") as u32,
+                            s[4].as_bool().expect("a span's face"),
+                            s[5].as_str().expect("a span's link").to_string(),
+                            hit as usize,
+                        ));
+                    }
+                }
+            }
+            out
+        };
+        let span = |text: &str, weight, mono, href: &str, hit| {
+            (text.to_string(), weight, mono, href.to_string(), hit)
+        };
+        assert_eq!(
+            hits("Hello **world**.", "hello world"),
+            [
+                span("Hello ", 400, false, "", 1),
+                span("world", 700, false, "", 1)
+            ]
+        );
+        assert_eq!(
+            hits("some**thing** and some**thing**", "something"),
+            [
+                span("some", 400, false, "", 1),
+                span("thing", 700, false, "", 1),
+                span("some", 400, false, "", 2),
+                span("thing", 700, false, "", 2)
+            ]
+        );
+        // Starting inside inline code, ending inside a link.
+        assert_eq!(
+            hits(
+                "Call `run()` then [the guide](guide.md) now.",
+                "n() then the g"
+            ),
+            [
+                span("n()", 400, true, "", 1),
+                span(" then ", 400, false, "", 1),
+                span("the g", 400, false, "/corpus/guide.md", 1)
+            ]
+        );
+        // A phrase across a table cell's styles, and none across two cells.
+        let table = "| A | B |\n| --- | --- |\n| plain *slanted* | other |\n";
+        let local = |_: &str| None;
+        let doc = document(table);
+        let page = value(
+            Path::new("/x.md"),
+            &doc,
+            &place("plain slanted", &local),
+            "",
+        );
+        assert_eq!(hit_ordinals(&page), [1, 1]);
+        let page = value(
+            Path::new("/x.md"),
+            &doc,
+            &place("slanted other", &local),
+            "",
+        );
+        assert!(hit_ordinals(&page).is_empty());
     }
 
     #[test]

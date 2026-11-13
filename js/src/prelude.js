@@ -692,7 +692,8 @@
   // waiting on nothing of its own.
   // A handler a module calls back (LLP 1133.016 D9): the `tools` export's, its value as JSON text.
   function tool(name, args) {
-    var f = global.exact.tools && global.exact.tools[name],
+    var handlers = global.exact.tools,
+      f = handlers && Object.prototype.hasOwnProperty.call(handlers, name) ? handlers[name] : undefined,
       text = function (v) {
         return JSON.stringify(v === undefined ? null : v);
       },

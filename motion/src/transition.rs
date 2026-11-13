@@ -129,6 +129,14 @@ impl std::fmt::Display for TransitionError {
 }
 
 impl Transition {
+    /// CSS's initial transition: covers every property but starts nothing.
+    pub const INITIAL: Self = Self {
+        property: TransitionProperty::All,
+        duration: 0.0,
+        delay: 0.0,
+        timing: TimingFunction::Easing(Easing::Ease),
+    };
+
     /// A transition with no delay.
     pub fn new(property: TransitionProperty, duration: f64, timing: TimingFunction) -> Transition {
         Transition {
@@ -209,9 +217,13 @@ impl Transition {
 pub struct Transitions(pub Vec<Transition>);
 
 impl Transitions {
-    /// No transitions: every change is immediate (CSS's initial value,
-    /// `transition: all 0s ease 0s`, which starts nothing).
+    /// Explicit `transition: none`: covers no property.
     pub const NONE: Transitions = Transitions(Vec::new());
+
+    /// An unset declaration: `all 0s ease 0s` still covers running transitions.
+    pub fn initial() -> Self {
+        Self(vec![Transition::INITIAL])
+    }
 
     /// The declaration governing `property`, if any. When several cover it,
     /// the last wins (CSS Transitions §2.1: "the last one is used"). A

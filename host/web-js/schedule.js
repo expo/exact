@@ -4,7 +4,7 @@
 // A queue mutation keeps one ticket in flight; a later send waits in `m.wait` with its send-time arguments and is
 // asked in a `next` commit of its own once the mutation is free: no ticket, no `then` or `next` armed, not stalled.
 // A gated task is in `clock.timers` only while its gate holds; a new key re-arms it from the commit's time.
-import { Mutations, Tasks, commit, recommit, M, journal, clock, drive, paint, order, write, eq, untracked, useSchedule, refused, Refusal, armedAt } from "./rt.js";
+import { Mutations, Tasks, commit, recommit, M, journal, clock, drive, paint, order, write, eq, untracked, useSchedule, refused, Refusal, armedAt, Invocation } from "./rt.js";
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const BOUND = 64; // runner QUEUE_BOUND: the 65th waiter refuses its action
 let Asked = new Set(), State = [];
@@ -43,7 +43,7 @@ const Q = {
   hold(m, source, args, undo) {
     if (!Asked.has(m) && idle(m) && !m.wait.length) { Asked.add(m); return false; }
     if (m.wait.length >= BOUND) throw new Refusal(`QueueFull { mutation: ${JSON.stringify(m.name)} }`);
-    m.wait.push([source, args]);
+    m.wait.push([source, args, Invocation.id]);
     if (!m.pend.n.v) { undo.push([m.pend.n, false]); write(m.pend.n, true); }
     return true;
   },
@@ -68,7 +68,7 @@ const Q = {
    * good (the successor is due); any other refusal puts it back and stalls `m` until a commit changes the state. */
   next(m) {
     m.next = Infinity; Q.own = null;
-    const ok = commit(() => { const [source, args] = m.wait.shift(); say(`${m.name} next (${m.wait.length} waiting)`); M(m, source, args, true); }, `${m.name} next`);
+    const ok = Invocation.run(m.wait[0][2], () => commit(() => { const [source, args] = m.wait.shift(); say(`${m.name} next (${m.wait.length} waiting)`); M(m, source, args, true); }, `${m.name} next`));
     if (ok === true) return true;
     const e = refused();
     if (!e) return ok; // the commit poisoned the runner: `forget` ran

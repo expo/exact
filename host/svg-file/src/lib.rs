@@ -9,7 +9,7 @@
 mod css;
 mod lower;
 mod values;
-mod xml;
+pub mod xml;
 
 #[cfg(test)]
 mod text_tests;
@@ -220,7 +220,7 @@ pub fn natural(prefix: &[u8]) -> Option<Natural> {
 /// Parse a document into its ops. With no user languages supplied to this
 /// loader, elements supporting `systemLanguage` fail its condition when present.
 pub fn parse(text: &str) -> Result<Document, Error> {
-    lower::lower(xml::tokenize(text)?)
+    lower::lower(xml::tokenize(text)?.events)
 }
 
 /// A document built in a scratch kernel, ready to resolve at any size.
@@ -419,6 +419,34 @@ mod tests {
         let scene = loaded.scene(10.0, 10.0);
         // The link's rect (filled by the class), the use, the switch's one taken child.
         assert_eq!(scene.items.len(), 3, "{scene:#?}");
+    }
+
+    #[test]
+    fn foreign_elements_with_combining_marks_are_ignored() {
+        let loaded = load("<svg xmlns:m='urn:m'><m:cafe\u{301}></m:cafe\u{301}><rect width='5' height='5'/></svg>").unwrap();
+        assert!(
+            loaded.document.warnings.is_empty(),
+            "{:?}",
+            loaded.document.warnings
+        );
+        assert_eq!(loaded.scene(10.0, 10.0).items.len(), 1);
+    }
+
+    #[test]
+    fn external_hrefs_warn_and_leave_link_contents_and_local_references() {
+        for attr in ["href", "xlink:href"] {
+            let text = format!(
+                "<svg xmlns:xlink='http://www.w3.org/1999/xlink'><defs><rect id='r' width='5' height='5'/></defs><use {attr}='#r'/><use {attr}='https://example.com/x.svg#r'/><a {attr}='https://example.com'><rect width='2' height='2'/></a></svg>"
+            );
+            let loaded = load(&text).unwrap();
+            let warnings = &loaded.document.warnings;
+            assert_eq!(warnings.len(), 2, "{warnings:?}");
+            for (warning, tag) in warnings.iter().zip(["use", "a"]) {
+                assert!(warning.contains(&format!("on `<{tag}>`")), "{warning}");
+                assert!(warning.contains("external reference"), "{warning}");
+            }
+            assert_eq!(loaded.scene(10.0, 10.0).items.len(), 2);
+        }
     }
 
     #[test]

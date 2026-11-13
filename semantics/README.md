@@ -83,7 +83,10 @@ itself never reaches the oracle: its own sources (`exactViewport`, `exactPage`,
 …) and a native module's (LLP 1133.002 D13), which it answers from the module's
 substitute. Each such resource that answered at boot holds that answer as a
 host fact (`fact` in the oracle's text), and each module's source is named
-(`module`).
+(`module`). Neither does a source the program declares (LLP 1162.001), whose
+HTTP request the runner makes itself: each is named (`fetch`), and a call to one
+is outside the semantics. A live `time`'s text (LLP 1126 D6) is the runner's
+presentation too, and the observation leaves it out.
 
 The observation starts with `== <step>` and `outcome ok|refused|poisoned`.
 Before the configuration, each attempted commit prints
