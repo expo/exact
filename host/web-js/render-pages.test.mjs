@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { webCompiler } from './module.mjs';
 import { buildTreeFile } from '../web/serve.mjs';
+import { generationOf } from '../web/generations.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const contract = (call, extra = '') => `routes nav
@@ -72,6 +73,38 @@ export async function answer(name: string, args: any[], store: any): Promise<any
   });
 }, 120000);
 
+// Runs `check` with a fetch against `render.mjs --serve` on `dist`, and stops the server after.
+async function renderServer(dist, check) {
+  const probe = createServer();
+  await new Promise(ok => probe.listen(0, '127.0.0.1', ok));
+  const port = probe.address().port;
+  await new Promise(ok => probe.close(ok));
+  const child = Bun.spawn([process.execPath, 'host/web-js/render.mjs', dist, '--serve', '--port', String(port)], {
+    cwd: root, stdout: 'pipe', stderr: 'pipe',
+  });
+  const errors = new Response(child.stderr).text();
+  let timer;
+  try {
+    const ready = (async () => {
+      let said = '';
+      for await (const bytes of child.stdout) {
+        said += new TextDecoder().decode(bytes);
+        if (said.includes('serving ')) return;
+      }
+      throw new Error(`render server exited: ${await errors}`);
+    })();
+    await Promise.race([ready, new Promise((_, no) => {
+      timer = setTimeout(() => no(new Error('render server did not start')), 30000);
+    })]);
+    clearTimeout(timer);
+    await check((path, headers) => fetch(`http://127.0.0.1:${port}${path}`, { headers }));
+  } finally {
+    clearTimeout(timer);
+    child.kill();
+    await child.exited;
+  }
+}
+
 test('the render server preserves encoded separators before looking up an exact file', async () => {
   await builtPages(contract('productPages()'), `export const grants = '';
 export function answer(name: string, args: any[]): any {
@@ -81,37 +114,16 @@ export function answer(name: string, args: any[]): any {
     expect(status, output).toBe(0);
     mkdirSync(resolve(dist, 'assets'), { recursive: true });
     writeFileSync(resolve(dist, 'assets/100%.txt'), 'an asset with a percent sign');
-    const probe = createServer();
-    await new Promise(ok => probe.listen(0, '127.0.0.1', ok));
-    const port = probe.address().port;
-    await new Promise(ok => probe.close(ok));
-    const child = Bun.spawn([process.execPath, 'host/web-js/render.mjs', dist, '--serve', '--port', String(port)], {
-      cwd: root, stdout: 'pipe', stderr: 'pipe',
-    });
-    const errors = new Response(child.stderr).text();
-    let timer;
-    try {
-      const ready = (async () => {
-        let said = '';
-        for await (const bytes of child.stdout) {
-          said += new TextDecoder().decode(bytes);
-          if (said.includes('serving ')) return;
-        }
-        throw new Error(`render server exited: ${await errors}`);
-      })();
-      await Promise.race([ready, new Promise((_, no) => {
-        timer = setTimeout(() => no(new Error('render server did not start')), 30000);
-      })]);
-      clearTimeout(timer);
+    await renderServer(dist, async get => {
       for (const id of ['plain', 'plain/index.html']) {
-        const response = await fetch(`http://127.0.0.1:${port}/product/${encodeURIComponent(id)}`);
+        const response = await get(`/product/${encodeURIComponent(id)}`);
         expect(response.status).toBe(200);
         const body = await response.text();
         expect(/<title>([^<]*)<\/title>/.exec(body)?.[1]).toBe(`Product: ${id}`);
         const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(body)[1]);
         expect(checkpoint.location).toBe('/product/' + encodeURIComponent(id));
       }
-      const asset = await fetch(`http://127.0.0.1:${port}/assets/100%25.txt`);
+      const asset = await get('/assets/100%25.txt');
       expect(await asset.text()).toBe('an asset with a percent sign');
       expect(buildTreeFile(dist, '/assets/100%25.txt')?.path).toBe(resolve(dist, 'assets/100%.txt'));
       // A directory of assets is named as its path decodes; only a build route's page keeps its escapes.
@@ -121,13 +133,43 @@ export function answer(name: string, args: any[]): any {
       expect(buildTreeFile(dist, '/deck/100%25/')?.path).toBe(resolve(dist, 'deck/100%/index.html'));
       // A path below a file names no file and is routed as any other path naming nothing.
       expect(existsSync(resolve(dist, 'app.js'))).toBe(true);
-      const below = await fetch(`http://127.0.0.1:${port}/app.js/x`), nothing = await fetch(`http://127.0.0.1:${port}/nothing/x`);
+      const below = await get('/app.js/x'), nothing = await get('/nothing/x');
       expect(below.status).toBe(nothing.status);
-    } finally {
-      clearTimeout(timer);
-      child.kill();
-      await child.exited;
-    }
+      // The crawler files the build wrote are served as files.
+      const robots = await get('/robots.txt');
+      expect(robots.headers.get('content-type')).toContain('text/plain');
+      expect(await robots.text()).toBe(readFileSync(resolve(dist, 'robots.txt'), 'utf8'));
+    });
+  });
+}, 120000);
+
+test('routes declared at the crawler files\' paths keep them, built and served as pages', async () => {
+  await builtPages(`routes nav
+  home "/" render=build
+  robots "/robots.txt" render=build
+  sitemap "/sitemap.xml" render=build
+  help "/robots.txt/help" render=request
+
+component App
+  view
+    text \`Authored \${top(nav).name}\`
+`, null, async ({ status, output, dist }) => {
+    expect(status, output).toBe(0);
+    await renderServer(dist, async get => {
+      for (const path of ['/robots.txt', '/sitemap.xml']) {
+        const html = readFileSync(resolve(dist, '.' + path, 'index.html'), 'utf8');
+        expect(html).toContain(`Authored ${path.slice(1, -4)}`);
+        // Compressed or not: a dist file is compressed in the server's static lookup, which a directory must not reach.
+        for (const encoding of ['identity', 'br']) {
+          const response = await get(path, { 'accept-encoding': encoding });
+          expect(response.status, `${path} ${encoding}`).toBe(200);
+          expect(response.headers.get('content-type')).toContain('text/html');
+          expect(await response.text()).toBe(html);
+        }
+        expect(buildTreeFile(dist, path, 'text/html')?.path).toBe(resolve(dist, '.' + path, 'index.html'));
+      }
+      expect(await (await get('/robots.txt/help')).text()).toContain('Authored help');
+    });
   });
 }, 120000);
 
@@ -160,7 +202,8 @@ export function answer(name: string, args: any[]): any {
   });
 }, 120000);
 
-test('the build rejects distinct static locations that choose the same page file', async () => {
+// Two such spellings would choose one page file; `buildPageFiles` refuses that too (crawl.test.mjs).
+test('the build refuses a static location that escapes a character a URL carries as itself', async () => {
   await builtPages(`routes nav
   home "/" render=client
   first "/a" render=build
@@ -171,9 +214,7 @@ component App
     text top(nav).name
 `, null, ({ status, output, dist }) => {
     expect(status, output).not.toBe(0);
-    expect(output).toContain('/a');
-    expect(output).toContain('/%61');
-    expect(output).toContain('same page file');
+    expect(output).toContain('`%61` escapes `a`');
     expect(existsSync(resolve(dist, 'a/index.html'))).toBe(false);
   });
 }, 120000);
@@ -235,4 +276,49 @@ component App
       expect(readFileSync(resolve(dist, 'product/declared page/index.html'), 'utf8')).toContain('>declared page</');
     });
   } finally { api.stop(true); }
+}, 120000);
+
+test('the render server sends a navigation the head of a request page before its data settles, based on its generation', async () => {
+  const source = `routes nav
+  home "/" render=request
+
+component App
+  resource greeting = greeting() as shape string else empty()
+  view
+    main
+      text greeting testId="greeting"
+`;
+  // The data source's answer comes from a server that holds it for 600 ms: a render waits for a fetch.
+  const slow = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Promise(done => setTimeout(() => done(new Response('Hello')), 600)) });
+  await builtPages(source, `export const grants = 'net.fetch http://127.0.0.1:${slow.port}';
+export async function answer(name: string): Promise<any> {
+  return await (await fetch('http://127.0.0.1:${slow.port}/')).text();
+}
+`, async ({ status, output, dist }) => {
+    expect(status, output).toBe(0);
+    // The receipt `web-build` writes, which names the build's generation.
+    writeFileSync(resolve(dist, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', files: [] }));
+    const id = generationOf(dist);
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+    const probe = createServer();
+    await new Promise(ok => probe.listen(0, '127.0.0.1', ok));
+    const port = probe.address().port;
+    await new Promise(ok => probe.close(ok));
+    const child = Bun.spawn([process.execPath, 'host/web-js/render.mjs', dist, '--serve', '--port', String(port)], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    try {
+      for await (const bytes of child.stdout) if (new TextDecoder().decode(bytes).includes('serving ')) break;
+      for (const encoding of ['identity', 'br']) {
+        const response = await fetch(`http://127.0.0.1:${port}/`, { headers: { accept: 'text/html', 'sec-fetch-dest': 'document', 'accept-encoding': encoding } });
+        expect(response.status).toBe(200);
+        const reader = response.body.getReader(), decoder = new TextDecoder();
+        // The first part, before the data source answers: the head, its base the generation's, and no greeting.
+        const first = decoder.decode((await reader.read()).value, { stream: true });
+        expect(first).toContain(`<base href="/.exact/gen/${id}/">`);
+        expect(first).not.toContain('Hello');
+        let page = first;
+        for (let part; !(part = await reader.read()).done;) page += decoder.decode(part.value, { stream: true });
+        expect(/data-testid="greeting"[^>]*>([^<]*)</.exec(page)?.[1]).toBe('Hello');
+      }
+    } finally { child.kill(); await child.exited; }
+  }).finally(() => slow.stop(true));
 }, 120000);

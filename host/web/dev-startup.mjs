@@ -94,6 +94,14 @@ export function startupBuilds() {
       child = null; exit = null;
       return code;
     },
+    /** Run `start(own)`, owning the child it passes to `own` as `run` owns its own. */
+    async owned(start) {
+      if (cancelled) await stopping;
+      const result = await start(next => { child = next; });
+      if (cancelled) await stopping;
+      child = null;
+      return result;
+    },
     handoff(stop) { residentStop = stop; },
   };
 }

@@ -1,6 +1,137 @@
 use crate::{compile, observe, oracle::Oracle, script};
 
 #[test]
+fn state_paths_deliver_nested_fields_and_indices() {
+    let scripts = script::scripted(
+        "paths",
+        include_str!("../../corpus/records/observation-paths.contract"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(scripts.len(), 2);
+    for s in &scripts {
+        assert!(s.delivery.stopped.is_none(), "{:?}", s.delivery.stopped);
+        crate::expectations(s).unwrap();
+    }
+    assert_eq!(scripts[1].delivery.until_met, 6);
+}
+
+#[test]
+fn missing_and_invalid_state_paths_never_match_none() {
+    let source = include_str!("../../corpus/records/observation-paths.contract");
+    let s = script::scripted("paths", source, None).unwrap().remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, _) = observe::run(plan.clone(), Oracle::for_case(&plan, &s.case), &[]);
+    assert_eq!(
+        crate::state_path::value(&plan, &lines, "gateway.matrix.0.1"),
+        Some(observe::number(2.0).as_str())
+    );
+    assert_eq!(
+        crate::state_path::value(&plan, &lines, "gateway.rows.1.absent"),
+        Some(observe::number(9.0).as_str())
+    );
+    assert!(crate::state_path::value(&plan, &lines, "remote.state").is_some());
+    for path in [
+        "unknown",
+        "unknown.state",
+        "gateway.missing",
+        "gateway.rows.2.state",
+        "gateway.rows.999999999999999999999999999999999999999",
+        "gateway.rows.-1",
+        "gateway.rows.+0",
+        "gateway.rows.01",
+        "gateway.rows.length",
+        "gateway.matrix.0.9",
+        "gateway.phase.state.field",
+        "gateway.phase.absent.field",
+        "saved.state",
+        "gateway.",
+        "gateway..phase",
+        "",
+        ".gateway",
+    ] {
+        assert_eq!(
+            crate::state_path::value(&plan, &lines, path),
+            None,
+            "{path}"
+        );
+        let mut missing = s.clone();
+        missing.items = vec![script::Item::Expect(
+            script::Expect::State(
+                path.into(),
+                contract_syntax::StateComparison::Equal,
+                vec!["none".into()],
+            ),
+            Default::default(),
+        )];
+        assert!(
+            crate::expectations_on(&missing, &plan, &lines).is_err(),
+            "{path}"
+        );
+    }
+    for path in [
+        "gateway.missing",
+        "gateway.rows.2.state",
+        "gateway.phase.absent.field",
+        "saved.state",
+    ] {
+        let source = format!("{source}\ntest \"missing wait\"\n  clock until state {path} == null within 10\n  tap \"start\"\n");
+        let s = script::scripted("missing wait", &source, None)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(s.case.events, [script::Event::Land], "{path}");
+        assert_eq!(s.delivery.taken, 0, "{path}");
+        let (_, kind, why) = s.delivery.stopped.unwrap();
+        assert_eq!(kind, "clock until (not met)", "{path}");
+        assert!(why.contains("<not printed>"), "{why}");
+    }
+    let absent = lines
+        .iter()
+        .filter(|l| !l.starts_with("slot gateway "))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        crate::state_path::value(&plan, &absent, "gateway.phase.state"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "async lane: needs Lean (semantics/README.md)"]
+fn state_paths_match_on_runner_and_lean_observations() {
+    let scripts = script::scripted(
+        "paths",
+        include_str!("../../corpus/records/observation-paths.contract"),
+        None,
+    )
+    .unwrap();
+    crate::leanrun::build().unwrap();
+    let cases = scripts.iter().map(|s| s.case.clone()).collect();
+    let outcomes = crate::check(cases, 2, "state-paths").unwrap();
+    for (s, outcome) in scripts.iter().zip(outcomes) {
+        assert!(matches!(outcome.verdict, crate::Verdict::Agree));
+        let plan = compile(&s.case).unwrap();
+        let (runner, lean) = outcome.observations.unwrap();
+        for lines in [runner, lean] {
+            crate::expectations_on(s, &plan, &lines).unwrap();
+            let last = crate::chunks(&lines).last().copied().unwrap();
+            assert_eq!(
+                crate::state_path::value(&plan, last, "held.phase.state"),
+                Some(
+                    observe::quote(if s.delivery.until_met == 0 {
+                        "idle"
+                    } else {
+                        "ready"
+                    })
+                    .as_str()
+                )
+            );
+        }
+    }
+}
+
+#[test]
 fn trace_names_due_work_and_handlers_whose_arguments_refused() {
     let scripts = script::scripted(
         "trace",
@@ -170,7 +301,7 @@ test "type in both fields"
         Oracle::for_case(&plan, &s.case),
         &s.case.events,
     );
-    crate::expectations_on(&s, &lines).unwrap();
+    crate::expectations_on(&s, &plan, &lines).unwrap();
     assert_eq!(
         lines
             .iter()
@@ -225,7 +356,7 @@ fn a_module_read_is_a_host_fact_and_its_source_a_module() {
         Oracle::for_case(&plan, &s.case),
         &s.case.events,
     );
-    crate::expectations_on(&s, &lines).unwrap();
+    crate::expectations_on(&s, &plan, &lines).unwrap();
     let oracle = oracle.unwrap();
     assert_eq!(oracle.host_sources(), ["geolocationStatus"]);
     let text = oracle.text();
@@ -260,11 +391,11 @@ test "bounds"
         Oracle::for_case(&plan, &s.case),
         &s.case.events,
     );
-    crate::expectations_on(&s, &lines).unwrap();
+    crate::expectations_on(&s, &plan, &lines).unwrap();
     let wrong = script::scripted("bounds", &source.replace("n >= -2", "n >= -1"), None)
         .unwrap()
         .remove(0);
-    assert!(crate::expectations_on(&wrong, &lines)
+    assert!(crate::expectations_on(&wrong, &plan, &lines)
         .unwrap_err()
         .contains("does not hold"));
 }
@@ -285,7 +416,7 @@ fn an_unanswered_module_read_is_no_fact() {
         Oracle::for_case(&plan, &s.case),
         &s.case.events,
     );
-    crate::expectations_on(&s, &lines).unwrap();
+    crate::expectations_on(&s, &plan, &lines).unwrap();
     let oracle = oracle.unwrap();
     assert!(oracle.host_sources().is_empty());
     let text = oracle.text();

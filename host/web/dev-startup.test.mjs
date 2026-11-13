@@ -57,7 +57,9 @@ mock.module(${JSON.stringify(resolve(root, 'host/web/dev-startup.mjs'))}, () => 
 }));
 mock.module(${JSON.stringify(resolve(root, 'scripts/rust.mjs'))}, () => ({ ...rust, rustInputs: () => [] }));
 mock.module(${JSON.stringify(resolve(root, 'host/web/serve.mjs'))}, () => ({ ...serve,
-  syncStaticTree: () => false, applyShaderTreeChange: () => {},
+  syncStaticTree: () => false,
+  // The resident checks the served shaders at startup, reaching the reflect tool's build when it is missing.
+  applyShaderTreeChange: (app, target, validate) => { if (process.env.FIXTURE_PHASE === 'reflect') validate(target); },
 }));
 mock.module('node:child_process', () => ({ ...children,
   spawn(command, args, options) {
@@ -69,6 +71,7 @@ mock.module('node:child_process', () => ({ ...children,
     else if (command === 'cargo' && args.includes('exact-js-bake')) kind = 'module-build';
     else if (command.endsWith('/exact-js-bake')) kind = 'module';
     else if (command === 'cargo' && args.includes('exact-web-js')) kind = 'reader';
+    else if (command === 'cargo' && args.includes('exact-gpu-reflect')) kind = 'reflect';
     else if (command === 'cargo' && args.some(a => /-gpu(?:-extra)?$/.test(a))) kind = 'gpu';
     else if (command === 'cargo' && args[0] === 'run') kind = 'producer';
     if (!kind) throw new Error('unexpected tool: ' + command + ' ' + args.join(' '));
@@ -79,6 +82,7 @@ mock.module('node:child_process', () => ({ ...children,
   },
   spawnSync(command, args, options) {
     if (command === 'cargo' && args.includes('exact-js-bake')) return spawnSync(process.execPath, [process.env.FIXTURE_TOOL, 'module-build'], options);
+    if (command === 'cargo' && args.includes('exact-gpu-reflect')) return spawnSync(process.execPath, [process.env.FIXTURE_TOOL, 'reflect'], options);
     if (command !== 'cargo' || (args[0] !== 'metadata' && !args.includes('sources'))) return spawnSync(command, args, options);
     const value = args[0] === 'metadata' ? { packages: [] } : { sources: [], consulted: [], packages: [] };
     return { status: 0, stdout: JSON.stringify(value), stderr: '' };
@@ -95,6 +99,7 @@ const dir = process.env.FIXTURE_DIR, dist = process.env.EXACT_WEB_DIST;
 const kind = process.argv[2];
 appendFileSync(resolve(dir, '.pids'), process.pid + '\\n');
 if (kind === 'module-build' && process.env.FIXTURE_PHASE === 'module') process.exit(0);
+if (kind === 'reflect' && process.env.FIXTURE_PHASE !== 'reflect') process.exit(0);
 if (kind === 'host' && !existsSync(resolve(dir, '.built'))) {
   mkdirSync(dist, { recursive: true });
   writeFileSync(resolve(dist, 'bake.json'), JSON.stringify({ version: 1, graph: { version: 1, sources: {} },
@@ -177,7 +182,7 @@ async function until(pass, what) {
   }
 }
 
-for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer', 'rebuild', 'module-build', 'module', 'mixed', 'reader', 'reader-handoff', 'queued-edit', 'inspect', 'gpu']) {
+for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer', 'rebuild', 'module-build', 'module', 'mixed', 'reader', 'reader-handoff', 'queued-edit', 'inspect', 'gpu', 'reflect']) {
   test(`shutdown on ${signal} during ${phase} owns its descendants and keeps dist`, async () => {
     const dir = mkdtempSync(resolve(root, 'dev-shutdown-')), dist = resolve(dir, 'dist');
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Shutdown', app: { id: 'test.shutdown', name: 'Shutdown' },

@@ -57,10 +57,10 @@ enum RasterVariant {
 /// Metadata is read before allocating pixels. Only the bounded prefix is passed
 /// to ImageIO here; its later internal decoder allocations are not measurable by
 /// our ledger and are not claimed to fit the Exact-owned storage budget.
-struct RasterMetadata: Equatable, Sendable {
+package struct RasterMetadata: Equatable, Sendable {
     static let encodedLimit = 64 * 1024 * 1024
     static let headerLimit = 256 * 1024
-    static let pixelLimit = 64 * 1024 * 1024
+    package static let pixelLimit = 64 * 1024 * 1024
     let sourceWidth: Int
     let sourceHeight: Int
     let orientation: Int

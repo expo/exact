@@ -3,7 +3,7 @@
 //! its workers), with a wake the rendering thread waits on instead of a UI
 //! loop. Dropping it aborts whatever is still in flight.
 pub use exact_executor::pump;
-use exact_executor::{Core, StreamHost, WorkerBudget};
+use exact_executor::{Core, SharedHttpCache, StreamHost, WorkerBudget};
 use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
@@ -14,6 +14,21 @@ const BUDGET: WorkerBudget = if cfg!(any(test, feature = "test-budget")) {
 } else {
     WorkerBudget::Process
 };
+
+thread_local! {
+    static HTTP_CACHE: std::cell::RefCell<Option<SharedHttpCache>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn set_http_cache(cache: SharedHttpCache) {
+    HTTP_CACHE.with(|current| *current.borrow_mut() = Some(cache));
+}
+
+fn http_cache() -> SharedHttpCache {
+    static BUILD: std::sync::OnceLock<SharedHttpCache> = std::sync::OnceLock::new();
+    HTTP_CACHE
+        .with(|current| current.borrow().clone())
+        .unwrap_or_else(|| BUILD.get_or_init(SharedHttpCache::new).clone())
+}
 
 /// The native core with a condition variable for its wake.
 pub struct Executor {
@@ -67,6 +82,7 @@ impl Executor {
             transport,
             BUDGET,
         );
+        core.set_shared_http_cache(http_cache());
         Self { core, wake }
     }
 

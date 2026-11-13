@@ -96,9 +96,9 @@ test('compact reports expose measured stages and preserve unknown evidence', () 
     columns: ['sequence', 'capture', 'generation', 'age_us', 'flags', 'target_offset_us', 'period_us', 'requested_period_us', 'gap_us', 'callback_us',
       'before_gap_us', 'before_callback_us', 'after_offset_us', 'after_gap_us', 'after_callback_us',
       'owner_queued_offset_us', 'owner_began_offset_us', 'owner_finished_offset_us', 'main_landed_offset_us',
-      'apply_began_offset_us', 'apply_finished_offset_us', 'work_target_offset_us', 'operations'],
+      'apply_began_offset_us', 'apply_finished_offset_us', 'work_target_offset_us', 'operations', 'frame_start_offset_us'],
     hitches: [['12', '1', '0', 1000, 17, 8000, 8000, 8000, 24000, 1000, 8000, 500, null, null, null,
-      -10000, -9000, -5000, -3000, -3000, -1000, 0, 40]] };
+      -10000, -9000, -5000, -3000, -3000, -1000, 0, 40, null]] };
   const text = renderFrameHealthReport(report);
   expect(text).toContain('overwritten 7');
   expect(text).toContain('last observed apply ended 1.000 ms before event');
@@ -129,6 +129,12 @@ test('compact reports expose measured stages and preserve unknown evidence', () 
   expect(render('perf', report)).toBe(text);
   expect(() => renderFrameHealthReport({ ...report, hitches: Array(17).fill(report.hitches[0]) })).toThrow();
   expect(() => renderFrameHealthReport({ ...report, hitches: [['bad']] })).toThrow();
+  const late = { ...report, hitches: [['13', '1', '0', 1000, 128, -4000, 0, 0, 0, 0, 0, 0, null, null, null,
+    null, null, null, null, null, null, null, null, -12000]] };
+  expect(renderFrameHealthReport(late)).toContain('frame work target overrun');
+  expect(renderFrameHealthReport(late)).toContain('work 12.000 ms · budget 8.000 ms · finished 4.000 ms past deadline');
+  late.hitches[0][4] |= 64;
+  expect(renderFrameHealthReport(late)).toContain('work unknown · budget unknown · finished unknown past deadline');
 });
 
 test("the screen's report gives each late frame's work against its deadline, and its neighbours' work", () => {

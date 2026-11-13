@@ -515,7 +515,7 @@ impl LayoutTree {
         self.deferred.remove(&node);
         self.walks.remove(&node);
         if let Some(slot) = self.slots.remove(&node) {
-            if let Some(anon) = self.tables.forget(slot) {
+            for anon in self.tables.forget(slot) {
                 self.remove(anon);
             }
             self.flowing.remove(&slot);

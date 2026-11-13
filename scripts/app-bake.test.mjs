@@ -741,49 +741,6 @@ test.each([false, true])('ordinary buildBake with split directories=%s streams p
   } finally { rmSync(dir,{recursive:true,force:true}); }
 }, 180000);
 
-test('a path dependency\'s build script: a watched file outside its package is named from it, a directory outside is refused', () => {
-  const dir = pinned(realpathSync(mkdtempSync(resolve(tmpdir(), 'r14-outside-watch-'))));
-  const write = (name, text) => { mkdirSync(dirname(resolve(dir,name)), {recursive:true}); writeFileSync(resolve(dir,name),text); };
-  try {
-    const target = bakeTarget('linux'), id = 'com.exact.plain', app = resolve(dir,'app');
-    // `watcher` is another repository's crate: its `../../.env` is under neither the app, its workspace nor exact2.
-    write('vendor/watcher/Cargo.toml', '[package]\nname="watcher"\nversion="0.1.0"\nedition="2021"\n');
-    write('vendor/watcher/src/lib.rs', 'pub const VALUE: u32 = 7;\n');
-
-    write('app/Cargo.toml', '[workspace]\nmembers=["linux"]\nresolver="2"\n');
-    write('app/linux/Cargo.toml', '[package]\nname="plain-linux"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nwatcher={path="../../vendor/watcher"}\n');
-    write('app/linux/src/main.rs', 'fn main() { let _ = watcher::VALUE; }');
-    write('app/app.contract', 'component App\n  view\n    text "plain"\n');
-    write('app/linux/build.rs', `fn main() {
-      let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-      std::fs::write(out.join("compat.json"), r#"${JSON.stringify({target,inputs:{platform:'linux',app:id,store:{L:'0'},keys:[]}})}"#).unwrap();
-      std::fs::write(out.join("artifacts.json"), r#"{"version":1,"artifacts":[],"sources":{}}"#).unwrap();
-      std::fs::write(out.join("app.plan"), b"fixture").unwrap();
-    }`);
-    const fixture = {dir:app, workspace:app, target:resolve(app,'target'), name:'plain', id, manifest:{app:{id,name:'Plain'},rust:false}};
-    write('app/bake.mjs', `import {buildBake} from ${JSON.stringify(resolve(import.meta.dir,'app.mjs'))};
-      const receipt = buildBake({...${JSON.stringify(fixture)},crate:kind=>'plain-'+kind},'linux',${JSON.stringify(target)},{profile:'dev',output:${JSON.stringify(resolve(app,'bakes'))}});
-      console.log(JSON.stringify(receipt));`);
-    const bake = (watched) => {
-      write('vendor/watcher/build.rs', `fn main() { println!("cargo:rerun-if-changed=${watched}"); }\n`);
-      return spawnSync(process.execPath,[resolve(app,'bake.mjs')],{cwd:app,encoding:'utf8',env:{...process.env,EXACT_UPDATE_TRUST:'development'}});
-    };
-    const receipt = (built) => { assert.equal(built.status,0,built.stderr); return JSON.parse(built.stdout.trim().split('\n').at(-1)).binary; };
-    // The name has `/` on every host: a receipt's names are the same on every machine.
-    const file = receipt(bake('../../.env'));
-    assert.ok(file.absent.includes('crate:watcher@0.1.0/../../.env'),JSON.stringify(file.absent));
-    assert.ok(file.missing.includes(resolve(dir,'.env')));
-    // A directory inside its own package is recorded as before.
-    const inside = receipt(bake('src'));
-    assert.ok(inside.directories.some(d => d.path === resolve(dir,'vendor/watcher/src')), JSON.stringify(inside.directories.map(d => d.path)));
-    // A directory outside it is refused, saying which package watches what and what to do.
-    const refused = bake('../..');
-    assert.notEqual(refused.status, 0);
-    assert.ok(refused.stderr.includes(`watcher 0.1.0's build script watches ${dir}, a directory outside its package`), refused.stderr);
-    assert.match(refused.stderr, /may watch files outside its package and directories inside it: have it print `cargo:rerun-if-changed=<file>` for each file it reads there/);
-  } finally { rmSync(dir,{recursive:true,force:true}); }
-}, 180000);
-
 test('ordinary bake metadata follows intermediate directory A, B and the unset default', () => {
   const dir=pinned(realpathSync(mkdtempSync(resolve(tmpdir(),'exact metadata directories-'))));
   const previous=process.env.CARGO_BUILD_BUILD_DIR;

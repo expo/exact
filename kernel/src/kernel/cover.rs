@@ -259,22 +259,33 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     // at `bottom: 0` would sit under the tab bar. The bars cover the
     // parent's edges, so an inset from a covered edge starts where the bar
     // ends, as on the web the footer rests above the tablist in flow and a
-    // hand-built screen pins it to the safe area. A percentage inset stays
-    // as written. A subtree in its own block has no covered parent edge.
+    // hand-built screen pins it to the safe area. An authored length that
+    // reads the same edge's inset uses the larger of its resolved value and
+    // the cover (LLP 1123 D3); another length adds the cover. A percentage
+    // inset stays as written. A subtree in its own block has no covered parent edge.
     if s.position == taffy::style::Position::Absolute && !arena.blocks.holds(slot) {
         if let Some(parent) = arena.parent(slot) {
             if matches!(arena.cover(parent), Some(HostCover::Edges(_))) {
-                let [top, right, bottom, left] = added_padding(arena, parent);
-                let past = |inset: &mut taffy::style::LengthPercentageAuto, cover: f32| {
+                let clearance = added_padding(arena, parent);
+                let env = crate::kernel::owner::env_for(arena, slot, &style);
+                let past = |inset: &mut taffy::style::LengthPercentageAuto,
+                            authored: &Dimension,
+                            edge: Edge| {
+                    let cover = clearance[edge as usize];
                     let raw = inset.into_raw();
                     if cover > 0.0 && raw.tag() == taffy::style::CompactLength::LENGTH_TAG {
-                        *inset = taffy::style::LengthPercentageAuto::length(raw.value() + cover);
+                        let value = if credited(authored, edge, &env) {
+                            raw.value().max(cover)
+                        } else {
+                            raw.value() + cover
+                        };
+                        *inset = taffy::style::LengthPercentageAuto::length(value);
                     }
                 };
-                past(&mut s.inset.top, top);
-                past(&mut s.inset.right, right);
-                past(&mut s.inset.bottom, bottom);
-                past(&mut s.inset.left, left);
+                past(&mut s.inset.top, &style.top, Edge::Top);
+                past(&mut s.inset.right, &style.right, Edge::Right);
+                past(&mut s.inset.bottom, &style.bottom, Edge::Bottom);
+                past(&mut s.inset.left, &style.left, Edge::Left);
             }
         }
     }

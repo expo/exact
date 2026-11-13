@@ -1445,7 +1445,8 @@ extension NSWindow.Level {
     /// its pictures are of this window alone (`CGWindowListCreateImage`), with
     /// canvas readbacks composited in place of Metal layers in either occlusion state,
     /// and page visibility is the driver's (`PageFacts.hidden`). A live frame
-    /// observation (`liveFrames`) lifts it while it records.
+    /// observation (`liveFrames`) lifts it while it records, and an iframe
+    /// guest, whose WebKit page is not on that clock, while the session holds one.
     public static let agentBehind = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
 }
 

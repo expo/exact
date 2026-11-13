@@ -18,6 +18,7 @@ component BarInsets
           column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
             header
               text "Inbox" role="heading" aria-level=1
+            box position="absolute" top="var(--exact-safe-area-inset-top)" right=0 width=4 height=4 testId="absolute-probe"
             row flex=1 min-height=0
               column width=290 margin-top="calc(-1 * var(--exact-safe-area-inset-top))" padding-top="var(--exact-safe-area-inset-top)" background-color="-exact-system-orange" testId="sidebar"
                 text "Sidebar" testId="sidebar-first"

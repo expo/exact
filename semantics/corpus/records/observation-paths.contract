@@ -1,0 +1,43 @@
+shape Phase
+  note: string
+  state: string
+  count: number
+  absent: option<number>
+
+shape Gateway
+  phase: Phase
+  rows: Phase[]
+  matrix: number[][]
+
+component App
+  state gateway = Gateway(phase=Phase(note="comma, braces {} [] and \"quote\"", state="idle", count=0, absent=none), rows=[Phase(note="first", state="ready", count=3, absent=none), Phase(note="second", state="done", count=7, absent=some(9))], matrix=[[1, 2], [3]])
+  derive snapshot = gateway
+  derive held = some(gateway)
+  resource remote = read() as shape Phase
+  mutation saved as shape Phase then opened
+  action start
+    send saved = save()
+  action opened
+    gateway = Gateway(gateway, phase=Phase(gateway.phase, state="ready", count=2))
+  view
+    button "Start" testId="start" press=start
+
+test "field expectations"
+  expect state gateway.phase.state == "idle"
+  expect state gateway.phase.note == "comma, braces {} [] and \"quote\""
+  expect state gateway.phase.absent == none
+  expect state held.phase.state == "idle"
+  expect state gateway.rows.1.count >= 7
+  expect state gateway.rows.0.count <= 3
+  expect state gateway.rows.1.absent == 9
+  expect state snapshot.rows.1.state in "ready" "done"
+
+test "field waits after a continuation"
+  tap "start"
+  clock until state gateway.phase.state == "ready" within 100
+  clock until state snapshot.rows.1.count == 7 within 100
+  clock until state gateway.rows.0.absent == null within 100
+  clock until state gateway.phase.count == 2 within 100
+  clock until state held.rows.1.state == "done" within 100
+  clock until state gateway.rows.1.absent == 9 within 100
+  expect state gateway.phase.count == 2

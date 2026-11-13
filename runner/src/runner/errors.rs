@@ -37,9 +37,11 @@ pub enum RunnerError {
         kernel: u64,
     },
     /// The plan belongs to another app (LLP 1023 D5): its header names one identity, this binary's data crate another.
+    /// `fix` says which declaration to change, since hosts print this error as it debug-formats.
     AppMismatch {
         plan: String,
         host: String,
+        fix: String,
     },
     Plan(PlanError),
     NotOneRoot(usize),

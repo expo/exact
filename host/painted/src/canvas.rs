@@ -832,6 +832,10 @@ impl Backend for Recorder {
         self.plane_open(matrix)
     }
 
+    fn supports_planes(&self) -> bool {
+        true
+    }
+
     fn plane_end(&mut self) {
         self.planes.pop();
         self.matrix = None;

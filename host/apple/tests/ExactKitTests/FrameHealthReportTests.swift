@@ -62,6 +62,56 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertNotNil((try JSONSerialization.jsonObject(with: oversized) as? [String: Any])?["error"])
     }
 
+    func testUnchangedLateOwnerWorkReachesTheReportWithoutAnApply() throws {
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        // At this uptime, (start + 0.016) + 0.008 and start + 0.024 convert to different nanoseconds.
+        let start = 2_097_152.00000039, deadline = start + 0.008, landed = start + 0.012
+        health.agentCaptureUntil = start + 60
+        health.updateCapture(at: start)
+        func land(at start: Double, finished: Double? = nil) {
+            let deadline = start + 0.008, finished = finished ?? deadline
+            health.sending(FrameHealth.tick, start: start, deadline: deadline)
+            health.record(arrival: start, target: deadline, period: 0.008, finished: start + 0.001, sent: FrameHealth.tick)
+            if finished > deadline {
+                health.record(arrival: start + 0.008, target: start + 0.016, period: 0.008, finished: start + 0.009, held: true, ran: false)
+            }
+            health.landed(FrameHealth.tick, at: finished)
+        }
+        land(at: start, finished: landed)
+        health.landed(FrameHealth.tick, at: landed + 0.001)
+        land(at: start + 0.016)
+        health.stop()
+        XCTAssertEqual(health.snapshot().worked, 2)
+        XCTAssertEqual(health.snapshot().late, 1)
+        XCTAssertEqual(health.historyStatus().retained, 1)
+        XCTAssertEqual(health.historyStatus().apply_deadlines, 0)
+        let now = start + 0.025
+        let data = FrameHealthReport.encode(FrameHealthReport.snapshot(health: health, session: nil, now: now))
+        XCTAssertLessThanOrEqual(data.count + 1, 4000)
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let rows = try XCTUnwrap(report["hitches"] as? [[Any]])
+        XCTAssertEqual(rows.count, 1)
+        let event = try XCTUnwrap(rows.first)
+        let columns = try XCTUnwrap(report["columns"] as? [String])
+        XCTAssertEqual(event[columns.firstIndex(of: "flags")!] as? UInt64, 128 | 8)
+        let age = (FrameHealth.nanoseconds(now) - FrameHealth.nanoseconds(landed)) / 1000
+        XCTAssertEqual(event[columns.firstIndex(of: "age_us")!] as? UInt64, age)
+        XCTAssertEqual(event[columns.firstIndex(of: "target_offset_us")!] as? Int, Int(((deadline - landed) * 1_000_000).rounded()))
+        let frameStart = try XCTUnwrap(columns.firstIndex(of: "frame_start_offset_us"))
+        XCTAssertEqual(event[frameStart] as? Int, -12_000)
+        XCTAssertTrue(event[columns.firstIndex(of: "apply_began_offset_us")!] is NSNull)
+        XCTAssertTrue(event[columns.firstIndex(of: "main_landed_offset_us")!] is NSNull)
+
+        for index in 2..<22 { land(at: start + Double(index) * 0.016, finished: start + Double(index) * 0.016 + 0.012) }
+        XCTAssertEqual(health.historyStatus().retained, 16)
+        XCTAssertEqual(health.historyStatus().overwritten, 5)
+        let tail = FrameHealthReport.encode(FrameHealthReport.snapshot(health: health, session: nil, now: start + 0.36))
+        XCTAssertLessThanOrEqual(tail.count + 1, 4000)
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: tail) as? [String: Any])
+        XCTAssertFalse((decoded["hitches"] as? [[Any]])?.isEmpty ?? true)
+    }
+
     func testDenseEvidenceFitsFourKBWithoutChangingTimingPrecision() throws {
         let (health, now) = populated()
         defer { health.destroy() }
@@ -141,6 +191,30 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertEqual(limited?["retryAfterMs"] as? Int, 14_000)
         wait(for: [finished], timeout: 5)
         XCTAssertFalse(health.reportInFlight)
+    }
+
+    func testPendingWorkExpiresTheAgentLeaseWithoutAReadOrApply() throws {
+        for hudVisible in [false, true] {
+            let health = FrameHealth(enabled: true)
+            defer { health.destroy() }
+            health.setHUDVisible(hudVisible)
+            _ = health.setAgentCapture("start", duration: 10)
+            let start = health.agentCaptureUntil - 0.010
+            let frameStart = start + 0.001, deadline = start + 0.009, landed = start + 0.013
+            health.sending(FrameHealth.tick, start: frameStart, deadline: deadline)
+            health.record(arrival: frameStart, target: deadline, period: 0.008,
+                          finished: start + 0.002, sent: FrameHealth.tick)
+            health.landed(FrameHealth.tick, at: landed)
+            XCTAssertEqual(health.agentCaptureUntil, 0, "landing expires the lease without another callback or read")
+            XCTAssertEqual(health.captureID != 0, hudVisible, "the card owns capture independently")
+            XCTAssertEqual(health.snapshot().worked, 1)
+            XCTAssertEqual(health.snapshot().late, 1, "capture expiry preserves core counters")
+            XCTAssertEqual(health.historyStatus().active, hudVisible ? 1 : 0)
+            XCTAssertEqual(health.historyStatus().retained, hudVisible ? 1 : 0)
+            XCTAssertEqual(health.historyStatus().apply_deadlines, 0)
+            let report = FrameHealthReport.snapshot(health: health, session: nil, now: landed)
+            XCTAssertEqual((report["hitches"] as? [[Any]])?.count, hudVisible ? 1 : 0)
+        }
     }
 
     func testAsynchronousTickCarriesActualOwnerAndApplyBoundaries() throws {

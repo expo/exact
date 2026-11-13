@@ -1017,7 +1017,7 @@ export function renderFrameHealthReport(report) {
   const expected = screen ? SCREEN_COLUMNS : ['sequence', 'capture', 'generation', 'age_us', 'flags', 'target_offset_us', 'period_us', 'requested_period_us', 'gap_us', 'callback_us',
     'before_gap_us', 'before_callback_us', 'after_offset_us', 'after_gap_us', 'after_callback_us',
     'owner_queued_offset_us', 'owner_began_offset_us', 'owner_finished_offset_us', 'main_landed_offset_us',
-    'apply_began_offset_us', 'apply_finished_offset_us', 'work_target_offset_us', 'operations'];
+    'apply_began_offset_us', 'apply_finished_offset_us', 'work_target_offset_us', 'operations', 'frame_start_offset_us'];
   if (!Array.isArray(columns) || columns.length !== expected.length || !Array.isArray(hitches) || hitches.length > 16 ||
       Buffer.byteLength(JSON.stringify(report), 'utf8') > 4000 || new Set(columns).size !== columns.length) {
     throw new Error('Frame health report has an invalid structure or exceeds 4 KB. Export it again from Exact.');
@@ -1052,7 +1052,8 @@ export function renderFrameHealthReport(report) {
     const bit = number => Math.floor(event.flags / 2 ** number) % 2 === 1;
     const workload = bit(23) ? ['motion', 'spatial', 'canvas', 'frame tasks', 'fill pending', 'tick pending', 'hatch frames'].filter((_, index) => bit(index + 16)).join(', ') || 'none at observation' : 'unknown';
     const thermal = ['nominal', 'fair', 'serious', 'critical'][Math.floor(event.flags / 2 ** 32) % 4];
-    const reasons = [event.flags & 1 ? 'callback gap' : null, event.flags & 2 ? 'callback target overrun' : null, event.flags & 4 ? 'tick apply target overrun' : null].filter(Boolean);
+    const reasons = [event.flags & 1 ? 'callback gap' : null, event.flags & 2 ? 'callback target overrun' : null,
+      event.flags & 4 ? 'tick apply target overrun' : null, event.flags & 128 ? 'frame work target overrun' : null].filter(Boolean);
     if (screen) {
       const next = event.flags & 8 ? `next update's effective start ${ms(event.after_offset_us)} after this one's, work ${ms(event.after_callback_us)}` : 'next update unseen';
       const rest = event.exact_us == null || event.card_us == null ? null : Math.max(0, event.callback_us - event.exact_us - event.card_us);
@@ -1060,6 +1061,11 @@ export function renderFrameHealthReport(report) {
         `  work ${ms(event.callback_us)} · deadline ${ms(Math.abs(event.target_offset_us))} ${event.target_offset_us < 0 ? 'before' : 'after'} its work's effective start, the commit less its work · previous update's work ${ms(event.before_callback_us || null)} · ${next}`,
         `  of its work: Exact's host phases ${ms(event.exact_us)} · the card's ${ms(event.card_us)} · the rest ${ms(rest)} · nodes laid out ${event.layouts ?? 'unknown'} · the main thread also waited ${ms(event.waited_us)} in the update`,
         `  workload ${workload} · asked by ${SCREEN_ASKERS.filter((_, index) => bit(index + 40)).join(', ') || 'none of Exact\'s frame clock (UIKit or the system)'} · thermal ${thermal} · low power ${bit(34)}${bit(36) ? ' · card dragged' : ''}`);
+      continue;
+    }
+    if (event.flags & 128) {
+      out.push(`#${event.sequence} / capture ${event.capture} / generation ${event.generation} · ${ms(event.age_us)} ago · ${reasons.join(', ')}`,
+        `  work ${ms(clamped || event.frame_start_offset_us == null ? null : -event.frame_start_offset_us)} · budget ${ms(elapsed('target_offset_us', 'frame_start_offset_us'))} · finished ${ms(clamped || event.target_offset_us == null ? null : -event.target_offset_us)} past deadline`);
       continue;
     }
     out.push(`#${event.sequence} / capture ${event.capture} / generation ${event.generation} · ${ms(event.age_us)} ago · ${reasons.join(', ') || 'timing event'}`,

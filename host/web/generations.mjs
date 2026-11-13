@@ -28,13 +28,19 @@ const generationsOf = (dist) => `${dist}.gen`, leasesOf = (dist) => `${dist}.lea
  * another is never touched. */
 export function foreignBeside(dist) {
   const receipt = (dir) => realDirectory(dir) && realFile(resolve(dir, '.exact-build.json'));
-  const entries = (dir, each) => realDirectory(dir) && readdirSync(dir).every((name) => each(name, resolve(dir, name)));
+  // A drive releases its lease, and the emptied directory, without the lock: an entry gone meanwhile was a lease.
+  const gone = (path) => { try { lstatSync(path); return false; } catch (e) { return e.code === 'ENOENT'; } };
+  const entries = (dir, each) => {
+    let names;
+    try { names = realDirectory(dir) ? readdirSync(dir) : null; } catch (e) { return e.code === 'ENOENT'; }
+    return names ? names.every((name) => each(name, resolve(dir, name))) : gone(dir);
+  };
   const lines = (file, form) => realFile(file) && readFileSync(file, 'utf8').split('\n').every((line) => line === '' || form.test(line));
   const owned = {
     previous: [receipt, 'a web build (its .exact-build.json)'],
     gen: [(dir) => entries(dir, (name, at) => GENERATION.test(name) && receipt(at)), 'builds kept by generation'],
     'gen.reaped': [(file) => lines(file, GENERATION), 'the generations reaped'],
-    leases: [(dir) => entries(dir, (name, at) => GENERATION.test(name) && entries(at, (lease, file) => /^\d+-\d+$/.test(lease) && realFile(file))), 'leases on kept builds'],
+    leases: [(dir) => entries(dir, (name, at) => GENERATION.test(name) && entries(at, (lease, file) => /^\d+-\d+$/.test(lease) && (realFile(file) || gone(file)))), 'leases on kept builds'],
     lock: [(file) => lines(file, /^\d+$/), 'a build\'s lock'],
   };
   for (const name of BESIDE) {
@@ -137,13 +143,22 @@ const bytesIn = (dir) => {
  * cap leased generations alone exceed is said once and kept. */
 let overSaid = false;
 export function reapGenerations(dist, keep = KEEP, now = Date.now()) {
+  const refuseForeign = () => { const foreign = foreignBeside(dist); if (foreign) throw new Error(foreign); };
+  refuseForeign();
   let names = [];
   try { names = readdirSync(generationsOf(dist)); } catch { return []; }
   const leased = leasedGenerations(dist);
   const kept = names.filter((n) => GENERATION.test(n) && realDirectory(resolve(generationsOf(dist), n)))
     .map((id) => ({ id, at: statSync(resolve(generationsOf(dist), id)).mtimeMs })).sort((a, b) => b.at - a.at);
-  const reaped = [], gone = (g) => { rmSync(resolve(generationsOf(dist), g.id), { recursive: true, force: true }); reaped.push(g.id); };
-  const told = () => { if (reaped.length) writeFileSync(reapedOf(dist), [...[...reapedIds(dist)].filter((id) => !reaped.includes(id)), ...reaped].slice(-256).join('\n') + '\n'); };
+  const reaped = [];
+  const gone = (g) => {
+    refuseForeign();
+    rmSync(resolve(generationsOf(dist), g.id), { recursive: true, force: true });
+    reaped.push(g.id);
+    // A later ownership check can abort the pass; completed deletions must still answer 410.
+    const ids = [...reapedIds(dist)].filter((id) => id !== g.id);
+    writeFileSync(reapedOf(dist), [...ids, g.id].slice(-256).join('\n') + '\n');
+  };
   const left = [];
   for (const [i, g] of kept.entries()) {
     if (leased.has(g.id) || i < keep.newest || now - g.at < keep.ageMs) left.push(g); else gone(g);
@@ -156,9 +171,6 @@ export function reapGenerations(dist, keep = KEEP, now = Date.now()) {
     gone(g); total -= g.bytes;
   }
   if (total > keep.bytes && !overSaid) { overSaid = true; console.log(`${generationsOf(dist)}: leased builds alone hold ${Math.round(total / 2 ** 20)} MiB, past the ${Math.round(keep.bytes / 2 ** 20)} MiB cap; kept while their drives run`); }
-  // Anything else there (a half-moved tree, a stray name) is not a generation.
-  for (const n of names) if (!GENERATION.test(n)) rmSync(resolve(generationsOf(dist), n), { recursive: true, force: true });
-  told();
   return reaped;
 }
 

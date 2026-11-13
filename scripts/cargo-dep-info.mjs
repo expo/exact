@@ -14,61 +14,147 @@ export function packageTests(dir) {
   return !existsSync(resolve(dir, 'app.json')) && existsSync(resolve(dir, 'package.json')) ? resolve(dir, 'test') : null;
 }
 
-/** A directory watch omits package tests; a separately named input is still read. */
-export function directoryInputNames(dir) {
+/** The package an explicit watch reads: the watched directory when it is one, else the installed
+ * package (`node_modules/<name>` or `node_modules/@scope/<name>`) that holds it. */
+function watchedPackage(path) {
+  path = resolve(path);
+  if (existsSync(resolve(path, 'package.json')) || existsSync(resolve(path, 'Cargo.toml'))) return path;
+  const parts = path.split(sep), at = parts.lastIndexOf('node_modules');
+  if (at < 0) return null;
+  const root = parts.slice(0, at + (parts[at + 1]?.startsWith('@') ? 3 : 2)).join(sep);
+  return existsSync(resolve(root, 'package.json')) ? root : null;
+}
+
+/** Explicit package watches keep installed sources; incidental tool trees and actual outputs stay excluded. */
+export function watchOutput(outputs = [], inputs = []) {
+  const roots = [...new Set(outputs.filter(Boolean).map(path => outputPath(resolve(path))))];
+  const packages = [...new Set(inputs.map(watchedPackage).filter(Boolean))]
+    .map(path => ({path, real:outputPath(path)})).sort((a, b) => b.path.length - a.path.length);
+  const toolDirectory = name => /^(target|node_modules|\.git|\.exact|\.gradle|\.build)$/.test(name);
+  const appOutput = (path, directory) => {
+    const name = basename(path);
+    return ((directory && /^(dist|web-dist|dist-windows|artifacts)$/.test(name))
+      || beside(name) || beside(name, 'web-dist') || name === 'app.contract.d.ts')
+      && (existsSync(resolve(dirname(path), 'app.json')) || existsSync(resolve(dirname(path), 'app.contract')));
+  };
+  return (path, directory) => {
+    const name = basename(path);
+    if ((directory && toolDirectory(name)) || name === '.git' || name.startsWith('.exact-js-bake-')
+      || appOutput(path, directory)) return true;
+    let real; try { real = outputPath(path); } catch { real = resolve(path); }
+    const source = packages.find(root => under(root.path, resolve(path)) && under(root.real, real))?.real;
+    // Installed packages keep their node_modules ancestors; tool directories
+    // inside the package and aliases into other tool outputs remain excluded.
+    for (let at = real, isDir = directory; dirname(at) !== at && !under(at, resolve(path)); at = dirname(at), isDir = true) {
+      const installed = basename(at) === 'node_modules' && source && under(at, source);
+      if ((isDir && toolDirectory(basename(at)) && !installed) || appOutput(at, isDir)) return true;
+    }
+    return (directory && toolDirectory(basename(real))) || appOutput(real, directory) || roots.some(root => under(root, real));
+  };
+}
+
+/** A directory watch omits outputs and package tests; a separately named file remains an input. */
+export function directoryInputNames(dir, skip = watchOutput()) {
   const tests = packageTests(dir);
   return readdirSync(dir).sort().filter(name => {
-    if (resolve(dir, name) !== tests) return true;
-    return !statSync(tests).isDirectory();
+    const path = resolve(dir, name);
+    let directory = false; try { directory = statSync(path).isDirectory(); } catch { /* dangling link */ }
+    return !(directory && path === tests) && !skip(path, directory);
   });
 }
 
 const inputIdentity = info => [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs];
 
-/** File identity detects replacement at an old mtime; directory identity would include ignored test edits. */
-export function directoryInputSnapshot(path) {
+/** File identity detects replacement at an old mtime; directory identity would include ignored output edits. */
+export function directoryInputSnapshot(path, skip = () => false) {
+  let link;
+  try { if (lstatSync(path).isSymbolicLink()) link = readlinkSync(path); } catch { /* unavailable */ }
   try {
-    const entries = readdirSync(path).sort().map(name => {
+    const entries = directoryInputNames(path, skip).map(name => {
+      const child = resolve(path, name);
+      let target;
+      try { if (lstatSync(child).isSymbolicLink()) target = readlinkSync(child); } catch { /* unavailable */ }
+      const linked = target === undefined ? {} : {link:target};
       try {
-        const info = statSync(resolve(path, name)), directory = info.isDirectory();
-        return {name, directory, ...(!directory ? {identity:inputIdentity(info)} : {})};
-      } catch (error) { return {name, directory:false, error:error.code}; }
+        const info = statSync(child), directory = info.isDirectory();
+        return {name, ...linked, directory, ...(!directory ? {identity:inputIdentity(info)} : {})};
+      } catch (error) { return {name, ...linked, directory:false, error:error.code}; }
     });
-    return {path, entries};
+    return {path, ...(link === undefined ? {} : {link}), entries};
   } catch (error) {
     if (!['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error;
     let identity = null; try { identity = inputIdentity(statSync(path)); } catch { /* unavailable */ }
-    return {path, entries:null, error:error.code, identity};
+    return {path, ...(link === undefined ? {} : {link}), entries:null, error:error.code, identity};
   }
 }
 
-/** Entry types filter removed tests; file identities and unreadable states preserve production changes. */
-export function packageDirectories(paths) {
-  const directories = new Map(), ancestors = new Set();
-  const visit = (path, tests) => {
-    let info, real;
-    try { info = statSync(path); } catch { return; }
-    // realpath fails on a directory without search permission; its snapshot then has no entries to descend into.
-    try { real = realpathSync(path); } catch { real = path; }
-    if (!info.isDirectory() || ancestors.has(real) || directories.has(path)) return;
-    const snapshot = directoryInputSnapshot(path);
-    directories.set(path, snapshot);
+/** The receipt and drive walk the same filtered entries and record links before stopping cycles. */
+export function* watchedTree(paths, {outputs = [], skip = () => false} = {}) {
+  const ancestors = new Set();
+  function* visit(path, excluded, top = false) {
+    let info, link;
+    try {
+      info = lstatSync(path);
+      if (info.isSymbolicLink()) { link = readlinkSync(path); info = statSync(path); }
+    } catch (error) { yield {path, link, error}; return; }
+    if ((!top || info.isDirectory()) && excluded(path, info.isDirectory())) return;
+    if (!info.isDirectory()) { yield {path, info, link}; return; }
+    let real; try { real = realpathSync(path); } catch { real = path; }
+    if (ancestors.has(real)) { yield {path, info, link, cycle:true}; return; }
+    const snapshot = directoryInputSnapshot(path, excluded);
+    yield {path, info, link, snapshot};
     ancestors.add(real);
-    for (const {name, directory} of snapshot.entries ?? []) {
-      const child = resolve(path, name);
-      if (directory && !/^(target|node_modules|\..*)$/.test(name) && child !== tests) visit(child, tests);
-    }
-    ancestors.delete(real);
-  };
-  for (const path of paths) { const tests = packageTests(path); if (tests) visit(resolve(path), tests); }
+    try { for (const entry of snapshot.entries ?? []) yield* visit(resolve(path, entry.name), excluded); }
+    finally { ancestors.delete(real); }
+  }
+  for (const path of paths) {
+    const output = watchOutput(outputs, [path]);
+    yield* visit(resolve(path), (path, directory) => output(path, directory) || skip(path, directory), true);
+  }
+}
+
+/** Inventories keep membership and link targets even when timestamps precede the build. */
+export function packageDirectories(paths, outputs = []) {
+  const directories = new Map();
+  for (const {snapshot} of watchedTree(paths, {outputs})) if (snapshot) directories.set(snapshot.path, snapshot);
+  // A watched file's `ENOTDIR` snapshot: a directory put in its place at an old mtime still differs.
+  for (const path of paths.map(path => resolve(path)).filter(path => !directories.has(path))) {
+    const snapshot = directoryInputSnapshot(path);
+    if (snapshot.error === 'ENOTDIR') directories.set(path, snapshot);
+  }
   return [...directories.values()];
+}
+
+/** Capture compiler inputs by bytes, directory membership and the targets written in links. */
+export function buildInputCollector({outputs, nameOf, hashes, replaced}) {
+  const inputs = new Map(), absent = new Map(), directories = new Map(), links = new Map();
+  const add = (path, optional = false, declarer = null) => {
+    for (const node of watchedTree([path], {outputs})) {
+      const {path:input, info, link, snapshot, error} = node;
+      if (replaced.has(input)) continue;
+      const name = nameOf(input, declarer);
+      if (link !== undefined) links.set(name, {name, path:input, target:link});
+      if (error) {
+        if (error.code === 'ELOOP' && link !== undefined) continue;
+        if (['ENOENT', 'ENOTDIR'].includes(error.code) && (optional || link !== undefined)) { absent.set(name, input); continue; }
+        throw new Error(`stale compiler dependency names missing or unreadable input ${input}; rebuild that Cargo unit`, {cause:error});
+      }
+      if (snapshot) {
+        if (!snapshot.entries) throw new Error(`unreadable compiler input ${input}`);
+        directories.set(name, {name, path:input, names:snapshot.entries.map(entry => entry.name)});
+      } else if (info.isFile() && inputs.get(name)?.path !== input) inputs.set(name, {name, path:input, sha256:hashes.of(input, info)});
+      else if (!node.cycle && !info.isFile()) throw new Error(`unsupported compiler input ${input}`);
+    }
+  };
+  return {inputs, absent, directories, links, add};
 }
 
 function outputPath(path) {
   try { return realpathSync(path); }
   catch (error) {
     if (!['ENOENT', 'ENOTDIR'].includes(error.code) || dirname(path) === path) throw error;
-    return resolve(outputPath(dirname(path)), basename(path));
+    let link; try { link = readlinkSync(path); } catch { /* not a link */ }
+    return link === undefined ? resolve(outputPath(dirname(path)), basename(path)) : outputPath(resolve(dirname(path), link));
   }
 }
 
@@ -81,7 +167,7 @@ export function watchedDigest(paths, outputs, { inventory = false, since = Infin
   let stable = true;
   const changed = info => { if (info.ctimeMs >= since) stable = false; };
   const row = (...values) => hash.update(JSON.stringify(values) + '\n');
-  const visit = (path, top = false, atRoot = false) => {
+  const visit = (path, top = false, atRoot = false, output = watchOutput(outputs, [path])) => {
     let info, link;
     try {
       info = lstatSync(path);
@@ -97,7 +183,7 @@ export function watchedDigest(paths, outputs, { inventory = false, since = Infin
       if (link) changed(link);
       if (info.isDirectory()) {
         if (ancestors.has(real)) { row(path, 'cycle'); return; }
-        const names = readdirSync(path).sort();
+        const names = inventory ? readdirSync(path).sort() : directoryInputNames(path, output);
         if (!inventory) row(path, 'directory', names);
         ancestors.add(real);
         try {
@@ -106,7 +192,7 @@ export function watchedDigest(paths, outputs, { inventory = false, since = Infin
             if (inventory && (['.git', 'node_modules', 'target', 'dist'].includes(name)
               || name.startsWith('.exact-js-bake-') || name.endsWith('.test.contract')
               || (top && (name === 'dist-windows' || beside(name) || name === 'app.contract.d.ts')))) continue;
-            visit(resolve(path, name), false, top);
+            visit(resolve(path, name), false, top, output);
           }
         }
         finally { ancestors.delete(real); }
@@ -197,15 +283,16 @@ export function inputHashes(app, env) {
   };
 }
 
-/** Products consumed by a later build step, captured before that step reads them. */
-export function inputProducts(paths, root) {
+/** Products consumed by a later build step, captured before that step reads them. Their directories'
+ * inventories omit `outputs` and tool trees, as the freshness walk over them does. */
+export function inputProducts(paths, root, outputs = []) {
   const products = [...new Set(paths)].filter(existsSync).map(path => {
     const bytes = readFileSync(path);
     return {path, bytes:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex'), input:true};
   });
-  const directories = new Map();
+  const directories = new Map(), output = watchOutput(outputs, [root]);
   for (const {path} of products) for (let dir = dirname(path); dir !== root && under(root, dir); dir = dirname(dir)) {
-    if (!directories.has(dir)) directories.set(dir, directoryInputSnapshot(dir));
+    if (!directories.has(dir)) directories.set(dir, directoryInputSnapshot(dir, output));
   }
   return {products, watchedDirectories:[...directories.values()]};
 }

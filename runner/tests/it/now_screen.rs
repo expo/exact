@@ -1155,9 +1155,16 @@ fn app_identity_gate() {
         Default::default(),
         "/",
     ) {
-        Err(RunnerError::AppMismatch { plan, host }) => {
+        Err(RunnerError::AppMismatch { plan, host, fix }) => {
             assert_eq!(plan, "com.exact.other");
             assert_eq!(host, "com.exact.mine");
+            // The refusal names both causes: the data source's declaration, and a plan from elsewhere.
+            assert!(
+                fix.contains("`fn app_id`")
+                    && fix.contains("must say \"com.exact.other\"")
+                    && fix.contains("the plan is the wrong one"),
+                "{fix}"
+            );
         }
         Err(other) => panic!("expected AppMismatch, got {other:?}"),
         Ok(_) => panic!("expected AppMismatch, got a boot"),

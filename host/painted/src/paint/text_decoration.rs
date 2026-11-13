@@ -63,21 +63,20 @@ impl Decorations {
 
     /// Each declaring box's whole decoration in one mask, so a blur has no
     /// seam where a descendant overrides the shadow. Ordered by the box's first
-    /// run, ancestors before descendants.
+    /// run, ancestors before descendants. A Markdown span is a box of its own,
+    /// beside the other spans of its text.
     pub(super) fn shadows(&self) -> Vec<DecorationShadow<'_>> {
         let mut shadows: Vec<DecorationShadow<'_>> = Vec::new();
         for d in &self.0 {
             let Some(shadow) = d.paint.shadow else {
                 continue;
             };
-            match shadows
-                .iter_mut()
-                .find(|s| s.mask.0[0].paint.source == d.paint.source && s.shadow == shadow)
-            {
-                Some(s) => {
-                    s.first_run = s.first_run.min(d.first_run);
-                    s.mask.0.push(d);
-                }
+            match shadows.iter_mut().find(|s| {
+                s.mask.0[0].paint.source == d.paint.source
+                    && s.first_run == d.first_run
+                    && s.shadow == shadow
+            }) {
+                Some(s) => s.mask.0.push(d),
                 None => shadows.push(DecorationShadow {
                     first_run: d.first_run,
                     shadow,
@@ -186,6 +185,21 @@ impl Painter {
             self.decoration_warning = true;
             self.notes.push("CSS text-decoration: Linux uses solid font-size-based line metrics; underline text-decoration-skip-ink:auto is not implemented (LLP 1001)".into());
         }
+        // A Markdown piece's lines are its span's, as an element's are: the
+        // runs on either side of it with the same lines and link.
+        let runs = paragraph.runs();
+        let lines_of = |i: usize| (runs[i].mark & (UNDERLINE | STRIKE), runs[i].href.as_str());
+        let mut spans: Vec<(usize, usize)> = (0..runs.len()).map(|i| (i, i)).collect();
+        for i in 1..runs.len() {
+            if lines_of(i) == lines_of(i - 1) {
+                spans[i].0 = spans[i - 1].0;
+            }
+        }
+        for i in (1..runs.len()).rev() {
+            if lines_of(i - 1) == lines_of(i) {
+                spans[i - 1].1 = spans[i].1;
+            }
+        }
         let mut lines = Vec::new();
         for (glyph, baseline, paint) in paragraph.paint_glyphs(palette) {
             if !super::paints(kernel, paint.source, reveal) {
@@ -211,7 +225,7 @@ impl Painter {
                             .node(paint.source)
                             .and_then(|node| self.text_shadow(&node, paint.color)),
                     },
-                    (glyph.run(), glyph.run()),
+                    spans[glyph.run()],
                 )
             });
             let thickness = (glyph.font_size / 16.0).max(1.0);

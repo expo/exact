@@ -4,7 +4,7 @@
 // still finds nothing, and a file that exists is still that file.
 import {afterAll, afterEach, beforeAll, describe, test, expect, spyOn, mock} from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
-import {mkdirSync, mkdtempSync, rmSync, readFileSync, renameSync, writeFileSync, symlinkSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, rmSync, readFileSync, realpathSync, renameSync, writeFileSync, symlinkSync} from 'node:fs';
 import {createServer} from 'node:net';
 import {createServer as httpServer} from 'node:http';
 import * as filesystem from '../../scripts/filesystem.mjs';
@@ -192,6 +192,43 @@ test('a build tree answers a miss with 404 and its 404.html, or a page with the 
     if (server) { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
     rmSync(dist, {recursive: true, force: true});
   }
+});
+
+// A built page is its route's answer whatever the request accepts. Its file keeps an escaped separator, and a lookup
+// finds it by either case of the escape's hex digits.
+test.each(['', '*/*', 'application/json', 'text/html'])('built pages with encoded separators or a leading dot serve for Accept: %s', async accept => {
+  const dist = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-built-segment-')));
+  try {
+    writeFileSync(resolve(dist, 'routes.json'), JSON.stringify({routes: [{pattern: '/post/:id', render: 'build'}]}));
+    for (const [location, file, ...spellings] of [['/post/a%2Fb', 'post/a%2Fb/index.html', '/post/a%2fb'], ['/post/.private', 'post/.private/index.html', '/post/%2Eprivate']]) {
+      const path = resolve(dist, file);
+      mkdirSync(resolve(path, '..'), {recursive: true});
+      writeFileSync(path, `<title>${location}</title>`);
+      for (const read of [buildTreeFile, buildTreeFileAsync]) for (const spelling of [location, ...spellings]) {
+        expect((await read(dist, spelling, accept))?.path, spelling).toBe(path);
+      }
+    }
+  } finally { rmSync(dist, {recursive: true, force: true}); }
+});
+
+test('a build tree refuses paths whose dot segments resolve to another built page', async () => {
+  const dist = mkdtempSync(resolve(tmpdir(), 'exact-built-traversal-'));
+  try {
+    writeFileSync(resolve(dist, 'routes.json'), JSON.stringify({routes: [{pattern: '/', render: 'build'}, {pattern: '/secret', render: 'build'}]}));
+    writeFileSync(resolve(dist, 'index.html'), '<title>home</title>');
+    mkdirSync(resolve(dist, 'secret'));
+    writeFileSync(resolve(dist, 'secret/index.html'), '<title>secret</title>');
+    writeFileSync(resolve(dist, '404.html'), '<title>missing</title>');
+    for (const read of [buildTreeFile, buildTreeFileAsync]) {
+      expect((await read(dist, '/secret', 'text/html'))?.route).toBe('/secret/index.html');
+      for (const path of ['/%2e%2e/secret', '/a/b/../../secret', '/.private/../secret', '/a%5Cb/../secret', '/%00/../secret', '/a/.. ']) {
+        for (const miss of [false, true]) expect(await read(dist, path, 'text/html', {miss}), path).toBeNull();
+      }
+      for (const path of ['/.private', '/post/.private', '/post/%2Eprivate']) {
+        expect(await read(dist, path, '*/*', {miss: true}), path).toBeNull();
+      }
+    }
+  } finally { rmSync(dist, {recursive: true, force: true}); }
 });
 
 test('the shared pattern matcher retains the route corpus semantics without notfound', () => {
