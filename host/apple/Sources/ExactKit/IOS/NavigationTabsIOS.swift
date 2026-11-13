@@ -425,9 +425,12 @@ extension NavigationHost {
         return tabController?.tabBar.items?.contains(where: { $0 === item }) == true ? item : nil
     }
 
-    /// The tab a route belongs to, by its tabpanel.
+    /// The tab a route belongs to, by the tabpanel that holds its node. A node
+    /// that has left the tree while UIKit still holds its controller, such as
+    /// a root More holds that the app replaced or removed, takes the tabpanel
+    /// it was last projected from, if that is still a tab.
     func tabIndex(ofRoute route: RouteController) -> Int? {
-        logicalParent(of: route.node).flatMap { tabPanels.firstIndex(of: $0.id) }
+        (logicalParent(of: route.node)?.id ?? route.panel).flatMap { tabPanels.firstIndex(of: $0) }
     }
 
     /// More shows a controller. A tab UIKit selected that the router is not

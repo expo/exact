@@ -885,9 +885,27 @@ final class NavigationMoreIOSTests: XCTestCase {
         session.presenter.press(try node(session, "tab-five").id)
         waitFor("the router on Five") { navigation.routerTab == 4 && !navigation.inTransition }
         waitForMainQueue()
-        XCTAssertTrue(more.topViewController === full, "More keeps Full: More holds \(more.stackRoutes.map { ($0 as? RouteController)?.key ?? "?" })")
+        XCTAssertTrue(more.topViewController === full, "More keeps Full: More holds \(routeKeys(more))")
         XCTAssertEqual(navigation.selectedKey, full.key, "and the router stays on it")
         XCTAssertNil(navigation.restDifference, "UIKit and the router agree")
+    }
+
+    /// The app opens Five at another URL, a new root route, while More holds
+    /// Five's root: Exact writes the new root into More, where UIKit holds
+    /// Five's routes, not into Five's own controller.
+    func testATabsNewRootIsWrittenIntoMoreWhileMoreHoldsTheOldOne() throws {
+        let (session, tabs, more) = try moreFixture("more-root-renewed")
+        let navigation = session.presenter.navigation
+        let five = try XCTUnwrap(tabs.tabControllers?[4] as? UINavigationController)
+        tapTab(tabs, of: tabs.moreNavigationController)
+        pickRow(tabs, 4)
+        waitFor("the router follows Five, whose root More holds") { navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil }
+        let old = try XCTUnwrap(more.stackRoutes.first as? RouteController)
+        try tapNode(session, "renew")
+        waitFor("a new root for Five") { navigation.selectedKey != old.key && !navigation.inTransition }
+        waitForMainQueue()
+        XCTAssertEqual(routeKeys(more), [navigation.selectedKey ?? ""], "More shows the new root")
+        XCTAssertEqual(routeKeys(five), [], "Five's own controller holds none of its routes")
     }
 
     /// An app that sets More's delegate itself takes More's calls from Exact:
@@ -1129,6 +1147,11 @@ final class NavigationMoreIOSTests: XCTestCase {
 
     private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
+    }
+
+    /// The keys of the routes `stack` holds, `?` for a controller that is no route.
+    private func routeKeys(_ stack: UIViewController) -> [String] {
+        stack.stackRoutes.map { ($0 as? RouteController)?.key ?? "?" }
     }
 
     /// How many times the session's journal holds `line`.
