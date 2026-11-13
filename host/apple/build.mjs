@@ -714,6 +714,10 @@ async function main(args, lockHeld = false) {
   // A development archive (--development) ships no dSYM, so SwiftPM writes no debug info for dsymutil to gather (~5 s).
   const swiftArgs = ['build', '-c', swiftWhole ? 'release' : 'debug', '--scratch-path', swiftBuildRoot, ...(swiftWhole ? [] : ['-Xswiftc', '-O', ...appleDeadStrip]), ...(args.includes('--development') ? ['-debug-info-format', 'none'] : []),
     ...(production && optimize === 'size' ? ['-Xswiftc', '-Osize', '-Xswiftc', '-Xfrontend', '-Xswiftc', '-internalize-at-link'] : [])], executableLink = [];
+  // Every product link dead-strips, as Xcode does by default (DEAD_CODE_STRIPPING), in Debug too; SwiftPM does only for
+  // release. A debug link otherwise keeps whole static-archive members, such as Hermes's llvh Path.cpp, whose unused
+  // disk-space helpers import statfs/fstatfs, which the required-reason audit (privacy.mjs) refuses with no reason to give.
+  executableLink.push('-Xlinker', '-dead_strip');
   if (ios) {
     swiftArgs.push(
       '--triple', iosTripleFor(app, device, tv, compiled.ios),

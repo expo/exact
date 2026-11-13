@@ -188,10 +188,13 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
   // SwiftPM tracks neither an external archive nor the linked plan. Invalidate only its link;
   // the objects/module stay incremental, including on a kernel-only edit.
   if (!existsSync(stamp) || readFileSync(stamp, 'utf8') !== digest) rmSync(dylib, { force: true });
-  runApple('swift', [...args, ...linkLibrary, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactCore'], options);
+  // Dead-stripped like every product link (build.mjs executableLink): the shared runtime links the app's archive, whose
+  // Hermes llvh Path.cpp would otherwise import statfs/fstatfs, unused, and fail the privacy check (expo/exact-build#130).
+  const deadStrip = ['-Xlinker', '-dead_strip'];
+  runApple('swift', [...args, ...deadStrip, ...linkLibrary, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactCore'], options);
   // Only the extension links the snapshot target. Keeping it out of the shared
   // runtime keeps SwiftUI and WidgetKit out of an ordinary app launch.
-  runApple('swift', [...args, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactSnapshot'], options);
+  runApple('swift', [...args, ...deadStrip, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactSnapshot'], options);
   const changed = !existsSync(stamp) || readFileSync(stamp, 'utf8') !== digest || !existsSync(resolve(framework, 'ExactCore'));
   if (changed) {
     const layout = frameworkLayout(framework, 'ExactCore', platform === 'macos' ? 'MacOSX' : 'iPhoneOS');
