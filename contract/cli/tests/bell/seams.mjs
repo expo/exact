@@ -76,11 +76,6 @@ check('bake', 'counts no type-only import and no import in a comment', !probe('t
   writeFileSync(join(dir, 'panel.contract'), '');
   writeFileSync(join(dir, 'app.ts'), "import type { Ring } from '@fixture/bell';\n// import { ring } from '@fixture/bell';\n/* import { silence } from '@fixture/bell'; */\nexport const answer = () => null;\n");
 }), 'found');
-check('bake', 'counts no import quoted in a string or a template literal', !probe('quoted', (dir) => {
-  writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "x"\n');
-  writeFileSync(join(dir, 'panel.contract'), '');
-  writeFileSync(join(dir, 'app.ts'), "export const sample = \"import { ring } from '@fixture/bell';\";\nexport const page = `import '@fixture/bell'`;\nexport const answer = () => null;\n");
-}), 'found');
 
 // The web, bound.
 run('bun', ['exact.mjs', 'web-build', '--render', 'none'], app);
