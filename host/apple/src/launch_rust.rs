@@ -231,19 +231,23 @@ impl<'a> Context<'a> {
             .filter(|(_, policy)| policy.is_some())
             .map(|(name, _)| name)
             .collect();
-        let versions = launch.0.invalidated.lock().unwrap().clone();
-        let snapshot = allowed
-            .iter()
-            .filter(|name| !guarded.contains(*name))
-            .filter_map(|name| {
-                backend
-                    .as_ref()?
-                    .read(name)
-                    .ok()
-                    .flatten()
-                    .map(|value| (name.clone(), value))
-            })
-            .collect();
+        // Each value must match its version for compare-and-set (LLP 1162.000 D2).
+        let (versions, snapshot) = {
+            let versions = launch.0.invalidated.lock().unwrap();
+            let snapshot = allowed
+                .iter()
+                .filter(|name| !guarded.contains(*name))
+                .filter_map(|name| {
+                    backend
+                        .as_ref()?
+                        .read(name)
+                        .ok()
+                        .flatten()
+                        .map(|value| (name.clone(), value))
+                })
+                .collect();
+            (versions.clone(), snapshot)
+        };
         Self {
             launch,
             grants,

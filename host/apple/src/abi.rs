@@ -406,6 +406,9 @@ impl<D: DataSource> Bridge<D> {
     /// the monospace reference measurer when none is given) under a
     /// viewport; the output is the first batch.
     pub fn boot(&mut self, plan: &[u8], data: D, hooks: Hooks, width: f32, height: f32) -> u32 {
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
+        }
         self.boot_bytes(PlanBytes::Copied(plan), data, hooks, width, height)
     }
 
@@ -578,6 +581,9 @@ impl<D: DataSource> Bridge<D> {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
         }
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
+        }
         self.discard_plan();
         if !let_go && self.host.as_ref().is_some_and(|h| h.runner().has_pending()) {
             return self.refuse_pending();
@@ -704,6 +710,10 @@ impl<D: DataSource> Bridge<D> {
     ) -> u32 {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
+        }
+        // A candidate can change the request a binary preload's name denotes (LLP 1162.000 D2).
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
         }
         self.prepared = None;
         data.set_document_owner(self.document_owner);

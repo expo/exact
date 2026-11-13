@@ -135,7 +135,13 @@ impl Drive {
             }),
             ..Links::ALL
         });
-        let len = bridge.boot(plan, composed(source.clone()), hooks, 100., 100.);
+        let len = bridge.boot_selected(
+            plan.to_vec().leak(),
+            || composed(source.clone()),
+            hooks,
+            100.,
+            100.,
+        );
         let batch = String::from_utf8(bridge.output_bytes(len as usize).to_vec()).unwrap();
         assert!(!batch.contains("\"error\":\""), "{batch}");
         (

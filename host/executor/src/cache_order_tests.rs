@@ -209,10 +209,35 @@ fn prefetch_uses_the_plain_reads_http_cache_rules() {
 }
 
 #[test]
-fn prefetch_refuses_sends_streams_files_independent_requests_and_other_reaches() {
+fn prefetch_is_a_plain_fetch_for_tools_wakes_and_devices() {
+    for asynchronous in [false, true] {
+        for origin in [
+            exact_runner::CallOrigin::Tool,
+            exact_runner::CallOrigin::Wake,
+            exact_runner::CallOrigin::Device,
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            for (index, prefetch) in [false, true].into_iter().enumerate() {
+                server.plan("/next", Plan::new(503, &[], b"answer"));
+                let mut request = server.request("/next");
+                request.reach.origin = origin;
+                request.prefetch = prefetch;
+                let (reply, cached) = ask(&core, &woke, job(index as u64 + 1, request));
+                assert_eq!(reply.status, 503);
+                assert_eq!(reply.body, b"answer");
+                assert!(!cached);
+            }
+            assert_eq!(server.count(), 2);
+        }
+    }
+}
+
+#[test]
+fn prefetch_refuses_sends_streams_files_and_independent_requests() {
     for asynchronous in [false, true] {
         let server = Server::new();
-        for kind in 0..9 {
+        for kind in 0..6 {
             let (core, _) = server.core(asynchronous, true);
             let mut r = job(1, server.request("/refused").prefetch());
             match kind {
@@ -221,18 +246,11 @@ fn prefetch_refuses_sends_streams_files_independent_requests_and_other_reaches()
                 2 => r.request = r.request.body_from("app:/data/file"),
                 3 => r.request = r.request.body_to("app:/data/file"),
                 4 => r.request = r.request.independent_http(1024),
-                5 => r.request.reach.origin = exact_runner::CallOrigin::Tool,
-                6 => r.request.reach.origin = exact_runner::CallOrigin::Wake,
-                7 => r.request.reach.origin = exact_runner::CallOrigin::Device,
                 _ => r.class = RequestClass::Parallel(0),
             }
             assert_eq!(
                 core.run(r, None),
-                Err(if matches!(kind, 0 | 5..=8) {
-                    "exactPrefetch requires the app's own plain HTTP read"
-                } else {
-                    "exactPrefetch requires a plain HTTP read"
-                })
+                Err("exactPrefetch requires a plain HTTP read")
             );
         }
         assert_eq!(server.count(), 0);

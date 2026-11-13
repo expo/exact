@@ -398,9 +398,9 @@ runtime 13 (LLP 1162.000 D1, D2).
 For a read the next screen will make, use `fetch(url, { exactPrefetch: true })`
 or `Request::get(url).prefetch()` in Rust. The option is accepted and checked on
 every host, and the request is made as written, as an ordinary fetch. No host holds
-its reply yet. Only the app's own plain reads may use it; a tool's, wake's or
-device's request, a send, a mutation, a stream, a file-bodied or an independent
-request refuses it. In TypeScript the value must be a boolean.
+its reply yet. A tool's, wake's or device's plain read may use it too. A send,
+a mutation, a stream, a file-bodied or an independent request, or native work,
+refuses it. In TypeScript the value must be a boolean.
 A TypeScript bundle naming it needs runtime 13; the Rust module seam is ABI 9
 (LLP 1162.000 D5).
 

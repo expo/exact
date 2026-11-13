@@ -1,6 +1,86 @@
 use super::*;
 use crate::store::{KeptStore, StoreRead};
 
+#[test]
+fn launch_secret_snapshot_holds_the_version_lock_against_the_app_writer() {
+    struct HeldRead {
+        value: Mutex<String>,
+        entered: Sender<()>,
+        release: Mutex<Receiver<()>>,
+    }
+    impl Backend for HeldRead {
+        fn read(&self, _: &str) -> Result<Option<String>, String> {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv_timeout(HANG).unwrap();
+            Ok(Some(self.value.lock().unwrap().clone()))
+        }
+        fn write(&self, _: &str, value: Option<&str>) -> Result<(), String> {
+            *self.value.lock().unwrap() = value.unwrap().into();
+            Ok(())
+        }
+    }
+    let server = Server::new(0);
+    let (entered, entering) = channel();
+    let (release, released) = channel();
+    let backend = Arc::new(HeldRead {
+        value: Mutex::new(String::new()),
+        entered,
+        release: Mutex::new(released),
+    });
+    let (snapshot, snapped) = channel();
+    let (finish, finished) = channel();
+    let finished = Mutex::new(finished);
+    let (answer, answered) = channel();
+    let url = format!("http://{}/feed", server.address);
+    let source = source(&server, move |ctx| {
+        snapshot.send(ctx.secret("session")).unwrap();
+        finished.lock().unwrap().recv_timeout(HANG).unwrap();
+        answer
+            .send((
+                ctx.set_secret("session", "C"),
+                ctx.preload(LaunchRequest::new("stale", Request::get(&url))),
+            ))
+            .unwrap();
+    });
+    let launch = fixture();
+    *launch.0.backend.lock().unwrap() = Some(backend.clone());
+    launch
+        .with_secret_write("session", || backend.write("session", Some("A")))
+        .unwrap();
+    begin(&launch, &source, false);
+    entering.recv_timeout(HANG).unwrap();
+    let serialized = launch.0.invalidated.try_lock().is_err();
+    let (attempt, attempted) = channel();
+    let (written, writing) = channel();
+    let app = launch.clone();
+    let stored = backend.clone();
+    let writer = std::thread::spawn(move || {
+        attempt.send(()).unwrap();
+        app.with_secret_write("session", || stored.write("session", Some("B")))
+            .unwrap();
+        written.send(()).unwrap();
+    });
+    attempted.recv_timeout(HANG).unwrap();
+    let completed_while_reading = writing.try_recv().is_ok();
+    release.send(()).unwrap();
+    let value = snapped.recv_timeout(HANG).unwrap();
+    writer.join().unwrap();
+    finish.send(()).unwrap();
+    let (write, handoff) = answered.recv_timeout(HANG).unwrap();
+    definitions(&launch);
+    assert!(
+        serialized,
+        "secret values and versions must share the writer lock"
+    );
+    assert!(!completed_while_reading);
+    assert_eq!(value.as_deref(), Some("A"));
+    assert_eq!(write, Err("launch secret changed".into()));
+    assert_eq!(handoff, Err("launch preload secret changed".into()));
+    assert_eq!(*backend.value.lock().unwrap(), "B");
+    assert_eq!(launch.0.invalidated.lock().unwrap()["session"], 2);
+    assert_eq!(server.count.load(Ordering::Acquire), 0);
+}
+
 thread_local! {
     static READS: Arc<AtomicUsize> = Arc::default();
     static DURING_SNAPSHOT: std::cell::RefCell<Option<Sender<()>>> = const { std::cell::RefCell::new(None) };

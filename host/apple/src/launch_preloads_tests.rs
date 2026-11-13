@@ -322,7 +322,7 @@ fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Dri
         );
         bridge.commit_plan()
     } else {
-        bridge.boot(plan, source, hooks, 100., 100.)
+        bridge.boot_selected(plan.to_vec().leak(), || source.clone(), hooks, 100., 100.)
     };
     let batch = String::from_utf8(bridge.output_bytes(len as usize).to_vec()).unwrap();
     assert!(!batch.contains("\"error\":\""), "{batch}");
@@ -1045,6 +1045,171 @@ fn a_plan_only_selection_disables_named_taking_before_the_first_batch_and_dispat
                 server.count.load(Ordering::Acquire),
                 if selected { 2 } else { 1 }
             );
+        }
+    }
+}
+
+#[test]
+fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads() {
+    #[derive(Clone)]
+    struct Named {
+        base: Source,
+        body: &'static [u8],
+    }
+    impl DataSource for Named {
+        fn grants(&self) -> &str {
+            self.base.grants()
+        }
+        fn preloads(&self) -> &[Baked] {
+            self.base.preloads()
+        }
+        fn replacement(&self, _: &[u8], _: &str, _: Vec<u8>) -> Result<Self, DataError> {
+            Ok(self.clone())
+        }
+        fn query(&mut self, name: &str, args: &[Value]) -> Result<Value, DataError> {
+            self.base.query(name, args)
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let mut request = self.base.definitions[0].fill(|_| None).unwrap();
+            request.body = self.body.to_vec();
+            Ok(Answer::Later(request.preload("feed").unwrap()))
+        }
+        fn parse(
+            &mut self,
+            store: &mut Store,
+            name: &str,
+            args: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            self.base.parse(store, name, args, outcome)
+        }
+    }
+    let plan = plan();
+    let empty = contract::compile("component App\n  view\n    text \"empty\"\n")
+        .unwrap()
+        .encode();
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for carried in [false, true] {
+            for equal in [false, true] {
+                for path in [
+                    "baked",
+                    "plan",
+                    "plan-delivery",
+                    "carried",
+                    "module",
+                    "module-delivery",
+                    "boot-plan",
+                    "direct",
+                ] {
+                    let takes = path == "baked" || equal;
+                    let server = Server::new(if takes { 1 } else { 2 });
+                    let mut base = server.source(PreloadWhen::Start, false);
+                    let mut definition = base.definitions[0];
+                    definition.method = "POST";
+                    definition.body = Some(&[PreloadPart::Literal("A")]);
+                    base.definitions = Box::leak(vec![definition].into_boxed_slice());
+                    let source = Named {
+                        base,
+                        body: if equal { b"A" } else { b"B" },
+                    };
+                    let launch = fixture();
+                    let mut bridge = Bridge::with_links(Links {
+                        io: Some(IoLinks {
+                            preloads: local,
+                            endow: memory_endow,
+                            start: start_io,
+                            ..IoLinks::LINKED
+                        }),
+                        ..Links::ALL
+                    });
+                    if carried {
+                        bridge.boot_selected(
+                            empty.clone().leak(),
+                            || source.clone(),
+                            Hooks::none(),
+                            100.,
+                            100.,
+                        );
+                        bridge.data_ready();
+                    }
+                    let initial = source.clone();
+                    launch.begin(false, move || initial);
+                    assert!(server.request().starts_with("POST "));
+                    server.release(0);
+                    ready(&launch);
+                    bridge.input_write(&plan);
+                    let length = match path {
+                        "baked" => bridge.boot_selected(
+                            plan.clone().leak(),
+                            || source.clone(),
+                            Hooks::none(),
+                            100.,
+                            100.,
+                        ),
+                        "direct" => bridge.boot(&plan, source, Hooks::none(), 100., 100.),
+                        "plan" => {
+                            bridge.prepare_plan(plan.len(), source, Hooks::none(), 100., 100.)
+                        }
+                        "plan-delivery" => bridge.prepare_plan_with_delivery(
+                            plan.len(),
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                            Some(Default::default()),
+                        ),
+                        "carried" => bridge.prepare_plan_carried(
+                            plan.len(),
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                            None,
+                            None,
+                            None,
+                        ),
+                        "module" => bridge.prepare_module(
+                            [plan.len(), 0, 0],
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                        ),
+                        "module-delivery" => bridge.prepare_module_with_delivery(
+                            [plan.len(), 0, 0],
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                            Some(Default::default()),
+                            false,
+                        ),
+                        "boot-plan" => {
+                            bridge.boot_plan(plan.len(), source, Hooks::none(), 100., 100.)
+                        }
+                        _ => unreachable!(),
+                    };
+                    let batch = String::from_utf8_lossy(bridge.output_bytes(length as usize));
+                    assert!(!batch.contains("\"error\":\""), "{path}: {batch}");
+                    assert_eq!(
+                        batch.contains("\"text\":\"content\""),
+                        takes,
+                        "{path}, carried={carried}, equal={equal}: {batch}"
+                    );
+                    if !matches!(path, "baked" | "direct" | "boot-plan") {
+                        bridge.commit_plan();
+                    }
+                    if !takes {
+                        assert!(server.request().starts_with("POST "));
+                        server.release(1);
+                    }
+                    assert_eq!(
+                        server.count.load(Ordering::Acquire),
+                        if takes { 1 } else { 2 }
+                    );
+                }
+            }
         }
     }
 }
