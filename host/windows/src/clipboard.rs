@@ -89,10 +89,10 @@ pub(super) fn text_bytes(text: &str) -> Vec<u8> {
 
 #[cfg(any(windows, test))]
 pub(crate) fn run_headless<D: exact_runner::DataSource + Default>(
-    config: &mut exact_linux::app::Config,
+    config: &mut exact_painted::app::Config,
     started: std::time::Instant,
 ) -> i32 {
-    let adapter: Box<dyn exact_linux::presenter::clipboard::Clipboard> = if substituting() {
+    let adapter: Box<dyn exact_painted::presenter::clipboard::Clipboard> = if substituting() {
         Box::new(Memory)
     } else {
         #[cfg(windows)]
@@ -106,12 +106,12 @@ pub(crate) fn run_headless<D: exact_runner::DataSource + Default>(
         #[cfg(not(windows))]
         return 1;
     };
-    exact_linux::app::run_headless::<D>(config, started, Some(adapter))
+    exact_painted::app::run_headless::<D>(config, started, Some(adapter))
 }
 
 #[cfg(any(windows, test))]
 fn substituting() -> bool {
-    exact_linux::picker::agent()
+    exact_painted::picker::agent()
         && std::env::var("EXACT_DEVICE").as_deref() != Ok("real")
         && !std::env::var("EXACT_AGENT_BIND")
             .unwrap_or_default()
@@ -122,7 +122,7 @@ fn substituting() -> bool {
 #[cfg(any(windows, test))]
 struct Memory;
 #[cfg(any(windows, test))]
-impl exact_linux::presenter::clipboard::Clipboard for Memory {
+impl exact_painted::presenter::clipboard::Clipboard for Memory {
     fn read_text(&mut self) -> Result<Option<String>, String> {
         Ok(PRIVATE.with(|board| board.borrow().text.clone()))
     }

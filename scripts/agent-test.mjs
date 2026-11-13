@@ -159,7 +159,7 @@ export const pickHint = (host) => host === 'web'
   ? '; first tap the visible file input or a button whose action calls showPicker("<input id>")'
   : '; first tap a button whose action calls showPicker("<input id>"); the file input needs id as well as testId';
 
-/** Where a native host keeps a drive's scratch stores (host/apple and host/linux `configure_storage`), or
+/** Where a native host keeps a drive's scratch stores (host/apple and host/painted `configure_storage`), or
  * null where the driver cannot reach them: an iOS simulator's are in its app container and go with the app. */
 export function storeBase(appId, host, env = process.env, home = homedir()) {
   if (host === 'macos' || host === 'mac') return resolve(home, 'Library/Caches/exact', appId, 'agent');
@@ -549,6 +549,18 @@ export async function serverRequest(base, st) {
 
 /** A launch line's op and the `open` option it sets (`size` aside: it is two numbers). */
 const LAUNCH = { epoch: 'epoch', 'time-zone': 'timeZone', locale: 'locale', seed: 'seed' };
+
+/** Literal comparisons in a scripted state assertion; numeric bounds never coerce another JSON type. */
+export function stateHolds(got, step) {
+  const equal = value => JSON.stringify(got) === JSON.stringify(value);
+  switch (step.comparison) {
+    case 'equal': return equal(step.value);
+    case 'at-least': return typeof got === 'number' && got >= step.value;
+    case 'at-most': return typeof got === 'number' && got <= step.value;
+    case 'in': return step.value.some(equal);
+    default: throw new Error(`unknown state comparison ${step.comparison}`);
+  }
+}
 
 /** Literal `always` predicates over the driver's JSON values (LLP 1151 D8). */
 export function propertyHolds(line, state, previous) {
@@ -964,7 +976,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
               got = got[field]; path += `.${field}`;
             }
             if (missing != null) { await fail(`${at}: ${path} has no field "${missing}" (${got !== null && typeof got === 'object' && !Array.isArray(got) ? `its fields: ${Object.keys(got).join(', ')}` : `it is ${JSON.stringify(got).slice(0, 200)}`})`); break; }
-            if (JSON.stringify(got) !== JSON.stringify(st.value)) await fail(`${at}: ${st.name} is ${JSON.stringify(got)}, expected ${JSON.stringify(st.value)}`);
+            if (!stateHolds(got, st)) {
+              const operator = {equal: '', 'at-least': '>= ', 'at-most': '<= ', in: 'in '}[st.comparison];
+              await fail(`${at}: ${st.name} is ${JSON.stringify(got)}, expected ${operator}${JSON.stringify(st.value)}`);
+            }
             break;
           }
           case 'expect-wakelock': {

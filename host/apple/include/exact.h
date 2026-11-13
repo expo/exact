@@ -762,6 +762,12 @@ uint32_t exact_pan_sample(ExactRuntime rt, uint32_t first, double x, double y, d
 /* The velocity along axis (0 x, 1 y) at t seconds, px/s: 0 with fewer than two
  * samples in the window, for a non-finite t, another axis, or a dead runtime. */
 double exact_pan_velocity(ExactRuntime rt, uint32_t axis, double t);
+/* The same tracker over samples the host holds, for a contact outside any
+ * runtime (the frame-health card): count samples, 3 * count values at samples,
+ * each t, x, y, oldest first. Of those finite and in time order it keeps the
+ * newest 16. Writes the velocity at now, units per second, to out[0] (x) and
+ * out[1] (y); 0 as above. No runtime. */
+void exact_velocity(const double *samples, size_t count, double now, double *out);
 /* The runner's clock: timers. Nonzero until_request stops after a timer that
  * sends, the clock at its due time (an agent's jump; the wall clock passes 0). */
 /* Timer waits: mode 0 declares support, 1 admits, 2 runs frame tasks. */

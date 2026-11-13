@@ -621,7 +621,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`apps/shelf`'s Progress and Yearly Goal rows), which the sheet keeps 15 from the
   card and the separator, or make the row itself a `column`, which stacks its children
   (LLP 1116 D2); to choose that space write the row's `padding-top`/`padding-bottom`
-  only, which replaces the column's. (Shelf recipe, 2026-10-10.)
+  only, which replaces the column's. A plain column of one or two texts becomes
+  a standard subtitle cell on iOS. An authored height, background colour or
+  corner radius on the row or column keeps its views; a subtitle column's
+  `min-height` does too, as does `align-items` or `justify-content` on either
+  a nested column or a row laid out as a column. Such nested columns get no
+  subtitle block padding for a literal box value or a ternary arm that writes
+  one; a `none` arm keeps the platform padding. Other expressions keep that
+  padding because they may evaluate to `none`; write explicit padding to control it.
+  The platform's interline gap stays. A column with `height=300` and no authored
+  padding or border has a 300 pt border box. Classes count too. (Shelf recipe; grouped tile, #327.)
 - **On iOS, a custom grouped row's leading symbol and line differ from a standard row's
   right to left or at an accessibility size.** Cause: a row the platform's cell can't
   express (a badge before its chevron) is its own views carried into the cell; iOS draws

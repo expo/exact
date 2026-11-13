@@ -174,6 +174,7 @@ include!(concat!(env!("OUT_DIR"), "/host.rs"));
     'Cargo.toml': `${header(`[[bin]]\nname = "${name}-linux"\npath = "src/main.rs"`)}ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
 exact-linux = ${dep('host/linux')}
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -187,7 +188,7 @@ ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { hatches: exact_hatches(), packages: exact_packages() };
+    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, composed));
 }
 `,
@@ -198,7 +199,7 @@ fn main() {
 [target.'cfg(target_os = "android")'.dependencies]
 ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
-exact-linux = ${dep('host/linux')}
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -224,7 +225,7 @@ mod android {
     ${module(false).replace(/\n(?=.)/g, '\n    ')}    include!(concat!(env!("OUT_DIR"), "/logic.rs"));
     include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
-    exact_linux::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
+    exact_painted::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
 }
 `,
   };
@@ -232,8 +233,8 @@ mod android {
     'Cargo.toml': `${header(`[[bin]]\nname = "${name}-windows"\npath = "src/main.rs"\ntest = false\nbench = false`)}ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
 exact-windows = ${dep('host/windows')}
-# The packages' Windows implementations name \`exact_linux::package\` (LLP 1133.022 D10 item 5).
-exact-linux = ${dep('host/linux')}
+# The packages' Windows implementations name \`exact_painted::package\` (LLP 1133.022 D10 item 5).
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -250,7 +251,7 @@ ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { hatches: exact_hatches(), packages: exact_packages() };
+    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_windows::run_composed::<AppData>(${JSON.stringify(title)}, window(), PLAN, COMPAT, composed));
 }
 `,

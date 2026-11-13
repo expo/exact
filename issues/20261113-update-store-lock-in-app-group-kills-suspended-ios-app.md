@@ -48,3 +48,15 @@ check that nothing else needs it in the group), or hold `owner.lock` (and a read
 while the store reads or writes and take it again for each operation, or
 release it when the app resigns active and take it again on return. The
 second-owner protection of LLP 1026 D11 must survive whichever is chosen.
+
+## Implementation
+
+The update store uses the app's private Application Support directory. Its
+owner and reader locks keep their existing lifetime; extensions continue
+reading immutable `widget-generations/` in the App Group (LLP 1126 D8).
+All 10 WidgetContainerTests pass on iOS Simulator. A Caltrain drive opens the
+station picker and searches for Palo; its updater's `owner.lock` is in the
+private container, no updater lock is in the group, and the group's published
+widget plan is readable. A signed iPhone or TestFlight
+run must still confirm background suspension and resumption without
+`0xdead10cc`; the simulator does not enforce this termination.

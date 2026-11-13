@@ -14,7 +14,7 @@ import java.io.File
 import java.nio.ByteOrder
 import java.nio.IntBuffer
 
-/** Canvas reader for exact2's op stream (host/linux/src/canvas.rs; LLP 1076 §3.3).
+/** Canvas reader for exact2's op stream (host/painted/src/canvas.rs; LLP 1076 §3.3).
  * Rows are RenderNodes recorded on a worker (async=0: main) and retained until freed.
  * A scroll frame translates the scroller's row group without repainting it.
  */

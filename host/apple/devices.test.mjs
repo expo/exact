@@ -5,10 +5,30 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, ut
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
-import { chooseSimulator, crashReports, crashSummary, crashWatch, forwardedEnv, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
+import { chooseSimulator, crashReports, crashSummary, crashWatch, forwardedEnv, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
+
+test('phone startup failures distinguish reported locks from possible prompts and retain diagnostics', () => {
+  const locked = phoneStartupFailure('the app exited', ['app: FBSOpenApplicationErrorDomain: Locked']);
+  expect(locked).toContain('the iPhone is locked: unlock it and run again');
+  expect(locked).toContain('FBSOpenApplicationErrorDomain: Locked');
+  expect(phoneStartupFailure('launch failed', ['app: FBSOpenApplicationServiceErrorDomain', 'app: for reason: Locked'])).toContain('the iPhone is locked:');
+  for (const cause of ['No route to host', 'deadline expired before handshake (waiting for foreground)']) {
+    const prompt = phoneStartupFailure(cause, []);
+    expect(prompt).toContain(cause);
+    expect(prompt).toContain('local-network prompt may be waiting');
+    expect(prompt).toContain('on the phone');
+    expect(prompt).not.toContain('the iPhone is locked:');
+  }
+  const silent = phoneStartupFailure('the app never became ready', []);
+  expect(silent).toContain('the app printed nothing');
+  expect(silent).toContain('Unlock the phone');
+  const crash = phoneStartupFailure('launch failed', ['app: custom failure']);
+  expect(crash).toContain('custom failure');
+  expect(crash).not.toContain('local-network prompt may be waiting');
+});
 
 // Native startup retries do not change the per-launch authentication boundary.
 test('a refused phone token cannot admit a command carrier; the right token still can', async () => {

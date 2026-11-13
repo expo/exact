@@ -33,6 +33,7 @@ pub struct Skipped {
 pub const HAIRLINE: &str = "var(--exact-hairline, 1px)";
 
 /// The `cssText` for a node's set rows, plus what was skipped.
+/// Keep `em` for the browser: a control's font can differ from the kernel's.
 pub fn css_text(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
     css_text_in(style, font_names, false)
 }
@@ -51,7 +52,11 @@ fn css_text_in(
 ) -> (String, Vec<Skipped>) {
     let authored = |out: &mut String, id| {
         use exact_kernel::style::relative::Unit;
-        let Some((unit, n)) = style.relative.get(id).filter(|_| relative) else {
+        let Some((unit, n)) = style
+            .relative
+            .get(id)
+            .filter(|(unit, _)| relative || *unit == Unit::Em)
+        else {
             return false;
         };
         match unit {

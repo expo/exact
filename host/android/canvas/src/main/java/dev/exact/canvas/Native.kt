@@ -80,7 +80,7 @@ object Native {
      * (x, y) and the box it shows in (x, y, width, height). exact2 tells the reader of each of them from then on
      * ([scrollers]). After the scrollers: the native module button under the point (0: none), then its painted
      * box x, y, width and height as float bits, in pixels, its allocation slot and generation, and how many long
-     * presses a node has taken so far (wrapping). Then each scroller's snap, in the same order (`host/linux/src/presenter/snap.rs`,
+     * presses a node has taken so far (wrapping). Then each scroller's snap, in the same order (`host/painted/src/presenter/snap.rs`,
      * `reader_snaps`): flags (bit 0 it snaps sideways, bit 1 up and down, bit 2 `mandatory`), then sideways and then up
      * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
      * at as float bits and 1 for `scroll-snap-stop: always`, in pixels; flag bit 3: a virtualized list, whose areas past
@@ -88,7 +88,7 @@ object Native {
     @JvmStatic external fun under(x: Float, y: Float): IntArray
     /** Virtualized list [id]'s snap areas up and down ([vertical]) or sideways, for a release at offset [release] whose
      * rest is projected near [projected] (pixels): a count, then per area its least and greatest offsets as float bits
-     * and 1 for `scroll-snap-stop: always` (`host/linux/src/presenter/snap.rs`, `reader_snaps_around`). */
+     * and 1 for `scroll-snap-stop: always` (`host/painted/src/presenter/snap.rs`, `reader_snaps_around`). */
     @JvmStatic external fun snapsAround(id: Int, vertical: Boolean, release: Float, projected: Float): IntArray
     /** What exact2 tells the reader of the text fields it hosts (LLP 1115.001 D8), when that is not what this last
      * returned (else null): a count, then for each field, in tree order: its id, its generation (moved on when its
@@ -280,7 +280,7 @@ object Native {
      * `hatches::reader::act`'s): its answer, a ticket for a registration, -1 when refused. */
     @JvmStatic external fun hatchAct(node: Int, kind: Int, text: String?): Long
     /** One request of the agent API (LLP 1012), a JSON line as UTF-8, and its answer the same way: the Linux
-     * host's own handler (`host/linux/src/canvas/agent.rs`), on the host's thread. From the first one the host's turns
+     * host's own handler (`host/painted/src/canvas/agent.rs`), on the host's thread. From the first one the host's turns
      * run at the driver's clock, which only a `clock` request moves. [AgentDrive] calls it for a driver over adb. */
     @JvmStatic external fun agent(line: ByteArray): ByteArray
     /** What an [ExactTamber] asks (LLP 1121 D12), on the host's thread: `{"view": id or 0, "names": [..]}`, answered

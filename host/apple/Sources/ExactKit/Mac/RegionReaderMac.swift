@@ -97,7 +97,8 @@ final class RegionReaderParagraph {
     private var selectionGeometry: [RegionSelectionSnapshot] = []
     private var failed: String?
     private lazy var service = RegionService { [weak self] in self?.receive($0) }
-    private let profile: NativeProfile
+    private var profile: NativeProfile?
+    private var profileSpace: CGColorSpace?
     private let profileAccount = NativeProfileAccount()
     private var publishing = false
     private var maxDemand = 0.0, maxPublish = 0.0, maxDraw = 0.0
@@ -113,8 +114,6 @@ final class RegionReaderParagraph {
         revision = request.revision; estimatedBytes = bytes
         fontSize = CGFloat(request.strut.font_size)
         lineHeight = request.strut.has_line_height != 0 ? CGFloat(request.strut.line_height) : fontSize * 1.2
-        let space = CGColorSpace(name: CGColorSpace.sRGB)!
-        profile = NativeProfile.capture(original: space, data: space.copyICCData(), account: profileAccount).owner!
     }
     deinit { service.close(); ink.removeFromSuperlayer() }
     func matches(_ r: ExactMeasureRequest) -> Bool {
@@ -174,6 +173,22 @@ final class RegionReaderParagraph {
             source = RegionTextSource.capture(spec, engine: engine)
         }
         guard let source, failed == nil else { return }
+        let space = source.rasterFormat.space
+        if profileSpace != space {
+            // A superseded raster may still own the old profile. Drop only
+            // this paragraph's reference before asking for its replacement.
+            profile = nil; profileSpace = nil
+            guard !waitingForPixels else { return }
+            let captured = NativeProfile.capture(original: space, data: space.copyICCData(), account: profileAccount)
+            guard let owner = captured.owner else {
+                if captured.refusal == .capacity {
+                    waitingForPixels = true
+                    node.presenter?.requestTextPublication()
+                } else { failed = "Text colour profile could not be retained" }
+                return
+            }
+            profile = owner; profileSpace = space
+        }
         let width = CGFloat(Float(node.contentBox().width))
         guard width > 0 else { return }
         wantedWidth = width
@@ -198,7 +213,7 @@ final class RegionReaderParagraph {
 
     private func requestViewport() {
         guard let node, let artifact = pointRequest == nil ? candidate ?? accepted : accepted,
-              failed == nil else { return }
+              failed == nil, let profile else { return }
         let ranges = node.presenter?.selection.rectangleRanges(node) ?? []
         if !ranges.isEmpty, !ranges.allSatisfy({ range in selectionGeometry.contains { $0.artifact == artifact.id && $0.range == range } }) {
             let request = RegionSelectionRequest(artifact: artifact.id, ranges: ranges)
@@ -218,8 +233,8 @@ final class RegionReaderParagraph {
         // even when CSS normal lets a million-character word overflow.
         let top = (pointRequest == nil ? candidateTop : nil) ?? max(0, port.minY - content.minY)
         let width = ceil(min(p.offeredWidth + 64, port.width + 64) * CGFloat(scale)) / CGFloat(scale)
-        let rowBytes = CGFloat(RegionRasterRequest.stride(width: Int(width * CGFloat(scale)),
-            format: RegionRasterRequest.compositedFormat) * scale)
+        let format = source?.rasterFormat.deep == true ? RegionRasterRequest.extendedFormat : RegionRasterRequest.compositedFormat
+        let rowBytes = CGFloat(RegionRasterRequest.stride(width: Int(width * CGFloat(scale)), format: format) * scale)
         let overscan = floor(CGFloat(8 * 1024 * 1024) / rowBytes * CGFloat(scale)) / CGFloat(scale)
         let capacity = floor(CGFloat(RegionRasterRequest.maximumPixelLimit) / rowBytes * CGFloat(scale)) / CGFloat(scale)
         let visible = ceil(port.height * CGFloat(scale)) / CGFloat(scale)
@@ -240,12 +255,12 @@ final class RegionReaderParagraph {
             rows: [RegionPaintRow(artifact: artifact.id, box: box, selection: selection,
                 selectionRanges: node.presenter?.selection.rectangleRanges(node) ?? [])],
             scroll: CGPoint(x: -32, y: band.y), size: CGSize(width: width, height: band.height), scale: scale,
-            profile: profile, format: RegionRasterRequest.compositedFormat,
+            profile: profile, format: format,
             // The existing view owns CSS backgrounds, including rounded corners
             // and opacity. Overflow ink must not repaint its ancestor's box.
             background: [0, 0, 0, 0],
             selectionColor: selected ?? [0, 0, 0, 0],
-            interaction: pointRequest, pixelLimit: RegionRasterRequest.maximumPixelLimit)
+            interaction: pointRequest, pixelLimit: RegionRasterRequest.maximumPixelLimit, headroom: source?.rasterFormat.headroom ?? 0)
         if let old = wantedRaster, old.sameOutput(as: next) { return }
         // A useful in-flight band must be allowed to arrive while the viewport
         // moves. Replacing its serial on every scroll tick can starve publication.
@@ -375,6 +390,7 @@ final class RegionReaderParagraph {
         ink.frame = frame
         ink.contentsScale = CGFloat(raster?.request.scale ?? 2)
         ink.contents = surface
+        ink.applyTextRange(headroom: raster?.request.headroom, limit: node.style["dynamic_range_limit"]?.string)
         CATransaction.commit()
         return true
     }

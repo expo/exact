@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { spawn } from '../host/apple/toolchain.mjs';
+import { spawn, spawnSync } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { withHostDeployment } from './filesystem.mjs';
 import { delimiter, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -15,6 +17,50 @@ export function cargoOnPath(env = process.env, home = homedir()) {
   if (!existsSync(resolve(rustup, 'cargo'))) return false;
   env.PATH = [rustup, ...dirs].join(delimiter);
   return true;
+}
+
+/** Every Cargo process Exact starts refuses implicit Hermes acquisition. */
+export function cargoEnvironment(env = process.env) { return withHostDeployment({ ...env, HERMES_LEAN_SYS_OFFLINE: '1' }); }
+
+/** The web artifacts' toolchain (LLP 1047 §6, §10): a pinned nightly builds
+ * std for size, and a panic aborts without its message or location. The web
+ * shows neither: wasm32-unknown-unknown has no panic output and the glue
+ * reads no trap. Everything else builds with rust-toolchain.toml's stable. */
+export const WEB_TOOLCHAIN = 'nightly-2026-08-21';
+export const WEB_STD = ['-Zbuild-std=std,panic_abort', '-Zbuild-std-features=optimize_for_size'];
+// Deprecation is stable's to judge (the six checks' clippy): the nightly
+// deprecates names, like `fetch_update`, before stable has their successors.
+export const WEB_RUSTFLAGS = ['-Zunstable-options', '-Cpanic=immediate-abort', '-Zlocation-detail=none', '-Adeprecated'];
+export const WEB_SIZE = [...WEB_STD, ...WEB_RUSTFLAGS].join(' ');
+/** The environment for a web build, refusing a machine without the toolchain
+ * or its std sources (Cargo builds offline, so std's dependencies too). */
+export function webToolchainEnv(env) {
+  const sysroot = spawnSync('rustc', ['--print', 'sysroot'], { env: { ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }, encoding: 'utf8' });
+  if (sysroot.status !== 0 || !existsSync(resolve(sysroot.stdout.trim(), 'lib/rustlib/src/rust/library/Cargo.lock'))) throw new Error(
+    `the web artifact builds with ${WEB_TOOLCHAIN} and its std sources (LLP 1047):\n` +
+    `  rustup toolchain install ${WEB_TOOLCHAIN} --profile minimal --component rust-src --component llvm-tools\n` +
+    `  cargo +${WEB_TOOLCHAIN} fetch --manifest-path "$(rustc +${WEB_TOOLCHAIN} --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml"`);
+  // `-Zbuild-std` builds std offline, so std's own locked sources must be in
+  // Cargo's cache. A successful preparation belongs to that cache and sysroot.
+  const library = resolve(sysroot.stdout.trim(), 'lib/rustlib/src/rust/library');
+  const home = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir();
+  const cargoHome = resolve(env.CARGO_HOME || resolve(home, '.cargo'));
+  const marker = resolve(cargoHome, '.exact', 'web-std', createHash('sha256').update(library).digest('hex'));
+  if (!existsSync(marker)) {
+    const offline = spawnSync('cargo', ['metadata', '--offline', '--locked', '--format-version', '1', '--manifest-path', resolve(library, 'Cargo.toml')], { env: cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }), encoding: 'utf8', maxBuffer: 1 << 26 });
+    let ready = offline.status === 0;
+    if (!ready) {
+      console.error(`${WEB_TOOLCHAIN}: std's sources are not fetched; fetching them once (cargo fetch --manifest-path …/library/Cargo.toml)`);
+      ready = spawnSync('cargo', ['fetch', '--locked', '--manifest-path', resolve(library, 'Cargo.toml')], { env: cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }), stdio: ['ignore', 'inherit', 'inherit'] }).status === 0;
+    }
+    if (ready) {
+      try {
+        mkdirSync(dirname(marker), { recursive: true });
+        writeFileSync(marker, '');
+      } catch { /* a read-only Cargo home checks again next time */ }
+    }
+  }
+  return cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN, EXACT_WEB_SIZE: WEB_SIZE });
 }
 
 /** Cargo's unused-patch diagnostics for the patches every outside workspace must carry (LLP 1036.001 D2).

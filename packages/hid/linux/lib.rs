@@ -13,9 +13,9 @@
 //! - A close ends the read: the reader polls its node beside a socket whose other end the open holds, so dropping
 //!   the open wakes it, and it announces nothing once stopped.
 //!
-//! The package names only `exact_linux` and `std`, so the ioctls and `poll` are declared here.
+//! The package names only `exact_painted` and `std`, so the ioctls and `poll` are declared here.
 
-use exact_linux::package::{json, Context, Json, Notifier, Package, Reply};
+use exact_painted::package::{json, Context, Json, Notifier, Package, Reply};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};

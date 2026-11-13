@@ -19,7 +19,7 @@ import android.view.HapticFeedbackConstants
  * What exact2 asks of the platform, acted on (LLP 1115.001 D5): the one channel out. exact2 queues a request and
  * wakes the reader; whoever holds the host takes the queue ([Native.requests], on exact2's thread) and hands it to
  * the main thread, where [perform] reads it. A request with an answer (the share sheet) is answered later by its id
- * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/linux/src/presenter/requests.rs`
+ * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/painted/src/presenter/requests.rs`
  * writes them.
  *
  * Everything here is the platform's own: an `Intent` for a link, `performHapticFeedback` for a haptic, the system's

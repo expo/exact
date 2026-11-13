@@ -1,7 +1,7 @@
 //! The page around a document (LLP 1048.000 D3, D6, D7): its head, its
 //! checkpoint, and the locations a build renders.
 
-use exact_runner::{DataError, DataSource, Value};
+use exact_runner::{Answer, DataError, DataSource, Store, Value};
 use exact_web::document::{build_locations, checkpoint, digest, read_checkpoint, route_at, Site};
 use exact_web::Host;
 
@@ -59,7 +59,91 @@ component A
 }
 
 #[test]
-fn without_a_head_the_title_is_the_apps_and_nothing_else_is_claimed() {
+fn a_rendered_title_uses_the_selected_route_before_the_app_name() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let src = r#"routes nav
+  home "/"
+    item "/item"
+    explicit "/explicit"
+    empty "/empty"
+    bare "/bare"
+    formatted "/formatted"
+
+component A
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}`
+          if e.name != "bare"
+            header
+              if e.name == "formatted"
+                text "**Inbox** & [Archive](/archive)" markup="markdown" role="heading" aria-level=1
+              else
+                text (e.name == "home" ? "Home" : "Item & <Detail>") role="heading" aria-level=1
+          if e.name == "explicit"
+            head title="Authored"
+          if e.name == "empty"
+            head title=""
+"#;
+    for (location, title) in [
+        ("/", "Home"),
+        ("/item", "Item &amp; &lt;Detail&gt;"),
+        ("/explicit", "Authored"),
+        ("/empty", ""),
+        ("/bare", "Site &amp; Co"),
+        ("/formatted", "Inbox &amp; Archive"),
+    ] {
+        let host = host(src, Says(""), location);
+        let head = host
+            .document()
+            .unwrap()
+            .page_head(host.runner().plan(), &SITE, location)
+            .unwrap();
+        for want in [
+            format!("<title>{title}</title>"),
+            format!("<meta property=\"og:title\" content=\"{title}\">"),
+            format!("<meta name=\"twitter:title\" content=\"{title}\">"),
+        ] {
+            assert!(head.contains(&want), "{location}: {want}\n{head}");
+        }
+    }
+}
+
+#[test]
+fn a_route_title_uses_the_panel_named_by_the_roots_tabs() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let host = host(
+        r#"component App
+  view
+    main navigationBack="back" navigationKey="selected"
+      row role="tablist"
+        button role="tab" aria-controls="first"
+          text "First"
+        button role="tab" aria-controls="second"
+          text "Second"
+      column role="tabpanel" id="first"
+        column navigationKey="other"
+          header
+            text "Covered" role="heading" aria-level=1
+      column role="tabpanel" id="second"
+        column navigationKey="selected"
+          header
+            column
+              text "  Selected  " role="heading" aria-level=1
+"#,
+        Says(""),
+        "/",
+    );
+    let head = host
+        .document()
+        .unwrap()
+        .page_head(host.runner().plan(), &SITE, "/")
+        .unwrap();
+    assert!(head.starts_with("<title>Selected</title>"), "{head}");
+}
+
+#[test]
+fn without_a_head_or_route_heading_the_title_is_the_apps() {
     let plain = host(
         "component A\n  view\n    column viewport-fit=\"cover\" interactive-widget=\"resizes-content\"\n      text \"a\"\n",
         Says(""),
@@ -125,8 +209,11 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
         !json.contains('<') && !json.contains('>') && !json.contains('&'),
         "{json}"
     );
-    // No stream is open, so no `open` is written
-    assert!(!json.contains("\"open\""), "{json}");
+    // No stream is open and no answer read the store, so neither field is written
+    assert!(
+        !json.contains("\"open\"") && !json.contains("\"readers\""),
+        "{json}"
+    );
     let read = read_checkpoint(&json).unwrap();
     assert_eq!(read, host.runner().document_checkpoint("/said?q=1"));
     assert_eq!(read.answers[0].3, Value::str("</script><!-- & \u{1F4AC}"));
@@ -141,11 +228,47 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
     }
 }
 
+/// `viewer()` answers the store's `token`.
+struct Viewer;
+
+impl DataSource for Viewer {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+
+    fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Now(Value::str(
+            store.get("token").unwrap_or("anonymous"),
+        )))
+    }
+
+    fn grants(&self) -> &str {
+        "secret.keep token\n"
+    }
+}
+
+#[test]
+fn a_checkpoint_lists_the_answers_that_read_the_store() {
+    let plan = contract::compile(
+        "component A\n  resource viewer = viewer() as shape string\n  view\n    text viewer\n",
+    )
+    .unwrap();
+    let host = Host::boot(&plan.encode(), Viewer, Default::default(), "/")
+        .unwrap()
+        .0;
+    let json = checkpoint(host.runner(), "/");
+    assert!(json.ends_with(",\"readers\":[0]}"), "{json}");
+    assert_eq!(
+        read_checkpoint(&json).unwrap(),
+        host.runner().document_checkpoint("/")
+    );
+}
+
 #[test]
 fn checkpoint_values_are_json_that_reads_back_exactly() {
     // Every kind of plan value, as `push_value` spells it: text a page's
     // compression matches against the document's own strings.
-    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":["a"]}"#;
+    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":[0],"readers":[0]}"#;
     let read = read_checkpoint(text).unwrap();
     let (name, source, args, value) = &read.answers[0];
     assert_eq!((name.as_str(), source.as_str()), ("a", "src"));
@@ -167,8 +290,13 @@ fn checkpoint_values_are_json_that_reads_back_exactly() {
     );
     assert_eq!(fields[8], Value::Number(f64::NEG_INFINITY));
     assert_eq!(read.pending, ["b"]);
-    assert_eq!(read.open, ["a"]);
+    assert_eq!((read.open, read.readers), (vec![0], vec![0]));
     assert!(read_checkpoint(&text.replace("{\"s\"", "{\"z\"")).is_err());
+    // Refuse an `open` or `readers` index past the answers
+    for field in ["open", "readers"] {
+        let past = text.replace(&format!("\"{field}\":[0]"), &format!("\"{field}\":[1]"));
+        assert!(read_checkpoint(&past).is_err(), "{past}");
+    }
 }
 
 #[test]

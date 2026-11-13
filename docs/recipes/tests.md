@@ -33,7 +33,7 @@ test "a repeat is refused and keeps its text; the list survives a relaunch"
 
 Every other form (drags, `perf`, `on web`): [the grammar](../contract-grammar.md#authored-tests).
 
-`expect` has no `<` or `contains`: compare a derive with `==`. `clock data` after an
+`expect state` takes `==`, `>=`, `<=` or `in 0 1`. `clock data` after an
 input whose reply the next `expect` reads (iOS needs it); `clock settle` after a sheet, an
 alert or a push. Test the refusal too; never wait in real time (pin `epoch`, `time-zone`); give
 every screen its own ids; tap a tab before reading in it.

@@ -191,7 +191,7 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
       wanted[path] = DIFFERS[path] ?? native;
       if (path === '/watch-await') {
         expect(reply.failed).toEqual([]);
-        expect(checkpoint.open).toEqual(['r']);
+        expect(checkpoint.open.map(k => checkpoint.answers[k][0])).toEqual(['r']);
         expect(/data-testid="r"[^>]*>([^<]*)</.exec(reply.html)[1]).toBe('watched');
       }
       if (path === '/body-from-await') expect(reply.refused).toEqual([['r', 'exactBodyFrom app:/data/b']]);

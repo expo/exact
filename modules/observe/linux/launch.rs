@@ -8,7 +8,7 @@
 // holding `queue.lock`, reading it, changing it and writing it back, and sends only
 // while holding `send.lock`, so each row is sent once.
 
-use exact_linux::journal::{self, serde_json, LaunchContext};
+use exact_painted::journal::{self, serde_json, LaunchContext};
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -92,7 +92,7 @@ fn session_id() -> String {
         z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         z ^ (z >> 31)
     };
-    let seed = exact_linux::launch_marks::boottime().to_bits()
+    let seed = exact_painted::launch_marks::boottime().to_bits()
         ^ u64::from(std::process::id()).rotate_left(40);
     let (a, b) = (mix(seed), mix(seed ^ journal::wall().to_bits()));
     uuid_v4((u128::from(a) << 64 | u128::from(b)).to_be_bytes())

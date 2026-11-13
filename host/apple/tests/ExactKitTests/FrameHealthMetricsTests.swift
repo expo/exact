@@ -592,12 +592,14 @@ final class FrameHealthMetricsTests: XCTestCase {
 
     func testADragKeepsItsReleaseVelocityAndResistsPastTheEdges() {
         let area = CGRect(x: 8, y: 8, width: 400, height: 800), size = CGSize(width: 320, height: 416)
+        // The release velocity is the engine's estimate over the last 100 ms (LLP 1057.001 §3): a drag at 1000 points a
+        // second, longer than the samples it keeps, then lifted a frame later half a point back, still throws forward
         var drag = FrameHealthCardFace.Drag(at: .zero, time: 1, origin: .zero, control: nil)
-        drag.track(CGPoint(x: 10, y: 0), at: 1.01)
-        // A lift at the last point keeps the momentum; one after the press held still has none
-        drag.track(CGPoint(x: 10, y: 0), at: 1.011)
-        XCTAssertEqual(drag.velocity(releasedAt: 1.011).dx, 1000, accuracy: 0.001)
-        XCTAssertEqual(drag.velocity(releasedAt: 1.07), .zero)
+        for i in 1...40 { drag.track(CGPoint(x: Double(i) * 1000 / 120, y: 0), at: 1 + Double(i) / 120) }
+        XCTAssertEqual(drag.velocity(releasedAt: 1 + 40.0 / 120).dx, 1000, accuracy: 0.001)
+        drag.track(CGPoint(x: 40000.0 / 120 - 0.5, y: 0), at: 1 + 41.0 / 120)
+        XCTAssertGreaterThan(drag.velocity(releasedAt: 1 + 41.0 / 120).dx, 500)
+        XCTAssertEqual(drag.velocity(releasedAt: 1 + 41.0 / 120 + 0.1), .zero, "a press held still for 100 ms has none")
         // Dragged past an edge, the card goes part of the way, the less the further, and never a whole span
         let resisted = { (x: CGFloat) in FrameHealthCardFace.resisted(CGPoint(x: x, y: 100), size: size, in: area).x }
         XCTAssertEqual(FrameHealthCardFace.resisted(CGPoint(x: 40, y: 100), size: size, in: area), CGPoint(x: 40, y: 100), "within the area, under the press")
@@ -1071,23 +1073,106 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual(layout.control(at: CGPoint(x: layout.title.minX + 1, y: 22)), .title, "within the title, not Close's target")
     }
 
+    func testTheTextAtTheBottomKeepsClearOfRounderBottomCorners() throws {
+        typealias D = FrameHealthCardDrawing
+        let width = FrameHealthCardFace.width, height = FrameHealthCardFace.height
+        XCTAssertNil(FrameHealthCardFace.Layout(width: width).bottomOutline, "12-point corners cut nothing")
+        // In a 54-point corner, as an iPhone's screen gives a card in its bottom-right corner, the frame-time chart's
+        // "now" moves left until the card's outline, kept 2 points in (`rounded`), holds it, and text away from that
+        // corner stays
+        let rounded = try XCTUnwrap(FrameHealthCardFace.Layout(width: width, corners: (12, 12, 54, 12)).bottomOutline)
+        let card = D.continuous(CGRect(x: 0, y: 0, width: width, height: height), radii: [12, 12, 54, 12])
+        let now = D.box("now", x: width - 14, y: height - 16, D.labelFont, .right)
+        XCTAssertFalse(card.contains(CGPoint(x: now.maxX, y: now.maxY)), "the corner cuts \"now\" where it is")
+        let moved = D.fit(now, .right, limit: .infinity, within: rounded)
+        XCTAssertTrue(moved.x < now.maxX && moved.limit == now.width, "it moves whole: \(moved)")
+        XCTAssertTrue(rounded.contains(CGPoint(x: moved.x, y: now.maxY)) && !rounded.contains(CGPoint(x: moved.x + 0.5, y: now.maxY)),
+            "as far as it must")
+        let stays = { (line: CGRect, align: D.Align) in
+            D.fit(line, align, limit: .infinity, within: rounded) == (align == .left ? line.minX : line.maxX, line.width)
+        }
+        XCTAssertTrue(stays(now.offsetBy(dx: 0, dy: -100), .right), "text far above the corner stays")
+        XCTAssertTrue(stays(D.box("30s ago", x: 40, y: height - 16, D.labelFont, .left), .left))
+        let empty = D.box("", x: width - 14, y: height - 16, D.labelFont, .right)
+        XCTAssertTrue(D.fit(empty, .right, limit: 30, within: rounded) == (empty.maxX, 30), "an empty line stays")
+        // A line across a card both of whose bottom corners round moves in at its start, then narrows at the end it
+        // reaches, as far as it must
+        let both = try XCTUnwrap(FrameHealthCardFace.Layout(width: width, corners: (12, 12, 54, 54)).bottomOutline)
+        let long = D.box(String(repeating: "Late frames ", count: 8), x: 12, y: height - 16, D.labelFont, .left)
+        let fitted = D.fit(long, .left, limit: width - 24, within: both), end = fitted.x + fitted.limit
+        XCTAssertTrue(fitted.x > 12 && end < width - 12, "\(fitted)")
+        XCTAssertTrue(both.contains(CGPoint(x: fitted.x, y: long.maxY)) && both.contains(CGPoint(x: end, y: long.maxY)))
+        XCTAssertFalse(both.contains(CGPoint(x: end + 0.5, y: long.maxY)))
+        // A compact card's last line, at its bottom left
+        let compact = try XCTUnwrap(FrameHealthCardFace.Layout(width: width, compact: true, corners: (12, 12, 12, 54)).bottomOutline)
+        let pacing = D.box("None over one refresh, 16.7ms", x: 12, y: 154, FrameHealthCardFace.digits, .left)
+        XCTAssertGreaterThan(D.fit(pacing, .left, limit: width - 24, within: compact).x, 12)
+        // Drawn, the charts' labels leave no ink within a point of the card's edge: in a 54-point corner, where "now"
+        // is cut without the outline, and with the frame-rate chart expanded, its 0 in a 62-point corner
+        let input = D.Input(reader: FrameHealthCardReader(), rates: .init(requestedHz: 60, periodMs: 1000 / 60.0), displayMaximumHz: 120)
+        let cases: [((CGFloat, CGFloat, CGFloat, CGFloat), Int?)] = [((12, 12, 54, 12), nil), ((12, 12, 12, 62), 0)]
+        for (corners, expanded) in cases {
+            let layout = FrameHealthCardFace.Layout(width: width, corners: corners)
+            let edge = D.continuous(CGRect(x: 1, y: 1, width: width - 2, height: height - 2),
+                radii: [corners.0, corners.1, corners.2, corners.3].map { $0 - 1 })
+            let ink = { (outline: CGPath?) in
+                try Self.ink(outside: edge, size: CGSize(width: width, height: height)) {
+                    D.charts($0, layout.chartArea, input, expanded: expanded, palette: Self.palette, within: outline)
+                }
+            }
+            XCTAssertGreaterThan(try ink(nil), 0, "\(corners): the corner cuts a label without the outline")
+            XCTAssertEqual(try ink(layout.bottomOutline), 0, "\(corners)")
+        }
+        // Details' last line, scrolled to its end, rises instead: its scroll grows by as much
+        let rows = [FrameHealthCardText.Detail(name: "Frames", value: "300", reason: nil)], caption = "Late: sent after UIKit's deadline"
+        let plain = FrameHealthCardFace.detailsHeight(width: width, rows: rows, caption: caption)
+        XCTAssertEqual(FrameHealthCardFace.detailsHeight(width: width, rows: rows, caption: caption,
+            clearing: FrameHealthCardFace.Layout(width: width)), plain)
+        let rise = FrameHealthCardFace.detailsHeight(width: width, rows: rows, caption: caption,
+            clearing: FrameHealthCardFace.Layout(width: width, corners: (12, 12, 54, 12))) - plain
+        XCTAssertGreaterThan(rise, 0)
+        let risen = D.rise(now, within: rounded)
+        XCTAssertTrue(risen > 0 && card.contains(CGPoint(x: now.maxX, y: now.maxY - risen)), "\(risen)")
+    }
+
+    /// The pixels `draw` inks on a white card `size` points large, drawn at twice its scale, whose middles lie outside
+    /// `outline`
+    private static func ink(outside outline: CGPath, size: CGSize, _ draw: (CGContext) -> Void) throws -> Int {
+        let w = Int(size.width * 2), h = Int(size.height * 2)
+        let ctx = try XCTUnwrap(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 2, y: -2)
+        draw(ctx)
+        let data = try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self)
+        var count = 0
+        for y in 0..<h {
+            for x in 0..<w where data[(y * w + x) * 4] < 250 {
+                if !outline.contains(CGPoint(x: (CGFloat(x) + 0.5) / 2, y: (CGFloat(y) + 0.5) / 2)) { count += 1 }
+            }
+        }
+        return count
+    }
+
     func testTheHeaderKeepsClearOfRounderTopCorners() {
         let plain = FrameHealthCardFace.Layout(width: FrameHealthCardFace.width), width = FrameHealthCardFace.width
         // A 51-point corner, as the folded iPhone Duo's screen gives a card in its top-right corner
-        let right = FrameHealthCardFace.Layout(width: width, corners: (12, 51))
+        let right = FrameHealthCardFace.Layout(width: width, corners: (12, 51, 12, 12))
         XCTAssertEqual(right.share.maxX, plain.share.maxX - 0.2915 * 39, accuracy: 0.01, "Share moves in")
         XCTAssertEqual(right.share.minX - right.details.minX, plain.share.minX - plain.details.minX, accuracy: 0.001, "and Details with it")
         XCTAssertEqual(right.close, plain.close)
         // Close moves in as far as the 6 points the title leaves it, and the title keeps its place
         XCTAssertEqual(plain.title.minX - plain.close.maxX, 2 + 6, "the title stands 6 points beyond Close's 2")
-        let left = FrameHealthCardFace.Layout(width: width, corners: (51, 12))
+        let left = FrameHealthCardFace.Layout(width: width, corners: (51, 12, 12, 12))
         XCTAssertEqual(left.close.minX, plain.close.minX + 6, accuracy: 0.001, "Close moves in, as far as the title allows")
         XCTAssertEqual(left.title.minX - left.close.maxX, 2, accuracy: 0.001)
-        XCTAssertEqual(FrameHealthCardFace.Layout(width: width, corners: (20, 12)).close.minX, plain.close.minX + 0.2915 * 8, accuracy: 0.01)
+        XCTAssertEqual(FrameHealthCardFace.Layout(width: width, corners: (20, 12, 12, 12)).close.minX, plain.close.minX + 0.2915 * 8, accuracy: 0.01)
         XCTAssertEqual(left.title, plain.title, "the title stays")
         XCTAssertEqual(left.share, plain.share)
         // The narrowest card, both corners rounded: the title's room and the moves shrink to keep the header apart
-        let both = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth, corners: (51, 51))
+        let both = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth, corners: (51, 51, 12, 12))
         let header = [both.close, both.title, both.status, both.details, both.share]
         for (a, b) in zip(header, header.dropFirst()) { XCTAssertLessThanOrEqual(a.maxX + 2, b.minX + 0.001, "\(a) and \(b)") }
 

@@ -60,7 +60,7 @@ fn ec(state: &mut HostState, op: u32, a: &str, data: &[u8]) -> Result<String, St
         | DataError::Unavailable(m)
         | DataError::UnknownSource(m)
         | DataError::Interface(m)
-        | DataError::DeferredAtBake(m)
+        | DataError::DeferredAtBake { message: m, .. }
         | DataError::Overrun(m)
         | DataError::Failed(_, m, _) => m,
     };

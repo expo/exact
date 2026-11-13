@@ -5,7 +5,7 @@ use accesskit::{
 };
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use exact_kernel::PropId;
-use exact_linux::{
+use exact_painted::{
     presenter::access::{act, flag, role, Node as Source},
     Presenter,
 };

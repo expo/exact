@@ -39,8 +39,10 @@ import { throwContractErrors } from './contract-diagnosis.mjs';
 import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withHostDeployment } from './filesystem.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { startSweep } from './sweep.mjs';
-import { NO_WORKSPACE, androidCargo, appleCargo, authoredWorkspace, cargoDiagnosticsCommand, cargoOnPath, knownWorkspace, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
-export { cargoOnPath } from './cargo-check.mjs';
+import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
+  NO_WORKSPACE, androidCargo, appleCargo, authoredWorkspace, cargoDiagnosticsCommand,
+  cargoOnPath, knownWorkspace, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
+export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath } from './cargo-check.mjs';
 import { ensureShells } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
 import { gameDefaults, lintGame, prepareGame } from '../game/app/shells.mjs';
@@ -49,8 +51,6 @@ import { shareTargetProblems, webShareTarget } from './share-target.mjs';
 import { bakedSettings, noteBunLoaded, settingChanges } from '../js/bake/src/__exact_env.mjs';
 noteBunLoaded(); // before this script starts a process: the settings Bun loaded from `.env` files (LLP 1153 D4)
 cargoOnPath(); process.env.HERMES_LEAN_SYS_OFFLINE = '1';
-/** Every Cargo process Exact starts refuses implicit Hermes acquisition. */
-export function cargoEnvironment(env = process.env) { return withHostDeployment({ ...env, HERMES_LEAN_SYS_OFFLINE: '1' }); }
 // @ref llp/1046.006.000-render-hooks.rfc.md#d5-shaders-that-live-with-the-game
 /** Explicit source roots, relative to app.json. Only packaged names reach a host. */
 export function shaderRoots(app) {
@@ -267,41 +267,6 @@ export function wasmRemapFlags(app, toolchain = null) {
     ...(app?.manifest?.game ? ['-C', 'llvm-args=-fp-contract=off'] : []),
     ...(toolchain === WEB_TOOLCHAIN ? WEB_RUSTFLAGS : [])];
   return targetRustflags('wasm32-unknown-unknown', flags, { cwd });
-}
-
-/** The web artifacts' toolchain (LLP 1047 §6, §10): a pinned nightly builds
- * std for size, and a panic aborts without its message or location. The web
- * shows neither: wasm32-unknown-unknown has no panic output and the glue
- * reads no trap. Everything else builds with rust-toolchain.toml's stable. */
-export const WEB_TOOLCHAIN = 'nightly-2026-08-21';
-export const WEB_STD = ['-Zbuild-std=std,panic_abort', '-Zbuild-std-features=optimize_for_size'];
-// Deprecation is stable's to judge (the six checks' clippy): the nightly
-// deprecates names, like `fetch_update`, before stable has their successors.
-const WEB_RUSTFLAGS = ['-Zunstable-options', '-Cpanic=immediate-abort', '-Zlocation-detail=none', '-Adeprecated'];
-export const WEB_SIZE = [...WEB_STD, ...WEB_RUSTFLAGS].join(' ');
-/** The environment for a web build, refusing a machine without the toolchain
- * or its std sources (Cargo builds offline, so std's dependencies too). */
-export function webToolchainEnv(env) {
-  const sysroot = spawnSync('rustc', ['--print', 'sysroot'], { env: { ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }, encoding: 'utf8' });
-  if (sysroot.status !== 0 || !existsSync(resolve(sysroot.stdout.trim(), 'lib/rustlib/src/rust/library/Cargo.lock'))) throw new Error(
-    `the web artifact builds with ${WEB_TOOLCHAIN} and its std sources (LLP 1047):\n` +
-    `  rustup toolchain install ${WEB_TOOLCHAIN} --profile minimal --component rust-src --component llvm-tools\n` +
-    `  cargo +${WEB_TOOLCHAIN} fetch --manifest-path "$(rustc +${WEB_TOOLCHAIN} --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml"`);
-  // `-Zbuild-std` builds std offline, so std's own locked sources must be in
-  // Cargo's cache. Checked once per toolchain (a marker beside the sysroot's
-  // library) and fetched when missing, rather than failing mid-build.
-  const library = resolve(sysroot.stdout.trim(), 'lib/rustlib/src/rust/library');
-  const marker = resolve(library, '.exact-fetched');
-  if (!existsSync(marker)) {
-    const offline = spawnSync('cargo', ['metadata', '--offline', '--locked', '--format-version', '1', '--manifest-path', resolve(library, 'Cargo.toml')], { env: cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }), encoding: 'utf8', maxBuffer: 1 << 26 });
-    let ready = offline.status === 0;
-    if (!ready) {
-      console.error(`${WEB_TOOLCHAIN}: std's sources are not fetched; fetching them once (cargo fetch --manifest-path …/library/Cargo.toml)`);
-      ready = spawnSync('cargo', ['fetch', '--locked', '--manifest-path', resolve(library, 'Cargo.toml')], { env: cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }), stdio: ['ignore', 'inherit', 'inherit'] }).status === 0;
-    }
-    if (ready) try { writeFileSync(marker, ''); } catch { /* a read-only toolchain checks again next time */ }
-  }
-  return cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN, EXACT_WEB_SIZE: WEB_SIZE });
 }
 
 // A Bun older than package.json's pin is refused before anything builds.

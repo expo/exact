@@ -390,17 +390,17 @@ fn dynamic_unavailable_colors_take_the_initial_value() {
     }
 }
 
-/// LLP 1069.000 D3 (#136): the live page writes the pixels the kernel
-/// resolves a `rem`/`em` row to, and re-resolves them; a page that keeps no
-/// kernel (the JS target's stylesheet) writes the units, for the browser.
+/// Both targets leave `em` to the browser's font. The live host resolves
+/// `rem` through the kernel; templates retain it (LLP 1069.000 D3).
 #[test]
-fn relative_lengths_are_pixels_live_and_units_ahead_of_time() {
+fn relative_lengths_keep_em_live_and_rem_ahead_of_time() {
     use exact_kernel::{StyleId, StyleProps, StyleValue};
     let mut s = StyleProps::default();
     for (id, value) in [
         (StyleId::Width, "10rem"),
         (StyleId::Height, "48px"),
         (StyleId::MarginLeft, "-0.5em"),
+        (StyleId::PaddingLeft, "0.5em"),
         (StyleId::FontSize, "1.5em"),
         (StyleId::LineHeight, "1.25em"),
         (StyleId::LetterSpacing, "0.1em"),
@@ -419,11 +419,12 @@ fn relative_lengths_are_pixels_live_and_units_ahead_of_time() {
     for (live_decl, ahead_decl) in [
         ("width:160px;".to_string(), "width:10rem;".to_string()),
         ("height:48px;".into(), "height:48px;".into()),
-        ("margin-left:-8px;".into(), "margin-left:-0.5em;".into()),
-        ("font-size:24px;".into(), "font-size:1.5em;".into()),
-        ("line-height:20px;".into(), "line-height:1.25em;".into()),
+        ("margin-left:-0.5em;".into(), "margin-left:-0.5em;".into()),
+        ("padding-left:0.5em;".into(), "padding-left:0.5em;".into()),
+        ("font-size:1.5em;".into(), "font-size:1.5em;".into()),
+        ("line-height:1.25em;".into(), "line-height:1.25em;".into()),
         (
-            "letter-spacing:1.6px;".into(),
+            "letter-spacing:0.1em;".into(),
             "letter-spacing:0.1em;".into(),
         ),
         (

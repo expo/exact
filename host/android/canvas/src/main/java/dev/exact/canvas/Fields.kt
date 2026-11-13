@@ -87,7 +87,7 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
  * The app's text fields (LLP 1115.001 D8). Each `input` of a text type and each `textarea` is the framework's own
  * [EditText], with no background of its own, over the container exact2 paints for it. The IME and its composition,
  * autofill, the selection handles, the magnifier, the floating toolbar and the spell checker are the platform's,
- * because the field is. `host/linux/src/presenter/hosted.rs` is exact2's side and has the words that cross.
+ * because the field is. `host/painted/src/presenter/hosted.rs` is exact2's side and has the words that cross.
  *
  * **Where a field is.** exact2 lays it out and says, with each stream, where its content box was painted, under
  * which clip, and among which scroller's rows ([told], [Native.fields]). The view is put there for real (its

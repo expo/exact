@@ -337,26 +337,23 @@ impl<D: DataSource> Runner<D> {
         seed
     }
 
-    /// Before the source is ready, each store reader is asked again at
-    /// `data_ready`, and shows the answer kept from the last launch where it
-    /// still fits (`seeded`: a document's answers already seeded it). A
-    /// launch that begins with a presence secret locked or pending shows
-    /// none (LLP 1133.010 D5): a kept answer is the account's content, and
-    /// the person has not passed the check yet.
-    pub(super) fn seed_kept(&mut self, seeded: &[bool], device_state: bool) {
+    /// Before the source is ready, each row the bake marked `reader` is
+    /// asked again at `data_ready`, and shows the answer kept from the last
+    /// launch where it still fits. A row a page's answer seeded (`seeded`)
+    /// is left to the page, whose checkpoint says whether it is asked again
+    /// ([`Runner::seed_checkpoint`]). A launch that begins with a presence
+    /// secret locked or pending shows none (LLP 1133.010 D5): a kept answer
+    /// is the account's content, and the person has not passed the check yet.
+    pub(super) fn seed_kept(&mut self, seeded: &[bool]) {
         let locked = self.store.opened_locked();
         if locked {
             self.log("kept answers not shown: the launch begins with a presence secret locked (LLP 1133.010 D5)");
         }
         for (i, &taken) in seeded.iter().enumerate() {
-            if !self.resource_row(i).reader
+            if taken
+                || !self.resource_row(i).reader
                 || exact_plan::runner_owned_source(self.plan.str(self.resource_row(i).source))
             {
-                continue;
-            }
-            // An answer the runtime already has isn't asked again when
-            // the module loads, unless the device's store may change it.
-            if taken && !device_state {
                 continue;
             }
             self.resources[i].stale = true;
@@ -382,15 +379,9 @@ impl<D: DataSource> Runner<D> {
 
     /// The first frame's kept answers: a store reader's while the data
     /// source is not ready, and a kept module source's always.
-    pub(super) fn seed_at_boot(
-        &mut self,
-        seeded: &[bool],
-        device_state: bool,
-        ready: bool,
-        private: bool,
-    ) {
+    pub(super) fn seed_at_boot(&mut self, seeded: &[bool], ready: bool, private: bool) {
         if !ready {
-            self.seed_kept(seeded, device_state);
+            self.seed_kept(seeded);
         }
         self.seed_kept_modules(ready, private);
         if !private && !self.store.opened_locked() {

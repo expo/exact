@@ -50,12 +50,14 @@ final class PresentedText: TextPresentation {
     func markdown(_ engine: TextEngine, source: Run, atoms: String, faces: String, rtl: Bool) -> [Run]? {
         MarkdownLink.installed?.expand(source.text, base: source, color: nil, boldText: engine.boldTextSteps(source.family), atoms: MarkdownAtoms(kinds: atoms, faces: faces, rtl: rtl))
     }
+    func resolveRuns(_ engine: TextEngine, runs: [Run]) -> [Run] { engine.atomIcons(runs) }
     func editorMarkdown(_ engine: TextEngine, source: Run, atoms: String, faces: String, rtl: Bool, width: CGFloat?) -> [Run]? {
         MarkdownLink.installed?.editorRuns(source.text, base: source, atoms: MarkdownAtoms(kinds: atoms, faces: faces, rtl: rtl), width: width) { engine.font($0) }
     }
     func attributes(_ r: Run, color: [Double], scale: CGFloat, attributes a: inout [NSAttributedString.Key: Any]) {
         a[.foregroundColor] = r.color.map(TextEngine.color) ?? TextEngine.color(color)
         if r.hidden { a[.exactHidden] = true }
+        if let icon = r.atomIcon { a[.exactAtomIcon] = TextAtomIcon(icon) }
         if r.fixedInk, r.color != nil { a[.exactFixedInk] = true }
         // A centred stroke over the fill: Core Text's negative width,
         // in percent of the run's size (LLP 1077 D7). Each run's own.
@@ -67,11 +69,11 @@ final class PresentedText: TextPresentation {
         if let sh = r.shadow, TextEngine.isShadow(sh) { a[.exactShadow] = TextRunShadow(sh) }
         // A run's own line is in its own colour and shows over its boxes';
         // a box's alone is in that box's colour (`Run.propagate`).
-        if r.underlined || r.underlineColor != nil {
+        if r.atomIcon == nil, r.underlined || r.underlineColor != nil {
             a[.underlineStyle] = NSUnderlineStyle.single.rawValue
             if !r.underlined, let c = r.underlineColor { a[.underlineColor] = TextEngine.color(c) }
         }
-        if r.decoration.contains("line-through") || r.strikeColor != nil {
+        if r.atomIcon == nil, r.decoration.contains("line-through") || r.strikeColor != nil {
             a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             if !r.decoration.contains("line-through"), let c = r.strikeColor { a[.strikethroughColor] = TextEngine.color(c) }
         }
@@ -213,7 +215,7 @@ extension TextEngine {
 /// The content area is the run's own font's, as the web's inline box is.
 /// `box` and `radii` are the run's box and its `border-radius` until
 /// `PresentedText.finish` puts the paragraph's table of boxes in their place.
-final class InlineBackground: NSObject {
+final class InlineBackground: NSObject, @unchecked Sendable {
     let color: CGColor
     let ascent: CGFloat
     let descent: CGFloat
@@ -279,7 +281,10 @@ enum TextLinePaint {
         ctx.scaleBy(x: 1, y: -1)
         ctx.textMatrix = .identity
         ctx.textPosition = .zero
-        if !drawShadowed(line, in: ctx, scale: scale, pass: pass) { CTLineDraw(line, ctx) }
+        if !drawShadowed(line, in: ctx, scale: scale, pass: pass) {
+            CTLineDraw(line, ctx)
+            TextAtomIcon.draw(line, in: ctx)
+        }
         ctx.textMatrix = matrix
         ctx.restoreGState()
     }

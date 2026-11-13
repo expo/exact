@@ -993,8 +993,12 @@ pub enum DataError {
     UnknownSource(String),
     BadArguments(String),
     Unavailable(String),
-    /// Build-time storage cannot answer; use the resource placeholder until activation.
-    DeferredAtBake(String),
+    /// A build-time call cannot answer; use the resource placeholder until activation.
+    DeferredAtBake {
+        message: String,
+        /// An invalid option needs a build warning; ordinary deferral does not.
+        warning: bool,
+    },
     /// The seam to a loaded Rust module could not carry the call (an
     /// answer over its bound, a trap): the source is there but cannot
     /// answer now. A resource asked this fails; it does not refuse the
@@ -1021,7 +1025,9 @@ impl std::fmt::Display for DataError {
             Self::UnknownSource(name) => write!(f, "unknown source: {name}"),
             Self::BadArguments(reason)
             | Self::Unavailable(reason)
-            | Self::DeferredAtBake(reason)
+            | Self::DeferredAtBake {
+                message: reason, ..
+            }
             | Self::Interface(reason)
             | Self::Overrun(reason)
             | Self::Failed(_, reason, _) => f.write_str(reason),

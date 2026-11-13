@@ -28,7 +28,7 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expect {
     /// `expect state name == literal`: the observation line's value text.
-    State(String, String),
+    State(String, contract_syntax::StateComparison, Vec<String>),
     /// `expect text "id" == "value"`.
     Text(String, String),
     /// `expect tree has|missing "id"`.
@@ -304,10 +304,28 @@ fn deliver(step: &Step) -> Result<Option<Item>, String> {
             Some(Ok(ms)) if ms.is_finite() && ms >= 0.0 => Item::Event(Event::Clock(ms)),
             _ => return Err("only clock +ms, data, settle and until state are delivered".into()),
         },
-        Step::ExpectState { name, value, .. } => match literal(value) {
-            Some(v) => Item::Expect(Expect::State(name.clone(), v), step.span()),
-            None => return Err(format!("expect state {name} needs a literal")),
-        },
+        Step::ExpectState {
+            name,
+            comparison,
+            value,
+            ..
+        } => {
+            let values = if *comparison == contract_syntax::StateComparison::In {
+                let Expr::List(values, _) = value else {
+                    return Err("state membership needs literals".into());
+                };
+                values.iter().map(literal).collect::<Option<Vec<_>>>()
+            } else {
+                literal(value).map(|value| vec![value])
+            };
+            match values {
+                Some(values) => Item::Expect(
+                    Expect::State(name.clone(), *comparison, values),
+                    step.span(),
+                ),
+                None => return Err(format!("expect state {name} needs a literal")),
+            }
+        }
         Step::ExpectText { target, value, .. } => {
             Item::Expect(Expect::Text(target.clone(), value.clone()), step.span())
         }
@@ -429,6 +447,32 @@ fn step_kind(step: &Step) -> String {
             "tap (not a plain press)".into()
         }
         other => kind_name(other.kind()),
+    }
+}
+
+/// Compare canonical observations with the same literal and numeric rules as the device driver.
+pub(crate) fn state_holds(
+    got: Option<&str>,
+    comparison: contract_syntax::StateComparison,
+    values: &[String],
+) -> bool {
+    use contract_syntax::StateComparison as C;
+    match comparison {
+        C::Equal | C::In => got.is_some_and(|got| values.iter().any(|value| value == got)),
+        C::AtLeast | C::AtMost => got
+            .and_then(crate::property::number)
+            .zip(
+                values
+                    .first()
+                    .and_then(|value| crate::property::number(value)),
+            )
+            .is_some_and(|(got, bound)| {
+                if comparison == C::AtLeast {
+                    got >= bound
+                } else {
+                    got <= bound
+                }
+            }),
     }
 }
 

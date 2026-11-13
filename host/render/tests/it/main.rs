@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 mod boot;
 mod checkpoints;
 mod direct;
+mod each;
 mod longpoll;
 mod overload;
 mod serve;

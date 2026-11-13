@@ -77,7 +77,7 @@ extension NavigationHost {
 
     /// What covers `node` but for `kept`, which stays in the page: the node
     /// itself, or, where it holds any of `kept`, each part of it that holds
-    /// none (host/linux/src/bars.rs `covered`).
+    /// none (host/painted/src/bars.rs `covered`).
     static func covered(_ node: NodeView, keeping kept: [NodeView]) -> [NodeView] {
         guard kept.contains(where: { $0.isDescendant(of: node) }) else { return [node] }
         return node.container.subviews.compactMap { $0 as? NodeView }

@@ -511,6 +511,7 @@ open class ExactActivity : Activity() {
         view.running(true)
         Exact.hidden(false)
         if (measured) Exact.owner?.windowFrames?.attach(window)
+        Extensions.started()
     }
 
     /** A driver's launch: the window's frames are measured for `perf frames` while it shows (LLP 1079.000 §6.2). */
@@ -538,6 +539,7 @@ open class ExactActivity : Activity() {
         Exact.owner?.windowFrames?.detach()
         Exact.hidden(true)
         if (reads()) pads.background()
+        if (reads()) Extensions.stopped(isChangingConfigurations)
         view.running(false, reads())
         // Behind the hide, the pads' release and the stop of the turns (none queued after it), what they and anything
         // since the pause committed is on disk before Android may kill it.
@@ -608,7 +610,7 @@ open class ExactActivity : Activity() {
     private fun environment(arrived: Boolean) {
         android.system.Os.setenv("XDG_CACHE_HOME", cacheDir.absolutePath, true)
         // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
-        // drive with no scratch store keeps its `app:/` files under it (`exact_linux::picker`).
+        // drive with no scratch store keeps its `app:/` files under it (`exact_painted::picker`).
         android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, false)
         // The launching intent's URL is the launch location (LLP 1133.023 D15 item 3): the activity is exported, so
         // any app may start it with one, which reaches only what the navigation root routes, as a link does.

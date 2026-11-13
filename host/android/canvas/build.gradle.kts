@@ -15,7 +15,7 @@ android {
             "../../../packages/background/android", "../../../packages/background/test",
             "../../../packages/calendar/android", "../../../packages/calendar/test",
             "../../../packages/camera/android", "../../../packages/camera/test",
-            "../../../packages/contacts/android",
+            "../../../packages/contacts/android", "../../../packages/contacts/test",
             "../../../packages/text-detection/android", "../../../packages/text-detection/test",
             "../../../packages/media-capture/android", "../../../packages/media-capture/test",
         ))

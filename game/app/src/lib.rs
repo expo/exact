@@ -55,7 +55,7 @@ fn bake_source<D: contract::DataSource>(
         platform
     };
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    // The Android shell is a cdylib only on Android (`exact_linux::canvas_jni!`); off it the library is empty.
+    // The Android shell is a cdylib only on Android (`exact_painted::canvas_jni!`); off it the library is empty.
     if platform == "android" && env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         fs::write(out.join("entry.rs"), "").unwrap();
         return;
@@ -126,7 +126,7 @@ fn bake_source<D: contract::DataSource>(
     } else {
         String::new()
     };
-    let composed = "exact_linux::Composed { packages: exact_packages(), ..Default::default() }";
+    let composed = "exact_painted::Composed { packages: exact_packages(), ..Default::default() }";
     let windows = format!(
         "fn main() {{ std::process::exit(exact_windows::run_composed::<AppData>({:?}, {}, PLAN, COMPAT, {composed})); }}",
         manifest.name,
@@ -142,7 +142,7 @@ fn bake_source<D: contract::DataSource>(
         }
         "linux" => &linux,
         // canvas_jni! embeds OUT_DIR's plan and compat itself.
-        "android" => "exact_linux::canvas_jni!(crate::AppData);",
+        "android" => "exact_painted::canvas_jni!(crate::AppData);",
         "windows" => &windows,
         _ => panic!("unsupported game app platform: {platform}"),
     };

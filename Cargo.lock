@@ -108,8 +108,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -231,8 +231,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -296,8 +296,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -321,6 +321,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -341,8 +342,8 @@ version = "0.1.0"
 dependencies = [
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-windows",
  "ibex2-sqlite",
 ]
@@ -571,7 +572,7 @@ dependencies = [
  "caltrain-data",
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
 ]
 
 [[package]]
@@ -615,6 +616,7 @@ dependencies = [
  "exact-linux",
  "exact-linux-update",
  "exact-logic",
+ "exact-painted",
  "exact-render",
  "ibex2-sqlite",
 ]
@@ -662,6 +664,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -705,6 +708,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -833,6 +837,7 @@ dependencies = [
  "contract",
  "exact-bake",
  "exact-linux",
+ "exact-painted",
 ]
 
 [[package]]
@@ -868,7 +873,7 @@ dependencies = [
  "contacts-calendar-fixture-data",
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
 ]
 
 [[package]]
@@ -1251,6 +1256,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -1412,7 +1418,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-ink",
- "exact-linux",
+ "exact-painted",
  "exact-runner",
  "serde_json",
  "winit",
@@ -1697,63 +1703,16 @@ dependencies = [
 name = "exact-linux"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
- "caltrain",
- "caltrain-data",
- "cc",
- "chrono",
- "chrono-tz",
  "contract",
  "des",
  "drm",
  "evdev",
- "exact-canvas",
- "exact-color",
- "exact-data",
- "exact-executor",
- "exact-grants",
- "exact-ink",
- "exact-js",
  "exact-kernel",
- "exact-linux",
- "exact-listen",
- "exact-markdown",
- "exact-motion",
- "exact-plan",
- "exact-raster",
- "exact-route",
+ "exact-painted",
  "exact-runner",
- "exact-svg-file",
- "exact-svg-raster",
- "exact-textflow",
- "exact-update",
- "fontconfig-parser",
- "fontique",
  "getrandom 0.3.4",
- "iana-time-zone",
- "ibex2",
- "jni-sys 0.3.1",
  "libc",
- "libloading",
- "memmap2",
- "messages-stress-data",
- "mimalloc",
- "parley",
- "png",
- "raw-window-handle",
- "roxmltree",
- "serde",
- "serde_json",
- "sha2",
- "skrifa",
- "swash",
  "tiny-skia",
- "unicode-segmentation",
- "url",
- "vello",
- "wgpu 29.0.4",
- "windows",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1765,6 +1724,7 @@ dependencies = [
  "contract",
  "exact-kernel",
  "exact-linux",
+ "exact-painted",
  "exact-runner",
  "exact-update",
  "ibex2",
@@ -1815,6 +1775,7 @@ dependencies = [
  "exact-linux",
  "exact-live-data",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -1890,6 +1851,66 @@ dependencies = [
 [[package]]
 name = "exact-num"
 version = "0.1.0"
+
+[[package]]
+name = "exact-painted"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "caltrain",
+ "caltrain-data",
+ "cc",
+ "chrono",
+ "chrono-tz",
+ "contract",
+ "exact-canvas",
+ "exact-color",
+ "exact-data",
+ "exact-executor",
+ "exact-grants",
+ "exact-ink",
+ "exact-js",
+ "exact-kernel",
+ "exact-listen",
+ "exact-markdown",
+ "exact-motion",
+ "exact-painted",
+ "exact-plan",
+ "exact-raster",
+ "exact-route",
+ "exact-runner",
+ "exact-svg-file",
+ "exact-svg-raster",
+ "exact-textflow",
+ "exact-update",
+ "fontconfig-parser",
+ "fontique",
+ "getrandom 0.3.4",
+ "iana-time-zone",
+ "ibex2",
+ "jni-sys 0.3.1",
+ "libc",
+ "libloading",
+ "memmap2",
+ "messages-stress-data",
+ "mimalloc",
+ "parley",
+ "png",
+ "raw-window-handle",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "skrifa",
+ "swash",
+ "tiny-skia",
+ "unicode-segmentation",
+ "url",
+ "vello",
+ "wgpu 29.0.4",
+ "windows",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "exact-plan"
@@ -2128,7 +2149,7 @@ dependencies = [
  "contract",
  "exact-ink",
  "exact-kernel",
- "exact-linux",
+ "exact-painted",
  "exact-runner",
  "png",
  "serde_json",
@@ -2223,8 +2244,8 @@ dependencies = [
  "exact-data-host",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "fieldnotes-data",
  "ibex2-sqlite",
@@ -2269,6 +2290,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "fieldnotes-data",
  "ibex2-sqlite",
 ]
@@ -2471,6 +2493,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "geofence-fixture-data",
  "ibex2-sqlite",
 ]
@@ -3041,6 +3064,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "interaction-gallery-data",
 ]
@@ -3271,8 +3295,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -3296,6 +3320,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -3353,6 +3378,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -3465,6 +3491,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "map-demo-data",
 ]
@@ -3545,6 +3572,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "markdown-stress-data",
 ]
@@ -3580,7 +3608,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "hello-data",
 ]
 
@@ -3591,6 +3619,7 @@ dependencies = [
  "contract",
  "exact-kernel",
  "exact-linux",
+ "exact-painted",
  "serde_json",
  "tiny-skia",
 ]
@@ -3629,6 +3658,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "exact-runner",
  "ibex2-sqlite",
@@ -3666,6 +3696,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "messages-stress-data",
  "serde_json",
@@ -3723,6 +3754,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "metronome-data",
 ]
@@ -3786,7 +3818,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "module-fixture-data",
 ]
 
@@ -3808,6 +3840,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "module-fixture-data",
 ]
@@ -3840,6 +3873,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "motion-gallery-data",
 ]
@@ -3926,7 +3960,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "native-fixture-data",
 ]
 
@@ -3958,6 +3992,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "native-fixture-data",
 ]
@@ -4067,6 +4102,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -4420,7 +4456,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "orientation-fixture-data",
 ]
 
@@ -4452,6 +4488,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "orientation-fixture-data",
 ]
@@ -4589,6 +4626,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -4610,7 +4648,7 @@ dependencies = [
  "contract",
  "exact-bake",
  "exact-data-host",
- "exact-linux",
+ "exact-painted",
  "photos-fixture-data",
 ]
 
@@ -4864,8 +4902,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -4950,6 +4988,7 @@ dependencies = [
  "exact-kernel",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-textflow",
  "ibex2-sqlite",
  "reflow-data",
@@ -5313,6 +5352,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "shared-elements-data",
 ]
@@ -5336,8 +5376,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -5362,6 +5402,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -5551,6 +5592,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "spark-data",
 ]
@@ -5595,6 +5637,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "sparkline-data",
 ]
@@ -5732,6 +5775,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "svg-gallery-data",
 ]
@@ -5815,7 +5859,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "tamber-host-data",
 ]
 
@@ -5920,6 +5964,7 @@ dependencies = [
  "exact-kernel",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-textflow",
  "ibex2-sqlite",
  "textflow-data",
@@ -6120,7 +6165,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "typetour-data",
 ]
 
@@ -6152,6 +6197,7 @@ dependencies = [
  "exact-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
  "typetour-data",
 ]
@@ -6226,7 +6272,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
- "exact-linux",
+ "exact-painted",
  "hello-data",
 ]
 
@@ -6351,8 +6397,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]
@@ -6377,6 +6423,7 @@ dependencies = [
  "exact-js-bake",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "ibex2-sqlite",
 ]
 
@@ -6727,8 +6774,8 @@ dependencies = [
  "contract",
  "exact-js",
  "exact-js-bake",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-plan",
  "ibex2-sqlite",
 ]

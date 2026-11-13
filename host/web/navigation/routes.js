@@ -542,12 +542,23 @@ function opensPopover(el) {
   return !!document.getElementById(el.getAttribute("popovertarget") || "")?.hasAttribute("popover") && !/^hide$/i.test(el.getAttribute("popovertargetaction") ?? "");
 }
 // LLP 1115.000 D4.1: title precedence is authored head, visible route heading, then app name.
-const titleOf = (route) => headerOf(route)?.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]")?.textContent.trim() ?? "";
+const titleOf = (route) => {
+  for (const el of headerOf(route)?.getElementsByTagName("*") ?? []) {
+    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]")) return el.textContent.trim();
+  }
+  return "";
+};
 let saidTitle = null, appName = null;
+export function routeTitle(root) {
+  for (const nav of root?.getElementsByTagName("*") ?? []) {
+    if (nav.hasAttribute("navigationBack")) return titleOf(selectedRoute(nav)) || null;
+  }
+  return null;
+}
 export function pageTitle(said = saidTitle) {
   saidTitle = said;
   appName ??= document.querySelector("meta[property=\"og:site_name\"]")?.content ?? document.title;
-  const nav = root?.querySelector("[navigationBack]"), title = said ?? (nav && titleOf(selectedRoute(nav)) || appName);
+  const title = said ?? routeTitle(root) ?? appName;
   if (document.title !== title) {
     document.title = title;
   }

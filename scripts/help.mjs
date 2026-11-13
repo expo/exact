@@ -327,11 +327,11 @@ Ports    none. Runs to completion.`,
       ['--release', 'optimize the APK for speed; set EXACT_UPDATE_TRUST=production for distribution'],
       ['--bundle', 'build a production .aab with an upload key; implies --release and no install'],
       ['--headless', 'build the Linux host for Android instead (agent android --headless runs it under adb shell)'],
+      ['--write-locks', 'regenerate gradle.lockfile and gradle-verification.xml after graph changes; review and commit both'],
       jsonBuilt(', installed (the device\'s serial, or null with none ready)', '; printed after the install; not with --run'),
     ],
-    // `--apk --install` are the verb's own; --release builds the release profile, for measuring; --write-locks writes
-    // the Gradle lock and verification files of an app whose modules name Maven libraries.
-    internal: ['--apk', '--install', '--write-locks'],
+    // `--apk --install` are the verb's own.
+    internal: ['--apk', '--install'],
     body: `Builds android/ for aarch64-linux-android, packages it with exact2's Canvas reader
 (host/android) into an APK under target/android/, prints its path and installs it on the
 device: ANDROID_SERIAL, else the one adb lists (with several and none named, it refuses).

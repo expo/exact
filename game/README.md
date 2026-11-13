@@ -984,7 +984,7 @@ accessibility and controls; the world owns the canvas contents. A HUD button wit
 `action="jump"` holds that `Actions` action while pressed; its `aria-keyshortcuts`
 takes its chord (the key with exactly its modifiers) before the focused world hears
 it and presses the action once per keydown, never on its repeats, moving no focus,
-on every host (the rule `host/linux/src/presenter/shortcuts.rs` states). The bake warns
+on every host (the rule `host/painted/src/presenter/shortcuts.rs` states). The bake warns
 when `Actions` bind the same key. Show touch controls under
 `exactViewport().pointer == "coarse"` ([recipe](recipes/touch-controls.md)). Hosts consume
 declaration data without a build dependency on the engine or gameplay. The GPU

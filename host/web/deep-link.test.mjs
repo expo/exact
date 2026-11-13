@@ -12,7 +12,7 @@ import {spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {Readable} from 'node:stream';
 import {createApp} from '../../game/new.mjs';
-import {developmentBuildEnv} from '../../scripts/app.mjs';
+import {HOST_DEV, developmentBuildEnv} from '../../scripts/app.mjs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {acceptsHTML, appDocumentPath, DirectoryOrigin, prefersMarkdown, webRootPath} from '../../scripts/origin.mjs';
@@ -271,7 +271,7 @@ for (const wasm of [false, true]) describe.skipIf(wasm && !SLOW)(`${wasm ? 'wasm
     });
     await prepare(process.execPath, ['host/web/build.mjs', app, '--render', 'none', ...(wasm ? ['--wasm'] : [])]);
     if (wasm) {
-      await prepare('cargo', ['build', '-q', '--release', '-p', 'exact-js-bake']);
+      await prepare('cargo', ['build', '-q', '--profile', HOST_DEV, '-p', 'exact-js-bake']);
       // A loop's first start builds the module producer and the app's wasm crates into the app's own target
       // (dev.mjs `toolingEnv`), minutes for a new app on a loaded machine: preparation too, so start it once
       // here, past the 30-second waits, until it listens.

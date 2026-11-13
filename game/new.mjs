@@ -203,7 +203,7 @@ export function createApp(destination, options = {}) {
 
 /** The crates an app's own depend on by path (`writeApp`, `linuxCrate`): a
  * folder named `exact` would write an `exact-apple` beside the SDK's. */
-const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
+const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-painted', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
 
 const rosterRule = body => {
   const insert = /^[ \t]+insert[ \t]*<-[ \t]*([^\n]*)/m.exec(body);

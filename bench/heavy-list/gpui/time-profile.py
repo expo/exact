@@ -28,7 +28,7 @@ for phase in ['fling','rest']:
   if not stack or leaf['name'].startswith('0x') or leaf['name']=='unknown':owner='unresolved';unresolved+=w
   elif any('benchmark-probe' in b for b in bins):owner='probe'
   elif 'Main Thread' in s['thread']:owner='main carrier/platform'
-  elif 'exact_linux::image' in names:owner='image'
+  elif 'exact_painted::image' in names:owner='image'
   elif 'exact_ink::present' in names:owner='present worker'
   elif 'agent' in names:owner='agent'
   elif any('Metal' in b or 'IOGPU' in b for b in bins):owner='Metal driver'

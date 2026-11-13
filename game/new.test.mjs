@@ -486,7 +486,7 @@ test('a Windows game shell links the shared presenter its baked entry uses', () 
     const app = resolve(root, 'windows-game');
     createGame(app);
     const manifest = Bun.TOML.parse(readFileSync(resolve(app, '.shells/windows/Cargo.toml'), 'utf8'));
-    assert.deepEqual(manifest.dependencies['exact-linux'], {workspace:true});
+    assert.deepEqual(manifest.dependencies['exact-painted'], {workspace:true});
     assert.deepEqual(manifest.dependencies['exact-windows'], {workspace:true});
   } finally {rmSync(root, {recursive:true, force:true});}
 });

@@ -240,7 +240,7 @@ test.each([true, false])('writes over list members retire independently (overlay
         rt.hd(root, { headTitle: () => got().join(',') + one() });
       });
       window.fixture = { rt, got, options, overlaid, completions,
-        snapshot: () => JSON.parse(answers([got, one], [['[', 's'], 's'], {})),
+        snapshot: () => JSON.parse(answers([got, one], [['[', 's'], 's'], {}).answers),
         save: () => rt.commit(() => rt.M(mutation, 'save', [])),
         change: value => rt.commit(() => rt.W(urls, value)),
         refuse: value => rt.commit(() => { rt.W(urls, value); rt.W(refusing, true); }),
@@ -256,7 +256,8 @@ test.each([true, false])('writes over list members retire independently (overlay
       const ticket = await page.evaluate(key => fixture.finish(key), key);
       await page.waitForFunction(ticket => [...fixture.rt.Resources, ...fixture.rt.Mutations].every(r => r.ticket?.id !== ticket), ticket);
     };
-    const checkpoint = [['got', 'look', [], ['server', 'server']], ['one', 'look', ['z'], 'server']];
+    // Each element's answer, never what a write shows
+    const checkpoint = [['got', 'look', ['a'], 'server'], ['got', 'look', ['b'], 'server'], ['one', 'look', ['z'], 'server']];
     for (const showLanded of [false, true, false]) {
       await page.evaluate(showLanded => { fixture.options.showLanded = showLanded; fixture.overlaid.length = 0; fixture.save(); }, showLanded);
       const shown = overlay ? 'writing' : 'server';
@@ -276,7 +277,7 @@ test.each([true, false])('writes over list members retire independently (overlay
     });
     await finish('c');
     expect(await page.evaluate(() => fixture.snapshot())).toEqual([
-      ['got', 'look', [], ['server', 'server', 'fresh', 'server']], ['one', 'look', ['z'], 'server'],
+      ['got', 'look', ['b'], 'server'], ['got', 'look', ['a'], 'server'], ['got', 'look', ['c'], 'fresh'], ['one', 'look', ['z'], 'server'],
     ]);
     await finish('save');
     await finish('a');
@@ -300,45 +301,113 @@ test.each([true, false])('writes over list members retire independently (overlay
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 
-test.each([false, true])('list members ask independently of the aggregate checkpoint (arguments: %s)', async withArgs => {
+// The page answered the first elements of `[1, 2, 3, 1]` and `title`; `readers` holds the first element's answer and
+// `title`'s. Each row gives the requests at boot, what each place of the list shows, and the elements' answers written
+// back by id.
+test.each([
+  ['with no arguments, the third takes the first\'s', { withArgs: false }, [],
+    ['rendered 1', 'rendered 2', 'rendered 1', 'rendered 1'], [[1, 'rendered 1'], [2, 'rendered 2'], [3, 'rendered 1']]],
+  ['with arguments, the third asks', {}, [['item', [3]]],
+    ['rendered 1', 'rendered 2', '', 'rendered 1'], [[1, 'rendered 1'], [2, 'rendered 2']]],
+  ['under another source, each asks', { source: 'other' }, [['item', [1]], ['item', [2]], ['item', [3]]],
+    ['', '', '', ''], []],
+  ['on a device whose store holds the app\'s own entries, those that read the store ask too', { store: true }, [['item', [1]], ['item', [3]], ['title', []]],
+    ['rendered 1', 'rendered 2', '', 'rendered 1'], [[1, 'rendered 1'], [2, 'rendered 2']]],
+])('list elements start from their page answers at their arguments: %s', async (_label, { withArgs = true, source = 'item', store = false }, requests, shown, written) => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
     await page.goto(server.url.href);
-    const boot = await page.evaluate(async withArgs => {
+    const boot = await page.evaluate(async ([withArgs, source, store]) => {
       globalThis.__exactRender = true;
       const cp = document.createElement('script');
       cp.type = 'application/vnd.exact.checkpoint';
       cp.textContent = JSON.stringify({ answers: [
-        ['items', 'item', [], [{ r: ['rendered 1'] }, { r: ['rendered 2'] }]],
+        ['items', source, withArgs ? [1] : [], { r: ['rendered 1'] }],
+        ['items', source, withArgs ? [2] : [], { r: ['rendered 2'] }],
         ['title', 'title', [], 'Hello'],
-      ], pending: [] });
+      ], pending: [], readers: [0, 2] });
       document.head.append(cp);
       const rt = await import('/host/web-js/rt.js'), { resEach } = await import('/host/web-js/each.js');
       const { answers } = await import('/host/web-js/checkpoint.js');
-      const requests = [], completions = [];
+      const requests = [];
       rt.data.answer = (source, args) => {
         requests.push([source, args]);
-        return { promise: new Promise(resolve => completions.push(resolve)) };
+        return { promise: new Promise(() => {}) };
       };
-      let items, title;
+      // A declared resource is made before `mount`, as an app's body makes it, and a list's elements in the boot
+      const title = rt.res('title', 'title', () => [], undefined, undefined, 's', '');
+      // Put the device's own entry in the store here, where `mount` loads it on a device: this page runs as a render,
+      // whose `Store.load` reads nothing
+      if (store) {
+        rt.Store.map.set('token', 'ada');
+      }
+      let items;
       rt.mount(root => {
-        items = resEach('items', 'item', () => [1, 2], x => x, x => withArgs ? [x] : [], '[{s}', '{s}', ['']);
-        title = rt.res('title', 'title', () => [], undefined, undefined, 's', '');
+        items = resEach('items', 'item', () => [1, 2, 3, 1], x => x, x => withArgs ? [x] : [], '[{s}', '{s}', ['']);
         rt.hd(root, { headTitle: () => title() + items().map(row => row[0]).join(',') });
       });
-      const snapshot = () => JSON.parse(answers([items, title], [['[', { text: 's' }], 's'], {}));
-      window.fixture = { rt, items, title, completions, snapshot };
-      return { requests, items: items(), pending: items.p(), title: title(), answers: snapshot() };
-    }, withArgs);
-    expect(boot).toEqual({ requests: [['item', withArgs ? [1] : []], ['item', withArgs ? [2] : []]],
-      items: [[''], ['']], pending: true, title: 'Hello', answers: [['title', 'title', [], 'Hello']] });
-    await page.evaluate(() => fixture.completions.forEach((resolve, i) => resolve([`fresh ${i + 1}`])));
-    await page.waitForFunction(() => fixture.rt.inflight.n === 0);
-    expect(await page.evaluate(() => [fixture.items(), fixture.items.p(), fixture.title()]))
-      .toEqual([[['fresh 1'], ['fresh 2']], false, 'Hello']);
-    expect(await page.evaluate(() => fixture.snapshot())).toEqual([
-      ['items', 'item', [], [{ r: ['fresh 1'] }, { r: ['fresh 2'] }]], ['title', 'title', [], 'Hello'],
-    ]);
+      // The page's answers as a render writes them
+      const written = JSON.parse(answers([items, title], [['[', { text: 's' }], 's'], {}).answers);
+      return { requests: requests.map(request => JSON.stringify(request)).sort(), items: items(), title: title(), answers: written };
+    }, [withArgs, source, store]);
+    const element = ([id, value]) => ['items', 'item', withArgs ? [id] : [], { r: [value] }];
+    expect(boot).toEqual({
+      requests: requests.map(request => JSON.stringify(request)).sort(), items: shown.map(text => [text]), title: 'Hello',
+      answers: [...written.map(element), ['title', 'title', [], 'Hello']],
+    });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
+// A resource asked again at other arguments keeps its earlier answer while the request is pending, and that request's
+// ticket puts the answer in `open`, so the reader's page shows it and asks again
+test('a render lists an answer whose request is still pending for the reader\'s page to ask again', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const written = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const rt = await import('/host/web-js/rt.js'), { answers } = await import('/host/web-js/checkpoint.js');
+      const at = rt.sig('a');
+      rt.data.answer = (source, [u]) => u === 'a' ? { v: 'first' } : { promise: new Promise(() => {}) };
+      let x;
+      rt.mount(root => {
+        x = rt.res('x', 'x', () => [at()], undefined, undefined, 's', '');
+        rt.hd(root, { headTitle: () => x() });
+      });
+      rt.commit(() => rt.W(at, 'b'));
+      const { answers: text, open } = answers([x], ['s'], {});
+      return { answers: JSON.parse(text), open, pending: x.p() };
+    });
+    expect(written).toEqual({ answers: [['x', 'x', ['a'], 'first']], open: [0], pending: true });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
+// A dev reload carries the developer's own settled answers, not a page's, so the runtime does not ask one again at
+// boot though it read the store and the store holds the app's own entries: the store rule at boot applies only to a
+// page's answers, as in the runner
+test('a dev reload\'s carried answer that read the store is not asked again at boot', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const boot = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const cp = document.createElement('script');
+      cp.type = 'application/vnd.exact.dev-checkpoint';
+      cp.textContent = JSON.stringify({ time: 0, answers: [['title', 'title', [], 'Hello', 's', true]] });
+      document.head.append(cp);
+      const rt = await import('/host/web-js/rt.js'), { devResource } = await import('/host/web-js/checkpoint.js');
+      const requests = [];
+      rt.data.answer = (source, args) => {
+        requests.push([source, args]);
+        return { promise: new Promise(() => {}) };
+      };
+      const title = devResource('title', 'title', () => [], undefined, undefined, 's', '', 's');
+      // Put the device's own entry in the store, as in the page tests above
+      rt.Store.map.set('token', 'ada');
+      rt.mount(root => rt.hd(root, { headTitle: () => title() }));
+      return { requests, title: title(), store: title.r.store };
+    });
+    expect(boot).toEqual({ requests: [], title: 'Hello', store: true });
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 

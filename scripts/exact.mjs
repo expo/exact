@@ -1082,7 +1082,7 @@ export function ended(${scope[0]}) {
 // \`exact hatch\`; yours from here. There is no platform object here: a hatch draws into its node's overlay
 // (a whole recording that replaces the last), observes the input that lands in its box, and changes Contract
 // state only by acting on authored nodes: click(), focus(), blur(), input(text).
-use exact_linux::hatches::{App, Context, Element, Hatches, Window};
+use exact_painted::hatches::{App, Context, Element, Hatches, Window};
 
 #[derive(Default)]
 pub struct AppHatches;

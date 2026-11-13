@@ -1,4 +1,4 @@
-export { liveById, sheetLeaves, panelsOf, overPage, pushingList, splitOf, unselected, unselectedForHead, routeFlags, historyURL, markBars, pageTitle, navigation, useSheets, sheetFrame } from "./navigation/routes.js";
+export { liveById, sheetLeaves, panelsOf, overPage, pushingList, splitOf, unselected, unselectedForHead, routeFlags, historyURL, markBars, routeTitle, pageTitle, navigation, useSheets, sheetFrame } from "./navigation/routes.js";
 export { listRow, viewChildren, viewParent, listOwner, listItem, syncListItemRoles, unwrapListItem } from "./navigation/lists.js";
 export { afterPaint, afterPaintPieces, presenceLoader, animationClock, animationClocks } from "./navigation/motion.js";
 export { scrollFollowers, scrollDrag } from "./navigation/scroll.js";

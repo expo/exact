@@ -182,7 +182,7 @@ extension NodeView {
 
     /// The fragments of the shaped text `start..<end` as the paragraph lays it
     /// out, each its line's slice of `font`'s content area.
-    func shapedRects(_ start: Int, _ end: Int, empty: Bool, font: CTFont) -> [CGRect] {
+    func shapedRects(_ start: Int, _ end: Int, empty: Bool, font: CTFont, line onlyLine: Int? = nil) -> [CGRect] {
         guard let paragraph = paragraphLayout() else { return [] }
         let spec = paragraphSpec(), box = paragraphBox()
         let (above, below) = CSSLineBox.content(font, scale: paragraph.lineScale)
@@ -193,6 +193,7 @@ extension NodeView {
         #endif
         var placedEmpty = false
         return paragraph.lines.indices.flatMap { index -> [CGRect] in
+            if let onlyLine, index != onlyLine { return [] }
             let line = paragraph.lines[index], range = CTLineGetStringRange(line)
             let lo = max(start, range.location), hi = min(end, range.location + range.length)
             if empty {

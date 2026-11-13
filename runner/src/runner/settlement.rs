@@ -716,6 +716,13 @@ impl<D: DataSource> Runner<D> {
                         args = kept;
                     }
                     resource_args[i] = args.clone();
+                    // @ref LLP 1048.000 D6 — give an element that a boot from
+                    // a page makes the page's answer at its arguments, and
+                    // what it read, to which its arguments' provenance below
+                    // adds, as to a declared resource's.
+                    if states[i].is_none() {
+                        states[i] = self.seed_member(i, &args, &mut force);
+                    }
                     // Store provenance follows the values used to form a
                     // resource query, including through derives. Such a
                     // resource is device data just like a direct reader.
@@ -1079,11 +1086,20 @@ impl<D: DataSource> Runner<D> {
                             self.resources[i].watching = self.store.take_topics();
                             match answer {
                                 Err(RunnerError::Data {
-                                    error: DataError::DeferredAtBake(_),
-                                    ..
+                                    resource,
+                                    error: DataError::DeferredAtBake { message, warning },
                                 }) => {
-                                    // Storage belongs to the launched app. A bake has no
-                                    // request to dispatch: activation asks this source again.
+                                    if warning {
+                                        let warning = format!(
+                                            "warning [deferred-at-bake] resource `{resource}`: {message}; \
+                                             keeping its placeholder until launch, where this option is refused"
+                                        );
+                                        if !self.bake_warnings.contains(&warning) {
+                                            self.bake_warnings.push(warning);
+                                        }
+                                    }
+                                    // A bake has no request to dispatch: activation
+                                    // asks this source again, including refused options.
                                     let Some(value) = self.placeholder(i, &row, &resources) else {
                                         return Err(self.unanswerable(i));
                                     };

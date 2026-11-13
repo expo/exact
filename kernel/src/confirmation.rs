@@ -13,7 +13,7 @@
 //! Three readers hold one rule here: lowering, which implies an alert-shaped
 //! dialog's `closedby` (LLP 1115.000 D13.4: an alert has no outside); the
 //! Linux host's top layer, which draws Android's and reads the kernel's tree
-//! (`host/linux/src/presenter/top/shape.rs`); and the Apple hosts' Swift,
+//! (`host/painted/src/presenter/top/shape.rs`); and the Apple hosts' Swift,
 //! which reads its own view mirror and asks through
 //! `exact_confirmation_is_alert` (`ConfirmationShape.swift`).
 

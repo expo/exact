@@ -218,7 +218,7 @@ component Hero
 }
 
 #[test]
-fn streamed_and_buffered_pages_preload_the_same_hero_image() {
+fn streamed_and_buffered_pages_keep_the_route_title_and_hero_image() {
     use super::serve::{dist, get, header, serving, JS_SHELL};
     use exact_render::{Serve, Server};
 
@@ -233,16 +233,18 @@ routes nav
   notfound render=build
 component Hero
   view
-    column
-      head title="Hero"
-      image "data:image/png;base64,AA==" alt="Inline"
-      image "symbol:circle" alt="Symbol"
-      column inert=true
-        image "assets/inert.png" alt="Inert"
-      column visibility="hidden"
-        image "assets/hidden.png" alt="Hidden"
-      image "assets/hero.png?one=1&two=2" alt="Hero"
-      image "assets/second.png" alt="Second"
+    main navigationKey="home" navigationBack="back"
+      column navigationKey="home"
+        header
+          text "**Hero** route" markup="markdown" role="heading" aria-level=1
+        image "data:image/png;base64,AA==" alt="Inline"
+        image "symbol:circle" alt="Symbol"
+        column inert=true
+          image "assets/inert.png" alt="Inert"
+        column visibility="hidden"
+          image "assets/hidden.png" alt="Hidden"
+        image "assets/hero.png?one=1&two=2" alt="Hero"
+        image "assets/second.png" alt="Second"
 "#,
     )
     .unwrap();
@@ -267,6 +269,7 @@ component Hero
         || Nowhere,
     );
     let check = |page: &str| {
+        assert!(page.contains("<title>Hero route</title>"), "{page}");
         let link = "<link rel=\"preload\" as=\"image\" href=\"assets/hero.png?one=1&amp;two=2\">";
         let at = page.find(link).expect("the hero preload");
         assert!(at < page.find("<div id=\"exact-root\">").unwrap());

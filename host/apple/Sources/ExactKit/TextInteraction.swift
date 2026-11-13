@@ -61,22 +61,25 @@ extension NodeView {
 
     /// `text`, the slice of this paragraph's shaped text (`paragraphSpec`)
     /// from UTF-16 offset `start`, as it is copied: each image's U+FFFC its
-    /// `aria-label` (LLP 1011.002 D4), any other character itself.
+    /// `aria-label` (LLP 1011.002 D4), omitting atom icons and their joiners.
     func copiedText(_ text: String, from start: Int) -> String {
         let runs = paragraphSpec().runs
         guard runs.contains(where: { $0.box != nil }) else { return text }
         var labels = inlineText.filter { $0.lightRun.box != nil }.map(\.spoken).makeIterator()
-        let slice = text as NSString, end = start + slice.length
-        var out = "", cursor = start, at = 0
+        let slice = NSMutableString(string: text)
+        let selection = NSRange(location: start, length: slice.length)
+        var replacements: [(NSRange, String)] = [], at = 0
         for run in runs {
-            defer { at += (run.text as NSString).length }
+            defer { at += run.text.utf16.count }
             guard run.box != nil else { continue }
-            let label = labels.next() ?? ""
-            guard at >= cursor, at < end else { continue }
-            out += slice.substring(with: NSRange(location: cursor - start, length: at - cursor)) + label
-            cursor = at + 1
+            let label = run.atomIcon == nil ? labels.next() ?? "" : ""
+            // The two joiners belong to the icon, not to the authored label.
+            let extent = run.atomIcon == nil ? NSRange(location: at, length: 1) : NSRange(location: at - 1, length: 3)
+            let overlap = NSIntersectionRange(selection, extent)
+            if overlap.length > 0 { replacements.append((NSRange(location: overlap.location - start, length: overlap.length), label)) }
         }
-        return out + slice.substring(from: min(cursor - start, slice.length))
+        for (range, label) in replacements.reversed() { slice.replaceCharacters(in: range, with: label) }
+        return slice as String
     }
 
     func visibleInlineText(in range: NSRange, source: NSString) -> String {

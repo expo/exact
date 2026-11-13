@@ -1,3 +1,4 @@
+import CExact
 import CoreGraphics
 import CoreText
 import Foundation
@@ -62,8 +63,8 @@ enum FrameHealthCardFace {
         var compact = false
         /// With Details in place of everything below the header
         var showsDetails = false
-        /// The radii of the card's top corners, which round with the screen's in a corner of it
-        var corners: (topLeft: CGFloat, topRight: CGFloat) = (12, 12)
+        /// The radii of the card's corners, top left first and clockwise, which round with the screen's in a corner of it
+        var corners: (topLeft: CGFloat, topRight: CGFloat, bottomRight: CGFloat, bottomLeft: CGFloat) = (12, 12, 12, 12)
         /// Close and Share sit in the card's top corners, and Details beside Share. Close moves in from a rounder
         /// top-left corner as far as the room the title leaves it.
         var close: CGRect { CGRect(x: 6 + min(Self.adaptation(corners.topLeft), closeRoom), y: 6, width: 32, height: 32) }
@@ -96,6 +97,15 @@ enum FrameHealthCardFace {
         /// Everything below the header, where Details shows; its rows scroll within it
         var detailsArea: CGRect { CGRect(x: 0, y: 44, width: width, height: (compact ? compactHeight : height) - 44) }
 
+        /// The card's outline 2 points in, which a button's fill keeps within
+        var inner: CGPath {
+            FrameHealthCardDrawing.continuous(CGRect(x: 2, y: 2, width: width - 4, height: (compact ? compactHeight : height) - 4),
+                radii: [corners.topLeft, corners.topRight, corners.bottomRight, corners.bottomLeft].map { $0 - 2 })
+        }
+        /// Where a bottom corner rounds more than 12 points, `inner`, which the text beside it keeps within by moving in
+        /// or up; elsewhere nil, since the face's 12-point margins clear a 12-point curve
+        var bottomOutline: CGPath? { max(corners.bottomRight, corners.bottomLeft) > 12 ? inner : nil }
+
         /// The control under a point, with each button's 44-point touch target; where two targets
         /// overlap, the nearer button.
         func control(at point: CGPoint) -> Control? {
@@ -112,21 +122,26 @@ enum FrameHealthCardFace {
     struct Drag {
         let start: CGPoint, origin: CGPoint, control: Control?
         var moved = false
-        /// The latest point the press moved to, and when
-        private var last: (CGPoint, TimeInterval)
-        /// Points a second, into the latest point
-        private var velocity = CGVector.zero
+        /// The press's latest samples, each its time, x and y, oldest first: as many as the engine's velocity estimator
+        /// reads at release (`exact_velocity`; LLP 1057.001 §3)
+        private var samples: [Double] = []
         init(at point: CGPoint, time: TimeInterval, origin: CGPoint, control: Control?) {
-            (start, self.origin, self.control, last) = (point, origin, control, (point, time))
+            (start, self.origin, self.control) = (point, origin, control)
+            samples.reserveCapacity(16 * 3)
+            track(point, at: time)
         }
         mutating func track(_ point: CGPoint, at time: TimeInterval) {
-            let elapsed = time - last.1
-            guard elapsed > 0, point != last.0 else { return }
-            velocity = CGVector(dx: (point.x - last.0.x) / elapsed, dy: (point.y - last.0.y) / elapsed)
-            last = (point, time)
+            if samples.count == 16 * 3 { samples.removeFirst(3) }
+            samples.append(time)
+            samples.append(Double(point.x))
+            samples.append(Double(point.y))
         }
-        /// The velocity a release at `time` carries: a press held still for 50 ms has none.
-        func velocity(releasedAt time: TimeInterval) -> CGVector { time - last.1 > 0.05 ? .zero : velocity }
+        /// The velocity a release at `time` carries, in points a second: a press held still for 100 ms has none.
+        func velocity(releasedAt time: TimeInterval) -> CGVector {
+            var velocity = [0.0, 0.0]
+            exact_velocity(samples, samples.count / 3, time, &velocity)
+            return CGVector(dx: velocity[0], dy: velocity[1])
+        }
     }
 
     /// A 0.4-second spring response with a damping ratio of 0.8 and unit mass
@@ -211,10 +226,13 @@ enum FrameHealthCardFace {
             separator(ctx, y: 125, width: width, p)
         }
         if bands.contains(.pacing) {
-            let label = "\(state.pacingName) (\(state.pacingWindow))", verdict = 12 + D.width(label, body) + 3.6
-            D.text(ctx, label, x: 12, y: 138, body, p.secondary, .left)
-            D.text(ctx, state.pacing.0, x: verdict, y: 138, strong, p.label, .left, limit: width - 12 - verdict)
-            D.text(ctx, state.pacing.1, x: 12, y: 154, Self.digits, p.label, .left, limit: width - 24)
+            // A compact card ends with these lines, whose starts move in together where a bottom corner rounds
+            let outline = layout.bottomOutline
+            let x = outline.map { D.fit(D.box(state.pacing.1, x: 12, y: 154, Self.digits, .left), .left, limit: width - 24, within: $0).x } ?? 12
+            let label = "\(state.pacingName) (\(state.pacingWindow))", verdict = x + D.width(label, body) + 3.6
+            D.text(ctx, label, x: x, y: 138, body, p.secondary, .left)
+            D.text(ctx, state.pacing.0, x: verdict, y: 138, strong, p.label, .left, limit: width - 12 - verdict, within: outline)
+            D.text(ctx, state.pacing.1, x: x, y: 154, Self.digits, p.label, .left, limit: width - 12 - x, within: outline)
         }
         guard !compact, bands.contains(.toolbar) else { return }
         // The segmented control: a track, and the chosen segment a chip of the card's ground
@@ -238,12 +256,10 @@ enum FrameHealthCardFace {
 
     /// The header: Close, the title, the status, Details and Share.
     private static func header(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette) {
-        let (width, compact, corners) = (layout.width, layout.compact, layout.corners)
         typealias D = FrameHealthCardDrawing
         // A button's fill keeps 2 points within the card's outline, so in a rounded corner its outer corner follows the card's
         ctx.saveGState()
-        let inner = CGRect(x: 2, y: 2, width: width - 4, height: (compact ? compactHeight : height) - 4)
-        ctx.addPath(D.continuous(inner, radii: [corners.topLeft - 2, corners.topRight - 2, 10, 10]))
+        ctx.addPath(layout.inner)
         ctx.clip()
         for (control, rect) in [(Control.close, layout.close), (.title, layout.title), (.details, layout.details), (.share, layout.share)] {
             // Details keeps the status's fill while it shows, as a toggled button does
@@ -277,7 +293,7 @@ enum FrameHealthCardFace {
 
     /// The table: for the last 5s and 30s, the figures the face does not show, then the deadline.
     static func table(_ ctx: CGContext, _ rect: CGRect, columns: [String], rows: [(String, [String])], caption: String,
-                      palette p: FrameHealthCardDrawing.Palette) {
+                      palette p: FrameHealthCardDrawing.Palette, within outline: CGPath? = nil) {
         typealias D = FrameHealthCardDrawing
         ctx.setFillColor(p.background)
         ctx.fill(rect)
@@ -292,7 +308,7 @@ enum FrameHealthCardFace {
             y += 25
             separator(ctx, y: y - 1, from: rect.minX, to: rect.maxX, p)
         }
-        D.text(ctx, caption, x: rect.minX, y: y + 6 + 8, body, p.secondary, .left, limit: rect.width)
+        D.text(ctx, caption, x: rect.minX, y: y + 6 + 8, body, p.secondary, .left, limit: rect.width, within: outline)
     }
 
     /// Details' rows, then its caption, from the top of a surface `width` points wide: a result with its
@@ -321,8 +337,13 @@ enum FrameHealthCardFace {
     }
 
     /// The height Details' rows and caption take, which scroll where it is more than the area's.
-    static func detailsHeight(width: CGFloat, rows: [FrameHealthCardText.Detail], caption: String) -> CGFloat {
-        rows.reduce(0) { $0 + height($1) } + CGFloat(FrameHealthCardDrawing.lines(caption, width: width - 24, body).count) * 16 + 10
+    static func detailsHeight(width: CGFloat, rows: [FrameHealthCardText.Detail], caption: String, clearing layout: Layout? = nil) -> CGFloat {
+        let total = rows.reduce(0) { $0 + height($1) } + CGFloat(FrameHealthCardDrawing.lines(caption, width: width - 24, body).count) * 16 + 10
+        guard let layout, let outline = layout.bottomOutline else { return total }
+        // Scrolled to its end, the last line, 10 points above it, rises clear of a rounder bottom corner
+        let line = CTFontGetAscent(body) + CTFontGetDescent(body)
+        return total + FrameHealthCardDrawing.rise(CGRect(x: 12, y: layout.detailsArea.maxY - 10 - line / 2, width: width - 24, height: line),
+            within: outline)
     }
 
     private static func height(_ row: FrameHealthCardText.Detail) -> CGFloat { row.reason == nil ? 25 : 36 }

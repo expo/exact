@@ -487,7 +487,7 @@ export const answer = (name: string, _args: unknown[], store: any, storage: any)
     await browser.clock('settle');
     expect(await browser.carrier.evaluate(`['writer', 'reader', 'seen'].map(id => document.querySelector('[data-testid="' + id + '"]').textContent)`), (await browser.logs()).lines.join('\n'))
       .toEqual(['started', 'started', 'written: device prefs']);
-    expect(checkpoint.open).toEqual(['writer', 'reader']);
+    expect(checkpoint.open.map(k => checkpoint.answers[k][0])).toEqual(['writer', 'reader']);
   } finally {
     await browser?.close(); site?.stop(true);
     rmSync(dir, { recursive: true, force: true });
@@ -649,7 +649,7 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
       const reply = await render(path);
       const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
       const text = id => new RegExp(`data-testid="${id}"[^>]*>([^<]*)<`).exec(reply.html)[1];
-      return { status: reply.status, settled: reply.settled, live: text('live'), pending: checkpoint.pending, open: checkpoint.open ?? [],
+      return { status: reply.status, settled: reply.settled, live: text('live'), pending: checkpoint.pending, open: (checkpoint.open ?? []).map(k => checkpoint.answers[k][0]),
         refused: reply.refused, failed: reply.failed.map(f => f.split(':')[0]), quick: reply.render < 1500 };
     };
     const seen = {}, wanted = {};

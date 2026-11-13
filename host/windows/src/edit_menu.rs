@@ -1,6 +1,6 @@
 //! Windows owns the editor menu's layout, input, clipping and dismissal.
 #![allow(unsafe_code)]
-use exact_linux::presenter::edit_menu::{EditAction, EditMenu};
+use exact_painted::presenter::edit_menu::{EditAction, EditMenu};
 use std::ptr;
 use windows_sys::Win32::{
     Foundation::{HWND, POINT},

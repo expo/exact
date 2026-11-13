@@ -414,6 +414,7 @@ public final class ExactSession {
     public internal(set) var firstLayoutMs: Double?
     /// The first batch and its numbers, once booted (the smoke prints them).
     public private(set) var booted = false
+    var atomIconRemeasurePending = false
     public private(set) var bootError: String?
     public private(set) var bootMs = 0.0
     public private(set) var rustMs = 0.0

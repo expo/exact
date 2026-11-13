@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FieldsTest {
     companion object {
-        private val family = File("../../linux/tests/fonts/Inter-Regular.ttf").canonicalPath + "#0"
+        private val family = File("../../painted/tests/fonts/Inter-Regular.ttf").canonicalPath + "#0"
 
         /** A statement of one field, id 1, with these font features; with a size, placed in that box. */
         fun statement(features: String = "", x: Float = 0f, y: Float = 0f, w: Float = 0f, h: Float = 0f): IntArray {

@@ -1,7 +1,7 @@
 # On Android, `console.log` in app.ts never reaches logcat, and the documented switch for it is not passed through
 
 **Status:** Open
-**Systems:** runner/src/runner.rs (`log`), host/linux/src/canvas/journal.rs, host/android/canvas/src/main/java/dev/exact/canvas/ExactActivity.kt (`environment`), host/android/README.md, docs/reference.md
+**Systems:** runner/src/runner.rs (`log`), host/painted/src/canvas/journal.rs, host/android/canvas/src/main/java/dev/exact/canvas/ExactActivity.kt (`environment`), host/android/README.md, docs/reference.md
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
 **Date:** 2026-11-13
@@ -13,8 +13,8 @@ A data module's `console` lines go to the runner's journal (`Runner::log`,
 `runner/src/runner.rs:1092-1100`), an in-memory ring, and to the platform's log only while
 measuring. `docs/reference.md:1521` and `:1891-1893` say they reach the agent's `logs`, which is
 all. On Android the host writes its own lines to logcat under the tag `exact`
-(`host/linux/src/android.rs:58-64`); the journal is written there only when `EXACT_LOG_JOURNAL=1`
-(`host/linux/src/canvas/journal.rs:1-13`).
+(`host/painted/src/android.rs:58-64`); the journal is written there only when `EXACT_LOG_JOURNAL=1`
+(`host/painted/src/canvas/journal.rs:1-13`).
 
 `host/android/README.md:175-177` says the switch is set by launching with the extra
 `x_log_journal=1`. The reader copies launch extras into the environment from a fixed list in a

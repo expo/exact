@@ -164,6 +164,7 @@ extension Spec {
             value.runs[i].backgroundRadii = []
             value.runs[i].shadow = nil
             value.runs[i].stroke = nil
+            value.runs[i].atomIcon = nil
         }
         if var strut = value.strut {
             strut.text = ""; strut.color = nil; strut.decoration = ""; strut.href = ""; strut.background = nil
@@ -190,17 +191,18 @@ package struct TextPaint: Hashable {
         let backgroundRadii: [InlineRadius]
         let shadow: [Double]?
         let stroke: [Double]?
+        let atomIcon: AtomIconRun?
         init(_ r: Run) {
             hidden = r.hidden; fixedInk = r.fixedInk; color = r.color; decoration = r.decoration
             underlineColor = r.underlineColor; strikeColor = r.strikeColor; href = r.href
             background = r.background; backgroundBox = r.backgroundBox; backgroundRadii = r.backgroundRadii
-            shadow = r.shadow; stroke = r.stroke
+            shadow = r.shadow; stroke = r.stroke; atomIcon = r.atomIcon
         }
         func apply(to run: inout Run) {
             run.hidden = hidden; run.fixedInk = fixedInk; run.color = color; run.decoration = decoration
             run.underlineColor = underlineColor; run.strikeColor = strikeColor; run.href = href
             run.background = background; run.backgroundBox = backgroundBox; run.backgroundRadii = backgroundRadii
-            run.shadow = shadow; run.stroke = stroke
+            run.shadow = shadow; run.stroke = stroke; run.atomIcon = atomIcon
         }
     }
     package let color: [Double]

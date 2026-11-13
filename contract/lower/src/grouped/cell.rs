@@ -92,3 +92,86 @@ pub(super) fn stacks(node: &Node) -> bool {
     matches!(node, Node::Element { tag, attrs, children, .. }
         if !hidden(node) && column_row(tag, attrs) && children.iter().filter(|c| !hidden(c)).count() >= 2)
 }
+
+/// Omit the sheet only where the box value is known to be present.
+/// Opaque expressions keep it: they may evaluate to `none`, which clears
+/// the kernel's written bit and restores the standard subtitle cell.
+fn without_box(
+    attrs: &[contract_syntax::Attr],
+    class: super::ClassRows<'_>,
+    is_box: impl Fn(exact_kernel::StyleMask) -> bool,
+    mut fallback: Expr,
+) -> Expr {
+    fn absent(value: &Expr, fallback: &Expr) -> Expr {
+        match value {
+            Expr::None(_) => fallback.clone(),
+            Expr::Ternary(cond, yes, no, _) if matches!(cond.as_ref(), Expr::Bool(..)) => absent(
+                if matches!(cond.as_ref(), Expr::Bool(true, _)) {
+                    yes
+                } else {
+                    no
+                },
+                fallback,
+            ),
+            Expr::Ternary(cond, yes, no, span) => {
+                let yes = absent(yes, fallback);
+                let no = absent(no, fallback);
+                if yes == no {
+                    yes
+                } else {
+                    Expr::Ternary(cond.clone(), Box::new(yes), Box::new(no), *span)
+                }
+            }
+            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::Some(..) => {
+                Expr::None(fallback.span())
+            }
+            _ => fallback.clone(),
+        }
+    }
+    let classed = class(attrs)
+        .ok()
+        .flatten()
+        .map(|(_, rows)| rows)
+        .unwrap_or_default();
+    // Resolve longhands before testing presence: an inline shorthand can
+    // clear a class's corner, and a longhand can replace part of a shorthand.
+    let mut seen = exact_kernel::StyleMask::default();
+    for a in classed.iter().chain(attrs).rev() {
+        let mut written = exact_kernel::StyleMask::default();
+        for id in crate::tags::rows(a) {
+            if !seen.has(id) && a.written {
+                written.set(id);
+            }
+            seen.set(id);
+        }
+        if is_box(written) {
+            fallback = absent(&a.value, &fallback);
+        }
+    }
+    fallback
+}
+
+/// A subtitle-shaped column keeps its text spacing, and takes the cell's
+/// block padding unless it or its row is known to write a box.
+pub(super) fn column(
+    node: &Node,
+    row: &[contract_syntax::Attr],
+    class: super::ClassRows<'_>,
+) -> Node {
+    let Node::Element { attrs, span, .. } = node else {
+        return node.clone();
+    };
+    let padding = without_box(
+        row,
+        class,
+        |w| exact_kernel::grouped::authored_row_box(w, false),
+        super::mv("lines-padding-block", *span),
+    );
+    let padding = without_box(
+        attrs,
+        class,
+        exact_kernel::grouped::authored_subtitle_box,
+        padding,
+    );
+    super::lines::subtitle(node, padding)
+}

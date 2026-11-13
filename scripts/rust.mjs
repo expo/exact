@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { homedir, tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cargoReproducibilityFlags, developmentBuildEnv, readBuilds, resolveApp, rustPolicy } from './app.mjs';
+import { HOST_DEV, cargoReproducibilityFlags, developmentBuildEnv, readBuilds, resolveApp, rustPolicy } from './app.mjs';
 import { channelOrigin } from './origin.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -287,14 +287,14 @@ export class RustBaker {
     try { await this.request(args); } finally { this.busy=false; }
   }
   async request(args) {
-    // Built optimized and started once per producer, like the resident Contract
+    // Built in host-dev and started once per producer, like the resident Contract
     // and module compilers: it interprets the candidate Wasm, which a debug
     // build does in seconds. A compiler edit is in the web receipt's inputs, so
     // the dev server rebuilds and starts a new producer.
     if (!this.child) {
       const target=resolve(this.app.target,'rust-tools'), env={...this.env,CARGO_TARGET_DIR:target};
-      run({...this.app,workspace:ROOT},'cargo',['build',...cargoReproducibilityFlags(this.app,ROOT),'-q','--release','-p','exact-logic-bake'],env);
-      const child=this.child=spawn(resolve(target,'release/exact-logic-bake'),['--serve'],{cwd:this.app.workspace,env,stdio:['pipe','pipe','pipe']});
+      run({...this.app,workspace:ROOT},'cargo',['build',...cargoReproducibilityFlags(this.app,ROOT),'-q','--profile',HOST_DEV,'-p','exact-logic-bake'],env);
+      const child=this.child=spawn(resolve(target,HOST_DEV,'exact-logic-bake'),['--serve'],{cwd:this.app.workspace,env,stdio:['pipe','pipe','pipe']});
       this.ready=new Promise((accept,reject)=>{this.startup={accept,reject};});
       const fail=error=>{
         if(this.child!==child)return;

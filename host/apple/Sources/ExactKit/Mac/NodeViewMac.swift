@@ -863,14 +863,14 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         style.values.contains { $0.isSchemeColor || $0.isSchemeGradient || $0.containsSystemColor }
     }
 
-    /// The appearance changed under this view. A repaint is not enough: the
-    /// text engine caches a paragraph spec and a laid-out paragraph, and a
-    /// `Run` carries a concrete colour, so ink from the previous appearance
-    /// would survive a redisplay. Inline text nodes are not in the native
-    /// hierarchy, so the paragraph that owns them is invalidated too, and
-    /// the colours assigned outside a draw are re-applied. @ref LLP 1034 D2
+    /// Cached text and colours assigned outside a draw must be resolved again.
+    /// Inline nodes have no native appearance callback; invalidate their owner too.
+    /// @ref LLP 1034 D2
     package override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        if let controls = presenter?.controls, let button = controls.controls[id] as? NativeButtonMac {
+            controls.configureNative(button, self, accent: channels("accent_color").map { TextEngine.color($0) })
+        }
         presenter?.tables.appearanceChanged(self); refreshGroupedSeparator(); presenter?.navigation.split.recolor(self)
         if let regions = presenter?.session?.regions, regions.owns(self) { regions.geometryChanged() }
         // An `svg`'s paints are resolved again; paint motion hears the appearance (LLP 1062 D4).

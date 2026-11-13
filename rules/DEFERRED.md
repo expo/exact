@@ -247,7 +247,11 @@ padding, border and radius, a ring while the selection is exactly it
 image source, so T3 Code's chips match their original's. Take: waived (Daehyeon
 Mun, 2026-11-02): the paint goes through the rows a kind already had, and the
 three outline rows are an atom's alone. Still out: the Apple reader's border,
-ring, hover paint and icon. **Expanded (Daehyeon Mun, 2026-10-29, waived;
+ring and hover paint. **Expanded (maintainers, 2026-11-11, #130; LLP
+1045.000 D4, §6):** the Apple reader draws SF Symbol and image-source icons
+inside its pills on iOS and macOS. This unblocks icon badges in wrapping
+prose, matching the editor. Take: the maintainers' ruling admits this scope;
+border, ring and hover paint stay deferred. **Expanded (Daehyeon Mun, 2026-10-29, waived;
 LLP 1045 D11):** the app gives each source line of the editor its base
 direction, `paragraphDirs` in HTML's `dir` words, drawn on the web and Apple.
 Unblocks T3 Code's composer, whose original gives each block the direction of
@@ -1075,6 +1079,20 @@ reading. Nothing that isn't HTML is added by it.
   LLP 1133.027's record below), constraint dictionaries, zoom on the
   web, `input capture` and the system camera UI, and the Windows, Linux,
   tvOS, visionOS and watchOS cells.
+  **Expanded (2026-11-12, expo/exact#381; LLP 1133.008 D1 as amended):**
+  the system camera UI, `takePhotoWithCameraApp` from `@exact/camera`:
+  Android's camera app (`MediaStore.ACTION_IMAGE_CAPTURE`), iOS's
+  `UIImagePickerController` with `.camera`, and the web's file input with
+  `accept="image/*"` and `capture` opened inside the press, the photo the
+  person keeps written to an `app:/` path and answered as `takePhoto`'s.
+  It needs no grant line; iOS needs the `device.camera` line's usage key,
+  and Android's `CAMERA` comes from a use of `getUserMedia` under that
+  line, not the line alone. Consumer: an access-control app whose guards photograph a visitor's
+  identity card with the phone's own camera app (its shutter, flash and
+  review). Unblocks that without app Kotlin or Swift. Take: none offered;
+  waived by Charlie's ask (2026-11-12: work the open issues through to the
+  ideal end state). Still out: the macOS, Windows, Linux, tvOS, visionOS
+  and watchOS cells, and `capture` on the HTML `input` tag.
 - **Expanded (Charlie, 2026-10-23, "Expand, no take", on LLP 1133.009 §15
   question 6):** recording the microphone to a file and reading its level,
   by Media Capture's and MediaStream Recording's names (`getUserMedia(audio=)`

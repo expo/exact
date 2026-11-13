@@ -41,13 +41,20 @@ struct RegionRasterRequest: Sendable {
     // The registered region surface keeps its 8 MiB contract. A reader can
     // admit a larger visible viewport, never a document-sized bitmap.
     var pixelLimit: Int = 8 * 1024 * 1024
+    var headroom: Float = 0
     static let maximumPixelLimit = 32 * 1024 * 1024
     static let compositedFormat = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+    static let extendedFormat = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue | CGBitmapInfo.byteOrder16Little.rawValue
+    var deep: Bool { format == Self.extendedFormat }
+    var composited: Bool { format == Self.compositedFormat || deep }
+    var bitsPerComponent: Int { deep ? 16 : 8 }
+    var bytesPerPixel: Int { deep ? 8 : 4 }
     static func stride(width: Int, format: UInt32) -> Int {
+        let bytes = width * (format == extendedFormat ? 8 : 4)
         #if os(macOS)
-        if format == compositedFormat { return IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, width * 4) }
+        if format == compositedFormat || format == extendedFormat { return IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, bytes) }
         #endif
-        return width * 4
+        return bytes
     }
     var bytesPerRow: Int { Self.stride(width: width, format: format) }
     // A continuing selection gesture may outlive replacement highlight pixels,
@@ -57,7 +64,7 @@ struct RegionRasterRequest: Sendable {
         rows.count == other.rows.count && zip(rows, other.rows).allSatisfy({
             $0.artifact == $1.artifact && $0.box == $1.box
         }) && scroll == other.scroll && size == other.size && scale == other.scale && profile == other.profile &&
-        format == other.format && background == other.background && selectionColor == other.selectionColor
+        format == other.format && headroom == other.headroom && background == other.background && selectionColor == other.selectionColor
     }
     // Serial is delivery identity; the remaining fields describe exact pixels.
     func samePixels(as other: RegionRasterRequest) -> Bool {
@@ -71,7 +78,7 @@ struct RegionRasterRequest: Sendable {
         if let range, let i = rows.firstIndex(where: { $0.artifact == artifact }) { rows[i].selection = range }
         return RegionRasterRequest(serial: serial,publication: publication,generation: generation,rows: rows,
             scroll: scroll,size: size,scale: scale,profile: profile,format: format,
-            background: background,selectionColor: selectionColor,interaction: interaction,pixelLimit: pixelLimit)
+            background: background,selectionColor: selectionColor,interaction: interaction,pixelLimit: pixelLimit,headroom: headroom)
     }
     var width: Int { Int(size.width * CGFloat(scale)) }
     var height: Int { Int(size.height * CGFloat(scale)) }
@@ -86,10 +93,11 @@ struct RegionRasterRequest: Sendable {
               selectionColor.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }),
               scroll.x.isFinite, scroll.y.isFinite, rows.count <= 64,
               pixelLimit > 0, pixelLimit <= Self.maximumPixelLimit,
-              format == CGImageAlphaInfo.premultipliedLast.rawValue || format == Self.compositedFormat else { return nil }
+              headroom.isFinite, headroom >= 0,
+              format == CGImageAlphaInfo.premultipliedLast.rawValue || composited else { return nil }
         var bytes = bytesPerRow * Int(h)
         #if os(macOS)
-        if format == Self.compositedFormat { bytes = IOSurfaceAlignProperty(kIOSurfaceAllocSize, bytes) }
+        if composited { bytes = IOSurfaceAlignProperty(kIOSurfaceAllocSize, bytes) }
         #endif
         return bytes > pixelLimit ? nil : bytes
     }
@@ -132,10 +140,10 @@ final class RegionPixels: @unchecked Sendable {
          fill: (UnsafeMutableRawPointer) -> Bool) throws {
         precondition(!Thread.isMainThread)
         #if os(macOS)
-        if let request, request.format == RegionRasterRequest.compositedFormat {
+        if let request, request.composited {
             guard let surface = IOSurface(properties: [.width: request.width, .height: request.height,
-                    .bytesPerElement: 4, .bytesPerRow: request.bytesPerRow, .allocSize: count,
-                    .pixelFormat: UInt32(0x42475241)]), surface.allocationSize <= count,
+                    .bytesPerElement: request.bytesPerPixel, .bytesPerRow: request.bytesPerRow, .allocSize: count,
+                    .pixelFormat: UInt32(request.deep ? 0x52476841 : 0x42475241)]), surface.allocationSize <= count,
                   surface.bytesPerRow == request.bytesPerRow, let space = profile.makeSpace() else {
                 throw RegionRasterRefusal.context
             }
@@ -148,6 +156,9 @@ final class RegionPixels: @unchecked Sendable {
             surface.unlock(options: [], seed: nil)
             guard filled else { throw RegionRasterRefusal.context }
             if let color = space.copyPropertyList() { IOSurfaceSetValue(surface, kIOSurfaceColorSpace, color) }
+            if request.deep, #available(macOS 15, *) {
+                IOSurfaceSetValue(surface, kIOSurfaceContentHeadroom, NSNumber(value: max(1, request.headroom)))
+            }
             self.surface = surface; storage = surface.baseAddress
             self.count = count; self.charge = charge; self.profile = profile
             return
@@ -191,14 +202,14 @@ final class RegionRaster: Sendable {
     @MainActor func accepts(_ image: CGImage, size: CGSize, scale: Int, profile: NativeProfile) -> Bool {
         guard request.size == size, request.scale == scale, request.profile == profile,
               image.width == request.width, image.height == request.height,
-              image.bitsPerComponent == 8, image.bitsPerPixel == 32,
+              image.bitsPerComponent == request.bitsPerComponent, image.bitsPerPixel == request.bytesPerPixel * 8,
               image.bytesPerRow == request.bytesPerRow, image.bitmapInfo.rawValue == request.format,
               let space = image.colorSpace, let expected = profile.makeSpace() else { return false }
         return CFEqual(space, expected)
     }
     @MainActor func image() -> CGImage? {
         guard let space = request.profile.makeSpace(), let provider = pixels.provider() else { return nil }
-        return CGImage(width: request.width, height: request.height, bitsPerComponent: 8, bitsPerPixel: 32,
+        return CGImage(width: request.width, height: request.height, bitsPerComponent: request.bitsPerComponent, bitsPerPixel: request.bytesPerPixel * 8,
             bytesPerRow: request.bytesPerRow, space: space, bitmapInfo: CGBitmapInfo(rawValue: request.format),
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
@@ -273,7 +284,7 @@ final class RegionPaintIndex {
         let shapedSelections = zip(request.rows, layouts).map { $1.metadata.shapedRange($0.selection) }
         let pixels = try RegionPixels(count: count, charge: charge, profile: request.profile, request: request) { pointer in
             guard let ctx = CGContext(data: pointer, width: request.width, height: request.height,
-                    bitsPerComponent: 8, bytesPerRow: request.bytesPerRow, space: space,
+                    bitsPerComponent: request.bitsPerComponent, bytesPerRow: request.bytesPerRow, space: space,
                     bitmapInfo: request.format) else { return false }
             ctx.setFillColor(CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: request.background)!)
             ctx.setBlendMode(.copy)
@@ -357,7 +368,7 @@ struct RegionRetainedWitness: Equatable {
           actualScroll: CGPoint, extent: CGSize, clip: CGRect) {
         guard a.bytes != nil, b.bytes != nil,
               a.publication == b.publication, a.generation == b.generation, a.rows == b.rows,
-              a.scale == b.scale, a.profile == b.profile, a.format == b.format,
+              a.scale == b.scale, a.profile == b.profile, a.format == b.format, a.headroom == b.headroom,
               a.background == b.background, a.selectionColor == b.selectionColor,
               actualScroll == b.scroll,
               extent.width.isFinite, extent.height.isFinite, extent.width >= 0, extent.height >= 0,

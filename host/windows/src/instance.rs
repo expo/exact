@@ -114,7 +114,7 @@ pub(crate) fn handed(args: &[String]) -> Handed {
     if crate::desktop::login_launch(args).is_some() {
         return Handed::Nothing;
     }
-    match exact_linux::app::launch_argument(args.iter().cloned()) {
+    match exact_painted::app::launch_argument(args.iter().cloned()) {
         Some(href) => Handed::Open(href),
         None => Handed::Show,
     }

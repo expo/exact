@@ -131,13 +131,14 @@ async function saveQuietly(id: string): Promise<Session> {
   return { ok: true, username: id, error: "saved" };
 }
 
-// One controller for every fetch (review r4a 7): a browser realm's fetch
-// watches its signal with a listener it removes when the fetch settles;
-// Hermes's watches through Ibex's own abort hooks and adds none.
+// A reused controller must not retain listeners after a fetch. Browser realms
+// listen on dependent signals; Hermes uses hooks and freezes the intrinsic,
+// so count only listeners on the supplied signal there.
 const reusedController = new AbortController();
 const listening = { added: 0, removed: 0 };
 {
-  const signal = reusedController.signal as any, add = signal.addEventListener, remove = signal.removeEventListener;
+  const signal = (Object.isFrozen(AbortSignal.prototype) ? reusedController.signal : AbortSignal.prototype) as any;
+  const add = signal.addEventListener, remove = signal.removeEventListener;
   signal.addEventListener = function (...args: unknown[]) { listening.added++; return add.apply(this, args); };
   signal.removeEventListener = function (...args: unknown[]) { listening.removed++; return remove.apply(this, args); };
 }

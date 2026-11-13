@@ -1229,11 +1229,11 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar u
 }, 90000);
 
 test('chromium: painted route titles match the web at several root sizes', async () => {
-  // Build outside the test: cargo test -p exact-linux --test route_titles --no-run.
+  // Build outside the test: cargo test -p exact-painted --test route_titles --no-run.
   const deps = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../../target', import.meta.url)), 'debug/deps');
   const binary = readdirSync(deps).filter(name => /^route_titles-[0-9a-f]+(?:\.exe)?$/.test(name))
     .map(name => resolve(deps, name)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  if (!binary) throw new Error('build the headless fixture: cargo test -p exact-linux --test route_titles --no-run');
+  if (!binary) throw new Error('build the headless fixture: cargo test -p exact-painted --test route_titles --no-run');
   const linux = spawnSync(binary, ['--exact', 'route_titles_keep_the_large_title_line', '--nocapture'], { encoding: 'utf8', timeout: 60000 });
   expect([linux.status, linux.stderr]).toEqual([0, '']);
   const layouts = JSON.parse(linux.stdout.match(/^ROUTE_TITLE_LAYOUT (.+)$/m)[1]);

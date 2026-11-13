@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Android's image codec (LLP 1133.019 D16), called from exact2's storage workers through JNI
- * (`host/linux/src/canvas/codec.rs`), which drives these steps in the order and with the search every codec shares:
+ * (`host/painted/src/canvas/codec.rs`), which drives these steps in the order and with the search every codec shares:
  * a decode upright, an edit (turn, flip, crop, size) as `Bitmap` transforms, an encode, and the metadata. A decoded
  * picture is held under a handle until it is closed. Steps run on the calling thread and never on the main one.
  *

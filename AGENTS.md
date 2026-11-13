@@ -95,7 +95,7 @@ section binds (`rules/RULES.md`, "Agents").
   `default-members`. The sixth (Charlie, 2026-10-12) compiles every crate and target
   of the workspace and runs none of their tests: on 2026-10-11 six things outside
   `default-members` were broken on origin/main while the five were green, and it
-  catches the ones that did not compile (`exact-web-js`, `exact-linux`'s tests). It
+  catches the ones that did not compile (`exact-web-js`, `exact-painted`'s tests). It
   needs the pinned Bun first on PATH (or named by `BUN`): app crates' build scripts
   run Bun, and under an older one each fails with "Bun … is older than …". It shares
   no compiled crate with the build, so it costs its whole time again: on an 18-core
@@ -185,12 +185,13 @@ section binds (`rules/RULES.md`, "Agents").
   socket through URLSession, wait on the wall clock or launch Bun, Swift or a nested
   cargo build are `async lane:`, and its Swift is the XCTests) and the native
   request executor the Apple, Linux and render hosts share (`exact-executor`). The
-  others (`exact-web-js`, `exact-web-capabilities`, `exact-linux`, `exact-windows`,
-  `exact-render`, …), `js/`, `gpu/` and most apps are
+  others (`exact-web-js`, `exact-web-capabilities`, `exact-painted` (the painted host
+  that `exact-linux`, `exact-windows` and Android's reader present), `exact-render`, …),
+  `js/`, `gpu/` and most apps are
   not tested by it (the sixth check compiles them, their tests too, and runs none),
   and the async lane reports a failing test only after the push. When you touch one, or
   what its tests read, run its tests before landing (`bun scripts/affected.mjs` names
-  them): `cargo test -p exact-linux --lib --tests --no-fail-fast`, or `--bins` for a
+  them): `cargo test -p exact-painted --lib --tests --no-fail-fast`, or `--bins` for a
   bin-only crate such as `exact-web-js`. Advice, not a check.
 - Verify by running, never by grepping. Fix loops get three rounds, then stop and say so.
 - To see a change work, drive the app: `bun scripts/agent.mjs <web|macos|ios|linux> tree

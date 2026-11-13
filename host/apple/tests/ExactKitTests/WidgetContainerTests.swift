@@ -8,6 +8,11 @@ import ExactCore
 
 @MainActor
 final class WidgetContainerTests: XCTestCase {
+    func testUpdateLocksStayInTheAppsPrivateContainer() throws {
+        let support = try XCTUnwrap(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+        XCTAssertEqual(WidgetContainer.updateBase, support)
+    }
+
     func testPublicationSkipsUnchangedAssetsAndKeepsPinnedGenerations() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

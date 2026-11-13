@@ -88,6 +88,8 @@ package struct Run: Hashable {
     /// An image in the paragraph's text (LLP 1011.002): the box this run's
     /// U+FFFC reserves. A metric.
     package var box: InlineBox?
+    /// The reader atom's icon; its box reserves horizontal room only.
+    package var atomIcon: AtomIconRun?
 
     package static func == (lhs: Run, rhs: Run) -> Bool {
         guard lhs.size == rhs.size, lhs.weight == rhs.weight, lhs.family == rhs.family,
@@ -98,7 +100,7 @@ package struct Run: Hashable {
               lhs.strikeColor == rhs.strikeColor, lhs.href == rhs.href,
               lhs.hidden == rhs.hidden, lhs.fixedInk == rhs.fixedInk, lhs.background == rhs.background, lhs.backgroundBox == rhs.backgroundBox,
               lhs.backgroundRadii == rhs.backgroundRadii, lhs.shadow == rhs.shadow, lhs.stroke == rhs.stroke,
-              lhs.indent == rhs.indent, lhs.hang == rhs.hang, lhs.box == rhs.box else { return false }
+              lhs.indent == rhs.indent, lhs.hang == rhs.hang, lhs.box == rhs.box, lhs.atomIcon == rhs.atomIcon else { return false }
         // CoreText's ranges address the original UTF16 source. Swift String's
         // canonical equality would alias NFC/NFD paragraphs with different
         // source lengths, so both equality and hashing use the exact UTF8.
@@ -138,6 +140,7 @@ package struct Run: Hashable {
         hasher.combine(indent)
         hasher.combine(hang)
         hasher.combine(box)
+        hasher.combine(atomIcon)
     }
     package init(text: String, size: CGFloat, weight: Int, family: Int, italic: Bool, lineHeight: CGFloat?, letterSpacing: CGFloat, numeric: Int = 0, ligatures: Int = 0, stretch: CGFloat = 100, variations: [FontAxis] = [], features: [FontFeature] = [], color: [Double]? = nil, decoration: String = "", href: String = "", background: [Double]? = nil, hidden: Bool = false, fixedInk: Bool = false, shadow: [Double]? = nil, stroke: [Double]? = nil, indent: CGFloat = 0, hang: Bool = false) {
         self.text = text
@@ -550,6 +553,7 @@ package final class TextEngine {
     package func stack(named name: String) -> Int? { familyStacks[name] }
     /// Where a declared face's relative source resolves: the app's resolver
     /// (LLP 1031 D1 — the committed complete generation, else the root).
+    package let assetResolver: AssetResolver?
     package let resolve: (String) -> URL?
     package let read: (String) -> Data?
     /// A face's file in the signed app bundle, when the generation is the
@@ -567,7 +571,8 @@ package final class TextEngine {
 
     package init(assets resolve: @escaping (String) -> URL?, read: ((String) -> Data?)? = nil,
          bundled: @escaping (String) -> URL? = { _ in nil },
-         coldTextTargetBytes: Int = TextResidency.defaultSoftTargetBytes, presentation: TextPresentation? = nil) {
+         coldTextTargetBytes: Int = TextResidency.defaultSoftTargetBytes, presentation: TextPresentation? = nil, assetResolver: AssetResolver? = nil) {
+        self.assetResolver = assetResolver
         self.presentation = presentation
         residency = TextResidency(softTargetBytes: coldTextTargetBytes)
         self.resolve = resolve
@@ -1443,7 +1448,7 @@ package final class TextEngine {
             let atoms = utf8(request.atoms, request.atoms_len), faces = utf8(request.faces, request.faces_len)
             if request.markup == 2, let laid = presentation?.editorMarkdown(self, source: source, atoms: atoms, faces: faces, rtl: request.direction == 1, width: request.width >= 0 ? CGFloat(request.width) : nil) {
                 runs = laid + runs.dropFirst()
-            } else if let expanded = presentation?.markdown(self, source: source, atoms: atoms, faces: faces, rtl: request.direction == 1) { runs = expanded }
+            } else if let expanded = presentation?.markdown(self, source: source, atoms: atoms, faces: faces, rtl: request.direction == 1) { runs = presentation?.resolveRuns(self, runs: expanded) ?? expanded }
             else if requiresMarkdownExpansion { refusedMarkdown = request.view; runs = [] }
         }
         // Metric-only keys match the geometry used by the colored presenter.

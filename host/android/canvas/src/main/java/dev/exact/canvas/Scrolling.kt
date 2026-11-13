@@ -28,7 +28,7 @@ import kotlin.math.sign
  * ([Native.scrolled]) and fills in rows behind it. A scroller with no such node (one inside another's row, one that
  * scrolls sideways, the page itself) moves when exact2's paint of it arrives, which the frame waits a moment for.
  *
- * What crosses to exact2 and back is `host/linux/src/presenter/scrollers.rs`:
+ * What crosses to exact2 and back is `host/painted/src/presenter/scrollers.rs`:
  * - at a touch's down the reader asks what is under it ([Native.under]): the scrollers, innermost first, and the axes
  *   exact2's own gestures claim there (a swipe row, a reorder grip, a `pan`);
  * - past the slop, a drag along an axis exact2 claims stays its own; along one a scroller under the finger scrolls
@@ -909,7 +909,7 @@ internal class Scrolling(private val view: ExactView) {
  * Where a scroll released at [release] and projected to rest at [projected] comes to rest among one axis's snap areas
  * ([snaps]: each one's least and greatest offset, which differ for one longer than the snapport; [stops]:
  * `scroll-snap-stop: always`), or null to rest where it would. LLP 1008 §9's rule, as
- * `host/linux/src/presenter/snap.rs`'s `rest`: the position nearest the projection (the smaller of two as near); for a
+ * `host/painted/src/presenter/snap.rs`'s `rest`: the position nearest the projection (the smaller of two as near); for a
  * fling [way] (1 as the offset grows, -1 back, 0 for a release too slow to fling), at least the first position past
  * [start], where the drag began, that way; then short of the first `always` position past the release in the way it
  * goes (CSS Scroll Snap 1 §6.2); and for `proximity` ([mandatory] false), only within a third of the snapport ([port])

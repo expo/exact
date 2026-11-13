@@ -7,7 +7,7 @@ description = "Native Windows window over Exact's shared Contract and GPU presen
 publish = false
 
 [dependencies]
-exact-linux = { path = "../linux" }
+exact-painted = { path = "../painted" }
 exact-runner = { path = "../../runner" }
 serde_json = "1.0"
 png = "=0.18.1"

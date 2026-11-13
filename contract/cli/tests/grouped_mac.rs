@@ -1,7 +1,7 @@
 //! LLP 1084 D7 on the Mac's grouped form (LLP 1115.002 D6): a row keeps
 //! its 36 points under `border-box`, rows stand a point apart, and the
 //! separator is drawn in that gap, 10 points in from both ends of the card.
-//! One test, its own process: the column is the process's.
+//! Its own process: every test uses the Mac metric column.
 use exact_kernel::style::metrics::{set_column, Column};
 use exact_kernel::{Color, ColorValue, Kernel, Offer};
 use exact_runner::{DataError, DataSource, Runner, Value};
@@ -20,7 +20,7 @@ component App
   action go
   view
     column testId="root" width=402 height=874
-      list appearance="auto" flex=1
+      list appearance="auto" testId="list" flex=1
         section
           row testId="first"
             view width=4 height=4
@@ -43,6 +43,10 @@ component App
               text "Written"
             button id="written-act" press=go flex-shrink=0
               text "Flag"
+          row
+            column background-color="transparent" testId="ground"
+              text "Title" testId="ground-title"
+              text "Detail" testId="ground-detail"
           row testId="end"
             text "End"
 "#;
@@ -148,5 +152,131 @@ fn the_macs_rows_keep_their_height_and_their_separator_stands_in_the_gap() {
         "{:?}",
         card.style.rare.corner_shape
     );
-    set_column(Column::Web);
+    let ground = k.node(id("ground")).unwrap();
+    let row = k.grouped_list(id("list")).unwrap().sections[0]
+        .rows
+        .iter()
+        .find(|r| r.view == ground.parent.unwrap())
+        .unwrap()
+        .clone();
+    assert!(row.custom);
+    assert!(!row.subtitle);
+    let padding = k.resolved_padding(ground.key).unwrap();
+    assert_eq!((padding.1, padding.3), (0.0, 0.0));
+    assert!(!ground.style.mask.has(exact_kernel::StyleId::PaddingTop));
+    let title = frame("ground-title");
+    let detail = frame("ground-detail");
+    assert!(
+        (detail.y - title.y - title.height - 3.0).abs() < 0.001,
+        "a background keeps the platform interline gap"
+    );
+}
+
+#[test]
+fn boxes_keep_the_macs_subtitle_gap_and_padding_for_each_arm() {
+    set_column(Column::Mac);
+    for (own, states, opaque) in [
+        ("class=(show ? Tile : Plain)", [false, true, false], false),
+        (
+            "class=Tile height=(show ? 300 : none)",
+            [false, true, false],
+            false,
+        ),
+        (
+            "class=Tile height=(match h { case some(n) => n, case none => none })",
+            [false, true, false],
+            true,
+        ),
+        ("height=(show ? 300 : none)", [false, true, false], false),
+        (
+            "class=Rounded border-radius=(show ? 16 : none)",
+            [false, true, false],
+            false,
+        ),
+        (
+            "height=(match h { case some(n) => n, case none => none })",
+            [false, true, false],
+            true,
+        ),
+        (
+            "height=(match [300].at(show ? 0 : 1) { case some(n) => n, case none => none })",
+            [false, true, false],
+            true,
+        ),
+        ("height=(true ? none : 300)", [false; 3], false),
+        ("height=300", [true; 3], false),
+    ] {
+        for on_row in [false, true] {
+            let (row, column) = if on_row { (own, "") } else { ("", own) };
+            let source = format!(
+                r#"style Tile
+  height=300
+style Rounded
+  border-top-left-radius=16
+style Plain
+  color="red"
+component App
+  state show = false
+  state h = none
+  action flip
+    show = !show
+    h = show ? none : some(300)
+  view
+    column testId="root" width=402 height=874
+      button press=flip testId="flip"
+        text "Flip"
+      list appearance="auto" testId="list" flex=1
+        section
+          row {row}
+            column {column} testId="tile"
+              text "Title" testId="title"
+              text "Detail" testId="detail"
+"#
+            );
+            let plan = contract::bake(contract::compile(&source).unwrap(), NoData).unwrap();
+            let mut r = Runner::boot(
+                plan,
+                NoData,
+                Kernel::with_monospace(),
+                Default::default(),
+                "/",
+            )
+            .unwrap();
+            for custom in states {
+                let k = r.kernel_mut();
+                let id =
+                    |k: &Kernel, name: &str| k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+                k.compute_layout(id(k, "root"), Offer::definite(402.0, 874.0))
+                    .unwrap();
+                let row = &k.grouped_list(id(k, "list")).unwrap().sections[0].rows[0];
+                assert_eq!(row.custom, custom, "{own}");
+                assert_eq!(row.subtitle, !custom, "{own}");
+                let tile = k.node(id(k, "tile")).unwrap();
+                let padding = k.resolved_padding(tile.key).unwrap();
+                assert_eq!(
+                    (padding.1, padding.3),
+                    (0.0, 0.0),
+                    "the Mac's block metric is zero: {own}"
+                );
+                for side in [
+                    exact_kernel::StyleId::PaddingTop,
+                    exact_kernel::StyleId::PaddingBottom,
+                ] {
+                    assert_eq!(
+                        tile.style.mask.has(side),
+                        !custom || opaque,
+                        "{own}, on_row={on_row}, custom={custom}: {side:?}"
+                    );
+                }
+                let title = k.node(id(k, "title")).unwrap().frame;
+                let detail = k.node(id(k, "detail")).unwrap().frame;
+                assert!(
+                    (detail.y - title.y - title.height - 3.0).abs() < 0.001,
+                    "{own}, on_row={on_row}"
+                );
+                let flip = id(k, "flip");
+                r.dispatch(flip, exact_runner::Event::Press).unwrap();
+            }
+        }
+    }
 }

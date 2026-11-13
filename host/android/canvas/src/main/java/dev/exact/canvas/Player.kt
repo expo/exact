@@ -59,7 +59,7 @@ internal fun makePicture(id: Int, w: Int, h: Int, hwbuf: Boolean): Bitmap {
 }
 
 /**
- * Replays an op stream (exact2's host/linux/src/canvas.rs) onto a Canvas. Its scratch objects are its own: one
+ * Replays an op stream (exact2's host/painted/src/canvas.rs) onto a Canvas. Its scratch objects are its own: one
  * Player a thread. [image] and [row] resolve ids; [group] gives a scroller's node (main thread only).
  */
 internal class Player(private val fonts: Map<Int, Font>) {

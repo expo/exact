@@ -32,27 +32,27 @@ const ids = (graph, changed) => select(graph, changed, suites(graph.repo).filter
 test('Cargo, imports and the names a test gives select a suite; what shared code dispatches to does not', () => {
   const { graph, done } = fixture({
     'kernel/src/lib.rs': 'pub fn layout() {}\n#[cfg(test)]\nmod tests { const APP: &str = include_str!("../../apps/demo/app.contract"); }\n',
-    'host/linux/src/lib.rs': '// A library names a host only to build for it.\nconst OTHER: &str = "host/apple/Sources/A.swift";\n',
-    'host/linux/tests/it.rs': 'fn fixture() { std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/other"); }\n',
+    'host/painted/src/lib.rs': '// A library names a host only to build for it.\nconst OTHER: &str = "host/apple/Sources/A.swift";\n',
+    'host/painted/tests/it.rs': 'fn fixture() { std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/other"); }\n',
     'host/apple/Sources/A.swift': '',
     'host/apple/build.mjs': "export const sources = 'Sources';\n",
-    'scripts/app.mjs': "import '../host/apple/build.mjs';\nexport const hosts = ['host/apple', 'host/linux'];\n",
+    'scripts/app.mjs': "import '../host/apple/build.mjs';\nexport const hosts = ['host/apple', 'host/painted'];\n",
     'scripts/app.test.mjs': "import { hosts } from './app.mjs';\nimport { test } from 'bun:test';\ntest('x', () => resolveApp('demo'));\n",
     'apps/demo/app.contract': 'use Card from "./card.contract"\n',
     'apps/demo/card.contract': '',
     'apps/other/app.contract': '',
     'docs/guide.md': '',
-  }, [{ name: 'exact-kernel', dir: 'kernel' }, { name: 'exact-linux', dir: 'host/linux', deps: ['exact-kernel'] }]);
+  }, [{ name: 'exact-kernel', dir: 'kernel' }, { name: 'exact-painted', dir: 'host/painted', deps: ['exact-kernel'] }]);
   try {
-    expect(ids(graph, ['kernel/src/lib.rs'])).toEqual(['cargo:exact-kernel', 'cargo:exact-linux']);
+    expect(ids(graph, ['kernel/src/lib.rs'])).toEqual(['cargo:exact-kernel', 'cargo:exact-painted']);
     // Only the tested package's tests are built: the kernel's include of the app is its own.
     expect(ids(graph, ['apps/demo/card.contract'])).toEqual(['bun:scripts/app.test.mjs', 'cargo:exact-kernel']);
-    expect(ids(graph, ['apps/other/app.contract'])).toEqual(['cargo:exact-linux']);
+    expect(ids(graph, ['apps/other/app.contract'])).toEqual(['cargo:exact-painted']);
     // The CLI imports the Apple build script, so its file is an input, but not the sources it builds from.
     expect(ids(graph, ['host/apple/build.mjs'])).toEqual(['bun:scripts/app.test.mjs']);
     expect(ids(graph, ['host/apple/Sources/A.swift'])).toEqual([]);
     expect(ids(graph, ['docs/guide.md'])).toEqual([]);
-    expect(ids(graph, [GLOBAL[1]])).toEqual(['bun:scripts/app.test.mjs', 'cargo:exact-kernel', 'cargo:exact-linux']);
+    expect(ids(graph, [GLOBAL[1]])).toEqual(['bun:scripts/app.test.mjs', 'cargo:exact-kernel', 'cargo:exact-painted']);
   } finally { done(); }
 });
 
@@ -60,12 +60,12 @@ test('a suite names what it reads by path, flag, call or property, never by pros
   const rust = rustLiterals([
     '#[ignore = "async lane: bun scripts/async.mjs runs it"]',
     'let a = repo().join("apps"); let b = dir.path().join("host");',
-    'Command::new("cargo").args(["test", "-p", "exact-linux"]);',
+    'Command::new("cargo").args(["test", "-p", "exact-painted"]);',
     'if kind == "bench" {} let c = format!("../../apps/{app}/app.contract");',
   ].join('\n'));
-  expect(rust.map(l => l.text)).toEqual(['apps', 'host', 'cargo', 'test', '-p', 'exact-linux', 'bench', '../../apps/']);
+  expect(rust.map(l => l.text)).toEqual(['apps', 'host', 'cargo', 'test', '-p', 'exact-painted', 'bench', '../../apps/']);
   expect(rust.find(l => l.text === 'apps').receiver).toBe('repo()');
-  expect(rust.find(l => l.text === 'exact-linux').prev).toBe('-p');
+  expect(rust.find(l => l.text === 'exact-painted').prev).toBe('-p');
   expect(rust.find(l => l.text === 'bench').compared).toBe(true);
   const { literals, imports } = jsSources("import a from './a.mjs'; resolve(import.meta.dir, '..', 'apps'); spawn('bun', ['scripts/agent.mjs', 'web', '--app', 'excord']); const t = `scripts/fixtures/${n}.contract`; process.env.EXACT_WEB_DIST;", 'x.mjs');
   expect(imports).toEqual(['./a.mjs']);
@@ -157,8 +157,8 @@ test('a path that starts with the code\'s own directory, its package\'s or the r
       + 'fn named() -> String { format!("{dir}/../named/a.txt", dir = env!("CARGO_MANIFEST_DIR")) }\n'
       + 'const SCHEMA: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tables/schema.json"));\n',
     // Count a library's include of another unit's file through `concat!`, as through a plain path
-    'tools/contract/src/lib.rs': 'pub const DATA: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../host/linux/data.txt"));\n',
-    'tools/named/a.txt': '', 'tools/tables/schema.json': '', 'host/linux/data.txt': '',
+    'tools/contract/src/lib.rs': 'pub const DATA: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../host/painted/data.txt"));\n',
+    'tools/named/a.txt': '', 'tools/tables/schema.json': '', 'host/painted/data.txt': '',
     'tools/corpus/a.contract': '',
     'tools/contract/corpus/a.contract': '',
   }, [{ name: 'contract', dir: 'tools/contract' }]);
@@ -174,7 +174,7 @@ test('a path that starts with the code\'s own directory, its package\'s or the r
     expect(ids(graph, ['tools/corpus/a.contract'])).toEqual(['cargo:contract']);
     expect(ids(graph, ['tools/named/a.txt'])).toEqual(['cargo:contract']);
     expect(ids(graph, ['tools/tables/schema.json'])).toEqual(['cargo:contract']);
-    expect(ids(graph, ['host/linux/data.txt'])).toEqual(['cargo:contract']);
+    expect(ids(graph, ['host/painted/data.txt'])).toEqual(['cargo:contract']);
   } finally { done(); }
 });
 
@@ -460,7 +460,7 @@ test("this checkout's parity suites follow the paint walk and their own gallery"
   const catalogue = suites(repo).filter(s => s.kind === 'parity');
   expect(catalogue.map(s => s.id).sort()).toEqual(['parity:motion', 'parity:svg']);
   const picked = changed => select(graph, changed, catalogue).map(s => s.suite.id).sort();
-  expect(picked(['host/linux/src/paint.rs'])).toEqual(['parity:motion', 'parity:svg']);
+  expect(picked(['host/painted/src/paint.rs'])).toEqual(['parity:motion', 'parity:svg']);
   expect(picked(['apps/svg-gallery/app.contract'])).toEqual(['parity:svg']);
   // `smoke.mjs`, which both legs run, imports both scripts
   expect(picked(['scripts/motionparity.mjs'])).toEqual(['parity:motion', 'parity:svg']);

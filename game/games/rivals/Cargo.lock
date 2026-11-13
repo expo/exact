@@ -876,9 +876,14 @@ dependencies = [
 name = "exact-apple"
 version = "0.1.0"
 dependencies = [
+ "arcstr",
+ "arrayvec",
+ "crypto-bigint",
+ "ecdsa",
+ "elliptic-curve",
  "exact-color",
  "exact-data",
- "exact-grants",
+ "exact-executor",
  "exact-kernel",
  "exact-markdown",
  "exact-markdown-editor",
@@ -889,9 +894,27 @@ dependencies = [
  "exact-runner",
  "exact-svg-file",
  "exact-textflow",
+ "foldhash 0.2.0",
+ "group",
  "ibex2",
+ "idna",
+ "litemap",
+ "memchr",
+ "percent-encoding",
+ "potential_utf",
+ "serde_core",
  "serde_json",
+ "slotmap",
+ "stable_deref_trait",
+ "subtle",
+ "tinystr",
+ "triomphe",
  "url",
+ "writeable",
+ "yoke",
+ "zerofrom",
+ "zeroize",
+ "zerotrie",
 ]
 
 [[package]]
@@ -904,10 +927,13 @@ dependencies = [
  "exact-filesystem",
  "exact-gpu-reflect",
  "exact-kernel",
+ "exact-logic-abi",
  "exact-plan",
  "exact-runner",
  "exact-svg-file",
  "exact-update",
+ "ibex2",
+ "serde",
  "serde_json",
  "sha2",
 ]
@@ -944,6 +970,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact-executor"
+version = "0.1.0"
+dependencies = [
+ "exact-data",
+ "exact-grants",
+ "exact-runner",
+ "ibex2",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "exact-filesystem"
 version = "0.1.0"
 dependencies = [
@@ -973,6 +1011,7 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
+ "serde_json",
 ]
 
 [[package]]
@@ -1007,6 +1046,7 @@ dependencies = [
  "exact-gpu-reflect",
  "exact-plan",
  "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1087,15 +1127,84 @@ dependencies = [
 name = "exact-linux"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
- "chrono",
- "chrono-tz",
  "des",
  "drm",
  "evdev",
+ "exact-painted",
+ "exact-runner",
+ "getrandom 0.3.4",
+ "libc",
+ "tiny-skia",
+]
+
+[[package]]
+name = "exact-listen"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "socket2",
+]
+
+[[package]]
+name = "exact-logic"
+version = "0.1.0"
+dependencies = [
+ "exact-logic-abi",
+ "exact-plan",
+ "exact-runner",
+ "libloading",
+ "serde_json",
+ "sha2",
+ "wasmi",
+ "wasmi_collections",
+ "wasmi_core",
+ "wasmi_ir",
+ "wasmparser",
+]
+
+[[package]]
+name = "exact-logic-abi"
+version = "0.1.0"
+dependencies = [
+ "exact-plan",
+ "exact-runner",
+]
+
+[[package]]
+name = "exact-markdown"
+version = "0.1.0"
+
+[[package]]
+name = "exact-markdown-editor"
+version = "0.1.0"
+dependencies = [
+ "exact-markdown",
+]
+
+[[package]]
+name = "exact-motion"
+version = "0.1.0"
+dependencies = [
+ "exact-color",
+ "exact-num",
+ "libm",
+]
+
+[[package]]
+name = "exact-num"
+version = "0.1.0"
+
+[[package]]
+name = "exact-painted"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
  "exact-canvas",
  "exact-color",
  "exact-data",
+ "exact-executor",
  "exact-grants",
  "exact-ink",
  "exact-kernel",
@@ -1136,60 +1245,6 @@ dependencies = [
  "windows",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "exact-listen"
-version = "0.1.0"
-dependencies = [
- "libc",
- "socket2",
-]
-
-[[package]]
-name = "exact-logic"
-version = "0.1.0"
-dependencies = [
- "exact-logic-abi",
- "exact-plan",
- "exact-runner",
- "libloading",
- "serde_json",
- "sha2",
- "wasmi",
- "wasmparser",
-]
-
-[[package]]
-name = "exact-logic-abi"
-version = "0.1.0"
-dependencies = [
- "exact-plan",
- "exact-runner",
-]
-
-[[package]]
-name = "exact-markdown"
-version = "0.1.0"
-
-[[package]]
-name = "exact-markdown-editor"
-version = "0.1.0"
-dependencies = [
- "exact-markdown",
-]
-
-[[package]]
-name = "exact-motion"
-version = "0.1.0"
-dependencies = [
- "exact-color",
- "exact-num",
- "libm",
-]
-
-[[package]]
-name = "exact-num"
-version = "0.1.0"
 
 [[package]]
 name = "exact-plan"
@@ -1327,7 +1382,7 @@ dependencies = [
  "accesskit_winit",
  "exact-ink",
  "exact-kernel",
- "exact-linux",
+ "exact-painted",
  "exact-runner",
  "png",
  "serde_json",
@@ -3208,6 +3263,9 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
+]
 
 [[package]]
 name = "range-alloc"
@@ -3332,8 +3390,8 @@ name = "rivals-android"
 version = "0.1.0"
 dependencies = [
  "exact-game-app",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-runner",
  "ibex2-sqlite",
 ]
@@ -3377,6 +3435,7 @@ dependencies = [
  "exact-game-app",
  "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-runner",
  "ibex2-sqlite",
 ]
@@ -3404,8 +3463,8 @@ name = "rivals-windows"
 version = "0.1.0"
 dependencies = [
  "exact-game-app",
- "exact-linux",
  "exact-logic",
+ "exact-painted",
  "exact-runner",
  "exact-windows",
  "ibex2-sqlite",
@@ -4114,6 +4173,10 @@ name = "triomphe"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b40688ea6389c8171614b25491f71d4a27946e0c7ce2da1c6de27e25abf1a0ae"
+dependencies = [
+ "serde",
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "typenum"

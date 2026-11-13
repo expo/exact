@@ -27,7 +27,7 @@ import java.nio.ByteBuffer
 object Legacy {
     /** A JPEG, GIF or WebP (an animation's first frame) from exact2's Rust where `AImageDecoder` (API 30) is missing:
      * the same platform decoder by its Java face, as the Rust asks that one, scaled to [width] by [height], cropped to
-     * [w] by [h] at ([x], [y]), into software ARGB_8888 pixels (`host/linux/src/canvas/legacy.rs`). [source] is the
+     * [w] by [h] at ([x], [y]), into software ARGB_8888 pixels (`host/painted/src/canvas/legacy.rs`). [source] is the
      * file, read in place during the call. Called on the Rust's decode threads. */
     @JvmStatic fun decode(source: ByteBuffer, width: Int, height: Int, x: Int, y: Int, w: Int, h: Int): Bitmap =
         ImageDecoder.decodeBitmap(ImageDecoder.createSource(source)) { d, _, _ ->

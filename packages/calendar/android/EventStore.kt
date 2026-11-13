@@ -350,7 +350,12 @@ internal class EventStore(private val context: ExtensionContext, private val say
         CalendarModule.insertIntentHatch?.invoke(intent)
         editing = true
         say("editor shown")
-        context.startActivityForResult(intent) { code, _ ->
+        context.startActivityForResult(intent, { refusal ->
+            // Nothing started: no calendar app (`NotFoundError`), the app left first, or the platform refused.
+            editing = false
+            say("editor not shown: $refusal")
+            reply(CalendarModule.error(refusal))
+        }) { code, _ ->
             editing = false
             val action = if (code == Activity.RESULT_OK) "saved" else "unknown"
             say("editor $action")

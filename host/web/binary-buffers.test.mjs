@@ -8,7 +8,7 @@ const binary = readFileSync(new URL('../../js/src/binary.js', import.meta.url), 
 const prelude = readFileSync(new URL('../../js/src/prelude.js', import.meta.url), 'utf8');
 
 function realm() {
-  const context = createContext({ Headers, URL, URLSearchParams, TextEncoder, TextDecoder });
+  const context = createContext({ Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal });
   runInContext(binary, context);
   runInContext('globalThis.said = f => { try { return f(); } catch (e) { return `${e.name}: ${e.message}`; } };', context);
   return context;

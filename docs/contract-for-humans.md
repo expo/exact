@@ -1325,7 +1325,18 @@ title, an optional second `text` (a value) or a `column` of two texts (a
 subtitle), and an optional trailing accessory — a `forward-chevron` or
 `checkmark` image, a checkbox or switch `input`, or a `button` holding only
 `image "symbol:info"`. `destructive` draws a row red. Any other row is custom
-and keeps its own views. A section written `background-color="transparent"` has no card: its rows sit on the list's background with no separators or corners, as a profile header does (LLP 1084 §6.2). That literal is the only `background-color` a section takes, and not beside a `class`; a section that gains and loses its card is two sections under `if`.
+and keeps its own views. A row with an authored `height`, `background-color` or
+corner radius also keeps its views, including a row laid out as a column. A
+subtitle column does too when it writes any of those or `min-height`. Authored
+`align-items` or `justify-content` on either a nested column or a row laid out
+as a column keeps its views too. Classes count as authored. Such nested
+columns omit subtitle block padding when lowering can establish that their
+row or column writes a box. Literal values and ternary arms are recognized;
+a `none` arm keeps the platform padding. Other expressions keep that padding
+because they may evaluate to `none`. Write explicit padding to control it.
+The title-to-subtitle gap stays the platform's
+unless you write your own gap. A row's own `min-height` alone still works
+on a standard cell. A section written `background-color="transparent"` has no card: its rows sit on the list's background with no separators or corners, as a profile header does (LLP 1084 §6.2). That literal is the only `background-color` a section takes, and not beside a `class`; a section that gains and loses its card is two sections under `if`.
 
 ```text
 list appearance="auto" listStyle="inset-grouped" flex=1

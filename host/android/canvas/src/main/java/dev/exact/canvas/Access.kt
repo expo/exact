@@ -19,7 +19,7 @@ import android.widget.FrameLayout
  * What the reader answers accessibility services with (LLP 1115.001 D13). What the reader shows is painted: the
  * page in one view, each bar and each surface of the top layer in a [Pane]. None of it says anything to TalkBack by
  * itself, so the view that holds it answers through an [AccessibilityNodeProvider] whose virtual nodes are exact2's
- * own statement of the tree ([Native.access], `host/linux/src/presenter/access.rs`): for each node its identity,
+ * own statement of the tree ([Native.access], `host/painted/src/presenter/access.rs`): for each node its identity,
  * what it stands under, what it is, its state, its box, its range, its place in a set, and its name, value and
  * description, in the order a person reads.
  *

@@ -36,7 +36,7 @@ try {
       stageHostGlue(root, gen);
       for (const f of ['app.js', 'names.js', 'paint.js']) copyFileSync(resolve(dir, f), resolve(gen, f));
       writeFileSync(resolve(gen, 'entry.js'), `import app from './app.js'; import { journal } from './rt.js'; app(); globalThis.journal=journal; globalThis.ready=true;`);
-      writeFileSync(resolve(gen, 'server-entry.js'), `import app from './app.js'; globalThis.__start=async()=>{app();return {activate:'eager',policy:'build'}};globalThis.__render=async()=>({root:document.rootHTML(),time:0,answers:'[]',pending:[],open:[]});`);
+      writeFileSync(resolve(gen, 'server-entry.js'), `import app from './app.js'; globalThis.__start=async()=>{app();return {activate:'eager',policy:'build'}};globalThis.__render=async()=>({root:document.rootHTML(),time:0,answers:'[]',pending:[],open:[],readers:[]});`);
       for (const [entry, file] of [['entry.js', 'app.js'], ['server-entry.js', '.gen/server.js']]) {
         const bundle = await rolldown({ input: resolve(gen, entry), logLevel: 'silent', external: ['./draw.js'] });
         await bundle.write({ file: resolve(dir, file), format: 'iife', codeSplitting: false });

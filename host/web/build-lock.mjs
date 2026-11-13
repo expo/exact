@@ -82,11 +82,11 @@ export function withLock(lock, fn) {
 }
 
 /** `lock` taken, waiting up to 30 s for another holder: what releases it. */
-export function takeLock(lock) {
+export function takeLock(lock, { waitMs = 30000 } = {}) {
   const osLock = kernel(), handle = osLock.open(lock, true), started = Date.now();
   try {
     while (!osLock.take(handle, true)) {
-      if (Date.now() - started > 30000) throw Object.assign(new Error(`${lock}: waited 30 s for this build lock, which ${holder(lock)} holds; wait for its build to finish, or stop it if it is stuck`), { code: 'ELOCKED' });
+      if (Date.now() - started >= waitMs) throw Object.assign(new Error(`${lock}: waited ${waitMs / 1000} s for this build lock, which ${holder(lock)} holds; wait for its build to finish, or stop it if it is stuck`), { code: 'ELOCKED' });
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
     osLock.mark(handle);

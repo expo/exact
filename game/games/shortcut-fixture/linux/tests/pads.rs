@@ -1,5 +1,5 @@
-use exact_linux::gamepad::{read, Change, Fetch, Layout, Opened, State};
-use exact_linux::presenter::{PainterChoice, Presenter};
+use exact_painted::gamepad::{read, Change, Fetch, Layout, Opened, State};
+use exact_painted::presenter::{PainterChoice, Presenter};
 use serde_json::{json, Value};
 
 #[test]
@@ -44,7 +44,7 @@ fn delayed_pad_reports_tap_and_hold_through_the_presenter() {
             presenter.set_delivery_from_compat(&compat.to_string()),
             None
         );
-        let ready = exact_linux::agent::handle(&mut presenter, r#"{"op":"state"}"#);
+        let ready = exact_painted::agent::handle(&mut presenter, r#"{"op":"state"}"#);
         presenter.sync_surfaces();
         assert!(presenter.has_gamepad_input(), "{ready}");
         assert_eq!(
@@ -73,13 +73,13 @@ fn delayed_pad_reports_tap_and_hold_through_the_presenter() {
             let reading = reading.unwrap();
             presenter.hardware_pad(index, true, reading.buttons, reading.axes, at);
         }
-        let reply: Value = serde_json::from_str(&exact_linux::agent::handle(
+        let reply: Value = serde_json::from_str(&exact_painted::agent::handle(
             &mut presenter,
             r#"{"op":"clock","to":1600}"#,
         ))
         .unwrap();
         assert!(reply.get("error").is_none(), "{reply}");
-        let state: Value = serde_json::from_str(&exact_linux::agent::handle(
+        let state: Value = serde_json::from_str(&exact_painted::agent::handle(
             &mut presenter,
             r#"{"op":"state"}"#,
         ))

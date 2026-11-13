@@ -582,8 +582,8 @@ pub struct Baked {
     /// Development-only source locations, keyed by the final plan digest.
     /// Absent from standalone and Cargo bakes, receipts and module payloads.
     pub source_map: Option<String>,
-    /// The compiler's warnings, each as `contract build` prints it, its file
-    /// from the app's directory: the bake's caller says them (LLP 1116.004 D7).
+    /// Compiler, JavaScript and deferred-call warnings. Compiler paths are
+    /// from the app's directory; the caller says them (LLP 1116.004 D7).
     pub warnings: Vec<String>,
     /// Snapshot plans compiled alongside the app, reused by bundle generation.
     pub entries: BTreeMap<String, contract::snapshot::Entry>,
@@ -1202,14 +1202,14 @@ fn bake_in(
     // values for the Rust half a development producer cannot run.
     let mut refresh_module = Module::inspect(bytecode.clone())?;
     refresh_module.set_budget_ms(f64::INFINITY);
-    let plan = match (composer, seed) {
-        (Some(composer), _) => contract::snapshot::bake_app(
+    let (plan, deferred_warnings) = match (composer, seed) {
+        (Some(composer), _) => contract::snapshot::bake_app_with_warnings(
             &entries,
             plan,
             Composed((composer.compose)(module)),
             Composed((composer.compose)(refresh_module)),
         ),
-        (None, Some(seed)) => contract::snapshot::bake_app(
+        (None, Some(seed)) => contract::snapshot::bake_app_with_warnings(
             &entries,
             plan,
             Seeded { module, seed },
@@ -1218,14 +1218,17 @@ fn bake_in(
                 seed,
             },
         ),
-        (None, None) => contract::snapshot::bake_app(&entries, plan, module, refresh_module),
+        (None, None) => {
+            contract::snapshot::bake_app_with_warnings(&entries, plan, module, refresh_module)
+        }
     }
     .map_err(|e| {
         source_map
             .as_ref()
             .map_or_else(|| e.to_string(), |map| map.bake_error(&e).to_string())
-    })?
-    .encode();
+    })?;
+    warnings.extend(deferred_warnings);
+    let plan = plan.encode();
     let source_map = source_map.map(|map| map.json(&plan));
     let packages = package_code(stage)?.packages;
     let mut receipt = serde_json::json!({
