@@ -168,6 +168,206 @@ impl exact_runner::DataSource for Granted {
 
 type Calls = Arc<Mutex<Vec<Json>>>;
 
+struct Wrapped;
+impl exact_runner::DataSource for Wrapped {
+    fn query(
+        &mut self,
+        source: &str,
+        _: &[exact_runner::Value],
+    ) -> Result<exact_runner::Value, exact_runner::DataError> {
+        Err(exact_runner::DataError::UnknownSource(source.into()))
+    }
+    fn answer(
+        &mut self,
+        _: &mut exact_runner::Store,
+        source: &str,
+        args: &[exact_runner::Value],
+    ) -> Result<exact_runner::Answer, exact_runner::DataError> {
+        if source != "wrapped" {
+            return self.query(source, args).map(exact_runner::Answer::Now);
+        }
+        let track = args[0].as_str().expect("a track");
+        Ok(exact_runner::Answer::Later(exact_runner::Request::native(
+            json!({ "extension": "sensor", "owner": "@fixture/sensor/own", "source": "reading", "args": { "track": track } }).to_string().into_bytes(),
+        )))
+    }
+    fn parse(
+        &mut self,
+        _: &mut exact_runner::Store,
+        _: &str,
+        _: &[exact_runner::Value],
+        outcome: Outcome,
+    ) -> Result<exact_runner::Answer, exact_runner::DataError> {
+        let Outcome::Response(response) = outcome else {
+            panic!("a response")
+        };
+        let value: f64 = serde_json::from_slice(&response.body).unwrap();
+        Ok(exact_runner::Answer::Now(exact_runner::Value::Number(
+            value,
+        )))
+    }
+}
+
+fn owned_runner(wrapper: bool) -> (App, Runner<Wrapped>, Calls) {
+    let app = App::new(
+        "owned",
+        &Fixture {
+            package: "@fixture/sensor",
+            grants: "",
+            interface: r#"{"kind":"interface","name":"@fixture/sensor","names":[
+          {"source":"reading","live":true,"options":{"track":"string"},"answers":"number","substitute":{"default":0}}]}"#,
+            app: r#"use reading as common from "@fixture/sensor"
+use reading as own from "@fixture/sensor/own"
+component App
+  state ownOn = true
+  state commonOn = true
+  state track = "a"
+  resource shared = common(track="a") when commonOn as shape number else empty()
+  resource owned = own(track=track) when ownOn as shape number else empty()
+  action move
+    track = "b"
+  action closeOwn
+    ownOn = false
+  action closeCommon
+    commonOn = false
+  view
+    text `${owned} ${shared}`
+"#,
+        },
+    );
+    let package = app.0.join("node_modules/@fixture/sensor");
+    std::fs::write(package.join("package.json"), r#"{"name":"@fixture/sensor","version":"1.0.0","exports":{".":"./exact.json","./own":"./own/exact.json"}}"#).unwrap();
+    std::fs::create_dir(package.join("own")).unwrap();
+    std::fs::write(package.join("own/exact.json"), r#"{"kind":"implementation","implements":"@fixture/sensor@^1.0","targets":["linux"],"names":[
+      {"source":"reading","live":true,"options":{"track":"string"},"answers":"number","substitute":{"default":0}}]}"#).unwrap();
+    if wrapper {
+        let path = app.0.join("app.contract");
+        let source = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, source.replace("own(track=track)", "wrapped(track)")).unwrap();
+        std::fs::write(
+            app.0.join("app.ts"),
+            "import { reading } from '@fixture/sensor/own';",
+        )
+        .unwrap();
+    }
+    let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Wrapped,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.set_module_target("linux");
+    let calls: Calls = Arc::default();
+    let seen = calls.clone();
+    r.native_slot().host(Some(Arc::new(move |body, reply| {
+        let body: Json = serde_json::from_slice(&body).unwrap();
+        let mut calls = seen.lock().unwrap();
+        calls.push(body.clone());
+        let count = calls
+            .iter()
+            .filter(|c| c["source"] == "reading" && c["owner"] == body["owner"])
+            .count();
+        reply.send(Outcome::Response(Response {
+            status: 200,
+            headers: Vec::new(),
+            body: count.to_string().into_bytes(),
+        }));
+    })));
+    r.listen(Arc::new(|| {}));
+    r.bind_extensions(&["sensor"], &[]);
+    pump(&mut r, &mut Vec::new());
+    (app, r, calls)
+}
+
+#[test]
+fn implementation_sources_refresh_directly_and_through_data_code() {
+    for wrapper in [false, true] {
+        let (_app, mut r, _) = owned_runner(wrapper);
+        let before = r.resource("owned").unwrap().clone();
+        let exact_runner::Value::Number(before) = before else {
+            panic!("a reading")
+        };
+        r.native_slot().changed("sensor.reading");
+        pump(&mut r, &mut Vec::new());
+        assert_eq!(
+            r.resource("owned"),
+            Some(&exact_runner::Value::Number(before + 1.0)),
+            "wrapper={wrapper}"
+        );
+    }
+}
+
+#[test]
+fn declarations_share_live_source_and_argument_group_lifetimes() {
+    let (_app, mut r, calls) = owned_runner(false);
+    r.act("move", Vec::new()).unwrap();
+    pump(&mut r, &mut Vec::new());
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c["release"] == "reading"),
+        "the interface still reads a: {:?}",
+        calls.lock().unwrap()
+    );
+    r.act("closeOwn", Vec::new()).unwrap();
+    pump(&mut r, &mut Vec::new());
+    let released: Vec<_> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c["release"] == "reading")
+        .cloned()
+        .collect();
+    assert_eq!(released.len(), 1, "{released:?}");
+    assert_eq!(released[0]["args"], json!({"track":"b"}));
+    r.act("closeCommon", Vec::new()).unwrap();
+    pump(&mut r, &mut Vec::new());
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c["release"] == "reading" && c.get("args").is_none())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn an_owned_request_keeps_its_argument_group_until_its_reply_lands() {
+    let (_app, mut r, calls) = owned_runner(false);
+    r.act("move", Vec::new()).unwrap();
+    let pending = r.take_requests();
+    assert_eq!(pending.len(), 1);
+    r.act("closeCommon", Vec::new()).unwrap();
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c["release"] == "reading"),
+        "the owned request is still in flight"
+    );
+    for out in pending {
+        let dispatch = match out.request.continuation {
+            Some(token) => r.dispatch_work(token),
+            None => r.native_work(&out.request),
+        };
+        run(&mut r, out.ticket, dispatch);
+    }
+    pump(&mut r, &mut Vec::new());
+    assert!(calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c["release"] == "reading" && c["args"]["track"] == "a"));
+}
+
 fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
     boot_with(name, &SENSOR, SENSOR.grants)
 }
@@ -218,7 +418,7 @@ fn boot_with(name: &str, fixture: &Fixture, grants: &'static str) -> (App, Runne
 
 /// The host's part: each request dispatched (a held one parked), released
 /// work run, each outcome fulfilled, until nothing is left to do.
-fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
+fn pump<D: exact_runner::DataSource>(r: &mut Runner<D>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -242,7 +442,7 @@ fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Granted>, ticket: u64, dispatch: Dispatch) {
+fn run<D: exact_runner::DataSource>(r: &mut Runner<D>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {

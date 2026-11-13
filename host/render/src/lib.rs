@@ -878,8 +878,8 @@ fn run(executor: &Executor, held: &mut Held, r: RequestOut, dispatch: Dispatch) 
 /// `--serve <dist> [--port <n>] [--renders <n>] [--queue <n>] [--lifetime
 /// <s>] [--generations <dir>]` is the server instead ([`Server`]): the built
 /// web app on loopback, its plan the dist's own `app.plan` unless `--plan`
-/// names one; `--generations` keeps the builds of `app.wasm` it serves, to
-/// send the next as a delta ([`Serve::generations`]).
+/// names one; `--generations` keeps builds at their versioned URLs and sends
+/// deltas between them ([`Serve::generations`]).
 /// It prints `serving http://127.0.0.1:<port>/`, then a line per render.
 pub fn main<D: DataSource + 'static>(baked: &[u8], data: fn() -> D) -> std::process::ExitCode {
     use std::process::ExitCode;

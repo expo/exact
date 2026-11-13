@@ -452,6 +452,12 @@ export function exercise(source: string): string {
     changing.maximumFractionDigits=3;
     kept.push((1.23456).toLocaleString('en-US',changing),(1.23456).toLocaleString(['de-DE'],changing),(1.23456).toLocaleString('de-DE',changing),(1234.5).toLocaleString('en-US'));
     out['en-US toLocaleString kept']=kept;
+    // A formatter reads its options once: changing the object after
+    // construction changes neither its output nor its resolved options.
+    const shared:Intl.NumberFormatOptions={notation:'compact',maximumFractionDigits:1};
+    const made=new Intl.NumberFormat('en-US',shared), before=made.format(12345);
+    shared.maximumFractionDigits=0; shared.minimumFractionDigits=0;
+    out['en-US compact options kept']=[before,made.format(12345),made.format(12000),String(made.resolvedOptions().maximumFractionDigits)];
     // A DateTimeFormat with an explicit timeZone and the same locales and
     // options shares an engine formatter, each `new` an object of its own; a Date's
     // toLocale…String adds its default fields when the options name none.

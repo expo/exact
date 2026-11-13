@@ -64,7 +64,7 @@ try {
     } finally { await s.close(); }
     s = await launch(fixture, host, options);
     try {
-      await s.prefer({ extension: 'tracking-consent.trackingAuthorizationStatus={"status":"restricted"}' });
+      await s.prefer({ extension: 'tracking-consent.trackingAuthorizationStatus#@exact/tracking-consent/apple={"status":"restricted"}' });
       await until(s, 'status', (v) => /restricted/.test(v ?? ''));
       const restricted = await ask(s, 'allow');
       check(host, 'drive 10: restricted answers restricted whatever the tap', restricted === 'Answered: restricted' && /restricted \(denied\)/.test((await texts(s)).status), `${restricted} ${JSON.stringify(await texts(s))}`);

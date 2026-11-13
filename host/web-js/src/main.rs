@@ -43,6 +43,7 @@ mod presence_tests;
 mod reads;
 mod sized;
 mod style;
+mod svg_lengths;
 mod symbols;
 mod timelines;
 

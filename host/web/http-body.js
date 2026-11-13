@@ -154,6 +154,10 @@ async function renderUpload(url, method, headers, body, limit, message, signal, 
     message({ event: 'exact:sending', id: '\0', data: '', coalesced: 0, received: performance.now() });
     const response = await fetch(url, { method, headers, body, signal, redirect: 'follow' });
     if (body?.byteLength) message({ event: 'exact:progress', id: '\0', data: JSON.stringify({ loaded: body.byteLength, total: body.byteLength }), coalesced: 0, received: performance.now() });
+    if (!response.url && response.type !== 'opaqueredirect') {
+      await response.body?.cancel();
+      return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+    }
     if (response.url && !admits(response.url)) {
       await response.body?.cancel();
       return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);
@@ -290,6 +294,10 @@ export async function readLongPoll(op, init, limit, message, controller, admits)
     try {
       const response = await fetch(url.href, { ...init, signal });
       const drop = () => response.body?.cancel().catch(() => {});
+      if (!response.url && response.type !== 'opaqueredirect') {
+        drop(); replied();
+        return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+      }
       if (response.url && !admits(response.url)) { drop(); replied(); return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`); }
       const status = response.status, type = response.headers.get('content-type') ?? '';
       // Judged by status and headers first: a reply that asks again, or an event stream, is never read.
@@ -592,6 +600,10 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     const response = await (early || fetch(asset ? localAssetURL(url) : url, init));
     // A redirect that left the grants names where it led (podcast F5): the
     // browser followed it, and the response's URL is the last hop's.
+    if (!response.url && response.type !== 'opaqueredirect') {
+      response.body?.cancel().catch(() => {});
+      return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
+    }
     if (response.url && (asset
       ? new URL(response.url).origin !== location.origin
       : !admitsNetwork(effective, response.url, 'fetch'))) return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);

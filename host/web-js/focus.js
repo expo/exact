@@ -4,21 +4,30 @@
 // is on the body or on the control just pressed (an `if` that mounts a field after a tap).
 // A carried restart (checkpoint.js, which holds `focus` while it rebuilds) marks every field it
 // rebuilt offered (`offerAll`), so none takes the focus later; a fresh boot's hidden or disabled
-// field may still take it when it is shown.
+// field may still take it when it is shown. A commit looks only while a field may be waiting: one
+// was built or bound since the last look, or that look passed one not yet offered.
 import { inertAncestor } from './navigation.js';
 const offered = new WeakSet();
-let restarting = false;
+let restarting = false, looking = true;
 const candidates = '[autofocus], [data-autofocus="true"]';
 
 /** A carried boot must not enqueue the browser's own autofocus candidates. */
 export function restartAutofocus() { restarting = true; }
 
+/** A field built or bound since the last look may be waiting: the next commit looks. */
+export const mayFocus = () => {
+  looking = true;
+};
+
 /** Keep the authored prop while a carried boot suppresses its DOM behavior. */
 export function autofocusProp(el, on) {
+  mayFocus();
   el.toggleAttribute('autofocus', on && !restarting);
   if (on && !restarting) el.removeAttribute('data-autofocus');
   else el.setAttribute('data-autofocus', String(on));
 }
+/** A Markdown editor's element replaces its textarea and copies its attributes: it keeps the field's offer. */
+export const replaced = (from, to) => offered.has(from) && offered.add(to);
 
 /** The press a pointer is dispatching (a click with `detail` > 0: a key's activation keeps the
  * focus where it is, as the wasm host's): its own work may hand the pressed control's focus to a
@@ -66,9 +75,12 @@ const rootOf = () => globalThis.document?.getElementById?.('exact-root');
 
 export function autofocus(root = rootOf()) {
   const token = running ?? dispatching, by = token && !token.dead ? token.el : null;
-  if (restarting || !root?.querySelectorAll) return;
+  if (restarting || !looking || !root?.querySelectorAll) return;
+  looking = false;
   for (const el of root.querySelectorAll(candidates)) {
-    if (offered.has(el) || !el.getClientRects().length || inertAncestor(el) || el.matches(':disabled') || getComputedStyle(el).visibility !== 'visible') continue;
+    if (offered.has(el)) continue;
+    looking = true;
+    if (!el.getClientRects().length || inertAncestor(el) || el.matches(':disabled') || getComputedStyle(el).visibility !== 'visible') continue;
     offered.add(el);
     const active = document.activeElement;
     if (!active || active === document.body || active === by) el.focus({ preventScroll: true });

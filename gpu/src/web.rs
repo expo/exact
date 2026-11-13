@@ -306,7 +306,8 @@ pub fn child(id: u32, index: u32, name: &str, frame: [f32; 4]) -> bool {
 pub fn children_count(id: u32, count: u32) -> bool {
     with(|m| m.children_count(id, count as usize)).unwrap_or(false)
 }
-/// Same encoding as native: 0 kernel frame, 1 ten floats, 2 hidden (out untouched).
+/// Same encoding as native: 0 kernel frame, 1 ten floats (sixteen with the
+/// two clip rows when `out` has room), 2 hidden (out untouched).
 pub fn placement(id: u32, index: u32, out: &mut [f32]) -> u32 {
     if out.len() < 10 {
         return 0;
@@ -316,6 +317,9 @@ pub fn placement(id: u32, index: u32, out: &mut [f32]) -> u32 {
         Some(p) => {
             out[..9].copy_from_slice(&p.homography);
             out[9] = p.depth;
+            if out.len() >= 16 {
+                out[10..16].copy_from_slice(p.clip_depth.as_flattened());
+            }
             1
         }
         None => 0,

@@ -1,3 +1,4 @@
+import { grantWords, trimGrant } from '../web/grant-admission.js';
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
@@ -499,7 +500,7 @@ if (rust) {
   if (devReload) devLogic.push(['rust', createHash('sha256').update(readFileSync(resolve(out, 'rust/wasm/app.module.wasm'))).digest('hex')]);
   rustGrants = await moduleGrants(built);
   rustGrantSet = normalizeGrants(ts ? 'Rust module' : 'app', rustGrants, 'rust');
-  moduleStorage = /^\s*(?:fs|sqlite)\./m.test(rustGrants);
+  moduleStorage = rustGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
   // The module binds with the plan's declarations, not the bake's answers.
   cpSync(resolve(gen, 'app.bind.plan'), resolve(out, 'app.bind.plan'));
 }
@@ -513,6 +514,11 @@ if (launchWeb.length) cpSync(resolve(here, 'marks.js'), resolve(gen, 'marks.js')
 // Held fetches and fetches tied to no answer (LLP 1016.000 D9): ts-fetch.js counts them through held.js, which it
 // does not import. Each entry imports this first, so a fetch an app module makes as it loads is counted too.
 if (ts) writeFileSync(resolve(gen, 'held-hooks.js'), "import { answering } from './ts-fetch.js'; import { heldReply, looseFetch } from './held.js'; Object.assign(answering, { loose: looseFetch, heldReply });\n");
+const rustAdmissionImports = rust ? ["import { setAppGrantSet } from './admission.js'; import { tsGrantSet, rustGrantSet } from './admission-data.js';"] : [];
+const rustAdmission = rust ? [
+  `data.appId ??= ${JSON.stringify((await import('../../scripts/app.mjs')).readManifest(appDir, app).app.id)};`,
+  'data.grants = setAppGrantSet(tsGrantSet, rustGrantSet);',
+] : [];
 writeFileSync(resolve(gen, 'main.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
   "import app, { sources, wait } from './app.js';",
@@ -549,6 +555,8 @@ writeFileSync(resolve(gen, 'main.js'), [
     "Clocked.push(() => { const o = reportTime(clock.now)[1]; if (o === told) return; told = o; commit(() => { for (const r of Resources) if (r.source === 'exactTime') R(r); }, 'time'); });",
   ] : []),
   ...(ts ? [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${mixed}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"] : []),
+  // File commands can run before the lazy Rust module has loaded.
+  ...rustAdmissionImports, ...rustAdmission,
   ...(ts && !production ? ['globalThis.exact = Object.assign(globalThis.exact ?? {}, { watchState });'] : []),
   // The schemes `openURL` may hand to the browser beyond its own (app.json `open_url`, navigation.js `declaredScheme`).
   ...(manifest.open_url?.schemes?.length ? [`globalThis.exact = Object.assign(globalThis.exact ?? {}, { openSchemes: ${JSON.stringify(manifest.open_url.schemes)} });`] : []),
@@ -621,7 +629,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js']) cpSync(resolve(here, f), resolve(gen, f));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
 writeFileSync(resolve(gen, 'modules.js'), localImports(readFileSync(resolve(here, 'modules.js'), 'utf8')));
 // The web host's own pieces the runtime loads (glue.mjs).
 stageHostGlue(root, gen);
@@ -643,6 +651,7 @@ const netGranted = [tsGrantSet, rustGrantSet].some(set => (set.entries ?? []).so
 const fetchRefused = production && ts && !netGranted;
 const emptyGrantAdmission = () => {
   const answers = {
+    trimGrant: trimGrant.toString(), grantWords: grantWords.toString(),
     createGrantSet: '() => EMPTY', scopedGrantSet: '() => EMPTY', unionGrantSets: '() => EMPTY',
     grantError: '() => null', rawGrantText: "() => ''", hasGrant: '() => false',
     admittingGrant: '() => null', admitsNetwork: '() => false', admitsSecret: '() => false', coversPath: '() => false',
@@ -667,7 +676,7 @@ for (const f of ['navigation.js', 'names.js']) cpSync(resolve(gen, f), resolve(g
 writeFileSync(resolve(gen, 'agent.js'), localImports(readFileSync(resolve(gen, 'agent.js'), 'utf8').replace("from './names.js'", "from './agent-names.js'").replace("from './navigation.js'", "from './agent-navigation.js'")));
 // A source granted `auth.session` signs in through the system browser (auth.js, LLP 1069.006), as
 // `@exact/sign-in` does for one granted `auth.apple` or `auth.google` (LLP 1133.014 D8).
-const auth = /^\s*auth\.(session|apple|google)\s/m.test(grants);
+const auth = tsGrantSet.entries.some(([, source]) => ['auth.session', 'auth.apple', 'auth.google'].includes(grantWords(source)[0]));
 // An upload is a granted fetch's stream (`exactUploadProgress`, LLP 1016.000 D10), so sources whose `fetch` is
 // ts-fetch-refused.js's never make one: rt.js keeps its empty ledger and uploads.js is not linked (LLP 1047.002 D3).
 const uploadsImport = "import { ledger, requestKey } from './uploads.js';";
@@ -728,6 +737,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   "import { markRoutes, markDocument } from './document.js';",
   ...(ts ? ["import { install as ts } from './ts-data.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
   ...(rust ? ["import { install } from './rust-data.js';"] : []),
+  ...rustAdmissionImports,
   // `exactTime` is a fact of the reader's device, which a render has not got: it answers as the runner does before a
   // host says the date (runner/src/time.rs, as the Rust renderer does), the unknown date in UTC, never the app's
   // source (LLP 1039 D1). The runtime answers the reader's when it adopts the page.
@@ -740,6 +750,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   'let t0, route, planResources;',
   'const prepare = async () => {',
   ...(ts ? [`  ts(data, ${mixed});`] : []),
+  ...rustAdmission,
   ...(rust ? ['  await install(data, sources, async p => __files(p));'] : []),
   ...(declared ? ['  prepareSources();'] : []),
   '};',
@@ -1016,7 +1027,7 @@ if (auth) {
   cpSync(resolve(root, 'host/web/auth-callback.html'), resolve(out, '.exact/auth/callback'));
   cpSync(resolve(root, 'host/web/auth-callback.js'), resolve(out, '.exact/auth/callback.js'));
   const { authClientMetadata } = await import('../../scripts/app.mjs');
-  const callbacks = grants.split('\n').map(l => l.trim()).filter(l => l.startsWith('auth.callback ')).map(l => l.slice(14).trim());
+  const callbacks = tsGrantSet.entries.map(([, source]) => source).filter(l => l.startsWith('auth.callback ')).map(l => trimGrant(l.slice(14)));
   const docs = authClientMetadata({ origin: manifest.app?.origin ?? null, displayName: manifest.app?.name ?? manifest.name, manifest }, callbacks);
   for (const [name, doc] of Object.entries(docs)) writeFileSync(resolve(out, `.exact/auth/${name}.json`), JSON.stringify(doc, null, 2) + '\n');
 }
@@ -1102,8 +1113,8 @@ if (devReload) writeFileSync(resolve(out, '.exact-dev-logic.json'), JSON.stringi
 // implementation's files, modules.js; a module view's `app:/` file, native.js):
 // what host/web/build.mjs ships.
 const extensionFiles = Object.keys(moduleFlag.extensions).length > 0;
-if (files || moduleStorage || extensionFiles || pageModules || /^\s*(?:fs|sqlite)\./m.test(grants)) {
-  const storageGrants = /^\s*(?:fs|sqlite)\./m.test(grants);
+const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
+if (files || moduleStorage || extensionFiles || pageModules || storageGrants) {
   const seeds = [resolve(gen, 'symbols.js'), files && resolve(gen, 'files.js'), (moduleStorage || storageGrants) && resolve(gen, 'admission.js'), storageGrants && resolve(gen, 'ts-data.js'),
     extensionFiles && resolve(gen, 'modules.js'), (pageModules || extensionFiles) && resolve(gen, 'native.js')].filter(Boolean);
   const roots = seeds.flatMap(seed => literalModuleURLs(readFileSync(seed, 'utf8'))).map(specifier => specifier.replace(/^\.\//, ''));

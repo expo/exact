@@ -10,6 +10,7 @@ import { clock, advance } from './clock.js';
 import { Views, Ids, viewId, Hooks } from './tree.js';
 import { OnHooks } from './events.js';
 import { start } from './mount.js';
+import { replaced } from './focus.js';
 /** A canvas's surface (LLP 1009 D2): its inputs, evaluated as the runner
  * evaluates them (records as arrays), to the app's GPU module — the web
  * host's own `gpu-glue.js` over `gpu.js`, fetched after the first painted
@@ -424,6 +425,7 @@ export function mde(e) {
     install(e, {
       live: n => n.isConnected,
       replace(n) {
+        replaced(e, n);
         Ids.set(n, id);
         Views.set(id, n);
         Object.defineProperties(e, {

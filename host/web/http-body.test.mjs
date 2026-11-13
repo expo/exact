@@ -21,6 +21,10 @@ function normalized(spec){
   const set=JSON.parse(result.stdout);sets.set(spec,set);return set;
 }
 
+function responseAt(url, body, init) {
+  return Object.defineProperty(new Response(body, init), 'url', { value: String(url) });
+}
+
 test('independent HTTP collects only a bounded complete response',async()=>{
   assert.deepEqual(await readBody(new Response('four'),4),new TextEncoder().encode('four'));
   assert.deepEqual(await readBody(new Response(null),4),new Uint8Array());
@@ -137,7 +141,7 @@ test('a stream delivers every event of each read as one batch, then its end', as
   const op = { method: 'GET', url: 'https://example.test/events', headers: [], body: '', stream: true, maxResponseBytes: 64 };
   const done = request(op, {
     grantSet: normalized('net.fetch https://example.test'), controllers: new Set(),
-    moduleLoader: { claim: (url, init) => { sent.push(init.headers); return Promise.resolve(new Response(body, { headers: { 'content-type': 'text/event-stream' } })); } },
+    moduleLoader: { claim: (url, init) => { sent.push(init.headers); return Promise.resolve(responseAt(url, body, { headers: { 'content-type': 'text/event-stream' } })); } },
     message: ({ received, ...m }) => { assert.equal(typeof received, 'number'); sent.push(m); },
   });
   const enc = (s) => new TextEncoder().encode(s);
@@ -171,7 +175,7 @@ test('a TypeScript stream reads a body that is not events as joined bytes, then 
     const body = new ReadableStream({ start(c) { push = c; } });
     const done = request({ method: 'GET', url: 'https://example.test/screen.avcc', headers: [], body: '', stream: true, maxResponseBytes }, {
       grantSet: normalized('net.fetch https://example.test'), controllers: new Set(), protocol,
-      moduleLoader: { claim: () => Promise.resolve(new Response(body, { headers: { 'content-type': 'application/octet-stream' } })) },
+      moduleLoader: { claim: url => Promise.resolve(responseAt(url, body, { headers: { 'content-type': 'application/octet-stream' } })) },
       message: (m) => sent.push([...new Uint8Array(m.data)]),
     });
     return { done, push: (bytes) => push.enqueue(new Uint8Array(bytes)), close: () => push.close() };
@@ -226,7 +230,7 @@ test('four MiB through a slow byte drain stays bounded and in order', async () =
     } }, { highWaterMark: 0 });
     const end = await request({ method: 'GET', url: 'https://example.test/bytes', headers: [], stream: true, maxResponseBytes: bound }, {
       grantSet: normalized('net.fetch https://example.test'), controllers: new Set(), protocol: { bytes: true },
-      moduleLoader: { claim: () => Promise.resolve(new Response(body)) },
+      moduleLoader: { claim: url => Promise.resolve(responseAt(url, body)) },
       message: async m => {
         waiting += m.data.byteLength; peak = Math.max(peak, waiting);
         assert.ok(waiting <= bound);
@@ -251,7 +255,7 @@ test('abort releases a byte reader waiting for delivery', async () => {
   const body = new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(16)); }, cancel() { cancelled = true; } }, { highWaterMark: 0 });
   const done = request({ method: 'GET', url: 'https://example.test/bytes', headers: [], stream: true, maxResponseBytes: 8 }, {
     grantSet: normalized('net.fetch https://example.test'), controllers: new Set(), controller, protocol: { bytes: true },
-    moduleLoader: { claim: () => Promise.resolve(new Response(body)) },
+    moduleLoader: { claim: url => Promise.resolve(responseAt(url, body)) },
     message: () => { calls++; enter(); return new Promise(() => {}); },
   });
   await entered;
@@ -634,13 +638,13 @@ test('a render upload keeps HTTP error replies and enforces its byte ceiling, ab
     globalThis.fetch = async (_url, init) => {
       expect([...init.body]).toEqual([97, 98]);
       expect(init.redirect).toBe('follow');
-      return new Response('busy', { status: 503 });
+      return responseAt(_url, 'busy', { status: 503 });
     };
     const reply = await request(op, host);
     expect([reply.kind, reply.status, decode(reply)]).toEqual([0, 503, 'busy']);
     expect(sent).toEqual([['exact:sending', ''], ['exact:progress', '{"loaded":2,"total":2}']]);
     sent.length = 0;
-    globalThis.fetch = async () => new Response('large');
+    globalThis.fetch = async url => responseAt(url, 'large');
     const large = await request({ ...op, body: '' }, host);
     expect([large.kind, decode(large)]).toEqual([2, 'HTTP response exceeds limit']);
     expect(sent).toEqual([['exact:sending', '']]);

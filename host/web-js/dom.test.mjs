@@ -92,6 +92,13 @@ async function withRenderRuntime(run) {
   }
 }
 
+// A static `style` (a presence's custom properties, a symbol's inline rows) is an attribute the compiler emits.
+test('a static style attribute renders', async () => withRenderRuntime((doc, { h }) => {
+  h(doc.root, 'span', 0, { style: '--exact-press:1' }, 0);
+  h(doc.root, 'i', 0, { style: 'color:red' }, 0);
+  expect(doc.rootHTML()).toBe('<span style="--exact-press:1;"></span><i style="color:red;"></i>');
+}));
+
 test.each([['', false], ['b', false], ['', true], ['b', true]])(
   'the runtime selects %j and rechecks changed option labels (explicit value: %j)',
   async (value, explicit) => withRenderRuntime((doc, { P, settled }) => {

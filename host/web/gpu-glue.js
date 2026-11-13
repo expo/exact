@@ -229,10 +229,27 @@ function supplyChildren(entry, module = gpu, staging = false) {
   if (staging || !entry.children || previous.length !== rows.length) module.gpu_children_count(entry.id, rows.length);
   entry.children = rows;
 }
+// The child's box, in its own points, cut by a placement's two clip rows
+// (each ax + by + c >= 0), as Linux clips its composite: "" when they cut nothing.
+function clipPath(h, width, height) {
+  let points = [[0,0],[width,0],[width,height],[0,height]], cut = false;
+  for (const [a,b,c] of [h.subarray(10,13), h.subarray(13,16)]) {
+    const d = ([x,y]) => a*x + b*y + c, next = [];
+    points.forEach((q, i) => {
+      const p = points.at(i - 1), dp = d(p), dq = d(q);
+      if ((dp >= 0) !== (dq >= 0)) next.push([p[0] + (q[0]-p[0]) * dp / (dp - dq), p[1] + (q[1]-p[1]) * dp / (dp - dq)]);
+      if (dq >= 0) next.push(q); else cut = true;
+    });
+    points = next;
+  }
+  return cut ? `polygon(${(points.length ? points : [[0,0]]).map(([x,y]) => `${x}px ${y}px`).join(",")})` : "";
+}
 function placeChildren(entry) {
   if (!entry.children) return;
-  const h = new Float32Array(10), placed = [];
+  const h = new Float32Array(16), placed = [];
   for (const [i, row] of (entry.children ?? []).entries()) {
+    // Rows that cut nothing, for a module that writes only the first ten floats.
+    h.set([0,0,1,0,0,1], 10);
     const outcome = gpu.gpu_placement(entry.id, i, h), el = row.el;
     row.hidden = outcome === 2;
     if (outcome === 0) { restoreChild(row); continue; }
@@ -245,6 +262,10 @@ function placeChildren(entry) {
     // Relative positioning makes z-index apply to ordinary block children too.
     if (!row.original.style.position || row.original.style.position === "static") el.style.position = "relative";
     el.style.transform = `matrix3d(${[h[0]-x*h[6],h[3]-y*h[6],0,h[6],h[1]-x*h[7],h[4]-y*h[7],0,h[7],0,0,1,0,h[2]-x*h[8],h[5]-y*h[8],0,h[8]].join(",")})`;
+    // The authored clip-path is kept, and restored, once a placement has cut the child.
+    const clip = clipPath(h, row.frame[2], row.frame[3]);
+    if (clip) row.original.style.clipPath ??= el.style.clipPath ?? "";
+    if ("clipPath" in row.original.style) el.style.clipPath = clip || row.original.style.clipPath;
     placed.push({el, depth:h[9], index:i});
   }
   // Integer CSS ranks preserve the full float ordering. At equal depth the later

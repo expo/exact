@@ -154,8 +154,8 @@ forwarding from UIKit’s visible cells, header and footer is not implemented ye
 RealWorld's public pages can be served by the native renderer:
 
 ```sh
-EXACT_WEB_DIST=target/realworld-dist bun host/web/build.mjs realworld-web
-cargo run --release -p realworld-web --bin realworld-render -- --serve target/realworld-dist --port 8080 --name Conduit
+EXACT_WEB_DIST=target/realworld-dist bun host/web/build.mjs realworld-web --wasm
+cargo run --release -p realworld-web --bin realworld-render -- --serve target/realworld-dist --port 8080 --name Conduit --generations target/realworld-generations
 ```
 
 The home feed, articles and profiles arrive as anonymous HTML. Their public
@@ -164,10 +164,13 @@ Links work without the runtime, which loads when the page is idle; a press
 made before it is ready is replayed once it is. Login and editing routes
 start the client normally. The renderer compresses what it sends (brotli, else
 gzip, by `Accept-Encoding`), and SIGTERM drains it. Reading-page transfer and
-the later runtime download are separate costs. With `--generations <dir>` it
-keeps the builds of `app.wasm` it has served, and a browser holding an earlier
-one gets the new build as a delta against it (LLP 1047.000 §9): after a
-one-line app change, 9.5 KB instead of 238.6.
+the later runtime download are separate costs. Keep the `--generations` directory
+across deploys, outside the replaced dist. It retains the newest four builds of
+`app.wasm`: an open page's `?v=` URL gets its exact build, or 404 once it expires.
+Malformed or repeated versions get 400. A browser holding a retained build can
+download another as a delta (LLP 1047.000 §9): after a one-line app change, 9.5 KB
+instead of 238.6. Versioned builds and stage files whose names match their content
+are cached as immutable; other files revalidate.
 
 ## Inspect and format Contract
 

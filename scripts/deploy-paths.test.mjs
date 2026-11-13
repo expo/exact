@@ -216,7 +216,10 @@ test('async names the suites of each failure its log attributes', () => {
   // conform.mjs's own lines: `FAIL <app> <step>:`, and in a cross-browser step `FAIL <browser> <app> <step>:`.
   const conform = name => failures(name, `FAIL ${name === 'conform' ? '' : 'firefox '}caltrain tap-station: moved\nFAIL engine launch: no browser\n`, 1);
   expect(owners('conform', '', conform('conform'))).toEqual({'conform: caltrain tap-station': ['conform:caltrain']});
-  expect(owners('conform-firefox', '', conform('conform-firefox'))).toEqual({'conform-firefox: firefox caltrain tap-station': ['conform:caltrain']});
+  expect(owners('conform-browsers', '', failures('conform-browsers', 'FAIL firefox caltrain tap-station: moved\nFAIL webkit caltrain tap-station: moved\n', 1))).toEqual({
+    'conform-browsers: firefox caltrain tap-station': ['conform:caltrain'],
+    'conform-browsers: webkit caltrain tap-station': ['conform:caltrain'],
+  });
 });
 
 test('async runs a check only for the suites selected, its Rust tests built as a full run builds them', () => {
@@ -229,12 +232,15 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   const runner = resolve(import.meta.dir, 'affected.mjs');
   expect(step('test')[2]).toEqual(expect.arrayContaining(['bun', runner, '--cargo-tests', 'exact-painted']));
   expect(step('lane').slice(1)).toEqual(['bun', [runner, '--cargo-tests', 'exact-painted', '--', '--ignored', 'a_lane_test']]);
-  for (const name of ['conform', 'conform-firefox', 'conform-webkit']) expect(step(name)[2].slice(0, 3)).toEqual(['host/web-js/conform.mjs', 'caltrain', '--synthetic']);
+  for (const name of ['conform', 'conform-browsers']) expect(step(name)[2].slice(0, 3)).toEqual(['host/web-js/conform.mjs', 'caltrain', '--synthetic']);
+  expect(step('conform-browsers')[2]).toContain('firefox,webkit');
+  expect(step('conform-firefox')).toBeUndefined();
+  expect(step('conform-webkit')).toBeUndefined();
   expect(step('glue')[2].at(-1)).toContain('./host/web/a.test.mjs');
   for (const name of ['prepare', 'ios']) expect(step(name)).toBeDefined();
   for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
   expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-painted']);
-  expect(asyncLane.covers('conform-webkit', selection)).toEqual(['conform:caltrain']);
+  expect(asyncLane.covers('conform-browsers', selection)).toEqual(['conform:caltrain']);
   expect(asyncLane.covers('ios', selection)).toBe(null);
   // The iOS classes its test files reach run alone, and a failure of one is that class's
   const classes = {...selection, iosOnly:['ATests', 'BTests']};
@@ -250,7 +256,7 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   // A parity leg builds its gallery's Linux host, then drives the smoke on a fresh web build
   expect(full.find(([n]) => n === 'parity-svg').slice(1)).toEqual(['sh', ['-c', 'cargo build --profile host-dev -p svg-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs svg --hosts linux']]);
   // What a selection can leave out is what a full run has and an empty selection has not.
-  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-firefox', 'conform-webkit', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-browsers', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
 });
 
 test('async runs each module drive whole and keeps its failure until it runs again', () => {

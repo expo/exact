@@ -302,7 +302,7 @@ fn the_transition_row_lowers_to_css_transition_and_springs_are_named() {
     let (css, spring) = transition_css(&rows);
     assert_eq!(
         css,
-        "opacity 0.25s ease-in-out 0s,all 0.5s cubic-bezier(0.4,0,0.2,1) 0s"
+        "opacity 0.25s ease-in-out 0s,all 0.5s cubic-bezier(0.4,0,0.2,1) 0s,translate 0s ease 0s"
     );
     assert!(spring, "the spring is reported, not silently dropped");
     assert_eq!(

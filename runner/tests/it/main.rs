@@ -42,6 +42,7 @@ mod rust_sockets;
 mod secret_state;
 mod sockets;
 mod stream_mapper;
+mod svg_lengths;
 mod tabs;
 mod transform_binding;
 mod uploads;

@@ -653,6 +653,34 @@ fn padded_group_drop_refuses_a_target_scrolled_ahead_of_feedback() {
 }
 
 #[test]
+fn a_refused_keyboard_lift_leaves_the_interaction_pin_where_it_was() {
+    let mut p = board();
+    let (grip, held) = (id(&p, "grip-a1"), id(&p, "grip-b1"));
+    // A session in another list, held by the runner and pinned there, so
+    // the runner refuses the key's lift at `group_begin`.
+    p.set_collection_interaction(Some(held));
+    assert!(p.refine_collections().is_none());
+    let key = p.host.kernel().node(held).unwrap().key;
+    let binding = p.host.runner().reorder_binding(key).unwrap();
+    let geometry = p.host.runner().reorder_geometry(binding.list).unwrap();
+    let runner = p.host.runner_mut();
+    let start = runner
+        .begin_group_reorder(binding, geometry, false)
+        .unwrap();
+    let token = start.expect("the other session starts").token;
+    assert!(!p.group_key(grip, " ", 0.), "the lift is refused");
+    assert!(p.group.is_none() && p.brush.lift.ghost.is_none());
+    assert_eq!(p.collection_interaction(), Some(held));
+    p.host.runner_mut().cancel_reorder(token).unwrap();
+    p.host.runner_mut().finish_reorder(token).unwrap();
+    assert!(
+        p.group_key(grip, " ", 10.),
+        "with no other session it lifts"
+    );
+    assert_eq!(p.collection_interaction(), Some(grip));
+}
+
+#[test]
 fn padded_group_drop_refuses_geometry_changed_by_a_due_timer() {
     let source = BOARD
         .replace(

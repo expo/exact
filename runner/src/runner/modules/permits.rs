@@ -542,11 +542,11 @@ impl<D: DataSource> Runner<D> {
     /// the agent too (LLP 1133.002 D14 step 2).
     pub(super) fn unsupported_here(&self, row: &ModulesRow) -> bool {
         let target = self.host_target();
-        (self.substitute(row)["unsupported"]
-            .as_array()
-            .into_iter()
-            .flatten())
-        .any(|t| t == target)
+        let sub = self.substitute(row);
+        if row.send && !self.implementation_here(row) {
+            return true;
+        }
+        (sub["unsupported"].as_array().into_iter().flatten()).any(|t| t == target)
     }
 }
 

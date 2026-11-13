@@ -54,6 +54,15 @@ pub fn motion_node(key: NodeKey) -> u64 {
     ((key.generation as u64) << 32) | key.index as u64
 }
 
+/// An unset row is CSS's `all 0s`; an authored empty list is `none`.
+pub fn transitions(style: &StyleProps) -> Transitions {
+    if style.mask.has(StyleId::Transition) {
+        style.transition.clone()
+    } else {
+        Transitions::initial()
+    }
+}
+
 /// The generation-checked kernel key packed into an engine node number.
 pub fn node_key(node: u64) -> NodeKey {
     NodeKey {
@@ -78,7 +87,7 @@ pub struct MotionSync {
     /// also retire their presentation projection/overlay and owned playback.
     /// Unlike `removed`, this preserves the node's other motion properties.
     pub retired: Vec<(u64, Property)>,
-    /// Each created or touched node's `transition` row.
+    /// Each created or touched node's `transition` row, `all 0s` when unset.
     pub transitions: Vec<(u64, Transitions)>,
     /// Each created or touched node's `-exact-layout-transition` row (LLP 1063).
     /// Its targets are not here: a host observes `Property::Layout` after
@@ -118,7 +127,7 @@ impl MotionSync {
     /// a path. Ascending.
     fn moving(&self) -> Vec<u64> {
         let mut moving: Vec<u64> = (self.transitions.iter())
-            .filter(|(_, row)| !row.0.is_empty())
+            .filter(|(_, row)| row.0.iter().any(exact_motion::Transition::starts))
             .chain(self.layout.iter().filter(|(_, row)| !row.0.is_empty()))
             .map(|(node, _)| *node)
             .chain((self.clocks.iter()).filter_map(|(node, clock)| clock.as_ref().map(|_| *node)))
@@ -324,8 +333,20 @@ pub fn color_targets(
     node: &crate::kernel::NodeRef<'_>,
     dark: bool,
 ) -> Vec<(Property, Option<Value>)> {
+    retained_color_targets(node, dark, 0)
+}
+
+fn retained_color_targets(
+    node: &crate::kernel::NodeRef<'_>,
+    dark: bool,
+    retained: u16,
+) -> Vec<(Property, Option<Value>)> {
     let s = node.style;
-    if s.transition.0.is_empty() && s.animation.0.is_empty() && s.rare.exit_animation.0.is_empty() {
+    if retained == 0
+        && s.transition.0.is_empty()
+        && s.animation.0.is_empty()
+        && s.rare.exit_animation.0.is_empty()
+    {
         return Vec::new();
     }
     let animated: Vec<Property> = s
@@ -340,7 +361,11 @@ pub fn color_targets(
     let wanted: Vec<Property> = Property::PAINT
         .into_iter()
         .filter(|p| svg || !matches!(p, Property::Fill | Property::Stroke))
-        .filter(|p| animated.contains(p) || s.transition.0.iter().any(|t| t.property.covers(*p)))
+        .filter(|p| {
+            retained & paint_bit(*p) != 0
+                || animated.contains(p)
+                || s.transition.0.iter().any(|t| t.property.covers(*p))
+        })
         .collect();
     if wanted.is_empty() {
         return Vec::new();
@@ -558,7 +583,13 @@ impl Kernel {
         let old = owners.0.get(&id).copied().unwrap_or(0);
         let mut mask = 0;
         if let Some(node) = self.node_by_key(key) {
-            for (property, value) in color_targets(&node, dark) {
+            // Clearing the row keeps `all` coverage for already owned paint.
+            let retained = if node.style.mask.has(StyleId::Transition) {
+                0
+            } else {
+                old
+            };
+            for (property, value) in retained_color_targets(&node, dark, retained) {
                 // Not a colour now (`none`, a server): nothing interpolates,
                 // and the row shows as authored.
                 let Some(value) = value else {
@@ -711,7 +742,7 @@ impl Kernel {
         };
         let node = self.node_by_key(owner).expect("validated height owner");
         MotionSync {
-            transitions: vec![(id, node.style.transition.clone())],
+            transitions: vec![(id, transitions(node.style))],
             changes: vec![Change {
                 node: id,
                 property: Property::Height,
@@ -898,7 +929,7 @@ impl Kernel {
             };
             let key = &key;
             let id = motion_node(*key);
-            sync.transitions.push((id, node.style.transition.clone()));
+            sync.transitions.push((id, transitions(node.style)));
             for (property, value) in targets(node.style) {
                 let velocity = (property == Property::Translate
                     && node.style.mask.has(StyleId::TranslateVelocity))
@@ -915,14 +946,14 @@ impl Kernel {
                     velocity,
                 });
             }
-            // @ref LLP 1055.000 D15 — a path's `d`, read only where a
-            // transition moves it, as a colour target is.
+            // @ref LLP 1055.000 D15 — an unset row still covers `d` with
+            // `all 0s`, so clearing it must retain an existing path's curve.
             if node.node_type == NodeType::SvgPath {
-                let path = node
-                    .style
-                    .transition
-                    .matching(Property::D)
-                    .and_then(|_| crate::svg::parse_d_motion(node.props.str(PropId::D)?));
+                let covered = !node.style.mask.has(StyleId::Transition)
+                    || node.style.transition.matching(Property::D).is_some();
+                let path = covered
+                    .then(|| crate::svg::parse_d_motion(node.props.str(PropId::D)?))
+                    .flatten();
                 sync.paths.push((id, path));
             }
             if node.node_type.is_svg_shape() {

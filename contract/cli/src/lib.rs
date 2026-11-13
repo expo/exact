@@ -992,6 +992,7 @@ fn compile_loaded(
             &v.agent,
         );
     }
+    native::implementation_imports(path, &app_root, &mut plan)?;
     reach::from_manifest(path, &app_root, &file, &mut plan)?;
     Ok((plan, sites.map(|sites| SourceMap::new(sites, sources))))
 }

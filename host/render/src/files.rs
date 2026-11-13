@@ -14,16 +14,42 @@ pub(crate) fn asset_shaped(path: &str) -> bool {
     })
 }
 
-/// Whether `target` names the build whose ETag is `tag`: the web build asks
-/// for `app.wasm?v=` and the first 16 hex digits of its SHA-256, and a URL
-/// that names its content may be cached for good.
-pub(crate) fn named_build(target: &str, tag: &str) -> bool {
-    target.split_once('?').is_some_and(|(_, query)| {
-        query.split('&').any(|pair| {
-            pair.strip_prefix("v=")
-                .is_some_and(|v| v.len() == 16 && tag.starts_with(v))
+/// The build requested by the web build's `app.wasm?v=<16 hex digits>`.
+/// A malformed or repeated version must never select a different build.
+pub(crate) fn build_version(target: &str) -> Result<Option<String>, ()> {
+    let Some((_, query)) = target.split_once('?') else {
+        return Ok(None);
+    };
+    let mut version = None;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if key != "v" {
+            continue;
+        }
+        if version.is_some() || !digest_prefix(&value) {
+            return Err(());
+        }
+        version = Some(value.into_owned());
+    }
+    Ok(version)
+}
+
+fn digest_prefix(value: &str) -> bool {
+    value.len() == 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Only the split build's `stages/<name>.<digest>.wasm` is content-addressed.
+/// Compare with the unencoded bytes' hash, not just the shape of the name.
+pub(crate) fn named_stage(path: &str, tag: &str) -> bool {
+    path.strip_prefix("/stages/")
+        .filter(|name| !name.contains('/'))
+        .and_then(|name| name.strip_suffix(".wasm"))
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(name, digest)| {
+            !name.is_empty() && digest_prefix(digest) && tag.starts_with(digest)
         })
-    })
 }
 
 /// The web's auth callback page (LLP 1069.006 D4), served with no referrer

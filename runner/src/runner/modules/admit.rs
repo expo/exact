@@ -616,9 +616,23 @@ impl<D: DataSource> Runner<D> {
         self.forget_refused_row(i);
     }
 
+    pub(super) fn implementation_here(&self, row: &ModulesRow) -> bool {
+        let sub = self.substitute(row);
+        let target = self.host_target();
+        sub["implementationTargets"]
+            .as_array()
+            .is_none_or(|targets| targets.iter().any(|t| t == target))
+            && !sub["implementationOverrides"]
+                .as_array()
+                .is_some_and(|targets| targets.iter().any(|t| t == target))
+    }
+
     /// What answers `row` now (module doc).
     pub(in crate::runner) fn route(&self, row: &ModulesRow) -> Route {
         let extension = self.plan.str(row.extension);
+        if !self.implementation_here(row) {
+            return Route::Substitute;
+        }
         if self.extensions.bound.contains(extension) && !self.kept_by_runner(row) {
             Route::Real
         } else if self.extensions.bound.contains(extension) {

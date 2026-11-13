@@ -393,10 +393,26 @@ export function C(name, args) {
 }
 // Who caused the commit (modules.js, LLP 1133.002 D12), taken as a command is queued, so a deferred tail runs it
 // under its own commit's origin.
-export const Origin = { now: () => 'app' };
+export const Origin = {
+  now: () => Origin.ask ?? 'app',
+  run(origin, f) {
+    const was = this.ask;
+    this.ask = origin;
+    try {
+      return f();
+    } finally {
+      this.ask = was;
+    }
+  },
+};
+/** A call's id follows its requests, replies, queued sends and `then`s (LLP 1133.023 D7); a person's commit has 0.
+ * `run` and `letGo` are calls.js's once the app has tools: until then every commit is a person's. `pending` is what a
+ * call waits for besides its requests, each with the call's `id`: a supersession a replacing commit has not published,
+ * and a tree update of its own that a view transition defers (shared.js). */
+export const Invocation = { id: 0, pending: new Set(), run: (id, f) => f(), letGo() {} };
 /** `refresh r`: forced at this commit's settlement (merged, LLP 1054.000.000 D2). */
-export function R(r) {
-  Refresh.push(r.r ?? r);
+export function R(r, reasking = false) {
+  Refresh.push([r.r ?? r, reasking]);
 }
 /** Pull every derive and resource in plan order: the settlement pass. */
 function settle() {
@@ -447,7 +463,7 @@ export function commit(f, what = 'commit', finished) {
     for (const [m, source, args, own] of Sends) m.send(source, args, undo, own);
     // an assignment beside a send wins
     for (const [n] of Writes) if (n.m && !n.landing && Sends.some(x => x[0] === n.m)) n.m.forget(undo);
-    for (const r of Refresh) r.force(undo);
+    for (const [r, reasking] of Refresh) r.force(undo, reasking);
     // runner/src/runner/router.rs `change`
     if (!routerValid()) throw new Refusal('invalid router value');
     step = 'settling its derives and resources';
@@ -497,7 +513,7 @@ export function commit(f, what = 'commit', finished) {
     }
   }
   const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes],
-    changed = Sched?.changed(queued);
+    changed = Sched?.changed(queued), invocation = Invocation.id;
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view
   // transition defers too (review C3).
   if (KeyEvent || Propagating)
@@ -517,7 +533,7 @@ export function commit(f, what = 'commit', finished) {
   const tail = Object.assign(
     () => {
       try {
-        return link ? Nav.withLink(link, update) : update();
+        return Invocation.run(invocation, () => link ? Nav.withLink(link, update) : update());
       } finally {
         unrun('its tree update failed');
       }
@@ -565,6 +581,7 @@ export function commit(f, what = 'commit', finished) {
     for (const m of landed)
       if (m.then) {
         m.due = armedAt();
+        m.thenInvocation = invocation;
         if (!clock.agent) drive();
       }
     Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)

@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// The journal line for a value a row refused.
+pub(super) fn invalid(view: ViewId, row: &str, value: &Value) -> String {
+    use exact_kernel::svg::length::{AttributeLength, ATTRIBUTE_LENGTH_DIAGNOSTIC};
+    let mut shown = String::new();
+    crate::agent::untyped_json(value, &mut shown);
+    let code = exact_kernel::PropId::from_name(row)
+        .and_then(AttributeLength::of)
+        .map_or(String::new(), |_| {
+            format!("{ATTRIBUTE_LENGTH_DIAGNOSTIC}: ")
+        });
+    format!("{code}view {view}: invalid {row} value {shown}; unset")
+}
+
 /// Why an instance could not be realized.
 #[allow(missing_docs)]
 #[derive(Clone, PartialEq)]

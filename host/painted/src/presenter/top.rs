@@ -1285,11 +1285,14 @@ impl<D: DataSource> Presenter<D> {
             } else {
                 Layout::of
             };
+            // The focus follows its row's node, not its index.
+            let focused = (open.focused).and_then(|i| open.layout.targets.get(i).map(|t| t.node));
             open.layout = measure(&mut self.text.borrow_mut(), &plan, pop, &inputs);
             (open.plan, open.inputs) = (plan, inputs);
             open.pressed = None;
             open.hovered = None;
-            open.focused = open.focused.filter(|i| *i < open.layout.targets.len());
+            let targets = &open.layout.targets;
+            open.focused = focused.and_then(|node| targets.iter().position(|t| t.node == node));
             if let Some(index) = open.focused {
                 open.layout.reveal_menu_target(index);
             }

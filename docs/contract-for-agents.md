@@ -925,6 +925,19 @@ component Water
 
 ## Data requests and side effects
 
+Import a module's shared sources and sends from its interface package. A
+platform's own names and types come from its implementation in both Contract
+and TypeScript. Tracking consent, for example, is `@exact/tracking-consent/apple`:
+elsewhere its status reads denied and unavailable, and its requests fail
+`NotSupportedError` (LLP 1133.028 D12–D13).
+
+An implementation import must name the implementation bound on the targets it
+covers. An implicit replacement fails the bake; an explicit selection in
+`app.json` makes the imported name use its declared default or refusal there.
+The agent identifies an implementation's own name as
+`<extension>.<name>#<import-path>` in `state.extensions` and `prefer extension`;
+shared names keep `<extension>.<name>`.
+
 Choose the mechanism from its lifetime:
 
 | Requirement | Mechanism |
@@ -1139,9 +1152,16 @@ the turn, and the answer goes on in a new one with its own 100 ms. Yield every
 few thousand items in a parse or tree walk:
 
 ```ts
-for (let i = 0; i < nodes.length; i++) {
-  if (i % 2000 === 1999) await scheduler.yield();
-  comments.push(toComment(nodes[i]));
+type Node = { id: string; body: string };
+type Post = { id: string; text: string };
+
+export async function toPosts(nodes: Node[]): Promise<Post[]> {
+  const posts: Post[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    if (i % 2000 === 1999) await scheduler.yield();
+    posts.push({ id: nodes[i].id, text: nodes[i].body });
+  }
+  return posts;
 }
 ```
 
@@ -1778,6 +1798,11 @@ last twenty with their `door`:
   `person-required`.
 - `value` is what `returns` reads (null when refused), and `message` a
   sentence for the caller. The record adds `cancelled`.
+
+A refresh does not make a call `busy`: `returns` and `fails when` read a
+resource's standing value (its last answer, its placeholder, a family's
+gathered list), and `pending`, `failed`, `failure` and `current` answer at
+once.
 
 **A cancelled call.** A browser's agent aborting `execute`, or the system
 cancelling an intent's task, cancels the call (the door sends
@@ -4088,9 +4113,11 @@ of SVG text/tspan `x`/`y`/`dx`/`dy`. Relative units and function text such as
 `calc()`, `env()` and `var()` are refused in literals and literal template parts
 (LLP 1055.000 D4). Literal concatenations are checked together; an incomplete
 fragment that could finish an accepted unit is left to runtime. Literal choices in
-conditionals, matches and inlined derives are checked too. Bound values must use
-the same units. Marker `refX` also accepts `left`/`center`/`right`, and `refY`
-accepts `top`/`center`/`bottom`; native hosts currently place these keywords at 0.
+conditionals, matches and inlined derives are checked too. Bound values use the
+same grammar: an unsupported computed value clears the attribute and journals
+`runtime-svg-length` on every target. Marker `refX` also accepts
+`left`/`center`/`right`, and `refY` accepts `top`/`center`/`bottom`; native hosts
+currently place these keywords at 0.
 `foreignObject` renders directly on the web, but draws nothing through SVG `use`.
 The compiler warns at a `use` whose unambiguous, unconditional literal target contains
 one (`lower-svg-use-foreign-object`). Native hosts refuse `foreignObject` at run

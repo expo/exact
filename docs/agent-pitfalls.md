@@ -1992,7 +1992,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `/usr/bin/openssl`, macOS's LibreSSL, comes first on `PATH`; it writes the run's EC
   key with explicit curve parameters, which Bun cannot read back (`startNet` in
   `host/web-js/conformance/net.mjs`), so every `conform.mjs` run fails, the async
-  lane's `conform`, `conform-firefox` and `conform-webkit` steps included. Fix: put
+  lane's `conform` and `conform-browsers` steps included. Fix: put
   Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (#1148, 2026-10-30.)
 - **An `EXACT_WEB_DIST` build compiles, then fails renaming its stage.** The
   destination's parent directory does not exist. Create that parent before

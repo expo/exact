@@ -95,7 +95,7 @@ test('a built store reader replaces its placeholder when the delayed Rust module
   try {
     for (const path of ['data/src', 'bake/src', 'web']) mkdirSync(resolve(dir, path), { recursive: true });
     write('app.json', JSON.stringify({ name: 'Reader', app: { id: 'test.reader', name: 'Reader' }, host: { web: {} } }));
-    write('app.contract', 'component App\n  resource session = session() as shape string else preview()\n  view\n    text session testId="session"\n');
+    write('app.contract', 'component App\n  resource session = session() as shape string else preview()\n  action export\n    saveFile("export", "app:/data/note.txt", "note.txt")\n  view\n    column\n      text session testId="session"\n      button "Export" id="export" testId="export" press=export\n');
     write('web/build.rs', 'fn main() { contract::bake(plan, startup_data::Reader); }');
     write('Cargo.toml', `[workspace]\nmembers = ["data", "bake"]\nresolver = "2"\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
     cpSync(resolve(ROOT, 'Cargo.lock'), resolve(dir, 'Cargo.lock'));
@@ -104,7 +104,7 @@ test('a built store reader replaces its placeholder when the delayed Rust module
 pub struct Reader;
 impl DataSource for Reader {
     fn app_id(&self) -> &str { "test.reader" }
-    fn grants(&self) -> &str { "secret.keep token" }
+    fn grants(&self) -> &str { "secret.keep token\\nfs.read app:/data" }
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
     }
@@ -149,6 +149,9 @@ impl DataSource for Reader {
     await requested;
     expect(await page.getByTestId('session').textContent()).toBe('waiting');
     expect(await page.evaluate(() => exact.resources.find(r => r.name === 'session').pending())).toBe(true);
+    expect(await page.evaluate(() => exact.data.appId)).toBe('test.reader');
+    await page.getByTestId('export').click();
+    expect(await page.evaluate(() => exact.files.holds().some(h => h.device?.capability === 'export'))).toBe(true);
     release();
     await page.waitForFunction(() => document.querySelector('[data-testid="session"]')?.textContent === 'signed in');
     expect(await page.evaluate(() => exact.resources.find(r => r.name === 'session').pending())).toBe(false);

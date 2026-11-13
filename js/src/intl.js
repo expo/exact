@@ -233,9 +233,14 @@
     if (!s) state.set(format, (s = { mode: "halfExpand" }));
     return s;
   }
+  // What a compact formatter reads from its options after construction.
+  var compactOptions = ["maximumSignificantDigits", "minimumSignificantDigits", "maximumFractionDigits", "minimumFractionDigits", "signDisplay"];
   function Compact(locales, options) {
     this.native = new Native(locales, options);
-    this.options = options;
+    // Options are read once, here, as ECMA-402's constructor reads them: a
+    // later change to the caller's object changes nothing.
+    this.options = {};
+    for (var i = 0; i < compactOptions.length; i++) this.options[compactOptions[i]] = options[compactOptions[i]];
     this.mode = modeOf(options);
     if (roundsEven) stateOf(this.native).mode = this.mode;
     var resolved = this.native.resolvedOptions();

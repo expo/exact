@@ -34,7 +34,12 @@ beforeAll(async () => {
   kept = ['fetch', 'WebSocket', 'location', 'exact', '__exact_module', '__exact_async_context', '__exact_ordinary', 'asker'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
   globalThis.location = { hostname: 'public.example', href: 'https://public.example/', origin: 'https://public.example' };
   // The browser's transports, each use recorded; a request is answered at once, a socket never opens.
-  globalThis.fetch = async (url, init) => { sent.push([String(url), init?.redirect]); return new Response('sent'); };
+  globalThis.fetch = async (url, init) => {
+    sent.push([String(url), init?.redirect]);
+    const response = new Response('sent');
+    Object.defineProperty(response, 'url', { value: String(url) });
+    return response;
+  };
   globalThis.WebSocket = class { constructor(url) { opened.push(String(url)); throw new Error('no socket here'); } };
   const fromWeb = name => readFileSync(resolve(root, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
   for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));

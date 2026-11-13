@@ -5,8 +5,8 @@
 //! flattened: every arm's children under the region's parent node), with
 //! its literal bindings applied through the runner's own bridge
 //! (`exact_runner::bridge`). `exact_web::host::template::parts` then gives
-//! the tag, props and CSS the live host would compute. A binding that is an
-//! expression is left out, and emitted as an effect instead.
+//! the tag, props and CSS the live host would compute. A computed binding or
+//! a refused SVG length is left out and emitted as an effect instead.
 
 use exact_kernel::{
     Kernel, NodeType, Op, PropId, PropKind, PropValue, StyleCodec, StyleId, ViewId,
@@ -156,6 +156,7 @@ pub fn static_tree(
                         value,
                     }),
                     Err(bridge::BridgeError::Unset(_)) => {}
+                    Err(e) if crate::svg_lengths::refused(&e) => {}
                     Err(e) => return Err(format!("node {i}: {e:?}")),
                 },
                 (BindingKind::Prop, None) => {

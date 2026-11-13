@@ -152,6 +152,56 @@ fn tree() -> (Kernel, exact_kernel::CommitReceipt) {
 }
 
 #[test]
+fn removing_a_paint_transition_declaration_retains_initial_property_coverage() {
+    for next in ["unset", "all 0s", "none", "opacity 1s"] {
+        let (mut k, receipt) = tree();
+        let node = motion_node(k.node(2).unwrap().key);
+        let mut engine = Engine::new();
+        let mut paint = PaintMotion::default();
+        k.motion_sync(&receipt).apply(&mut engine).unwrap();
+        paint.adopt(&k, receipt.created.iter().copied(), &mut engine);
+        let receipt = k
+            .apply(
+                0,
+                2,
+                &[Op::SetStyle {
+                    id: 2,
+                    patch: patch(&[(StyleId::BackgroundColor, "#ff0000")]),
+                }],
+            )
+            .unwrap();
+        k.motion_sync(&receipt).apply(&mut engine).unwrap();
+        paint.sync(&k, &receipt, &mut engine);
+        engine.advance(0.05).unwrap();
+        let end = engine.settle_time();
+        let change = if next == "unset" {
+            let mut mask = exact_kernel::StyleMask::EMPTY;
+            mask.set(StyleId::Transition);
+            Op::ClearStyle {
+                id: 2,
+                mask,
+                written: true,
+            }
+        } else {
+            Op::SetStyle {
+                id: 2,
+                patch: patch(&[(StyleId::Transition, next)]),
+            }
+        };
+        let receipt = k.apply(0, 3, &[change]).unwrap();
+        k.motion_sync(&receipt).apply(&mut engine).unwrap();
+        paint.sync(&k, &receipt, &mut engine);
+        let covered = matches!(next, "unset" | "all 0s");
+        assert_eq!(
+            engine.is_active(node, Property::BackgroundColor),
+            covered,
+            "{next}"
+        );
+        assert_eq!(engine.settle_time(), if covered { end } else { None });
+    }
+}
+
+#[test]
 fn native_appearance_reports_snap_first_then_transition_per_view() {
     let (k, receipt) = tree();
     let key = k.node(2).unwrap().key;

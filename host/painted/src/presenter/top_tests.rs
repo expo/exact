@@ -260,6 +260,53 @@ fn desktop_overlay_accepts_pointer_keys_and_dismisses_without_clicking_through()
 }
 
 #[test]
+fn a_menu_row_inserted_above_the_focus_leaves_the_focus_on_its_row() {
+    let source = APP
+        .replace(
+            "  state said = \"nothing\"\n",
+            "  state said = \"nothing\"\n  state extra = false\n  action grow\n    extra = true\n  task growing mount\n    every(100, grow)\n",
+        )
+        .replace(
+            "aria-label=\"Row\"\n",
+            "aria-label=\"Row\"\n        if extra\n          button press=keep popovertarget=\"menu\" popovertargetaction=\"hide\" testId=\"menu-new\"\n            text \"New\"\n",
+        );
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(&source),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_overlays();
+    p.frame();
+    tap(&mut p, "more").unwrap();
+    assert!(p.surface_key("ArrowDown", 1.));
+    assert!(p.surface_key("ArrowDown", 2.));
+    let open = p.top.open.as_ref().unwrap();
+    assert_eq!(
+        open.layout.targets[open.focused.unwrap()].node,
+        id(&p, "menu-share")
+    );
+    p.clock(150.);
+    p.frame();
+    let open = p.top.open.as_ref().unwrap();
+    assert_eq!(
+        open.layout.targets.len(),
+        5,
+        "the new row is in the open menu"
+    );
+    assert_eq!(
+        open.layout.targets[open.focused.unwrap()].node,
+        id(&p, "menu-share")
+    );
+    assert!(p.surface_key("Enter", 160.));
+    assert_eq!(text(&p, "said"), "sent");
+}
+
+#[test]
 fn desktop_alerts_focus_cancel_or_ok_on_open_and_replacement() {
     let mut p = boot();
     p.serve_overlays();

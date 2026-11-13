@@ -861,7 +861,8 @@ final class NavigationBarIOSTests: XCTestCase {
             return nil
         }
         try tap(nav.topViewController?.navigationItem.rightBarButtonItems?.first { $0.accessibilityLabel == "Clear" })
-        until("the item's tap shows the alert") { alert()?.title == "Clear the count?" }
+        // The agent's `back` refuses an alert still presenting (`clock settle` first).
+        until("the item's tap shows the alert") { alert()?.title == "Clear the count?" && !session.presenter.menus.inTransition }
         XCTAssertNil(agent.back()["error"])
         until("Cancel dismisses it") { alert() == nil }
         let reply = agent.tap(["id": Int(invoker.id)])

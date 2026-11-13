@@ -16,7 +16,7 @@
 //! [`Motion`], which is [`Still`] unless the app's entry registered
 //! [`springs`], so an app that uses no spring or hold carries no engine.
 
-use exact_kernel::motion::{motion_node, targets, MotionSync};
+use exact_kernel::motion::{motion_node, targets, transitions, MotionSync};
 use exact_kernel::{CommitReceipt, Kernel, NodeKey, ViewId};
 use exact_motion::{
     Change, Engine, EngineError, HoldEnd, HoldStart, HoldToken, Property, SpringDescriptor,
@@ -277,7 +277,7 @@ pub struct Springs {
     #[cfg(test)]
     frame_compilations: usize,
     /// Compare fixed-size curve identity before compiling browser keyframes.
-    playing: BTreeMap<(u64, Property), SpringDescriptor>,
+    playing: BTreeMap<(u64, Property), (SpringDescriptor, f64)>,
     /// One explicit trial owner, bound to its arena generation. Unsupported
     /// styles retire its slot; a later eligible style can adopt it again.
     height_owner: Option<(NodeKey, ViewId)>,
@@ -477,7 +477,7 @@ impl Motion for Springs {
         if let Some(node) = kernel.node_by_key(target) {
             let key = motion_node(target);
             let sync = MotionSync {
-                transitions: vec![(key, node.style.transition.clone())],
+                transitions: vec![(key, transitions(node.style))],
                 changes: targets(node.style)
                     .into_iter()
                     .filter(|(property, _)| {
@@ -598,7 +598,7 @@ impl Motion for Springs {
             }
             match self.engine.spring_descriptor(p.node, p.property) {
                 Some(descriptor) => {
-                    if self.playing.get(&key) == Some(&descriptor) {
+                    if self.playing.get(&key).map(|(d, _)| d) == Some(&descriptor) {
                         continue;
                     }
                     #[cfg(test)]
@@ -609,7 +609,8 @@ impl Motion for Springs {
                         .engine
                         .spring_frames(p.node, p.property)
                         .expect("a running spring descriptor has frames");
-                    self.playing.insert(key, descriptor);
+                    self.playing
+                        .insert(key, (descriptor, frames.start + frames.duration));
                     out.push(Lowered::Start {
                         view,
                         property: p.property,
@@ -620,11 +621,10 @@ impl Motion for Springs {
                     });
                 }
                 None => {
-                    // A spring that reached its target finished on the page
-                    // too; one whose property moved on without a spring must
-                    // stop, or its frames would keep overriding the style.
-                    if let Some(previous) = self.playing.remove(&key) {
-                        if p.value != previous.target {
+                    // A cancelled spring can have the same target. Until its
+                    // end, its browser frames would keep overriding the style.
+                    if let Some((previous, end)) = self.playing.remove(&key) {
+                        if now < end || p.value != previous.target {
                             out.push(Lowered::Cancel {
                                 view,
                                 property: p.property,

@@ -488,10 +488,32 @@ fn a_computed_transition_is_checked_as_an_authors() {
 
 #[test]
 fn bound_spring_transitions_match_the_static_css_writer() {
-    assert_spring_transitions(&TRANSITION_MAP);
+    assert_spring_transitions(&TRANSITION_MAP, false);
 }
 
-pub(crate) fn assert_spring_transitions(map: &str) {
+pub(crate) fn assert_spring_transitions(map: &str, pressed: bool) {
+    let expected = |value: &str| {
+        let mut style = exact_kernel::StyleProps::default();
+        style
+            .set_dynamic(
+                StyleId::Transition,
+                &exact_kernel::StyleValue::Text(value.into()),
+            )
+            .unwrap();
+        if pressed {
+            style
+                .set_dynamic(StyleId::PressScale, &exact_kernel::StyleValue::Number(0.9))
+                .unwrap();
+        }
+        let css = exact_web::css::css_text(&style, &[]).0;
+        css.split("transition:")
+            .nth(1)
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    };
     let values = [
         "color -exact-spring()",
         "font-weight -exact-spring(100, 20, 1)",
@@ -514,14 +536,7 @@ pub(crate) fn assert_spring_transitions(map: &str) {
     ];
     let actual = run(map, &values);
     for (i, value) in values.iter().enumerate() {
-        let transitions = exact_motion::Transitions::parse(value).unwrap();
-        let (expected, _) = exact_web::css::transition_css(&transitions);
-        let expected = if expected.is_empty() {
-            "none"
-        } else {
-            &expected
-        };
-        assert_eq!(actual[i], expected, "{value}");
+        assert_eq!(actual[i], expected(value), "{value}");
     }
     let values: Vec<_> = [0.0001, 0.1, 1.0, 100.0, 10000.0]
         .into_iter()
@@ -539,12 +554,7 @@ pub(crate) fn assert_spring_transitions(map: &str) {
         .collect();
     let actual = run(map, &values.iter().map(String::as_str).collect::<Vec<_>>());
     for (i, value) in values.iter().enumerate() {
-        let transitions = exact_motion::Transitions::parse(value).unwrap();
-        assert_eq!(
-            actual[i],
-            exact_web::css::transition_css(&transitions).0,
-            "{value}"
-        );
+        assert_eq!(actual[i], expected(value), "{value}");
     }
 }
 

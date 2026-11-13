@@ -110,14 +110,24 @@ pub(crate) fn arm(start: Instant, timeout: f64, json: bool) {
     RECORD.json.store(json, Ordering::SeqCst);
     signals::install();
     std::thread::spawn(signals::watch);
-    if timeout > 0.0 {
-        let deadline = start + Duration::from_secs_f64(timeout);
+    if let Some(end) = (timeout > 0.0)
+        .then(|| forced_end(start, timeout))
+        .flatten()
+    {
         std::thread::spawn(move || {
-            sleep_until(deadline + GRACE);
+            sleep_until(end);
             RECORD.timeout.store(true, Ordering::SeqCst);
             force_exit(outcome(&Causes::default(), None).status);
         });
     }
+}
+
+/// When the timeout's watchdog forces the exit: `timeout` seconds after
+/// `start`, plus the grace. `None` when no `Instant` is that late.
+pub(crate) fn forced_end(start: Instant, timeout: f64) -> Option<Instant> {
+    start
+        .checked_add(Duration::try_from_secs_f64(timeout).ok()?)?
+        .checked_add(GRACE)
 }
 
 /// Boot is done: a forced exit no longer writes the pre-boot `exit` object.

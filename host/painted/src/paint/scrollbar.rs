@@ -129,9 +129,11 @@ impl Painter {
             let max = [bounds.max.0, bounds.max.1];
             let offset = b.scroll.unwrap_or_default();
             let port = self.split_port(b.id, b.rect);
+            let bar =
+                |i: usize| matches!(axes[i], Overflow::Auto | Overflow::Scroll) && max[i] > 0.;
             for vertical in [false, true] {
                 let i = usize::from(vertical);
-                if !matches!(axes[i], Overflow::Auto | Overflow::Scroll) || max[i] <= 0. {
+                if !bar(i) {
                     continue;
                 }
                 let track = if vertical {
@@ -140,7 +142,7 @@ impl Painter {
                     (
                         port.0 + 2.,
                         port.1 + port.3 - WIDTH,
-                        port.2 - 4. - if max[1] > 0. { WIDTH } else { 0. },
+                        port.2 - 4. - if bar(1) { WIDTH } else { 0. },
                         WIDTH,
                     )
                 };

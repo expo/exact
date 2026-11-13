@@ -1,5 +1,5 @@
 import type { Answer, Sources } from './app.contract.d.ts';
-import { advertisingIdentifier } from '@exact/tracking-consent';
+import { advertisingIdentifier } from '@exact/tracking-consent/apple';
 
 // The suite writes the id `exact new` gave the app.
 export const appId = '__APP_ID__';

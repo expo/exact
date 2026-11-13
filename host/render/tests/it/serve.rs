@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 mod crawl;
+mod generations;
 
 const SRC: &str = r#"
 routes nav
@@ -830,112 +831,6 @@ fn a_kept_page_goes_against_a_dictionary_the_browser_holds() {
 }
 
 #[test]
-fn a_named_build_goes_against_the_earlier_one_the_browser_holds() {
-    use sha2::{Digest, Sha256};
-    super::warm_transport();
-    // Two builds that differ in a few places, each incompressible alone.
-    let mut seed = 7u32;
-    let earlier: Vec<u8> = (0..200_000)
-        .map(|_| {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 24) as u8
-        })
-        .collect();
-    let mut build = earlier.clone();
-    for at in [10, 50_000, 120_000] {
-        build.splice(at..at + 8, *b"changed!");
-    }
-    let dist = dist("generations");
-    std::fs::write(dist.join("app.wasm"), &build).unwrap();
-    let kept = dist.with_extension("kept");
-    let _ = std::fs::remove_dir_all(&kept);
-    std::fs::create_dir_all(&kept).unwrap();
-    let hex = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-    std::fs::write(kept.join(format!("{}.wasm", hex(&earlier))), &earlier).unwrap();
-    let served = run(Serve {
-        dist,
-        port: 0,
-        name: "Blog".into(),
-        origin: None,
-        deadline: Duration::from_millis(300),
-        renders: 1,
-        queue: 8,
-        viewport: Default::default(),
-        lifetime: Duration::from_secs(120),
-        generations: Some(kept.clone()),
-    });
-    let addr = served.addr;
-    // The server keeps the build it serves beside the earlier one.
-    assert!(kept.join(format!("{}.wasm", hex(&build))).is_file());
-    let named = format!("/app.wasm?v={}", &hex(&build)[..16]);
-    let hash = exact_data::envelope::base64(&Sha256::digest(&earlier));
-    let ask = |target: &str, extra: &str| {
-        fetch_bytes(
-            addr,
-            &format!("GET {target} HTTP/1.1\r\nAccept-Encoding: gzip, br, dcb\r\nAvailable-Dictionary: :{hash}:\r\n{extra}\r\n"),
-        )
-    };
-    // The URL names the build, so it caches for good, and a browser may keep
-    // it as the next build's dictionary. The delta is made off the request's
-    // path; until then the build goes as it otherwise would.
-    let waited = std::time::Instant::now();
-    let (headers, body) = loop {
-        let (status, headers, body) = ask(&named, "");
-        assert_eq!(status, 200);
-        assert_eq!(
-            header(&headers, "cache-control"),
-            Some("public, max-age=31536000, immutable")
-        );
-        assert_eq!(
-            header(&headers, "use-as-dictionary"),
-            Some("match=\"/app.wasm\"")
-        );
-        if header(&headers, "content-encoding") == Some("dcb") {
-            break (headers, body);
-        }
-        assert!(waited.elapsed() < BOUND, "no delta within {BOUND:?}");
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert_eq!(
-        header(&headers, "vary"),
-        Some("Accept-Encoding, Available-Dictionary")
-    );
-    let etag = header(&headers, "etag").unwrap().to_string();
-    assert!(etag.ends_with("-dcb\""), "{etag}");
-    assert_eq!(body[..4], [0xff, 0x44, 0x43, 0x42]);
-    assert_eq!(body[4..36], Sha256::digest(&earlier)[..]);
-    let mut decoded = Vec::new();
-    brotli::Decompressor::new_with_custom_dict(&body[36..], 4096, earlier.clone().into())
-        .read_to_end(&mut decoded)
-        .unwrap();
-    assert!(decoded == build, "the delta decodes to the build");
-    assert!(body.len() < 1_000, "{} bytes", body.len());
-    // Its ETag gets a 304.
-    let (status, _, body) = ask(&named, &format!("If-None-Match: {etag}\r\n"));
-    assert_eq!((status, body.len()), (304, 0));
-    // A URL that doesn't name this build revalidates, holds no dictionary and
-    // gets none; nor does a CDN's request, or a dictionary this server lacks.
-    for target in ["/app.wasm", "/app.wasm?v=0123456789abcdef"] {
-        let (status, headers, _) = ask(target, "");
-        assert_eq!(
-            (status, header(&headers, "cache-control")),
-            (200, Some("no-cache"))
-        );
-        assert_eq!(header(&headers, "use-as-dictionary"), None);
-        assert_ne!(header(&headers, "content-encoding"), Some("dcb"));
-    }
-    let (_, headers, _) = ask(&named, "CDN-Loop: cloudflare\r\n");
-    assert_eq!(header(&headers, "use-as-dictionary"), None);
-    assert_ne!(header(&headers, "content-encoding"), Some("dcb"));
-    let unknown = exact_data::envelope::base64(&[0u8; 32]);
-    let (_, headers, _) = fetch_bytes(
-        addr,
-        &format!("GET {named} HTTP/1.1\r\nAccept-Encoding: dcb\r\nAvailable-Dictionary: :{unknown}:\r\n\r\n"),
-    );
-    assert_eq!(header(&headers, "content-encoding"), None);
-}
-
-#[test]
 fn a_file_the_dist_lacks_is_a_plain_404() {
     let served = start("favicon", 1, 8, 300);
     let addr = served.addr;
@@ -1127,6 +1022,39 @@ fn large_static_files_stream_with_lengths_validators_and_head() {
     assert_eq!(status, 304);
     assert!(body.is_empty());
     assert_eq!(get(addr, "/glue.js").0, 200);
+
+    let dist = path.parent().unwrap();
+    let version = &etag[1..17];
+    std::fs::hard_link(&path, dist.join("app.wasm")).unwrap();
+    std::fs::create_dir(dist.join("stages")).unwrap();
+    let stage = format!("large.{version}.wasm");
+    std::fs::hard_link(&path, dist.join("stages").join(&stage)).unwrap();
+    std::fs::hard_link(&path, dist.join("stages/large.0000000000000000.wasm")).unwrap();
+    for (url, cache) in [
+        (
+            format!("/app.wasm?v={version}"),
+            "public, max-age=31536000, immutable",
+        ),
+        (
+            format!("/stages/{stage}"),
+            "public, max-age=31536000, immutable",
+        ),
+        ("/stages/large.0000000000000000.wasm".into(), "no-cache"),
+    ] {
+        let (status, headers, body) = fetch_bytes(addr, &format!("HEAD {url} HTTP/1.1\r\n\r\n"));
+        assert_eq!((status, body.len()), (200, 0));
+        assert_eq!(header(&headers, "cache-control"), Some(cache));
+        assert_eq!(header(&headers, "etag"), Some(etag));
+        let (status, headers, body) = fetch_bytes(
+            addr,
+            &format!("GET {url} HTTP/1.1\r\nIf-None-Match: {etag}\r\n\r\n"),
+        );
+        assert_eq!((status, body.len()), (304, 0));
+        assert_eq!(header(&headers, "cache-control"), Some(cache));
+    }
+    let (status, headers, _) = get(addr, "/app.wasm?v=0000000000000000");
+    assert_eq!(status, 404);
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
 }
 
 /// The JavaScript runtime's shell, as host/web-js/build.mjs writes it.

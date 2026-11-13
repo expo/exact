@@ -16,15 +16,24 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 
-test.each([false, true])('a view validates and delivers its agent vocabulary (substitute source: %p)', async withSource => {
-  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+function moduleServer() {
+  return Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === '/') return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } });
     if (path.endsWith('/names.js')) return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
+    if (path.endsWith('/admission-data.js')) return new Response("import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(null);", { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/fixture-source.js') return new Response(`export const appId = 'test.owned';
+      export const answer = () => __exact_module({ extension: 'sensor', owner: '@fixture/sensor/own', source: 'reading', args: { track: 'a' } });`, { headers: { 'content-type': 'text/javascript' } });
+    if (path.endsWith('/ts-data.js')) return new Response(readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8')
+      .replace('__APP_TS__', '/fixture-source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace('__FETCH_MODULE__', './ts-fetch.js'), { headers: { 'content-type': 'text/javascript' } });
     const local = resolve(root, '.' + path);
     const file = existsSync(local) ? local : resolve(root, 'host/web', path.split('/').at(-1));
     return existsSync(file) ? new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } }) : new Response('Not found', { status: 404 });
   } });
+}
+
+test.each([false, true])('a view validates and delivers its agent vocabulary (substitute source: %p)', async withSource => {
+  const server = moduleServer();
   let browser;
   try {
     browser = await suiteBrowser();
@@ -77,6 +86,164 @@ test.each([false, true])('a view validates and delivers its agent vocabulary (su
       expect(result.sourceError.error).toContain('type its JSON');
     }
     expect(result.state.words.preferred).toEqual({ ...result.cleared, ...(withSource ? { status: { available: true } } : {}) });
+  } finally { await browser?.close(); server.stop(true); }
+});
+
+test.each([false, true])('implementation live readers refresh and share their provider lifetime (data code: %p)', async wrapper => {
+  const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async wrapper => {
+      const rt = await import('/host/web-js/rt.js');
+      const { install } = await import('/host/web-js/ts-data.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      install(rt.data);
+      let value = 1, changed;
+      const releases = [], own = { implementation: true, owner: '@fixture/sensor/own', implementationTargets: ['web'] };
+      modules({
+        ...(!wrapper ? { common: ['sensor.reading', false, { implementation: true }, 'n', 'never', { track: 's' }, true] } : {}),
+        owned: ['sensor.reading', false, own, 'n', 'never', { track: 's' }, true],
+      }, { sensor: async () => ({ implementation: context => {
+        changed = context.changed;
+        return { reading: () => value, release: name => releases.push([name]), releaseArgs: (name, args) => releases.push([name, args]) };
+      } }) });
+      let owned, common, ownScope, commonScope;
+      const track = rt.sig('a');
+      rt.mount(() => {
+        commonScope = rt.scope(() => { common = rt.res('shared', wrapper ? 'owned' : 'common', () => [['a']], undefined, undefined, 'n', 0); rt.effect(() => common()); });
+        ownScope = rt.scope(() => { owned = rt.res('own', wrapper ? 'wrapped' : 'owned', () => wrapper ? [] : [[track()]], undefined, undefined, 'n', 0); rt.effect(() => owned()); });
+      });
+      globalThis.fixture = { rt, owned, common, releases, ownScope, commonScope, track, change: () => { value++; changed('sensor.reading'); } };
+    }, wrapper);
+    await page.waitForFunction(() => fixture.owned() === 1 && fixture.common() === 1);
+    await page.evaluate(() => fixture.change());
+    await page.waitForFunction(() => fixture.owned() === 2 && fixture.common() === 2, null, { timeout: 3000 });
+    if (!wrapper) {
+      await page.evaluate(() => fixture.rt.commit(() => fixture.rt.W(fixture.track, 'b')));
+      await page.waitForFunction(() => fixture.owned.r.settled?.[0]?.[0] === 'b' && !fixture.owned.r.ticket);
+      expect(await page.evaluate(() => fixture.releases)).toEqual([]);
+    }
+    await page.evaluate(() => fixture.rt.commit(() => fixture.rt.end(fixture.ownScope)));
+    await page.evaluate(() => Promise.resolve());
+    expect(await page.evaluate(() => fixture.releases)).toEqual(wrapper ? [] : [['reading', { track: 'b' }]]);
+    await page.evaluate(() => fixture.change());
+    await page.waitForFunction(() => fixture.common() === 3);
+    await page.evaluate(() => fixture.rt.commit(() => fixture.rt.end(fixture.commonScope)));
+    await page.evaluate(() => Promise.resolve());
+    expect(await page.evaluate(() => fixture.releases.filter(r => r.length === 1))).toEqual([['reading']]);
+  } finally { await browser.close(); server.stop(true); }
+});
+
+test.each([false, true])('implementation names keep their defaults and refuse off-target sends (agent: %p)', async agent => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async agent => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = agent;
+      let calls = 0;
+      const own = { implementation: true, owner: '@fixture/sensor/apple', implementationTargets: ['ios'] };
+      modules({
+        reading: ['sensor.reading', false, { ...own, default: { value: 0 }, targets: { web: { value: 7 } } }, { value: 'n' }],
+        sample: ['sensor.sample', true, own, { value: 'n' }],
+        reset: ['sensor.reset', true, { ...own, effect: true }, 'u'],
+      }, { sensor: async () => ({ implementation: () => ({
+        reading() { calls++; return { value: 9 }; },
+        sample() { calls++; return { value: 9 }; },
+        reset() { calls++; },
+      }) }) });
+      const call = (name, send) => exact.extensions.call({ extension: 'sensor', owner: '@fixture/sensor/apple', [send ? 'send' : 'source']: name, args: {} });
+      return { reading: await call('reading', false), sample: await call('sample', true), reset: await call('reset', true), calls };
+    }, agent);
+    expect(result).toEqual({ reading: { value: 7 }, sample: { error: 'NotSupportedError' }, reset: { error: 'NotSupportedError' }, calls: 0 });
+  } finally { await browser?.close(); server.stop(true); }
+});
+
+test.each([false, true])('implementation owners separate calls and explicit overrides use substitutes (agent: %p)', async agent => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async agent => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = agent;
+      let instances = 0, calls = 0;
+      const own = { implementation: true, implementationTargets: ['web'] };
+      modules({
+        shared: ['sensor.reading', false, { default: 3 }, 'n'],
+        first: ['sensor.reading', false, { ...own, owner: '@fixture/first', default: 1 }, 'n'],
+        second: ['sensor.reading', false, { ...own, owner: '@fixture/second', implementationOverrides: ['web'], default: 2 }, 'n'],
+        send: ['sensor.sample', true, { ...own, owner: '@fixture/second', implementationOverrides: ['web'] }, 'n'],
+      }, { sensor: async () => ({ implementation: () => {
+        instances++;
+        return { reading() { calls++; return 9; }, sample() { calls++; return 9; } };
+      } }) });
+      const call = (owner, name = 'reading', send = false) => exact.extensions.call({ extension: 'sensor', ...(owner ? { owner } : {}), [send ? 'send' : 'source']: name });
+      return { shared: await call(), first: await call('@fixture/first'), second: await call('@fixture/second'), send: await call('@fixture/second', 'sample', true), instances, calls, state: exact.extensions.state() };
+    }, agent);
+    expect(result.shared).toBe(agent ? 3 : 9);
+    expect(result.first).toBe(9);
+    expect(result.second).toBe(2);
+    expect(result.send).toEqual({ error: 'NotSupportedError' });
+    expect(result.instances).toBe(1);
+    expect(result.calls).toBe(agent ? 1 : 2);
+    expect(result.state.sensor.names['reading#@fixture/second']).toEqual({ owner: '@fixture/second', route: 'substitute' });
+  } finally { await browser?.close(); server.stop(true); }
+});
+
+test('a data-code reader asleep under its when stays listed and lets its provider go', async () => {
+  const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { install } = await import('/host/web-js/ts-data.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      install(rt.data);
+      const releases = [], open = rt.sig(true), own = { implementation: true, owner: '@fixture/sensor/own', implementationTargets: ['web'] };
+      modules({ owned: ['sensor.reading', false, own, 'n', 'never', { track: 's' }, true] },
+        { sensor: async () => ({ implementation: () => ({ reading: () => 1, release: name => releases.push(name) }) }) });
+      const asked = () => [];
+      asked.gate = () => open();
+      let read;
+      rt.mount(() => { read = rt.res('own', 'wrapped', asked, undefined, undefined, 'n', 0); rt.effect(() => read()); });
+      globalThis.fixture = { rt, read, open, releases };
+    });
+    await page.waitForFunction(() => fixture.read() === 1);
+    await page.evaluate(() => fixture.rt.commit(() => fixture.rt.W(fixture.open, false)));
+    await page.evaluate(() => Promise.resolve());
+    expect(await page.evaluate(() => ({ readers: exact.extensions.state().sensor.readers, releases: fixture.releases })))
+      .toEqual({ readers: { 'reading#@fixture/sensor/own': ['own'] }, releases: ['reading'] });
+  } finally { await browser.close(); server.stop(true); }
+});
+
+test('an implementation-owned ticket names its declared request', async () => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const holds = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const own = { implementation: true, owner: '@fixture/sensor/apple', implementationTargets: ['web'] };
+      modules({ sample: ['sensor.sample', true, { ...own, choose: true }, 'n'] }, { sensor: async () => ({ implementation: () => ({ sample: () => 1 }) }) });
+      exact.extensions.call({ extension: 'sensor', owner: '@fixture/sensor/apple', send: 'sample', args: { count: 2 } });
+      await new Promise(r => setTimeout(r, 0));
+      return exact.extensions.holds();
+    });
+    expect(holds.map(h => [h.name, h.device.args.request])).toEqual([['sensor.sample#@fixture/sensor/apple', 'sample']]);
   } finally { await browser?.close(); server.stop(true); }
 });
 
@@ -170,7 +337,7 @@ function fixture() {
   const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
   manifest.dependencies = { ...manifest.dependencies, '@fixture/sensor': `file:${pkg}` };
   writeFileSync(join(app, 'package.json'), JSON.stringify(manifest, null, 2));
-  run('bun', ['install'], app);
+  run('bun', ['install', '--offline'], app);
   run('bun', ['exact.mjs', 'web-build', '--render', 'none'], app);
   return { dir, dist: join(app, 'target/web-dist') };
 }
