@@ -526,10 +526,17 @@ capability has a call of its own.
 | 13 | the session's orientation lock (LLP 1133.029 D6) | 0 for none; or 1, the orientations its types allow as bits (portrait-primary 1, portrait-secondary 2, landscape-primary 4, landscape-secondary 8), whether a holder says `natural`, whether one says `current`, a count, and for each holder its node and its word as a string | sets the activity's `requestedOrientation` (`Orientation.told`): the manifest's mapping for the set, `locked` for `current`, the manifest's value for none; on a display 600 dp wide or wider only `current` | none by id: `Native.orientationApplied` reports what was asked, for `state.orientationlock.applied` |
 | 14 | whether a canvas receives pad input (LLP 1133.022 D4) | one word: 1 or 0 | observes controller buttons and joystick motion, consuming them only while 1; Android's fallback keys always pass through for navigation | none |
 | 15 | a GPU surface's haptic message (LLP 1009 D10) | the canvas's view id (a surface id is its module's, and two modules count from 1), then a string: the message's JSON as `exact_gpu::haptics` writes it (a texture's `intensity` and `sharpness`, its stop, or a pattern); exact2 sends a stop when the surface goes | `SurfaceHaptics`, on the vibrator ("Haptics", below); nothing while the activity is paused | none |
+| 16 | Contract sound operations | a JSON string: asset `files`, `reset`, monotonic `submitted` seconds and `ops` (play 1, end 2, change 4), each with a voice id and `at` in monotonic seconds; play has a sound index, gain, rate and pan, change has optional gain, rate and pan and a ramp in seconds | `SoundOutput` opens `libexact_sound.so` at the first play; AAudio runs the shared mixer against its speaker timestamp; the existing focus owner applies `audio_session` | none; under the driver, `state.sounds.output` remains `"agent"` |
 
 Kinds 5, 6, 7, 8, 13 and 14 are statements of the app's state, told when it changes and anew to a reader made again; exact2
 reads them as the queue is taken (`Presenter::tell_shell`), Back, the wake lock and the orientation lock only after a
 commit or (Back) when a surface opens or closes, and none of them during a scroll's own frames.
+
+For sound diagnostics in a debuggable APK, capture `adb logcat -v monotonic -s exact:D AAudio:D AudioTrack:D`
+alongside emulator PCM and `dumpsys audio` / `dumpsys media.audio_flinger`. The `sound` lines give foreground
+and focus changes, stream opens and closes, submitted cue times and the discard cutoff. While open, once per
+second they give pending and native queued operations, live voices, drops, late starts, timestamp availability,
+latency and underruns. These diagnostics are disabled in non-debuggable apps.
 
 **Haptics.** Android names occasions, not strengths. Under its constants are a texture tick, a tick, a click, a
 heavy click and a double click, and Exact's names choose by those: `selection` is `SEGMENT_TICK` (Android 14;

@@ -77,6 +77,8 @@ use paragraph::props_for;
 mod persistence;
 #[path = "presence.rs"]
 mod presence;
+#[path = "renew.rs"]
+mod renew;
 #[path = "tamber.rs"]
 mod tamber;
 #[cfg(test)]
@@ -1242,6 +1244,7 @@ impl<D: DataSource> Host<D> {
             > 1)
         .then(|| self.runner.handlers());
         self.close_new_top_layer(receipts);
+        let mut repaint = Vec::new();
         for t in receipts {
             let r = &t.receipt;
             // Flights capture their leavers before an exit takes them
@@ -1267,6 +1270,7 @@ impl<D: DataSource> Host<D> {
                     self.transform_drags.remove(id);
                 }
             }
+            repaint.extend(self.renew_views(r, &mut batch));
             for key in &r.created {
                 if let Some(node) = self.runner.kernel().node_by_key(*key) {
                     let id = node.id;
@@ -1350,6 +1354,7 @@ impl<D: DataSource> Host<D> {
             self.cancel_invalid_height_drag();
             self.reconcile_transform_drags(&mut batch);
         }
+        self.repaint_renewed(&repaint, &mut batch);
         let seek = self.engine.advance(self.engine_time(self.now_ms));
         debug_assert!(seek.is_ok(), "the clock never runs backwards here");
         // An advance whose commits changed no node (a frame task that only

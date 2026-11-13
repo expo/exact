@@ -1,62 +1,151 @@
-import { sendRequest } from "./request-send.js";
-import { markdownText } from './markdown.js';
 export { px, lt, presenceUse } from './presence-bindings.js';
-// Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan binds one (LLP 1047.002 D1)
-let Probes = null; export function usePresenceBindings(b) { Probes = b; } const presentArm = (view, ...a) => Probes ? Probes.arm(view, ...a) : view; export const presentRows = (row, ...a) => Probes ? Probes.rows(row, ...a) : row;
-import { inOrder, rowKey } from './rows.js';
-import { resourceInspection, retainedAnswer } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
-import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
-export { liveTime } from "./live-time.js";
-import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
-import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } from "./document.js"; export { Head, unopened, tp }; export { canSetStatus, statusSubject } from "./document.js"; import { conforms, eq, equal, unchangedArguments, failureCode, failureReason, loneSurrogate, Refusal, Failed, checkArguments, finiteArguments } from "./shape.js"; import { pointer, record } from "./pointer.js"; import { autofocus, press } from "./focus.js";
-let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
-import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { heldAsks, heldReplies, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
-export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
-let Media = null; export function useMedia(m) { Media = m; } let Traversal = null, Nav = null; export function useTraversal(f, nav = null) { Traversal = f; Nav = nav; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` and the page's navigation.js (the link a deferred tree update keeps) only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links them (LLP 1047.002 D1)
-let Links = null; export function useLinks(l) { Links = l; } // links.js only where a plan binds a link's `href`, `rel` or `target` (LLP 1047.002 D1)
+// Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan
+// binds one (LLP 1047.002 D1)
+export let Probes = null;
+export function usePresenceBindings(b) {
+  Probes = b;
+}
+export const presentArm = (view, ...a) => (Probes ? Probes.arm(view, ...a) : view);
+export const presentRows = (row, ...a) => (Probes ? Probes.rows(row, ...a) : row);
+import { resourceInspection, retainedAnswer } from './resource-inspection.js';
+export { canvasColor } from './said.js';
+import { rt as Link } from './rt-link.js';
+export { liveTime } from './live-time.js';
+import { liveById, installFits } from './navigation.js';
+// synced animations (LLP 1055.002, emit.rs `clocks`)
+export { animationClocks, launchLocation } from './navigation.js';
+export { fontFamily } from './font-family.js';
+import { Head, markDocument, projectRoots, openTabs, unopened, tp } from './document.js';
+export { Head, unopened, tp };
+export { canSetStatus, statusSubject } from './document.js';
+import { conforms, eq, equal, Refusal, Failed } from './shape.js';
+import { autofocus } from './focus.js';
+// The compiler installs `Paint` only when a plan can layer boxes.
+export let Paint;
+export function usePaint(pass) {
+  Paint = pass;
+}
+export { conforms, eq, equal, Refusal, Failed };
+// optimistic writes shown over answers (the runner's writes.rs)
+import * as Ov from './overlay.js';
+import { heldAsks, heldReplies, Open, closeLetGo } from './held.js';
+export { heldAsks, heldReplies };
+// the agent's `state.writes`
+export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed }));
+// media.js only where a plan has a `video` or `audio`; router.js's `traversal` and the page's navigation.js (the link
+// a deferred tree update keeps) only where a plan has routes or a back control (router.js `navigationRoots`): a plan
+// without either never links them (LLP 1047.002 D1)
+export let Media = null;
+export function useMedia(m) {
+  Media = m;
+}
+let Traversal = null,
+  Nav = null;
+export function useTraversal(f, nav = null) {
+  Traversal = f;
+  Nav = nav;
+}
+// links.js only where a plan binds a link's `href`, `rel` or `target` (LLP 1047.002 D1)
+export let Links = null;
+export function useLinks(l) {
+  Links = l;
+}
+// The runtime's other parts, each its own file, which import what they share from here.
+import { clock, time, armedAt, agentMode, every, advance, drive, unpark, fire, pauseTimers } from './clock.js';
+import { Resources, Mutations, lateReaders, lateIdle } from './resources.js';
+import { Views } from './tree.js';
+import { KeyEvent, Propagating } from './events.js';
+import { Pres, Present, Sh, Input, pressFeedback } from './pieces.js';
+import { Booting, start } from './mount.js';
+export * from './clock.js';
+export * from './resources.js';
+export * from './tree.js';
+export * from './events.js';
+export * from './pieces.js';
+export * from './mount.js';
+export * from './strings.js';
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
 // Semantics kept from the runner (LLP 1005 §6):
 // - an action's writes land together at its commit (the VM collects `StoreSlot`s), then one
 //   synchronous flush updates the DOM, then its commands run (focus after the tree is there);
-// - derives and resources settle by glitch-free, lazy pulls; equal values keep their identity, so nothing downstream reruns;
+// - derives and resources settle by glitch-free, lazy pulls; equal values keep their identity, so
+//   nothing downstream reruns;
 // - a resource admits its compiled value only while its arguments equal the
 //   compiled ones; a source not ready keeps the value and asks again when it
 //   is; a later answer lands in its own commit, if its ticket is current;
 // - timers fire on a clock the host moves (`advance`), each at its own time.
-let Listener = null, Owner = null, Queue = [], FocusQueue = [], Flushing = false, Rev = 0, LateStore = false; // `LateStore`: a store write outside a commit (module work, a let-go answer's code) owes a commit of its own (LLP 1146 D2)
-const CLEAN = 0, CHECK = 1, DIRTY = 2;
+export let Listener = null,
+  Owner = null,
+  Queue = [],
+  FocusQueue = [],
+  Flushing = false,
+  Rev = 0,
+  // A store write outside a commit (module work, a let-go answer's code) owes a commit of its own (LLP 1146 D2).
+  LateStore = false;
+const CLEAN = 0,
+  CHECK = 1,
+  DIRTY = 2;
 function node(fn, v, effect) {
   const n = { fn, v, effect, s: fn ? DIRTY : CLEAN, src: [], obs: new Set(), kids: null, gone: 0 };
-  if (Owner) { (Owner.kids ??= []).push(n); n.up = Owner; }
+  if (Owner) {
+    (Owner.kids ??= []).push(n);
+    n.up = Owner;
+  }
   return n;
 }
-function read(n) {
-  if (Listener && !n.obs.has(Listener)) { n.obs.add(Listener); Listener.src.push(n); }
+export function read(n) {
+  if (Listener && !n.obs.has(Listener)) {
+    n.obs.add(Listener);
+    Listener.src.push(n);
+  }
   if (n.fn) fresh(n);
   return n.v;
 }
 function fresh(n) {
-  if (n.s === CHECK) for (const s of n.src) { if (s.fn) fresh(s); if (n.s === DIRTY) break; }
+  if (n.s === CHECK)
+    for (const s of n.src) {
+      if (s.fn) fresh(s);
+      if (n.s === DIRTY) break;
+    }
   if (n.s === DIRTY) run(n);
   n.s = CLEAN;
 }
 function drop(n) {
   for (const s of n.src) if (!s.dead) s.obs.delete(n);
   n.src = [];
-  if (n.kids) { for (const k of n.kids) dispose(k); n.kids = null; }
+  if (n.kids) {
+    for (const k of n.kids) dispose(k);
+    n.kids = null;
+  }
 }
-function dispose(n) { n.gone = 1; Settle.delete(n); drop(n); if (n.ends) for (const f of n.ends.splice(0)) f(); }
+function dispose(n) {
+  n.gone = 1;
+  Settle.delete(n);
+  drop(n);
+  if (n.ends) for (const f of n.ends.splice(0)) f();
+}
 /** Run `f` when the scope that owns this code ends (a region's arm or row). */
-function onEnd(f) { if (Owner) (Owner.ends ??= []).push(f); }
+function onEnd(f) {
+  if (Owner) (Owner.ends ??= []).push(f);
+}
 function run(n) {
-  if (n.busy) throw new Refusal("a cycle: a derive or resource reads itself");
+  if (n.busy) throw new Refusal('a cycle: a derive or resource reads itself');
   drop(n);
   const [l, o] = [Listener, Owner];
   Listener = Owner = n;
   n.busy = 1;
   let v;
-  try { v = n.fn(n.v); } finally { Listener = l; Owner = o; n.busy = 0; }
-  if (!n.effect && !eq(n.v, v)) { n.v = v; for (const o of n.obs) o.s = DIRTY; }
+  try {
+    v = n.fn(n.v);
+  } finally {
+    Listener = l;
+    Owner = o;
+    n.busy = 0;
+  }
+  if (!n.effect && !eq(n.v, v)) {
+    n.v = v;
+    for (const o of n.obs) o.s = DIRTY;
+  }
 }
 function stale(n, state) {
   if (n.s < state) {
@@ -67,7 +156,8 @@ function stale(n, state) {
 }
 function write(n, v) {
   if (eq(n.v, v)) return;
-  n.v = v; if (!CatchingUp) Rev++;
+  n.v = v;
+  if (!CatchingUp) Rev++;
   for (const o of n.obs) stale(o, DIRTY);
 }
 /** A row's new item: an effect `fm` marked re-runs only if a field it reads changed (LLP 1071.000 D3). */
@@ -75,185 +165,487 @@ export function writeItem(n, v) {
   const o = n.v;
   if (eq(o, v)) return;
   let m = -1;
-  if (Array.isArray(o) && Array.isArray(v) && o.length === v.length) { m = 0; for (let k = 0; k < v.length && k < 31; k++) if (!eq(o[k], v[k])) m |= 1 << k; }
-  n.v = v; if (!CatchingUp) Rev++;
+  if (Array.isArray(o) && Array.isArray(v) && o.length === v.length) {
+    m = 0;
+    for (let k = 0; k < v.length && k < 31; k++) if (!eq(o[k], v[k])) m |= 1 << k;
+  }
+  n.v = v;
+  if (!CatchingUp) Rev++;
   for (const x of n.obs) if (!x.m || x.m & m) stale(x, DIRTY);
 }
 /** Writes in `f` publish what an earlier commit already made, to a row or arm whose region's update is still queued
  * (presence-bindings.js): they are no change of this commit's, so `rev` does not count them. */
 let CatchingUp = false;
-export function catchUp(f) { const was = CatchingUp; CatchingUp = true; try { return f(); } finally { CatchingUp = was; } }
+export function catchUp(f) {
+  const was = CatchingUp;
+  CatchingUp = true;
+  try {
+    return f();
+  } finally {
+    CatchingUp = was;
+  }
+}
 let Mask = 0; // effects made in `fm`'s `g` read a row's item only as the fields in `m`
-export function fm(m, g) { const o = Mask; Mask = m; try { g(); } finally { Mask = o; } }
+export function fm(m, g) {
+  const o = Mask;
+  Mask = m;
+  try {
+    g();
+  } finally {
+    Mask = o;
+  }
+}
 function flush() {
   if (Flushing) return;
   Flushing = true;
-  try { for (let i = 0; i < Queue.length; i++) if (!Queue[i].gone) fresh(Queue[i]); } finally { Queue = []; Flushing = false; }
+  try {
+    for (let i = 0; i < Queue.length; i++) if (!Queue[i].gone) fresh(Queue[i]);
+  } finally {
+    Queue = [];
+    Flushing = false;
+  }
   while (FocusQueue.length) FocusQueue.shift()();
 }
-function untracked(f) { const l = Listener; Listener = null; try { return f(); } finally { Listener = l; } }
-export function fact() { const o = Owner; Owner = null; const n = node(null, 0); Owner = o; return { get: () => read(n), bump() { n.v++; for (const o of n.obs) stale(o, DIRTY); } }; } // a host fact a roster read depends on (`sharedFiles`' tokens, LLP 1133.024 D3): `get` tracked, `bump` in a commit re-evaluates its readers
-/** A slot: a getter, `.n` its node; `t` its declared type (writes conform); `name` a string slot's, which a write past MAX_STRING names. */
-export function sig(v, t, name) { // an initial value outside `t`: the runner refuses the boot, or the row's creation poisons (SlotType)
+function untracked(f) {
+  const l = Listener;
+  Listener = null;
+  try {
+    return f();
+  } finally {
+    Listener = l;
+  }
+}
+/** A host fact a roster read depends on (`sharedFiles`' tokens, LLP 1133.024 D3): `get` tracked, `bump` in a commit
+ * re-evaluates its readers. */
+export function fact() {
+  const o = Owner;
+  Owner = null;
+  const n = node(null, 0);
+  Owner = o;
+  return {
+    get: () => read(n),
+    bump() {
+      n.v++;
+      for (const o of n.obs) stale(o, DIRTY);
+    },
+  };
+}
+/** A slot: a getter, `.n` its node; `t` its declared type (writes conform); `name` a string slot's, which a write past
+ * MAX_STRING names. An initial value outside `t`: the runner refuses the boot, or the row's creation poisons
+ * (SlotType). */
+export function sig(v, t, name) {
   if (t && !conforms(v, t)) throw new Error(`a slot's initial value does not conform to its type: ${v}`);
-  const n = node(null, v); n.t = t; n.name = name; const g = () => read(n); g.n = n; return g; }
-/** A string past MAX_STRING's UTF-8 bytes (runner `too_long`): one test, TextEncoder's U+FFFD for a lone surrogate (LLP 1090 D6). */
-const long = s => typeof s === "string" && s.length > 22369621 && (s.length > 67108864 || new TextEncoder().encode(s).length > 67108864);
+  const n = node(null, v);
+  n.t = t;
+  n.name = name;
+  const g = () => read(n);
+  g.n = n;
+  return g;
+}
+/** A string past MAX_STRING's UTF-8 bytes (runner `too_long`): one test, TextEncoder's U+FFFD for a lone surrogate
+ * (LLP 1090 D6). */
+const long = s =>
+  typeof s === 'string' &&
+  s.length > 22369621 &&
+  (s.length > 67108864 || new TextEncoder().encode(s).length > 67108864);
 const tooLong = name => new Refusal(`StringTooLong { name: ${JSON.stringify(name)} }`);
 const Settle = new Set();
 /** A derive: lazy, cached, equal results keep their object; settled at
  * every commit before the tree; its value conforms to its type. */
 export function memo(fn, t, name) {
   // Against its last value, which conformed: an unchanged part is not checked again.
-  const n = node(t ? last => {
-    let v;
-    try { v = fn(); } catch (e) { if (name && e?.typeRefusal) e.message = `derive ${JSON.stringify(name)}: ${e.message}`; throw e; }
-    if (!conforms(v, t, [0], last)) {
-      const r = n.resource;
-      const error = new Refusal(`${r ? `resource ${JSON.stringify(r.name)} (source ${JSON.stringify(r.source)})` : `derive${name ? ` ${JSON.stringify(name)}` : ""}`}: value does not conform to its type${r?.error ? `; source failed: ${r.error}` : ""}`);
-      if (!r && name) {
-        const seen = new Set(), visit = s => {
-          if (seen.has(s)) return; seen.add(s);
-          const upstream = s.resource;
-          if (upstream?.error) error.message += `; read resource ${JSON.stringify(upstream.name)} (source ${JSON.stringify(upstream.source)}) failed: ${upstream.error}`;
-          for (const input of s.src) visit(input);
-        };
-        for (const input of n.src) visit(input);
-      }
-      error.typeRefusal = true; throw error;
-    }
-    return v;
-  } : fn);
+  const n = node(
+    t
+      ? last => {
+          let v;
+          try {
+            v = fn();
+          } catch (e) {
+            if (name && e?.typeRefusal) e.message = `derive ${JSON.stringify(name)}: ${e.message}`;
+            throw e;
+          }
+          if (!conforms(v, t, [0], last)) {
+            const r = n.resource;
+            const error = new Refusal(
+              `${r ? `resource ${JSON.stringify(r.name)} (source ${JSON.stringify(r.source)})` : `derive${name ? ` ${JSON.stringify(name)}` : ''}`}: value does not conform to its type${r?.error ? `; source failed: ${r.error}` : ''}`,
+            );
+            if (!r && name) {
+              const seen = new Set(),
+                visit = s => {
+                  if (seen.has(s)) return;
+                  seen.add(s);
+                  const upstream = s.resource;
+                  if (upstream?.error)
+                    error.message += `; read resource ${JSON.stringify(upstream.name)} (source ${JSON.stringify(upstream.source)}) failed: ${upstream.error}`;
+                  for (const input of s.src) visit(input);
+                };
+              for (const input of n.src) visit(input);
+            }
+            error.typeRefusal = true;
+            throw error;
+          }
+          return v;
+        }
+      : fn,
+  );
   Settle.add(n);
-  const g = () => read(n); g.n = n; return g;
+  const g = () => read(n);
+  g.n = n;
+  return g;
 }
 /** A binding probe's lazy cache; settlement leaves its errors to the tree update. */
-export function bindingMemo(fn) { const n = node(fn); return () => read(n); }
-export function effect(fn) { const n = node(fn, undefined, 1); if (Mask) n.m = Mask; fresh(n); return n; }
+export function bindingMemo(fn) {
+  const n = node(fn);
+  return () => read(n);
+}
+export function effect(fn) {
+  const n = node(fn, undefined, 1);
+  if (Mask) n.m = Mask;
+  fresh(n);
+  return n;
+}
 /** A scope whose effects `dispose` ends, owned by `parent` (a region's
  * arms and rows belong to the region's scope, never to its effect, which
  * drops what it owns each time it reruns). */
 function scope(f, parent = Owner) {
-  const o = Owner; Owner = parent;
+  const o = Owner;
+  Owner = parent;
   const n = node(null);
   Owner = n;
-  try { f(); } catch (e) { dispose(n); throw e; } finally { Owner = o; }
+  try {
+    f();
+  } catch (e) {
+    dispose(n);
+    throw e;
+  } finally {
+    Owner = o;
+  }
   return n;
 }
-function end(n) { dispose(n); const k = n.up?.kids; if (k) k.splice(k.indexOf(n), 1); }
+function end(n) {
+  dispose(n);
+  const k = n.up?.kids;
+  if (k) k.splice(k.indexOf(n), 1);
+}
 /** Leaving rows' scopes end, owner's kids filtered once; nothing unsubscribes from their own signals. */
-function endAll(rows) {
+export function endAll(rows) {
   let up = null;
-  for (const r of rows.values()) if (r.s) { r.item.n.dead = r.index.n.dead = 1; dispose(r.s); up = r.s.up; }
+  for (const r of rows.values())
+    if (r.s) {
+      r.item.n.dead = r.index.n.dead = 1;
+      dispose(r.s);
+      up = r.s.up;
+    }
   if (up?.kids) up.kids = up.kids.filter(k => !k.gone);
 }
 // For loaded pieces (list.js): scopes, untracked reads, writes, the owner in
 // force, and a count of what commits changed (an edge's no-op, runner/collection.rs).
 export { scope, end, untracked, write, onEnd };
-export const owner = () => Owner, rev = () => Rev, ticket = () => Ticket, nextTicket = () => ++Ticket, stood = f => Out.push(f), restoring = () => Restoring; // `stood`: run `f` once this commit stands (each.js)
-let Writes = null, Commands = [], Out = [], Landed = [], Sends = [], Refresh = [], Finishes = null, Poisoned = false, Refused = null, Why = "", Sched = null; // `Why`: the step the last commit was refused in and the exception's own words, cut (`why`): a boot refusal's reason (`mount`); the journal keeps them whole
-const why = (step, m, c = [...m]) => `while ${step}: ${c.length > WHY_MAX ? `${c.slice(0, WHY_MAX).join("")}… (${c.length - WHY_MAX} more characters in the journal)` : m}`, WHY_MAX = 300; // by code point; a write's value or a source's error may be long, or private
-/** Queued sends and gated tasks (schedule.js, LLP 1092), installed by a plan that declares them; the last commit's refusal. */
-export const useSchedule = s => { Sched = s; }, refused = () => Refused;
-export const journal = Object.assign([], { start: 0, push(...l) { const over = Array.prototype.push.apply(this, l) - 4096; if (over > 0) this.start += this.splice(0, over).length; return this.length; } }); // the runner's ring (JOURNAL_RING): `start` is the oldest line's index
+export const owner = () => Owner,
+  rev = () => Rev,
+  // Run `f` once this commit stands (each.js).
+  stood = f => Out.push(f),
+  restoring = () => Restoring;
+// `Why`: the step the last commit was refused in and the exception's own words, cut (`why`): a boot refusal's
+// reason (`mount`); the journal keeps them whole.
+export let Writes = null,
+  Commands = [],
+  Out = [],
+  Landed = [],
+  Sends = [],
+  Refresh = [],
+  Finishes = null,
+  Poisoned = false,
+  Refused = null,
+  Why = '',
+  Sched = null;
+// Cut by code point; a write's value or a source's error may be long, or private.
+const why = (step, m, c = [...m]) =>
+    `while ${step}: ${c.length > WHY_MAX ? `${c.slice(0, WHY_MAX).join('')}… (${c.length - WHY_MAX} more characters in the journal)` : m}`,
+  WHY_MAX = 300;
+/** Queued sends and gated tasks (schedule.js, LLP 1092), installed by a plan that declares them; the last commit's
+ * refusal. */
+export const useSchedule = s => {
+    Sched = s;
+  },
+  refused = () => Refused;
+// The runner's ring (JOURNAL_RING): `start` is the oldest line's index.
+export const journal = Object.assign([], {
+  start: 0,
+  push(...l) {
+    const over = Array.prototype.push.apply(this, l) - 4096;
+    if (over > 0) this.start += this.splice(0, over).length;
+    return this.length;
+  },
+});
 export const say = line => journal.push(`t=${clock.now} ${line}`);
 /** A write inside an action: collected, applied at commit. */
-export function W(s, v) { Writes.push([s.n, v]); if (s.n === Assigned.n) Assigned.v = v; } export const Assigned = { n: null, v: undefined }; // the router slot's last value written (router.js `assigned`)
+export function W(s, v) {
+  Writes.push([s.n, v]);
+  if (s.n === Assigned.n) Assigned.v = v;
+}
+// The router slot's last value written (router.js `assigned`).
+export const Assigned = { n: null, v: undefined };
 /** A host command inside an action: run after the commit. */
-export function C(name, args) { Commands.push([name, args, Origin.now()]); Rev++; } export const Origin = { now: () => "app" }; // who caused the commit (modules.js, LLP 1133.002 D12), taken as a command is queued, so a deferred tail runs it under its own commit's origin
+export function C(name, args) {
+  Commands.push([name, args, Origin.now()]);
+  Rev++;
+}
+// Who caused the commit (modules.js, LLP 1133.002 D12), taken as a command is queued, so a deferred tail runs it
+// under its own commit's origin.
+export const Origin = { now: () => 'app' };
 /** `refresh r`: forced at this commit's settlement (merged, LLP 1054.000.000 D2). */
-export function R(r) { Refresh.push(r.r ?? r); }
-/** What its resource reads (a watched topic, ts-data.js `changed`, LLP 1016.002 D4; the store, `lateReaders`) changed while ticket `t` was in flight (`t.again`): its reply landed or failed, so the resource is asked again. */
-const again = t => { if (t.again) { t.again = false; say(`${t.r.name}: asked again, what it reads changed while ticket ${t.id} was in flight`); R(t.r); } }, openEnded = t => !!(t.stream || t.req?.stream || t.req?.longPoll || t.call?.held > 0), reads = r => r.store || !!r.ticket?.call?.seen?.read, lateReaders = () => { for (const r of Resources) if (reads(r) && r.ticket && !openEnded(r.ticket)) r.ticket.again = true; }, lateIdle = () => { for (const r of Resources) if (reads(r) && (!r.ticket || openEnded(r.ticket))) R(r); }; // a store write outside a commit asks every store reader again (one whose answer has read the store so far, landed or not), a failed one too, as the runner's commit after a module turn does (LLP 1146 D2): one in flight once its reply lands, marked before that commit's checkpoint so a refusal keeps the mark, and one whose request may never land (a stream, a long poll, a held fetch) now
+export function R(r) {
+  Refresh.push(r.r ?? r);
+}
 /** Pull every derive and resource in plan order: the settlement pass. */
-function settle() { for (const n of Settle) if (!n.gone) fresh(n); }
+function settle() {
+  for (const n of Settle) if (!n.gone) fresh(n);
+}
 /** One commit: `f` runs; its writes, sends and refreshes land; settlement
  * runs; a refusal anywhere up to here puts everything back and leaves the
  * tree untouched; then the tree updates, completion callbacks run, requests go out, commands run. */
-export function commit(f, what = "commit", finished) {
-  if (Writes) { if (finished) Finishes.push(finished); return f(); }
+export function commit(f, what = 'commit', finished) {
+  if (Writes) {
+    if (finished) Finishes.push(finished);
+    return f();
+  }
   if (Poisoned) return say(`refused ${what}: the runner is poisoned; reload`);
   Probes?.capture();
-  Writes = []; Commands = []; Out = []; Landed = []; Sends = []; Refresh = []; Finishes = finished ? [finished] : []; Refused = null; Why = ""; time();
-  const was = Now.v, undo = [], saved = Resources.map(r => r.save()), held = Mutations.map(m => [m.ticket, m.tickets, m.concluded]), store = Store.save(), queued = Sched?.save(), writes = Ov.save();
-  let ok = true, step = Booting ? "building the view" : `running the ${what}`; // where a refusal stops it (`Why`)
+  Writes = [];
+  Commands = [];
+  Out = [];
+  Landed = [];
+  Sends = [];
+  Refresh = [];
+  Finishes = finished ? [finished] : [];
+  Refused = null;
+  Why = '';
+  time();
+  const was = Now.v,
+    undo = [],
+    saved = Resources.map(r => r.save()),
+    held = Mutations.map(m => [m.ticket, m.tickets, m.concluded]),
+    store = Store.save(),
+    queued = Sched?.save(),
+    writes = Ov.save();
+  let ok = true,
+    // where a refusal stops it (`Why`)
+    step = Booting ? 'building the view' : `running the ${what}`;
   try {
     untracked(f);
-    step = "landing its writes and sends"; tick();
+    step = 'landing its writes and sends';
+    tick();
     for (const [n, v] of Writes) {
-      if (n.t && !conforms(v, n.t)) throw new Refusal(`a write does not conform to its slot's type: ${JSON.stringify(v)}`);
+      if (n.t && !conforms(v, n.t))
+        throw new Refusal(`a write does not conform to its slot's type: ${JSON.stringify(v)}`);
       if (n.name && long(v)) throw tooLong(n.name);
-      undo.push([n, n.v]); write(n, v);
+      undo.push([n, n.v]);
+      write(n, v);
       if (n.m && !n.landing) n.m.forget(undo);
     }
     for (const [m, source, args, own] of Sends) m.send(source, args, undo, own);
-    for (const [n] of Writes) if (n.m && !n.landing && Sends.some(x => x[0] === n.m)) n.m.forget(undo); // an assignment beside a send wins
+    // an assignment beside a send wins
+    for (const [n] of Writes) if (n.m && !n.landing && Sends.some(x => x[0] === n.m)) n.m.forget(undo);
     for (const r of Refresh) r.force(undo);
-    if (!routerValid()) throw new Refusal("invalid router value"); // runner/src/runner/router.rs `change`
-    step = "settling its derives and resources"; settle();
+    // runner/src/runner/router.rs `change`
+    if (!routerValid()) throw new Refusal('invalid router value');
+    step = 'settling its derives and resources';
+    settle();
     // A store write re-asks the resources that read the store, until quiet.
-    for (let k = 0; Store.dirty && k < 4; k++) { Store.dirty = false; for (const r of Resources) if (r.store) r.revise(undo); settle(); }
-    step = "arming its tasks and sequences"; Sched?.gates(); Sounds.gate?.(); // gated tasks and sequences over the settled state, inside the rollback (LLP 1092 D8, LLP 1125 D2)
+    for (let k = 0; Store.dirty && k < 4; k++) {
+      Store.dirty = false;
+      for (const r of Resources) if (r.store) r.revise(undo);
+      settle();
+    }
+    // gated tasks and sequences over the settled state, inside the rollback (LLP 1092 D8, LLP 1125 D2)
+    step = 'arming its tasks and sequences';
+    Sched?.gates();
+    Sounds.gate?.();
   } catch (e) {
     ok = false;
     for (const [n, v] of undo.reverse()) write(n, v);
-    if (Now.v !== was) { Now.v = was; for (const o of Now.obs) stale(o, DIRTY); } // nor its time: the clock's readers read as they did
-    Resources.forEach((r, k) => k < saved.length && r.restore(saved[k])); Mutations.forEach((m, k) => { [m.ticket, m.tickets, m.concluded] = held[k]; }); Sched?.restore(queued); Ov.restore(writes); // new list members end through their refusal callbacks (each.js)
+    // nor its time: the clock's readers read as they did
+    if (Now.v !== was) {
+      Now.v = was;
+      for (const o of Now.obs) stale(o, DIRTY);
+    }
+    // new list members end through their refusal callbacks (each.js)
+    Resources.forEach((r, k) => k < saved.length && r.restore(saved[k]));
+    Mutations.forEach((m, k) => {
+      [m.ticket, m.tickets, m.concluded] = held[k];
+    });
+    Sched?.restore(queued);
+    Ov.restore(writes);
     Store.restore(store);
-    for (const go of Out) go.refused?.(e?.message ?? e); Out = []; Commands = []; Landed = []; Refused = e; // what would have gone says so (ts-stream.js, ts-data.js)
-    say(`refused ${what}: ${e.message}`); Why = why(step, e instanceof Refusal ? e.message : String(e)); // `String`: a TypeError's name too
+    // what would have gone says so (ts-stream.js, ts-data.js)
+    for (const go of Out) go.refused?.(e?.message ?? e);
+    Out = [];
+    Commands = [];
+    Landed = [];
+    Refused = e;
+    say(`refused ${what}: ${e.message}`);
+    // `String`: a TypeError's name too
+    Why = why(step, e instanceof Refusal ? e.message : String(e));
     if (!(e instanceof Refusal)) console.error(e);
-    Restoring = true; try { settle(); } catch {} finally { Restoring = false; }
+    Restoring = true;
+    try {
+      settle();
+    } catch {
+    } finally {
+      Restoring = false;
+    }
   }
-  const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes], changed = Sched?.changed(queued);
-  // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view transition defers too (review C3).
-  if (KeyEvent || Propagating) for (const c of cmds.filter(c => c[0] === "preventDefault" || c[0] === "stopPropagation")) { cmds.splice(cmds.indexOf(c), 1); command(...c); }
-  Writes = Finishes = null; unpark();
+  const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes],
+    changed = Sched?.changed(queued);
+  // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view
+  // transition defers too (review C3).
+  if (KeyEvent || Propagating)
+    for (const c of cmds.filter(c => c[0] === 'preventDefault' || c[0] === 'stopPropagation')) {
+      cmds.splice(cmds.indexOf(c), 1);
+      command(...c);
+    }
+  Writes = Finishes = null;
+  unpark();
   // What the commit would have sent and did not is refused, whatever stopped its tree update (a hook that threw, a
   // poisoned tree, a tail a view transition never ran): an answer's batches that wait for it too (ts-stream.js).
-  let sent = 0; const unrun = why => { for (const go of out.splice(sent)) go.refused?.(why); };
+  let sent = 0;
+  const unrun = why => {
+    for (const go of out.splice(sent)) go.refused?.(why);
+  };
   const link = Nav?.holdLink();
-  const tail = Object.assign(() => { try { return link ? Nav.withLink(link, update) : update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
-  const update = () => { // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
+  const tail = Object.assign(
+    () => {
+      try {
+        return link ? Nav.withLink(link, update) : update();
+      } finally {
+        unrun('its tree update failed');
+      }
+    },
+    { unrun: () => unrun('its tree update never ran') },
+  );
+  // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
+  const update = () => {
     for (const f of Before) f();
-    Pres?.before({ ops: Probes?.gains() ?? [] }, Views); // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
-    try { flush(); openTabs(); } catch (e) { Poisoned = true; Why = why("updating the tree", String(e)); say(`poisoned: ${e.pc != null ? `Instance(${e.message})` : e.message}`); console.error(e); Sched?.forget(); for (const f of finishes) f(false); return false; } // a trap as the runner's InstanceError (LLP 1090 D6)
+    // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
+    Pres?.before({ ops: Probes?.gains() ?? [] }, Views);
+    try {
+      flush();
+      openTabs();
+    } catch (e) {
+      Poisoned = true;
+      Why = why('updating the tree', String(e));
+      // a trap as the runner's InstanceError (LLP 1090 D6)
+      say(`poisoned: ${e.pc != null ? `Instance(${e.message})` : e.message}`);
+      console.error(e);
+      Sched?.forget();
+      for (const f of finishes) f(false);
+      return false;
+    }
     for (const f of finishes) f(ok);
-    settled(true); if (!ok) return Sched?.scan(false), false;
-    clock.epoch++; Store.persist();
+    settled(true);
+    if (!ok) return (Sched?.scan(false), false);
+    clock.epoch++;
+    Store.persist();
     for (const r of Resources) retainedAnswer(r, say);
-    while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(inflight, say); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
-    // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit (LLP 1016.001 D3).
-    for (const m of landed) if (m.then) { m.due = armedAt(); if (!clock.agent) drive(); }
+    while (sent < out.length) out[sent++]();
+    if (Open.size) closeLetGo(inflight, say);
+    for (const c of cmds) command(...c);
+    Sounds.apply?.(cmds);
+    Sounds.midiApply?.(cmds);
+    Sounds.stood?.();
+    // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js;
+    // LLP 1115.000 D4.2)
+    if (!Booting) {
+      autofocus();
+      Input?.arrive();
+    }
+    // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit
+    // (LLP 1016.001 D3).
+    for (const m of landed)
+      if (m.then) {
+        m.due = armedAt();
+        if (!clock.agent) drive();
+      }
     Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
     return true;
   };
-  return Sh && ok && !Traversal?.() ? Sh.commit(tail, Queue, inflight, After) : tail(); // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
+  // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
+  return Sh && ok && !Traversal?.() ? Sh.commit(tail, Queue, inflight, After) : tail();
 }
-/** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while reads are
- * owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of that leaves nothing owed. */
-export function recommit(f, what) { const done = commit(f, what), owed = done === false ? Resources.filter(r => r.reconciling) : [], why = Refused?.message; if (owed.length) { for (const r of owed) r.giveUp(`the commit that asked it again was refused: ${why}`); commit(() => {}, "the reads a refused commit owed"); } return done; }
+/** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while
+ * reads are owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of
+ * that leaves nothing owed. */
+export function recommit(f, what) {
+  const done = commit(f, what),
+    owed = done === false ? Resources.filter(r => r.reconciling) : [],
+    why = Refused?.message;
+  if (owed.length) {
+    for (const r of owed) r.giveUp(`the commit that asked it again was refused: ${why}`);
+    commit(() => {}, 'the reads a refused commit owed');
+  }
+  return done;
+}
 /** What runs after each commit's tree update (a loaded piece's publication), before it (the text flow piece puts
  * flowed paragraphs back), and as the clock moves: before each timer or `then` fires, and where an advance lands. */
-export const After = [], Before = [], Clocked = [];
-/** `-exact-fit` (LLP 1116.001 D1.4): fitted texts are scaled after each tree update (navigation.js `fitText`). */ export const fitTexts = () => installFits(After);
-/** Authored scroll offsets (`scrollTop`, `scrollLeft`), set once the commit's tree is in place, as the web host's `pendingScrolls`
- * (a virtualized list builds the rows there first: `$jump`, list.js); and a select's committed
+export const After = [],
+  Before = [],
+  Clocked = [];
+/** `-exact-fit` (LLP 1116.001 D1.4): fitted texts are scaled after each tree update (navigation.js `fitText`). */
+export const fitTexts = () => installFits(After);
+/** Authored scroll offsets (`scrollTop`, `scrollLeft`), set once the commit's tree is in place, as the web host's
+ * `pendingScrolls` (a virtualized list builds the rows there first: `$jump`, list.js); and a select's committed
  * `$value` once written or its options change, as glue.js `settleValue` (a reader's pick stands until its action). */
-const Scrolls = new Map(), Selects = new Set();
+export const Scrolls = new Map(),
+  Selects = new Set();
 /** What a commit does once its tree is in place: authored scrolls, then the
  * loaded pieces' publications (also after a list's report, list.js). */
-export function settled(inCommit) { drain(); markDocument(); Paint?.flush(); Present?.(); for (const f of After) f(); if (!inCommit && !Booting) autofocus(); } // a list's own mounts (list.js); a commit's scan follows its commands
-let Restoring = false, Booting = false; export const booting = () => Booting; // `Restoring`: a refused commit's settle over what it put back, which asks nothing. The boot's own offsets are no reader's scroll (the web host hears none: its input opens after them): `scroll` skips one
+export function settled(inCommit) {
+  drain();
+  markDocument();
+  Paint?.flush();
+  Present?.();
+  for (const f of After) f();
+  // a list's own mounts (list.js); a commit's scan follows its commands
+  if (!inCommit && !Booting) autofocus();
+}
+// `Restoring`: a refused commit's settle over what it put back, which asks nothing. The boot's own offsets (`Booting`,
+// mount.js) are no reader's scroll (the web host hears none: its input opens after them): `scroll` skips one
+export let Restoring = false;
 function drain() {
-  for (const [e, o] of Scrolls) for (const name in o) {
-    const at = o[name];
-    if (e.$jump) e.$jump(name, at);
-    else if (e[name] !== at) { if (Booting && (at < 0 || Math.min(at, name === "scrollTop" ? e.scrollHeight - e.clientHeight : e.scrollWidth - e.clientWidth) !== e[name])) e.$bootScroll = e.$bootScrollEnd = true; /* only an offset that moves fires */ if (clock.agent && e.style.scrollBehavior === "smooth") e.scrollTo({ [name === "scrollTop" ? "top" : "left"]: at, behavior: "instant" }); else e[name] = at; }
-  }
+  for (const [e, o] of Scrolls)
+    for (const name in o) {
+      const at = o[name];
+      if (e.$jump) e.$jump(name, at);
+      else if (e[name] !== at) {
+        if (
+          Booting &&
+          (at < 0 ||
+            Math.min(at, name === 'scrollTop' ? e.scrollHeight - e.clientHeight : e.scrollWidth - e.clientWidth) !==
+              e[name])
+        )
+          // only an offset that moves fires
+          e.$bootScroll = e.$bootScrollEnd = true;
+        if (clock.agent && e.style.scrollBehavior === 'smooth')
+          e.scrollTo({ [name === 'scrollTop' ? 'top' : 'left']: at, behavior: 'instant' });
+        else e[name] = at;
+      }
+    }
   // Options compare as nodes and values: a branch that replaces them with equal values still resets the pick.
   // Reapply an equal value too: the render DOM must mark the first option selected explicitly.
-  Scrolls.clear(); for (const e of Selects) if (!e.isConnected) Selects.delete(e); else { const o = [...e.options], v = o.map(x => x.value); if (e.$set || o.length !== e.$options?.length || o.some((x, i) => x !== e.$options[i] || v[i] !== e.$values[i])) { e.$set = false; e.$options = o; e.$values = v; e.value = e.$value; } }
+  Scrolls.clear();
+  for (const e of Selects)
+    if (!e.isConnected) Selects.delete(e);
+    else {
+      const o = [...e.options],
+        v = o.map(x => x.value);
+      if (e.$set || o.length !== e.$options?.length || o.some((x, i) => x !== e.$options[i] || v[i] !== e.$values[i])) {
+        e.$set = false;
+        e.$options = o;
+        e.$values = v;
+        e.value = e.$value;
+      }
+    }
 }
 /** An action: each call is one commit. Its arguments conform to its parameters' types (`types`, after `skip` leading
  * arguments: a row action's row), each then within MAX_STRING when `names` names it a string's, or it is refused before
@@ -263,1222 +655,246 @@ function drain() {
 export function act(fn, types, skip = 0, names) {
   const go = a => {
     for (let i = 0; types && i < types.length; i++) {
-      if (!conforms(a[i + skip], types[i])) throw new Refusal(`argument ${i + 1} does not conform to its parameter's type`);
+      if (!conforms(a[i + skip], types[i]))
+        throw new Refusal(`argument ${i + 1} does not conform to its parameter's type`);
       if (names?.[i] && long(a[i + skip])) throw tooLong(names[i]);
     }
     fn(...a);
   };
-  const a = (...x) => commit(() => go(x), "action");
-  a.t = f => (...v) => {
-    if (Poisoned) try { f(); } catch (e) { return say(`refused action: ${e.message}`); }
-    return commit(() => go([...f(), ...v]), "action");
-  };
+  const a = (...x) => commit(() => go(x), 'action');
+  a.t =
+    f =>
+    (...v) => {
+      if (Poisoned)
+        try {
+          f();
+        } catch (e) {
+          return say(`refused action: ${e.message}`);
+        }
+      return commit(() => go([...f(), ...v]), 'action');
+    };
   return a;
 }
 /** The host commands, by name; a loaded piece adds its own (list.js `scrollIntoView`). */
 export const Hosts = {
-  requestFullscreen: id => Media ? Media.requestFullscreen(id) : say(`requestFullscreen: refused: no video with id "${id}"`), // media.js's where a plan has media; without any, the same refusal
-  scrollIntoView: (id, block, inline, behavior) => { const e = liveById(id); if (e) e.scrollIntoView({ block: block ?? "start", inline: inline ?? "nearest", behavior: behavior ?? "auto" }); else say(`scrollIntoView "${id}" refused: no live node with that id`); }, // an element's, by id (minesweeper F3); list.js takes a row's
-  scrollBy: (id, x, y) => { const e = liveById(id); if (e) e.scrollBy(x, y); else say(`scrollBy "${id}" refused: no live node with that id`); }, // LLP 1101.004 R3
-  observe: n => say(`observe ${n}`), observeAttributes: () => {}, observeError: m => say(`observeError ${m}`) }; // journal lines only; marks.js replaces these when the app has launch modules
-export function useCommands(table) { for (const name in table) Hosts[name] = table[name](say, () => agentMode()); } // commands.js's, each by name as the compiled plan imported it for an action that names it (emit.rs, LLP 1047.002 D1): a factory over the journal and whether the agent drives the page; one no action names is never linked
-let KeyEvent = null, Propagating = null; Hosts.preventDefault = () => { KeyEvent?.preventDefault(); if (KeyEvent?.type === "beforeunload") KeyEvent.returnValue = ""; if (!KeyEvent && Propagating?.type === "pointerdown") Propagating.preventDefault(); /* a pointerdown handler's: the browser keeps the focus, places no caret, starts no selection; the click still fires (LLP 1005 §3) */ }; Hosts.stopPropagation = () => { const e = KeyEvent ?? Propagating; if (e) e.$stopped = true; }; // Propagating: the pointer's down or up a handler is running for, which only its `stopPropagation()` reaches (its default is the browser's); // the key, focus, wheel, beforeunload or clipboard event whose handler is running (`on`): commands run before its commit returns; a stopped key reaches no ancestor's `key` handler, its default still does (files diary F8); a prevented beforeunload is the browser's "Leave site?" (Safari reads `returnValue`)
-export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
+  // media.js's where a plan has media; without any, the same refusal
+  requestFullscreen: id =>
+    Media ? Media.requestFullscreen(id) : say(`requestFullscreen: refused: no video with id "${id}"`),
+  // an element's, by id (minesweeper F3); list.js takes a row's
+  scrollIntoView: (id, block, inline, behavior) => {
+    const e = liveById(id);
+    if (e) e.scrollIntoView({ block: block ?? 'start', inline: inline ?? 'nearest', behavior: behavior ?? 'auto' });
+    else say(`scrollIntoView "${id}" refused: no live node with that id`);
+  },
+  // LLP 1101.004 R3
+  scrollBy: (id, x, y) => {
+    const e = liveById(id);
+    if (e) e.scrollBy(x, y);
+    else say(`scrollBy "${id}" refused: no live node with that id`);
+  },
+  // journal lines only; marks.js replaces these when the app has launch modules
+  observe: n => say(`observe ${n}`),
+  observeAttributes: () => {},
+  observeError: m => say(`observeError ${m}`),
+};
+// commands.js's, each by name as the compiled plan imported it for an action that names it (emit.rs, LLP 1047.002 D1):
+// a factory over the journal and whether the agent drives the page; one no action names is never linked
+export function useCommands(table) {
+  for (const name in table) Hosts[name] = table[name](say, () => agentMode());
+}
+// A handler's `preventDefault()` and `stopPropagation()` act on its event (events.js `KeyEvent`, `Propagating`):
+// commands run before its commit returns; a stopped key reaches no ancestor's `key` handler, its default still does
+// (files diary F8); a prevented beforeunload is the browser's "Leave site?" (Safari reads `returnValue`)
+Hosts.preventDefault = () => {
+  KeyEvent?.preventDefault();
+  if (KeyEvent?.type === 'beforeunload') KeyEvent.returnValue = '';
+  // A pointerdown handler's: the browser keeps the focus, places no caret, starts no selection; the click still fires
+  // (LLP 1005 §3).
+  if (!KeyEvent && Propagating?.type === 'pointerdown') Propagating.preventDefault();
+};
+Hosts.stopPropagation = () => {
+  const e = KeyEvent ?? Propagating;
+  if (e) e.$stopped = true;
+};
+// The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's;
+// sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays
+// them once it stood (LLP 1125 D2).
+export const Sounds = {
+  apply: null,
+  own: new Set(['playSound', 'playSounds', 'stopSounds', 'setSounds', 'sendMIDI', 'requestMIDIAccess']),
+  gate: null,
+  stood: null,
+  seq: null,
+  midi: null,
+  midiApply: null,
+  beatAt: null,
+};
 function command(name, args, origin) {
   const f = Hosts[name];
   say(`command ${name}`);
   if (Sounds.own.has(name)) return;
-  if (Origin.refused?.(name, origin)) return; if (f) f.origin ? f(origin, ...args) : f(...args); else say(`refused: ${name} is not a command this runtime carries`);
+  if (Origin.refused?.(name, origin)) return;
+  if (f) f.origin ? f(origin, ...args) : f(...args);
+  else say(`refused: ${name} is not a command this runtime carries`);
 }
-export const clock = { now: 0, timers: [], agent: false, epoch: 0 };
 // `performanceNow()` is elapsed time: the driver's clock under the agent and in a render, else the
 // page's since it started; a timer commits at its due time. A reader of `performanceNow()` is
 // re-evaluated at each commit made at a later time, as the runner marks the clock read dirty
 // (instance/deps.rs), and never by the clock moving alone. Not a write: no commit counts it as a change.
-const Now = node(null, 0);
-let Timing = false, Instant = null; export const armedAt = () => Instant ?? clock.now; // where a `then` or queue `next` armed now is due: on the wall clock, a callback's own place (the timers RFC, D2)
-// A commit takes its time first (`time`); its clock readers see it once the body has run (`tick`): the body reads the pre-state.
-export function time() { if (!clock.agent && !Timing && start) clock.now = Math.max(clock.now, performance.now() - start); }
-function tick() { if (Now.v !== clock.now) { Now.v = clock.now; for (const o of Now.obs) stale(o, DIRTY); } }
-// A release build never enters agent mode (LLP 1069.007 D2): its build writes this false, as the wasm host's files are gated.
-const AGENT_ADMITTED = true;
-/** Whether the agent drives this page (or a render does): the clock is then the driver's. */ export const agentMode = () => !!globalThis.__exactRender || (AGENT_ADMITTED && new URLSearchParams(location.search).has("agent"));
-/** A timer: `every(ms, action, once)`, due from mount; `i` its plan order, which breaks ties (schedule.js inserts by it). */
-let Order = 0; export const order = () => Order++, Tasks = []; // every task, for the agent's `state.tasks`
-export function every(ms, action, once, name, wait = 0, max = 0, tolerance = 0) {
-  clock.timers.push({ due: clock.now + ms, ms, action, once, name, wait, max, tolerance, i: Order++ }); Tasks.push(clock.timers.at(-1));
-  if (!clock.agent) drive();
-}
-// A frame task (LLP 1073): once per presented frame, never caught up; on the
-// agent's seekable clock, a virtual frame every 1000/60 ms after it last fired.
-// The kth virtual frame after `base`, the product first, as the runner's
-// `virtual_frame`: sixty frames are exactly a second.
-const vf = (base, k) => base + k * 1000 / 60; Object.assign(Link, { clock, every, commit, journal, advance, drive, wall: () => performance.now() - start, nextMutation: () => Mutations.reduce((due, m) => Math.min(due, m.due ?? Infinity, m.next ?? Infinity), Infinity), fireTimer: t => fire(t.action), busy: () => !!Writes, poisoned: () => Poisoned, pauseTimers: () => { clearTimeout(driving); globalThis.cancelAnimationFrame?.(painting); driving = painting = 0; } }); // (for lazy chunks: rt-link.js)
-/** `every(frame, action)`. */
-export function frames(action, name) {
-  clock.timers.push({ due: vf(clock.now, 1), base: clock.now, k: 1, frame: true, action, name, i: Order++ }); Tasks.push(clock.timers.at(-1));
-  if (!clock.agent) paint();
-}
-/** Move the clock to `to`, firing each due timer and armed `then` at its own time, in order; a seek fires frame
- * tasks' virtual frames too, the wall clock's (`wall`) none. `stop()`, asked after each, ends it there (the agent's:
- * one that sent a request): true. A change receipt boundary also yields true; resume toward the same `to`. A refusal or 4096 commits stops there; a
- * non-finite `to` (NonFiniteClock) leaves the clock where it was: its journal line, as the runner's error. Under the
- * agent the journal gets the runner's line for an advance that fired. `timers` false runs only armed `then`s
- * and change actions, at `to` = now, as an agent's input ends (Runner::land_then; trivia F3). */
-export function advance(to, wall, stop, timers = true) {
-  if (!Number.isFinite(to)) return say(`refused advance: NonFiniteClock (${to})`), journal.at(-1);
-  if (Poisoned) return say("refused advance: Poisoned"), journal.at(-1); to = Link.timerWait?.cutoff(to, wall) ?? to; let fired = 0, stopped = false;
-  for (;;) {
-    let next = null, then = null, head = null; const execution = t => t.change ? Math.max(t.due, clock.now) : Link.timerWait?.execution(t, wall) ?? t.due, priority = t => t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0;
-    // Run authored tasks before hatch and data callbacks due at the same time
-    if (!clock.stopped) for (const t of clock.timers) if ((timers || t.change) && (!t.change || t.ready) && execution(t) <= to && !(wall && t.frame) && (!next || execution(t) < execution(next) || execution(t) === execution(next) && (priority(t) < priority(next) || priority(t) === priority(next) && t.due < next.due))) next = t;
-    // An answer's `then` goes before a timer due at the same time: the answer landed first; a queue's `next` between them (LLP 1092 D3).
-    for (const m of Mutations) if (m.due <= to && (!then || m.due < then.due) && (!next || m.due <= execution(next))) then = m;
-    for (const m of Mutations) if (m.next <= to && (!head || m.next < head.next) && (!next || m.next <= execution(next)) && (!then || m.next < then.due)) head = m;
-    if (head) then = null;
-    if (!next && !then && !head) break; if (next?.change && !then && !head && fired) return true;
-    if (fired === 4096) return say("refused advance: 4096 commits in one advance (TIMER_FIRE_LIMIT)"), journal.at(-1);
-    // On the wall clock (the timers RFC, D2, D3) a repeat that missed beats fires once, its firing consumed first; each callback observes the clock as it runs and as it ends, and what it arms takes its place; a repeat's next beat is the first of its phase after the end, unless its callback dropped it, or re-armed it (a gate's step) from there.
-    const at = head ? head.next : then ? then.due : next.due, repeat = (wall || next?.wait) && !head && !then && !next.once && !next.frame && !next.hatch, gen = next?.gen;
-    if (head) clock.now = Math.max(clock.now, head.next);
-    else if (then) { clock.now = Math.max(clock.now, then.due); then.due = Infinity; }
-    else { clock.now = wall ? Math.max(clock.now, execution(next)) : execution(next); if (next.once) clock.timers.splice(clock.timers.indexOf(next), 1); else if (!next.hatch) next.due = next.frame ? vf(next.base, ++next.k) : repeat ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now)) : next.due + next.ms; }
-    if (!head && !then && !next.hatch && !next.data) { const counts = clock.timerFirings ??= Array(7).fill(0); counts[next.frame ? 6 : wall && next.wait ? 5 : next.wait ?? 0]++; } const due = next?.due, sample = () => { if (wall) clock.now = Math.max(clock.now, performance.now() - start); }; sample(); Instant = wall ? (next?.wait || next?.change ? clock.now : at) : null; const ok = fire(head ? () => Sched.next(head) : then ? () => commit(then.then, `${then.name} then`) : next.action); Instant = null; sample();
-    if (repeat && clock.timers.includes(next)) next.due = next.gen === gen && next.due === due ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now)) : clock.now + next.ms; if (ok !== true) return journal.at(-1);
-    if (head || then || !next.hatch && !next.data) { fired++; } // Hatch and data callbacks have their own limits
-    if (!head && !then && next.change) return true; if (stop?.()) { stopped = true; break; }
+export const Now = node(null, 0);
+export function tick() {
+  if (Now.v !== clock.now) {
+    Now.v = clock.now;
+    for (const o of Now.obs) stale(o, DIRTY);
   }
-  if (!stopped) clock.now = Math.max(clock.now, to);
-  for (const f of Clocked) f();
-  // Under the agent only: this journal is not a ring, and a page's own clock would add a line a tick.
-  if (fired && clock.agent) say(`advance → ${fired} timer${fired === 1 ? "" : "s"} fired, epoch ${clock.epoch}`);
-  return stopped;
 }
-function fire(f) { for (const c of Clocked) c(); Timing = true; try { return f(); } finally { Timing = false; } }
-let driving = 0, start = 0, painting = 0;
-export function drive() {
-  clearTimeout(driving); if (clock.agent || Poisoned) return;
-  let next = Infinity;
-  for (const t of [...(clock.stopped ? [] : clock.timers), ...Mutations]) if (!t.frame && (!t.change || t.ready)) next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0)); // no timer while a wake runs unseen (wakes.js)
-  for (const m of Mutations) if (m.next < next) next = m.next;
-  if (!isFinite(next)) return;
-  const token = Link.timerWait?.generation(); driving = setTimeout(() => { if (clock.agent || token !== Link.timerWait?.generation()) return; advance(performance.now() - start, true); Link.timerWait?.check(); drive(); }, Math.min(2147483647, Math.max(0, next - (performance.now() - start))));
-}
-// Presented frames: before each paint, timers due by the frame's time, then
-// every frame task once at it (Runner::frame).
-export function paint() {
-  if (painting || typeof requestAnimationFrame !== "function") return;
-  const token = Link.timerWait?.generation(); painting = requestAnimationFrame(function frame(ts) {
-    if (Poisoned || token !== Link.timerWait?.generation()) return; painting = 0;
-    if (clock.agent || !clock.timers.some(t => t.frame)) return;
-    painting = requestAnimationFrame(frame);
-    advance(Math.max(clock.now, ts - start), true);
-    Link.timerWait?.check(true); const at = clock.now, rev = Rev, ticket = Ticket;
-    NowRead = false;
-    // A frame task's commit may arm or drop one (a gate, LLP 1092 D10): each armed at the frame's start fires once.
-    for (const t of clock.timers.filter(t => t.frame).sort((a, b) => !!a.hatch - !!b.hatch)) if (clock.timers.includes(t)) { t.base = at; t.k = 1; t.due = vf(at, 1); (clock.timerFirings ??= Array(7).fill(0))[6]++; fire(t.action); }
-    // Frames whose tasks changed nothing and read no clock would change
-    // nothing again until state does: the loop parks until a commit writes
-    // (skipping a frame that would commit nothing is unobservable).
-    if (Rev === rev && Ticket === ticket && !NowRead && !clock.timers.some(t => t.hatch && t.frame)) { cancelAnimationFrame(painting); painting = 0; Parked = Rev; }
-    drive();
-  });
-}
-let NowRead = false, Parked = -1;
-/** After a commit that wrote: a parked frame loop runs again. */
-function unpark() { if (Parked >= 0 && Rev !== Parked) { Parked = -1; paint(); } }
-/** The app's data sources (LLP 1016). `answer(source, args, store)` gives
- * `{v}` now, `{req}` (an HTTP request the host runs, then `parse`s),
- * a Promise (an executor-local continuation: TypeScript), or `null` while
- * the source is not ready; `ready(f)` calls `f` once it is. `uploads`: the uploads asked, none until ts-data.js installs uploads.js's `ledger` (LLP 1016.000 D10). */
-export const data = { answer: () => null, parse: null, q: [], ready: f => data.q.push(f), uploads: { at() {}, ends: (r, t, ...c) => c, kept: r => r.value } };
-const DEVELOPMENT_STORE = null; // a development build's app directory, as storage-environment.js's (host/web-js/build.mjs writes both)
-/** The page's `localStorage` keys of a kind: "exact.<kind>.<name>", or in a development build "exact.<kind>.@<digest>/<name>", its app's own on the origin the dev server's apps share (LLP 1116.004 D8). Persisted state's kind is "state" (persist.js); the durable store's (LLP 1018, `Store`: name → text, kept after a commit stands) is "secret". */
+// The runtime's objects for lazy chunks (rt-link.js).
+Object.assign(Link, {
+  clock,
+  every,
+  commit,
+  journal,
+  advance,
+  drive,
+  wall: () => performance.now() - start,
+  nextMutation: () => Mutations.reduce((due, m) => Math.min(due, m.due ?? Infinity, m.next ?? Infinity), Infinity),
+  fireTimer: t => fire(t.action),
+  busy: () => !!Writes,
+  poisoned: () => Poisoned,
+  pauseTimers,
+});
+/** The app's data sources (LLP 1016). `answer(source, args, store)` gives `{v}` now, `{req}` (an HTTP request the host
+ * runs, then `parse`s), a Promise (an executor-local continuation: TypeScript), or `null` while the source is not
+ * ready; `ready(f)` calls `f` once it is. `uploads`: the uploads asked, none until ts-data.js installs uploads.js's
+ * `ledger` (LLP 1016.000 D10). */
+export const data = {
+  answer: () => null,
+  parse: null,
+  q: [],
+  ready: f => data.q.push(f),
+  uploads: { at() {}, ends: (r, t, ...c) => c, kept: r => r.value },
+};
+// A development build's app directory, as storage-environment.js's (host/web-js/build.mjs writes both).
+export const DEVELOPMENT_STORE = null;
+/** The page's `localStorage` keys of a kind: "exact.<kind>.<name>", or in a development build
+ * "exact.<kind>.@<digest>/<name>", its app's own on the origin the dev server's apps share (LLP 1116.004 D8). Persisted
+ * state's kind is "state" (persist.js); the durable store's (LLP 1018, `Store`: name → text, kept after a commit
+ * stands) is "secret". */
 export const Kept = kind => `exact.${kind}.${DEVELOPMENT_STORE ? `@${DEVELOPMENT_STORE}/` : ''}`;
 export const Store = {
-  map: new Map(), writes: [], pending: new Map(), dirty: false,
-  get(k) { return globalThis.__exactRender ? undefined : this.map.get(k); },
-  exclusive(k, work) { return import("./storage-environment.js").then(m => m.exclusiveSecret(this, Kept("secret"), k, work)); },
+  map: new Map(),
+  writes: [],
+  pending: new Map(),
+  dirty: false,
+  get(k) {
+    return globalThis.__exactRender ? undefined : this.map.get(k);
+  },
+  exclusive(k, work) {
+    return import('./storage-environment.js').then(m => m.exclusiveSecret(this, Kept('secret'), k, work));
+  },
   // Outside a render, keeping what is already kept is no write, as the runner's `Store::set`.
-  set(k, v) { if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
-    if (v != null && this.map.get(k) === v) return; if (v == null) this.map.delete(k); else this.map.set(k, v); this.writes.push([k, v]); if (Writes) this.dirty = true; Rev++; if (!Writes && !LateStore) { LateStore = true; queueMicrotask(() => { LateStore = false; Store.persist(); lateReaders(); recommit(lateIdle, "a store write outside a commit"); }); }
+  set(k, v) {
+    if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
+    if (v != null && this.map.get(k) === v) return;
+    if (v == null) this.map.delete(k);
+    else this.map.set(k, v);
+    this.writes.push([k, v]);
+    if (Writes) this.dirty = true;
+    Rev++;
+    if (!Writes && !LateStore) {
+      LateStore = true;
+      queueMicrotask(() => {
+        LateStore = false;
+        Store.persist();
+        lateReaders();
+        recommit(lateIdle, 'a store write outside a commit');
+      });
+    }
   }, // kept now, whatever that commit's settlement does; the commit asks the store's readers again
-  save() { return [new Map(this.map), this.writes.length]; },
-  restore([m, n]) { this.map = m; this.writes.length = n; this.dirty = false; },
-  persist() { const p = Kept("secret"), jobs = []; for (const [k, v] of this.writes.splice(0)) this.pending.set(k, { v, warned: false }); for (const [k, entry] of this.pending) { const live = () => this.pending.get(k) === entry, failed = e => { if (!live()) return; if (!Object.hasOwn(entry, "before")) this.pending.delete(k); if (!entry.warned) { entry.warned = true; say(`store ${k} failed: ${e}`); } }, write = () => { try { const before = localStorage.getItem(p + k); if (Object.hasOwn(entry, "before") && entry.before !== before) { this.pending.delete(k); return; } entry.before = before; entry.v == null ? localStorage.removeItem(p + k) : localStorage.setItem(p + k, entry.v); this.pending.delete(k); } catch (e) { failed(e); } }; if (Object.hasOwn(entry, "before") && !this.leased?.has(k)) { entry.retry ??= import("./storage-environment.js").then(m => m.retrySecretWrite(p + k, live, write)).catch(failed).finally(() => { delete entry.retry; }); jobs.push(entry.retry); } else write(); } return Promise.all(jobs); },
-  load() { if (globalThis.__exactRender) return; const p = Kept("secret"); try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(p)) this.map.set(k.slice(p.length), localStorage.getItem(k)); } } catch {} },
-};
-/** Resource instances, including list members; list aggregates have no entry. */
-export const Resources = [];
-// A release build's DEVELOPMENT_STORE is null: it inspects nothing, and its bundle drops the inspection's code.
-const Inspections = DEVELOPMENT_STORE ? resourceInspection(true, () => clock.now) : { track() {}, begin() {}, placeholder() {}, take() {}, fail() {} };
-let Ticket = 0;
-const sameReq = (a, b) => a && b && a.storage === b.storage && a.method === b.method && a.url === b.url && a.body === b.body && JSON.stringify(a.headers) === JSON.stringify(b.headers) && a.http === b.http && a.cache === b.cache && JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
-export const inflight = { n: 0 }; // Requests in flight, for the agent's `clock settle`.
-export const busy = () => [...document.querySelectorAll('[aria-busy="true"]')].map(el => el.getAttribute('data-testid') ?? el.id); // the elements the app marks `aria-busy="true"` (still loading), by test id else id
-const send = (t, land) => sendRequest(t, land, Out, data, inflight, say);
-
-function ask(source, args, name, mutation, forced) {
-  checkArguments(name, args);
-  if (mutation) mutation.requests++;
-  if (["startActivity", "updateActivity", "endActivity"].includes(source)) throw new Refusal(`${source} is not linked into this artifact`);
-  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name, forced)) : data.answer(source, args, Store, name, !!mutation, forced); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
-  return a && a.then ? (a.then(undefined, e => globalThis.exact?.generationGone?.(e)), { promise: a, call: a.call }) : a; // (a reaped build's lazy chunk fails here: the page loads again, generation-reload.js)
-}
-/** The reply to ticket `t` while its target `held()` it: a commit in which `f` takes the source's answer (a TypeScript
- * promise's value, or the parse of the outcome). Any refusal spends the reply: the ticket goes in a commit of its own,
- * as the runner's `release_failed` (admission.rs), so a derive's refusal cannot leave it pending forever. */
-function reply(t, name, source, held, f, next, gone) {
-  t.held = held;
-  if (t.call) t.call.wanted = held; // what the answer's module calls read (ts-data.js `__exact_module`); not `call.held`, held.js's count of its held fetches
-  return o => {
-    if (commit(() => {
-      if (!held()) return say(`dropped reply for ${name}: ticket ${t.id} is no longer held`);
-      let p;
-      try { if (o.error !== undefined) throw new Failed(o.error, o.code, o.reason); p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store); }
-      catch (e) { throw e instanceof Failed ? e : new Failed(String(e?.message ?? e), failureCode(e), failureReason(e)); }
-      Out.push(...(p.effects ?? [])); f(p, o); Out.push(...(o.effects ?? [])); // a socket frame's replies from its mapper (a Rust parse's, a TypeScript stream's), sent once this commit stands (LLP 1016.000 D7)
-    }, `${o.more ? "message" : "reply"} ${name}; wall ${t.elapsed} ms`) !== false || !held()) return;
-    const failed = `request ${t.id} (${name}) failed and is no longer pending: ${next}: ${Refused?.message ?? Refused}`; say(failed); if (DEVELOPMENT_STORE) console.error(`exact: ${failed}`); // why, on the line a test failure quotes (sb4 farm wave 6, E3: a mutation's refused reply named nowhere); a development page's console too (LLP 1142 D4)
-    gone(Refused.message, Refused.code, Refused.reason); recommit(() => { if (t.r) again(t); }, "a failed request");
-  };
-}
-const revalidated = (name, same) => `${name} answered: ${same ? "equal to its build-time answer" : "replaces its build-time answer"}`; // runner lines.rs
-/** A resource: its value, the arguments it settled with, one ticket in flight. A bake's answer is a first frame: `baked` asks at launch, as a native runner at `data_ready` (LLP 1048.003 D6; feed F24); a document's `kept` was asked for its page, and is asked again when the page lists it as `open`, or when it read the store and the device's store holds the app's own entries; one that read the store is a store reader's (LLP 1048.000 D6). */
-export function res(name, source, args, initial, initialArgs, type, ph, carried = false, kept = keptAnswer(name, source, type)) { // `carried`: settled, not a bake to ask again — a dev reload's (checkpoint.js), an `else` row's (emit.rs); `kept`: the page's answer it starts from, a list element's as each.js finds it
-  const ver = sig(0), pend = sig(false), fail = sig(null), cur = sig(false); // `cur`: `current(x)` (LLP 1161.001), its own signal: an answer equal to the placeholder changes no value
-  if (kept) [initialArgs, initial] = kept;
-  const r = { name, source, type, value: initial, settled: initialArgs, pending: pend, baked: kept ? READER.has(source) || checkpoint().revalidate || kept[2] || kept[3] && Store.map.size > 0 : !carried && initialArgs !== undefined, ticket: null, forced: false, rev: false, store: !!kept?.[3], origin: 0, marks: [], context: args.context ?? 0 }; // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
-  Inspections.track(r, !kept && !carried, () => pend.n.v);
-  const flag = (s, v, undo) => { if (!eq(s.n.v, v)) { undo?.push([s.n, s.n.v]); write(s.n, v); } }, release = () => { if (r.ticket) { say(`forget ticket ${r.ticket.id} (${name})`); r.ticket = null; } flag(pend, false); }, fails = (args, error, code, reason) => { r.failed = args; r.error = error; r.code = code; r.reason = reason; flag(fail, failure()); release(); say(`resource ${name} failed: ${error}`); Inspections.fail(r); return r.value; }, failure = () => r.failed ? [r.failed, r.code ?? "error", r.error ?? "it failed", r.reason ?? ""] : null; // `fail` holds the message too: a `failure(x)` reader is asked again when only it changes
-  const hold = () => {
-    if (r.value !== undefined) return;
-    r.placeholder = true; const v = typeof ph === "function" ? ph() : ph; // a placeholder until an answer lands: what time-to-interactive waits for (marks.js)
-    if (v === undefined) throw new Failed(`${name} answers later and has nothing to show; give it an \`else\``);
-    r.value = v; Inspections.placeholder(r);
-  };
-  const id = a => a?.slice(0, Math.max(0, a.length - r.context)), asleep = () => { r.asleep = r.slept = true; r.forced = r.rev = r.reconciling = false; if (!r.ticket?.upload) release(); if (r.failed) { r.failed = null; r.error = r.code = r.reason = undefined; } flag(fail, failure()); hold(); return r.value; }; // `id`: the call arguments, `with` aside (`current`, LLP 1161.001); `asleep`: a closed `when`, the value kept and no answer, a request let go but an upload's (LLP 1161.002 D2)
-  const take = (v, a, origin, generation) => { // `origin`: when it was asked (overlay.js)
-    if (type && !conforms(v, type, [0], r.checked)) throw new Failed(loneSurrogate(v) ? `${name}: result string contains a lone surrogate` : `${name}: the answer does not conform to its shape`, "shape");
-    r.checked = v;
-    r.value = v; r.settled = a; r.origin = origin; r.placeholder = false; r.slept = false; Inspections.take(r, generation); // a fresh answer: current again after idleness (LLP 1161.001)
-  };
-  const land = t => reply(t, name, source, () => r.ticket === t, ...data.uploads.ends(r, t, (p, o) => { // an upload keeps how it ended (uploads.js)
-    if (t.call?.seen?.read || p.store) r.store = t.read = true;
-    if (p.req) {
-      const req = { ...p.req, forced: t.forced };
-      if (o.more) {
-        const n = { id: ++Ticket, name, owner: r, args: t.args, forced: t.forced, req, r, origin: t.origin, generation: t.generation };
-        r.ticket = n;
-        send(n, land(n));
-      } else {
-        t.req = req; t.id = ++Ticket;
-        send(t, land(t));
-      }
-      return;
+  save() {
+    return [new Map(this.map), this.writes.length];
+  },
+  restore([m, n]) {
+    this.map = m;
+    this.writes.length = n;
+    this.dirty = false;
+  },
+  persist() {
+    const p = Kept('secret'),
+      jobs = [];
+    for (const [k, v] of this.writes.splice(0)) this.pending.set(k, { v, warned: false });
+    for (const [k, entry] of this.pending) {
+      const live = () => this.pending.get(k) === entry,
+        failed = e => {
+          if (!live()) return;
+          if (!Object.hasOwn(entry, 'before')) this.pending.delete(k);
+          if (!entry.warned) {
+            entry.warned = true;
+            say(`store ${k} failed: ${e}`);
+          }
+        },
+        write = () => {
+          try {
+            const before = localStorage.getItem(p + k);
+            if (Object.hasOwn(entry, 'before') && entry.before !== before) {
+              this.pending.delete(k);
+              return;
+            }
+            entry.before = before;
+            entry.v == null ? localStorage.removeItem(p + k) : localStorage.setItem(p + k, entry.v);
+            this.pending.delete(k);
+          } catch (e) {
+            failed(e);
+          }
+        };
+      if (Object.hasOwn(entry, 'before') && !this.leased?.has(k)) {
+        entry.retry ??= import('./storage-environment.js')
+          .then(m => m.retrySecretWrite(p + k, live, write))
+          .catch(failed)
+          .finally(() => {
+            delete entry.retry;
+          });
+        jobs.push(entry.retry);
+      } else write();
     }
-    if (t.baked) say(revalidated(name, eq(p.v, r.value))); t.baked = false; take(p.v, t.args, t.origin, t.generation); r.failed = null; r.error = r.code = r.reason = undefined; if (!o.more) r.ticket = null; again(t);
-    W(pend, !!(o.more && t.upload)); W(fail, null); W(ver, ver.n.v + 1); // an upload is pending until its reply
-  }, "it keeps its last value", (error, code, reason) => { if (t.call?.seen?.read || t.read || data.threwRead?.()) r.store = true; r.ticket = null; r.failed = t.args; r.error = error; r.code = code; r.reason = reason; write(pend.n, false); write(fail.n, failure()); Inspections.fail(r); }));
-  const m = memo(() => { const shown = Ov.shown(r, (() => {
-    ver(); if (args.gate && !args.gate()) return asleep(); if (r.asleep) { r.asleep = false; r.forced = true; } // `when` (LLP 1161.002): closed, nothing is asked; waking asks again, forced
-    const a = r.asked = args(); if (Restoring) return flag(fail, failure()), r.value; // `asked`: the overlay's arguments while a placeholder stands; a refused commit put `failed` back, and `fail` follows it there too
-    const forced = r.forced, waited = r.launch, rev = r.rev, reconciling = r.reconciling, mk = finiteArguments(a) ? data.uploads.at(r, a) : null; // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
-    r.forced = r.rev = r.reconciling = false; if (forced) r.launch = undefined; // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile
-    // A failure keeps the value for its arguments, including NaN; `refresh` or new ones ask again (settlement.rs), but not an upload's. `fail` follows.
-    if (r.failed && (forced && !mk?.failed || !unchangedArguments(a, r.failed))) { r.failed = null; r.error = r.code = r.reason = undefined; }
-    flag(fail, failure());
-    if (r.failed) return r.value;
+    return Promise.all(jobs);
+  },
+  load() {
+    if (globalThis.__exactRender) return;
+    const p = Kept('secret');
     try {
-      checkArguments(name, a);
-    } catch (e) {
-      if (!reconciling) throw e;
-      return fails(a, e.message, failureCode(e), failureReason(e));
-    }
-    if (mk) return data.uploads.answer(r, mk, a, { take, fails, release }); // an upload answers as it ended, or goes on
-    const baked = r.baked; r.baked = false;
-    if (!forced && !rev) {
-      // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
-      // `equal`: `-0` is `0`, NaN asks again; a bake is asked once anyway (LLP 1048.003 D6).
-      if (!r.ticket && r.settled !== undefined && equal(a, r.settled) && !baked) return r.value;
-      if (r.ticket && equal(a, r.ticket.args)) return r.value;
-    }
-    let ans; Inspections.begin(r);
-    const refresh = forced && waited !== true; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1; `Runner::launch` in the runner)
-    try { ans = ask(source, a, name, false, refresh); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
-    catch (e) {
-      if (data.threwRead?.()) r.store = true; for (const t of data.threwWatches?.() ?? []) (r.watches ??= new Set()).add(t); // a failed ask watched what it read, the shown answer's topics kept
-      if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
-      if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
-      if (globalThis.__exactRender) hold();
-      return fails(a, String(e?.message ?? e), failureCode(e), failureReason(e)); // its newest ask failed: an older one in flight is let go
-    }
-    if (ans && ans.store) r.store = true; r.watches = ans?.watches; // a fresh answer's topics replace the last's (LLP 1016.002 D2), a later turn's joining them
-    if (ans && "v" in ans) {
-      if (baked) say(revalidated(name, eq(ans.v, r.value)));
-      try { take(ans.v, a, Ov.tick()); }
-      catch (e) { if (!reconciling) throw e; return fails(a, String(e?.message ?? e), "shape"); }
-      if (r.ticket) { say(`forget ticket ${r.ticket.id} (${name})`); r.ticket = null; }
-      if (!r.ticket) flag(pend, false);
-      return r.value;
-    }
-    if (ans && !forced && !rev && r.ticket && !equal(a, r.ticket.args) && (ans.req && r.ticket.req && sameReq(ans.req, r.ticket.req) || ans.upload && ans.upload === r.ticket.upload)) { // a Rust request, or an upload (LLP 1016.000 D10)
-      say(`keep request ${r.ticket.id} (${name}): the same request for newer arguments`);
-      r.ticket.args = a; r.ticket.generation = r.inspection?.request;
-      return data.uploads.kept(r, a); // what it shows meanwhile; an upload's mark covers these arguments too
-    }
-    if (ans && (ans.req || ans.promise || ans.stream)) {
-      hold();
-      const t = { id: ++Ticket, name, owner: r, args: a, forced: refresh, req: ans.req && { ...ans.req, forced: refresh }, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
-      if (r.ticket) say(`forget ticket ${r.ticket.id} (${name})`);
-      r.ticket = t; flag(pend, true); send(t, land(t));
-      return r.value;
-    }
-    // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at data_ready (review B3); another compiled
-    // value stands, stale, forced then (LLP 1027 D4). That ask's refusal fails it, not the commit; a commit refused otherwise is followed by one failing it.
-    const shown = baked && eq(a, r.settled);
-    r.launch = !forced && waited !== false;
-    if (!shown) { hold(); flag(pend, true); }
-    if (!r.waiting) { r.waiting = true; data.ready(() => { r.waiting = false; r.forced = r.reconciling = true; r.baked ||= shown; recommit(() => { r.ov = null; W(ver, ver.n.v + 1); W(pend, false); }, `data ready ${name}`); }); }
-    return r.value;
-  })(), r.settled ?? r.asked, r.origin); flag(cur, !r.placeholder && !r.slept && r.settled !== undefined && r.asked !== undefined && equal(id(r.settled), id(r.asked))); return shown; }, type);
-  Object.assign(r, {
-    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept, r.watches, r.launch],
-    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; r.watches = x[22]; r.launch = x[23]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
-    force: undo => { r.forced = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
-    touch: undo => flag(ver, ver.n.v + 1, undo), // its writes changed: what it shows is laid over again
-    reconcile: undo => { r.forced = r.reconciling = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
-    revise: undo => { r.rev = true; flag(ver, ver.n.v + 1, undo); }, giveUp: why => { r.baked = r.forced = r.reconciling = r.launch = false; fails(r.asked ?? [], why, "error"); }, // owed by a refused commit (`commit`)
-  });
-  onEnd(() => { r.gone = true; }); // its region ended: an open stream closes (`Open`)
-  Resources.push(r);
-  m.p = () => (m(), pend()); m.c = () => (m(), cur()); m.f = () => (m(), fail() != null); m.e = () => { m(); const f = fail(); return f ? [f[3] || f[1], f[2], f[3]] : null; }; // `failure(x)`: `none`, or the `Failure` record `[code, message, reason]`
-  m.n.resource = r; m.r = r;
-  return m;
-}
-/** A mutation (LLP 1016): its slot, resources, and newest-winning ticket — or (`mode` 1), a `queue` (LLP 1092), one ticket and the sends waiting their turn (`wait`, schedule.js), each asked at its `next`;
- * or (`mode` 2), `parallel` (LLP 1161.000), a ticket per send in flight (`tickets`), numbered in send order (`send`), the slot and failure following the latest to conclude (`concluded`, runner parallel.rs). */
-export const Mutations = []; const BOUND = 64; // the runner's QUEUE_BOUND: a parallel mutation's 65th send in flight refuses its action
-export function mut(name, slot, refreshes, type, mode) {
-  const pend = sig(false), fail = sig(null);
-  const m = { name, requests: 0, ticket: null, then: null, due: Infinity, next: Infinity, queue: mode === 1, parallel: mode === 2, tickets: [], sends: 0, concluded: 0, pend, refreshes: refreshes.map(x => x.r) };
-  const keeps = () => !!(m.wait || m.parallel), out = t => { m.tickets = m.tickets.filter(x => x !== t); return m.tickets.length > 0 || !!m.wait?.length; }; // an assignment or a newer send forgets nothing (LLP 1092 D4, LLP 1161.000 D4); `out`: `t` is no longer in flight, whether `m` is still pending
-  const concludes = t => { if (!m.parallel) return true; if (m.concluded > t.send) return false; m.concluded = t.send; return true; }; // a send's reply landed or it failed without one: whether its outcome reaches the slot and the failure, as no later send has concluded (D4)
-  const shown = (re, undo) => { for (const r of m.refreshes) r.touch(undo); for (const r of re ?? []) r.reconcile(undo); }; // a write began or ended (overlay.js)
-  Mutations.push(m);
-  slot.n.m = m;
-  // An answer now lands before the action's own writes, as the runner's do: an assignment in the same action wins.
-  const landWrite = (v, undo) => { if (!Writes.some(w => w[0] === slot.n)) { slot.n.landing = 1; try { undo.push([slot.n, slot.n.v]); write(slot.n, v); } finally { slot.n.landing = 0; } } Landed.push(m); };
-  // A reply the source cannot take ends it unsent: its slot as it was, its `then` unarmed (`reply`).
-  const land = t => reply(t, name, t.source, () => m.parallel ? m.tickets.includes(t) : m.ticket === t, (p, o) => {
-    if (p.req) { if (o.more) { const n = { id: ++Ticket, source: t.source, args: t.args, req: p.req, write: t.write, send: t.send }; if (m.parallel) m.tickets = [...m.tickets.filter(x => x !== t), n]; else m.ticket = n; send(n, land(n)); } else { t.req = p.req; send(t, land(t)); } return; }
-    if (type && !conforms(p.v, type, [0], m.checked)) throw new Failed(`${name}: the answer does not conform to its shape`, "shape");
-    m.checked = p.v; if (m.parallel) { if (!o.more) W(pend, out(t)); } else { if (!o.more) m.ticket = null; W(pend, !!m.wait?.length); }
-    Ov.land(m, p.v, t.write);
-    if (concludes(t)) { W(fail, null); slot.n.landing = 1; W(slot, p.v); } Landed.push(m); // a reply concluding after a later send's leaves the slot (LLP 1161.000 D4)
-    for (const r of refreshes) R(r.r);
-    queueMicrotask(() => { slot.n.landing = 0; });
-  }, "it ends unsent", (error, code, reason) => { if (concludes(t)) write(fail.n, [reason || code || "error", error, reason || ""]); if (m.parallel) write(pend.n, out(t)); else { m.ticket = null; write(pend.n, !!m.wait?.length); } m.ended(t.write); });
-  Object.assign(m, {
-    // A queue's or a parallel mutation's assignment forgets nothing (LLP 1092 D4, LLP 1161.000 D4).
-    forget(undo) { undo?.push([fail.n, fail.n.v]); write(fail.n, null); if (m.ticket && !keeps()) { say(`forget ticket ${m.ticket.id} (${name})`); m.ticket = null; undo.push([pend.n, pend.n.v]); write(pend.n, false); } if (!keeps()) shown(Ov.endPending(m), undo); },
-    ended(write) { const re = Ov.end(m, write); if (re) shown(re); return !!re; }, // its send in flight ended without landing: whether a write showed (the caller's commit publishes it)
-    send(source, args, undo, own) {
-      if (m.parallel && m.tickets.length >= BOUND) throw new Refusal(`QueueFull { mutation: ${JSON.stringify(name)} }`); const at = m.parallel ? ++m.sends : 0; // the 65th in flight refuses (LLP 1161.000 D2); `at`, its place in send order
-      if (!own) shown(Ov.accept(m, source, args), undo); // its write shows from here (a queue's next was accepted as it began to wait)
-      // A queue's send waits unless the mutation is free; `own` is a `next`'s, whose ask refusing drops it (LLP 1092 D3).
-      if (m.wait && !own && Sched.hold(m, source, args, undo)) return;
-      undo.push([fail.n, fail.n.v]); write(fail.n, null);
-      let a;
-      try {
-        a = ask(source, args, name, m);
-        if (!a || !("v" in a || a.req || a.promise || a.stream)) throw new Refusal(`${name}: its source is not ready`);
-        if ("v" in a && type && !conforms(a.v, type, [0], m.checked)) throw new Refusal(`${name}: the answer does not conform to its shape`);
-      } catch (e) {
-        if (e instanceof Refusal || e?.refuse || e?.kind === "UnknownSource") { if (own) Sched.own = e; throw e; }
-        m.forget(undo); m.ended(Ov.asked(m)); undo.push([pend.n, pend.n.v]); write(pend.n, m.tickets.length > 0 || !!m.wait?.length); concludes({ send: at });
-        const reason = failureReason(e); undo.push([fail.n, fail.n.v]); write(fail.n, [reason || failureCode(e), String(e?.message ?? e), reason]);
-        say(`send ${name} failed: ${e?.message ?? e}; it ends unsent`); return;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k.startsWith(p)) this.map.set(k.slice(p.length), localStorage.getItem(k));
       }
-      Out.push(...(a.effects ?? []));
-      if ("v" in a) {
-        m.checked = a.v;
-        Ov.land(m, a.v);
-        m.forget(undo); // answered at once, it replaces one still in flight (newest wins): the older reply is not wanted
-        concludes({ send: at }); landWrite(a.v, undo);
-        if (m.wait && pend.n.v !== !!m.wait.length) { undo.push([pend.n, pend.n.v]); write(pend.n, !!m.wait.length); } // a queue: pending while one waits
-      } else {
-        const t = { id: ++Ticket, name: m.name, owner: m, source, args, req: a.req, promise: a.promise, call: a.call, stream: a.stream, write: Ov.asked(m), send: at };
-        if (t.call) t.call.ticket = t; if (m.parallel) m.tickets = [...m.tickets, t]; else m.ticket = t; undo.push([pend.n, pend.n.v]); write(pend.n, true); send(t, land(t));
-      }
-      if ("v" in a) for (const r of refreshes) R(r.r); // answered at once, it has landed: what it changes is forced (commit.rs `landed_now`)
-    },
-  });
-  m.p = () => pend(); m.f = () => fail() != null; m.e = () => fail();
-  return m;
-}
-export function M(m, source, args, own) { Sends.push([m, source, args, own]); }
-const SVG = "http://www.w3.org/2000/svg";
-/** An element under `p`: its static class, attributes and text. */
-export function h(p, tag, cls, attrs, text, ns) {
-  if (attrs?.["aria-keyshortcuts"] != null || attrs?.["data-exact-looks"] != null) input(); // (a look snaps by its edges too, LLP 1121 D8)
-  if (Adopt) { const e = adopt(p, tag, cls, attrs); if (tag === "video" || tag === "audio") Media.media(e, attrs); if (tag === "iframe") frame(e, attrs?.["data-app-src"]); if (tag === "button") oneActivation(e); return e; }
-  const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag), owner = listOwner(p); e.$exactTree = true; e.authoredInert = attrs?.inert !== undefined;
-  if (cls !== 0) e.setAttribute("class", "c" + cls); // `bits`, below: the paint facts the compiler wrote, kept as paint.js `facts` reads them rather than read back from the attribute names; a bound fact's `P` clears them (LLP 1071.001 A6)
-  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if (tag === "a") Links?.made(e, attrs); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
-  if (text !== 0) e.textContent = text;
-  if (tag === "iframe") frame(e, attrs?.["data-app-src"]);
-  if (tag === "button") oneActivation(e);
-  p.append(owner ? listItem(e, owner) : e);
-  if (tag === "video" || tag === "audio") Media.media(e, attrs); // an `audio` is the same media host (LLP 1042 §8)
-  Paint?.list(e); return e;
-}
-/** An SVG element (the compiler knows the node's type; element.rs's tag). */
-export const hs = (p, tag, cls, attrs, text) => h(p, tag, cls, attrs, text, SVG);
-/** A canvas: the host's surface element under its children (`glue.js`). Adopted, its inline alignment goes, as a spinner's: its class follows the live parent. */
-export function cv(e) {
-  if (Adopt) { e.style.removeProperty("justify-self"); const s = at(e); if (s?.dataset?.surface !== undefined) { e.$n = s.nextSibling; return; } }
-  const s = document.createElement("canvas");
-  s.dataset.surface = "";
-  s.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1";
-  if (Adopt) e.insertBefore(s, at(e)); else e.append(s);
-}
-// Adopt with a cursor per parent: match tags, restore classes and region anchors, and drop renderer view ids.
-// A mismatch abandons adoption and builds afresh (LLP 1048.000 D6).
-let Adopt = false, AdoptedLists = new Set(); // the parents whose rows a keyed list adopted: one holding rows past the list's (a page built ahead, opened at a query it was not built at) is no projection of this plan either (`mount`)
-class Mismatch extends Refusal {}
-// The next node to adopt under `p`; insertions go before it and never move it.
-const at = p => (p.$n === undefined ? (p.$n = p.firstChild) : p.$n);
-function adopt(p, tag, cls, attrs) {
-  let e = at(p);
-  while (e && e.nodeType !== 1) e = e.nextSibling;
-  const shell = e; if (e?.hasAttribute("data-exact-list-item")) e = listRow(e);
-  if (!e || e.localName.toLowerCase() !== tag.toLowerCase()) throw new Mismatch(`adoption: expected <${tag}>, found ${e ? "<" + e.localName + ">" : "nothing"}`);
-  p.$n = shell.nextSibling; e.$exactTree = true; e.authoredInert = attrs?.inert !== undefined;
-  e.$paintWaiting = false; e.$paintFacts = null; e.removeAttribute("data-exact-paint");
-  // Inline rows stay, except spinner alignment: its class follows the live parent.
-  if (attrs?.["data-exact-progress"] !== undefined) e.style.removeProperty("justify-self");
-  if (e.hasAttribute("data-view")) e.removeAttribute("data-view");
-  if (attrs?.["data-exact-own-isolation"] === undefined && !e.hasAttribute("data-exact-own-isolation") && !e.hasAttribute("data-exact-policy") && e.style.isolation) e.style.removeProperty("isolation");
-  if (cls !== 0 && e.getAttribute("class") !== "c" + cls) e.setAttribute("class", "c" + cls);
-  if (attrs) { const rendered = Links && tag === "a" ? e.getAttribute("rel") : null; for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if (tag === "a") Links?.made(e, attrs, rendered); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
-  Paint?.list(e); return e;
-}
-function mark(p) { const c = document.createComment(""); p.insertBefore(c, at(p)); return c; }
-/** Build fresh inside an adopted page (a virtualized list's rows). */
-export function unadopted(f) { const a = Adopt; Adopt = false; try { return f(); } finally { Adopt = a; } }
-/** Whether construction is adopting a rendered page. */
-export const adopting = () => Adopt;
-/** Adopt a rendered row under `w` (a virtualized list's, LLP 1048.001):
- * one that isn't this plan's projection is built afresh, alone. */
-export function adoptRow(w, f) {
-  const a = Adopt; Adopt = true;
-  try { return f(); } catch (e) { if (!(e instanceof Mismatch)) throw e; say(`list: a row built afresh: ${e.message}`); } finally { Adopt = a; }
-  w.textContent = ""; w.$n = undefined;
-  return unadopted(f);
-}
-const BOOL = /^(disabled|readonly|inert|checked|multiple|autoplay|controls|loop|muted|playsinline|disablepictureinpicture|disableremoteplayback|autofocus)$/, NOT_DOM = /^(partition|appleAllowsBackForwardNavigationGestures|appleAllowsMagnification|appleInactiveSchedulingPolicy)$/i; // NOT_DOM: an iframe's partition and Apple words, kept on the element, never DOM attributes (a browser has neither, LLP 1020.002 Q4) // present means true: a bound `autofocus` false is no attribute (rows.rs writes the static one so)
-/** A loaded piece's own handling of a prop (symbols.js's `src`): true when handled. */
-export const PropHooks = {};
-if (typeof addEventListener === "function") for (const [type, on] of [["compositionstart", true], ["compositionend", false]]) addEventListener(type, ev => { ev.target.exactComposing = on; }, true); /* which field composes, for a piece loaded later (LLP 1114.007) */ const Composing = new WeakSet(), Held = new WeakMap(), HeldTask = new WeakMap(); function writeValue(e, v) {
-  // An option's getter may equal its label without carrying an explicit value.
-  if (e.localName === "option") {
-    if (e.getAttribute("value") !== v) e.value = v;
-    return;
-  }
-  if (!HeldTask.has(e) && (e.localName === "input" || e.localName === "textarea")) { HeldTask.set(e, 0); e.addEventListener("compositionstart", () => { clearTimeout(HeldTask.get(e)); Composing.add(e); }); e.addEventListener("compositionend", () => { HeldTask.set(e, setTimeout(() => { Composing.delete(e); if (Held.has(e)) writeValue(e, Held.get(e)); e.exactDecorations?.sync(); }, 0)); }); } if (e.value !== v && Composing.has(e)) return Held.set(e, v); Held.delete(e); if (e.value !== v) e.value = v; } // the app's `value` never ends a composition (LLP 1115.000 §5, ruling 6; the wasm host's `writeValue`, glue.js): another value written while a field's text composes is held, the last one, and written when the composition has ended and its last `input` was heard.
-/** A dynamic prop, by the DOM name the live host uses (`applyProps`). */
-const navigable = (v, e) => { try { const p = new URL(v, document.baseURI).protocol; return ["http:", "https:", "mailto:", "tel:"].includes(p) || p === "data:" && e?.localName === "iframe" && opaque(e); } catch { return false; } }, opaque = e => e.hasAttribute("sandbox") && !e.getAttribute("sandbox").toLowerCase().split(/[\t\n\f\r ]+/).includes("allow-same-origin"); // a frame also shows a `data:` document in an opaque sandbox (navigation.js `frameURL`)
-function frame(e, v) {
-  commitGuestOrigin(e);
-  const app = !!v?.startsWith("app:/") || pageGivenFiles(v ?? ""); /* an app file, or a page of the app's origin whose query may name one (LLP 1020.001 D7; picker-glue.js decides) */ if (app) e.setAttribute("data-app-src", v); else e.removeAttribute("data-app-src"); if (globalThis.__exactRender) return app;
-  if (!e.$frame) { e.$frame = true; e.addEventListener("load", ev => { if (e.exactAppFrame && !e.exactAppFrame.url) ev.stopImmediatePropagation(); else e.exactLoaded = e.getAttribute("src"); /* the src that loaded, for the agent's tree, which loads after boot and cannot read another origin's readiness */ }, true); onEnd(() => e.exactAppFrame?.dispose()); }
-  if (e.exactAppFrame?.path === v) return true; e.exactAppFrame?.dispose(); e.exactAppFrame = null; if (!app) return false;
-  const s = e.exactAppFrame = { path: v, live: true, url: null, dispose() { this.live = false; if (this.url) URL.revokeObjectURL(this.url); } }; e.removeAttribute("src"); inflight.n++;
-  globalThis.exact ??= {}; import(new URL("./picker-glue.js", import.meta.url).href).then(m => m.appFrame(e, s, data.appId, () => commitGuestOrigin(e), u => e.setAttribute("src", navigable(u, e) ? u : "about:blank"))).finally(() => inflight.n--); return true;
-}
-export function P(e, name, f) {
-  if (name === "aria-keyshortcuts") input();
-  if (name === "data-scrolldocument") Docs.add(e);
-  effect(() => {
-    let v = f();
-    v = rel(name, v == null ? null : typeof v === "boolean" ? String(v) : String(v)); const sandboxChanged = name === "sandbox" && e.localName === "iframe" && e.getAttribute(name) !== v;
-    if (name === "tabindex") e.exactAuthoredTabIndex = v;
-    // A URL that navigates is written only if the web host's policy takes it (navigation.js `navigableURL`,
-    // `frameURL`): a refused link loses its `href`, an iframe shows about:blank and keeps its source for its sandbox to decide.
-    if (name === "src" && e.localName === "iframe") { e.$src = v; if (frame(e, v)) return; if (v != null && !navigable(v, e)) v = "about:blank"; } else if (name === "href" && v != null && (!navigable(v) || v === "")) v = null;
-    if (name === "backgroundMaterial" && v === "none") v = null; // no material, cleared as the runner clears it (bridge.rs `prop_value`)
-    if (PropHooks[name]?.(e, v)) return; if (NOT_DOM.test(name)) return void (e["$" + name] = v);
-    if (e.$media && Media.mediaProp(e, name, v)) return; // media.js: `paused`, `volume`, `currentTime` … are the glue's; an `app:/` source its own
-    if (name === "text") { e.$unset = v == null; if (!e.childElementCount && e.textContent !== (v ?? "")) e.textContent = v ?? ""; } // `$unset`: no text, as the runner's cleared row, not an empty one (difftest's drive.mjs)
-    else if (name === "value") { if (e.localName === "select") { Selects.add(e); e.$value = v ?? ""; e.$set = true; } if (v == null && e.localName === "option") e.removeAttribute("value"); else writeValue(e, v ?? ""); e.exactDecorations?.sync(); } // a cleared option's value is its label again
-    else if (name === "scrollTop" || name === "scrollLeft") { if (v != null) (Scrolls.get(e) ?? Scrolls.set(e, {}).get(e))[name] = Number(v); }
-    else if (BOOL.test(name)) { if (name === "inert") e.authoredInert = v === "true"; e.toggleAttribute(name, v === "true"); if (name === "disabled" && v === "true" && document.activeElement === e && e.matches(":disabled")) e.blur(); /* HTML focus fixup, now, for a control only (glue.js) */ if (name === "checked") e.checked = e.$checked = v === "true"; if (name === "muted") e.muted = v === "true"; if (name === "autofocus") { if (v === "true") e.removeAttribute("data-autofocus"); else e.setAttribute("data-autofocus", "false"); } }
-    else if (v == null) { if (e.hasAttribute(name) || suppressedInvocation(e, name)) { e.removeAttribute(name); if (name.startsWith("data-exact-")) Paint?.facts(e); } }
-    else if (e.getAttribute(name) !== v) { e.setAttribute(name, v); if (name.startsWith("data-exact-")) Paint?.facts(e); }
-    if (name === "role") syncListItemRoles(e); else if (name === "popover" && e.parentElement?.hasAttribute("data-exact-list-item")) listItem(e);
-    if (e.localName === "a" && (name === "rel" || name === "target" || name === "href")) Links?.prop(e, name, v);
-    if (name === "sandbox" && e.localName === "iframe" && !e.exactAppFrame) { const source = e.$src ?? e.getAttribute("src"); if (source != null) { const s = navigable(source, e) ? source : "about:blank"; if (sandboxChanged || e.getAttribute("src") !== s) e.setAttribute("src", s); } } // a new sandbox takes effect on navigation, even to the same source; a literal source stays in src, a refused `data:` source in $src
-    if ((name === 'src' || name === 'sandbox') && e.localName === 'iframe') commitGuestOrigin(e);
-  });
-}
-/** A reader uses built pieces; new text loads the parser on demand. */
-export function md(e, f, prepared) { markdownText(e, f, prepared, { effect, inflight, adopting, renderMarkup }); }
-/** Views by id, one id space for the agent and the GPU module (the web
- * host's `exact.views`): an element gets an id when either first asks. */
-export const Views = new Map();
-const Ids = new WeakMap();
-let NextView = 1;
-const forgetView = e => { const i = Ids.get(e); if (!e.isConnected && Views.get(i) === e) Views.delete(i); };
-let ViewObserver = null;
-export function viewId(e) { let i = Ids.get(e); if (!i) { i = NextView++; Ids.set(e, i); } if (!Views.has(i)) onEnd(() => queueMicrotask(() => forgetView(e))); Views.set(i, e); watchViews(); return i; }
-function watchViews() { if (ViewObserver || typeof MutationObserver !== "function") return; ViewObserver = new MutationObserver(records => { for (const r of records) for (const e of r.removedNodes) { forgetView(e); for (const child of e.querySelectorAll?.("*") ?? []) forgetView(child); } }); ViewObserver.observe(document.documentElement, { childList: true, subtree: true }); }
-/** A canvas's surface (LLP 1009 D2): its inputs, evaluated as the runner
- * evaluates them (records as arrays), to the app's GPU module — the web
- * host's own `gpu-glue.js` over `gpu.js`, fetched after the first painted
- * frame, only when a canvas is on the page (a loaded capability). */
-let Gpu = null;
-export function gs(e, name, values) {
-  const id = viewId(e); e.exactSurfaceName = name;
-  onEnd(() => { try { globalThis.exact?.gpu?.destroy(id); } catch (err) { say(`gpu: ${err.message}`); } });
-  effect(() => {
-    const v = values();
-    const x = globalThis.exact ??= {};
-    // Published after the commit applied, as the runner publishes surface
-    // inputs: the canvas is in the document by then.
-    if (x.gpu) return queueMicrotask(() => { try { e.isConnected && x.gpu.surface(id, name, v); } catch (err) { say(`gpu: ${err.message}`); } });
-    const pending = x.pendingSurfaces ??= [], queued = pending.find(p => p.id === id);
-    if (queued) queued.values = v; else pending.push({ id, name, values: v, generation: 0 });
-    if (!Gpu && typeof requestAnimationFrame === "function" && !globalThis.__exactRender) {
-      x.views = Views; x.generation = 0; x.devAssets = null; x.root = document.getElementById("exact-root"); x.assetURL = v => rel("src", v); // a release's asset path, as the wasm glue's `localAssetURL` (LLP 1098 D6)
-      // The GPU glue's name NUL JSON wire reaches the reserved readers in facts.js.
-      let written = "";
-      x.writeIn ??= t => { written = t; return 0; };
-      (x.wasm ??= {}).exact_surface_record ??= () => { const at = written.indexOf("\0"); x.surfaceRecord?.(at < 0 ? written : written.slice(0, at), at < 0 ? null : written.slice(at + 1)); return 0; };
-      x.wasm.exact_canvas_performance_requested ??= () => x.canvasPerformanceRequested?.(written) ? 1 : 0;
-      x.wasm.exact_canvas_performance_record ??= () => { const at = written.indexOf("\0"); x.canvasPerformanceRecord?.(at < 0 ? written : written.slice(0, at), at < 0 ? null : written.slice(at + 1)); return 0; };
-      x.send ??= () => {};
-      // A surface's `message` to its canvas's `message=` handler (gpu-glue.js `messages`), as the wasm glue's `message` dispatches it.
-      x.message ??= (el, text) => el?.dispatchEvent(new CustomEvent("exact-native", { detail: { kind: "message", value: text } }));
-      if (clock.agent) x.now = () => clock.now;
-      inflight.n++;
-      Gpu = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import(new URL("gpu-glue.js", document.baseURI).href)).then(() => x.gpu?.settled?.()).catch(err => say(`gpu: ${err.message}`)).finally(() => inflight.n--);
-    }
-  });
-}
-/** A Canvas 2D surface (LLP 1056): its arguments, drawn by the data
- * module and replayed by the web host's own glue, both in `canvas2d.js`,
- * fetched two frames after the first 2D canvas mounts (a loaded
- * capability); `types` are the arguments' declared types where known. */
-let Canvas2d = null;
-export function c2(e, name, values, types, names) {
-  const c = { e, name, types, names, mounted: clock.now, args: null };
-  onEnd(() => Canvas2d?.then(m => m?.gone(c)));
-  effect(() => {
-    c.args = values();
-    if (typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-    if (!Canvas2d) {
-      inflight.n++;
-      Canvas2d = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import("./canvas2d.js"))
-        .then(m => m.engine({ data, clock, inflight, journal, advance, After, views: Views, viewId, wall: Link.wall }))
-        .catch(err => say(`canvas2d: ${err.message}`)).finally(() => inflight.n--);
-    }
-    // After the commit applied, as the runner publishes surface inputs, and before the canvas module's restyle (`After`).
-    Canvas2d.then(m => m?.args(c));
-  });
-}
-/** When native code may load (LLP 1024 D7): after the browser's first paint entry, or two frames and 250 ms where it records none (glue.js `afterNativePaint`). */
-let Painted = null, Native = null;
-export const painted = () => Painted ??= new Promise(r => { let o; const done = () => { o?.disconnect(); r(); }; try { o = new PerformanceObserver(() => requestAnimationFrame(done)); o.observe({ type: "paint", buffered: true }); } catch {} requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 250))); });
-/** A context menu's popover (LLP 1021 §5.1): after the node's own `contextmenu` (both fire), the popover its `contextpopover` names opens anchored to it,
- * the browser's own menu prevented and no ancestor hearing the event (macOS consumes the click too); a text field's edit menu stays the browser's (navigation.js `editMenu`), and a disabled or inert node opens nothing. */
-export function cp(e) {
-  e.addEventListener("contextmenu", ev => { if (ev.$cp || !e.getAttribute("contextpopover") || editMenu(ev.target) || e.matches(":disabled") || inertAncestor(e)) return; ev.$cp = 1; ev.preventDefault(); ev.stopPropagation(); contextAt(ev, () => { if (!e.isConnected || e.matches(":disabled") || inertAncestor(e)) return; const p = liveById(e.getAttribute("contextpopover") ?? ""); if (p && !p.matches(":popover-open")) return [p, e]; }); });
-}
-/** A native module's element (LLP 1024 D3): the real custom element, empty until the web host's adapter (`native.js`)
- * and the app's module artifact load (`painted`); the module renders into it, its events reaching the handlers as `exact-native` events (`on`). */
-export function nm(e) {
-  if (typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-  const id = viewId(e), st = e.exactNative = { id, name: e.localName, state: "loading", status() { return { name: this.name, state: this.state, ...(this.error ? { error: this.error } : {}) }; } };
-  onEnd(() => { st.destroyed = true; Native?.then(h => h.destroy(e), () => {}); });
-  // In flight until the module is attached and its first events are in (`clock settle` waits for them).
-  inflight.n++;
-  (Native ??= painted().then(() => import("./native.js")).then(m => m.viewHost(say, () => data.appId)))
-    .then(h => h.attach(e), err => { st.state = "unavailable"; st.error = String(err?.message ?? err); say(`native ${st.name} #${id}: unavailable: ${st.error}`); })
-    .finally(() => setTimeout(() => inflight.n--));
-}
-export const mapped = (v, map, clear) => typeof v === "string" && !v.trim() ? clear === undefined ? map(null) : clear : map(v);
-export function S(e, prop, unit, f) {
-  Probes?.bind(e, prop, unit, f);
-  let rendered = Adopt;
-  effect(() => { css(e, prop, unit, f(), rendered); rendered = false; });
-}
-let Scratch = null;
-const Normal = new Map(), same = v => v.replace(/\btransparent\b/g, "rgba(0, 0, 0, 0)");
-export function normal(prop, t) {
-  const k = prop + "\0" + t;
-  let v = Normal.get(k);
-  if (v === undefined) { const s = Scratch ??= document.createElement("i").style; s.removeProperty(prop); s.setProperty(prop, t); Normal.set(k, v = same(s.getPropertyValue(prop))); if (Normal.size > 4096) Normal.clear(); }
-  return v;
-}
-export { gridValue } from "./grid.js"; export { Pc } from "./lower.js";
-// A row's CSS text: authored blanks explicitly clear (LLP 1115.000 D2); internal custom properties may carry an empty token (text-style presence); `auto` on a maximum is CSS's unbounded `none` (LLP 1102 §3.11); a bound `-exact-hairline` is the sheet's one device pixel, as css.rs writes a literal one (LLP 1115.000 D10.3); a layout region is its safe area (LLP 1123 D10).
-import { regions } from "./regions.js"; import "./said.js"; export const cssText = (prop, unit, v) => { const t = v == null ? null : typeof v === "number" ? v + unit : !String(v).trim() && !prop.startsWith("--") ? "unset" : /^\s*-exact-hairline\s*$/i.test(v) ? "var(--exact-hairline, 1px)" : regions(String(v)); return t === "auto" && (prop === "max-width" || prop === "max-height") ? "none" : t; };
-export function css(e, prop, unit, v, rendered) {
-  // The value this binding last wrote: the same again writes nothing (a write restyles and repaints the node, for every dynamic row a list update touched).
-  const last = e.$css ??= {}, t = cssText(prop, unit, v);
-  if (last[prop] === t) return;
-  last[prop] = t; // The `animation` shorthand resets the longhands a timeline's consumer writes again after it (LLP 1057.003 D5).
-  if (prop === "animation") for (const p of ["animation-timeline", "animation-range", "animation-play-state"]) delete last[p];
-  // An adopted node's inline style is the renderer's: a value it already shows is not written again (a write
-  // restyles and repaints the node). (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
-  if (rendered) {
-    const now = e.style.getPropertyValue(prop);
-    if (t == null ? !now : same(now) === (normal(prop, t) || "unset")) return;
-  }
-  if (t == null) return e.style.removeProperty(prop);
-  // A value the browser took before (`Normal`, read back after its first write) is written once; one it refused falls to `unset` at once. Only a value not yet seen pays the remove before the write that lets the read-back tell a refusal from an earlier value (LLP 1071.001 A8). Every property takes `unset`: one that reads back empty is a property this browser does not have (Chrome's `-moz-osx-font-smoothing`), not a refusal.
-  const k = prop + "\0" + t, known = prop.startsWith("--") || t === "unset" || Normal.get(k);
-  if (known) return e.style.setProperty(prop, t);
-  if (known === undefined) { e.style.removeProperty(prop); e.style.setProperty(prop, t); const got = same(e.style.getPropertyValue(prop)); Normal.set(k, got); if (Normal.size > 4096) Normal.clear(); if (got) return; }
-  e.style.setProperty(prop, "unset"); say(`unset ${prop}: ${JSON.stringify(v)} is not a value it takes`);
-}
-/** `S` for a row that can reference an element (`url(#…)`): an authored id
- * names the node the kernel's `resolve_id` would, the nearest in the tree
- * (the deepest common ancestor's first, LLP 1055.000 D3), by its DOM id; a
- * name not yet in the tree is resolved again after the commit builds it. */
-let Refs = null;
-export function Sr(e, prop, unit, f) {
-  Probes?.bind(e, prop, unit, f);
-  effect(() => {
-    const v = f(), write = () => {
-      let missing = false;
-      const r = v == null ? v : String(v).replace(/url\(\s*["']?#([^"')\s]+)["']?\s*\)/g, (m, name) => {
-        for (let a = e.parentElement; a; a = a.parentElement) { const c = a.querySelector(`[data-exact-id="${CSS.escape(name)}"]`); if (c) return `url(#${c.id})`; }
-        missing = true; return m;
-      });
-      css(e, prop, unit, r);
-      return missing;
-    };
-    if (write()) {
-      if (!Refs) { Refs = []; After.push(() => { for (const w of Refs.splice(0)) w(); }); }
-      Refs.push(write);
-    }
-  });
-}
-export { svgTransform, svgGeometry } from "./svg-transform.js"; export { ds, x_querySelectorAll } from "./dataset.js"; export { ht } from "./hatches.js"; export { pf } from "./perf.js";
-import { backdropValue as backdropCss } from "./backdrop.js"; export const backdropValue = (v, report = true) => backdropCss(v, report ? why => say(`unset backdrop-filter: ${why}`) : undefined);
-/** Loaded pieces' hooks: `style(e, prop, value)` takes a dynamic row's write on a node the motion piece holds
- * (motion.js); `image(e)` an image built or adopted with a symbol or `app:/` source (symbols.js). */
-export const Hooks = {};
-/** `S` on a node the motion engine follows (`mo`): while a hold owns it, a
- * write goes to the authored style the hold restores. */
-export function Sm(e, prop, unit, f) {
-  Probes?.bind(e, prop, unit, f);
-  effect(() => {
-    const v = f();
-    // Held: the hold's authored style takes it, and what css() last wrote no longer says what shows.
-    if (Hooks.style?.(e, prop, cssText(prop, unit, v))) { if (e.$css) delete e.$css[prop]; }
-    else css(e, prop, unit, v);
-  });
-}
-/** A loaded piece's own handling of an event (files.js's file input): true when handled. */
-export const OnHooks = {};
-export function on(e, kind, f, bind) {
-  // The runner's dispatch_at fires what is due at the event's time first (a focus's `then` before the input); a refusal still lets the event run.
-  const ends = kind === "close" || kind === "scrollend", go = f, wall = !clock.agent, own = ends ? Owner : null, pointer = kind === "pointerdown" || kind === "pointerup", /* another event's handler run inside a pointer handler (a focus it moved) is not that pointer event's: its `stopPropagation()` does not stop it */ run = (...a) => { if (pointer) return go(...a); const outer = Propagating; Propagating = null; try { return go(...a); } finally { Propagating = outer; } };
-  f = (...a) => { const to = wall && start ? Math.max(clock.now, performance.now() - start) : clock.now; if (clock.timers.some(t => t.due <= to && !(wall && t.frame)) || Mutations.some(m => m.due <= to || m.next <= to)) advance(to, wall); if (!ends || (e.isConnected && !own?.gone)) return run(...a); };
-  // A queued dialog close (or a scroll's end a due task's removal outlived) can outlive its arm, even while an exit animation keeps the element connected.
-  const l = (t, g, capture = false) => { e.addEventListener(t, g, capture); if (ends) onEnd(() => e.removeEventListener(t, g, capture)); };
-  if (OnHooks.file && e.localName === "input" && e.type === "file" && OnHooks.file(e, kind, f)) return;
-  if (e.$media && Media.MEDIA_EVENTS.has(kind)) return Media.mediaOn(e, kind, f); // media.js: the glue's reports
-  // A module view hears its module's events, and the page's own input as any element does (glue.js `attach`): a click is its press.
-  if (e.exactNative) { l("exact-native", ev => { if (ev.detail.kind === kind) f(...(ev.detail.value == null ? [] : [ev.detail.value])); }); if (kind === "message") return; }
-  if (e.localName === "img" && (kind === "load" || kind === "error")) return imageEvent(e, kind, f, inflight);
-  if (e.localName === "iframe" && kind === "error") return l(kind, ev => f(ev.detail ?? "iframe did not load"));
-  return bind ? bind(e, kind, f, l) : l(kind, kind === "pictureinpictureerror" ? ev => f(ev.detail) : () => f()); // picture-in-picture.js: the failure's reason
-}
-// Each event family's binder, passed to `on` by the generated module only where its plan binds that family
-// (emit.rs `binder`), so a plan carries only the families it hears; any other event is a plain listener.
-// A link with a press is the app's navigation: the browser's is prevented. A modified or other-button click, a `target` or `download`, is the browser's alone and the press does not run, with a router or without (`router`, input-glue.js).
-// a press action taking one more parameter hears the MouseEvent's modifiers (gallery F20) and point (LLP 1021 D2)
-export const onPress = (e, kind, f, l) => { if (!e.matches("button, a[href], input, select, textarea, summary")) input(); /* the input piece presses it by key (input-glue.js `pressesByKey`) */ return l("click", ev => { const a = ev.target.closest?.("a[href]"); if (a && a !== e && e.contains(a)) return; for (let n = ev.target; n && n !== e.parentNode; n = n.parentNode) if (n.nodeType === 1 && n.hasAttribute("disabled")) { ev.stopPropagation(); return; } /* a disabled box on the way presses nothing, as on iOS (PointerIOS.swift `activationTarget`) */ if (e.localName === "a" && (ev.button || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || (e.target && e.target !== "_self") || e.hasAttribute("download"))) return; ev.stopPropagation(); if (e.localName === "a") ev.preventDefault(); const done = ev.detail > 0 ? press(e) : null; try { f([ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey, ev.clientX, ev.clientY]); } finally { done?.(); } }); };
-// A checkbox's value is whether it is checked, a radio's its `value`; the platform moves the control at once, and an action that refuses snaps the box or the radio group back (glue.js, navigation.js). A host's change carries its own text (files.js: a picker's lines, which an input's value would flatten). A range's is a number (the events table). An action taking one more parameter hears the `InputEvent` (x2apps codeedit #2, survey #2).
-export const onValue = (e, kind, f, l) => { return l(kind, ev => {
-      if (ev instanceof CustomEvent) return f(ev.detail);
-      const box = e.type === "checkbox", radio = e.type === "radio", v = box ? e.checked : e.type === "range" ? Number(e.value) : e.value;
-      f(v, inputRecord(e, box || radio ? e.value : String(v), box ? e.checked : radio, ev));
-      if (box && e.$checked !== undefined && e.checked !== e.$checked) e.checked = e.$checked;
-      if (radio) settleRadios(e, r => r.$checked);
-    }); };
-export const onBeforeInput = (e, kind, f, l) => l(kind, ev => { const outer = KeyEvent; KeyEvent = ev; try { f(inputRecord(e, e.value, false, ev)); } finally { KeyEvent = outer; } });
-export const onHover = (e, kind, f, l) => { l("pointerenter", () => f(true)); return l("pointerleave", () => f(false)); };
-export const onFocusWithin = (e, kind, f, l) => l(kind, ev => { if (ev.$stopped) return; const outer = KeyEvent; KeyEvent = ev; try { f([ev.target?.exactExitId ?? ev.target?.id ?? "", ev.relatedTarget?.exactExitId ?? ev.relatedTarget?.id ?? null]); } finally { KeyEvent = outer; } });
-// `keycapture` hears keydown outermost first, then `key` bubbles; `keyup` bubbles too (#140). An action taking one more parameter hears the KeyboardEvent record (contract/types selection.rs's order: code, repeat and isComposing last; a keyCode-229 keydown, one an input method processed, is composing, as web code takes it: WebKit's Enter that commits a composition comes after `compositionend`, isComposing false). With nothing focused a key or a clipboard event targets `<body>`, outside the app, where the DOM's `window` listeners hear it: the first root's handlers hear any event whose target is `<body>` or `<html>` (`atBody`; never a copy a flow forwards to a detached node), on `<html>` as it bubbles, so after the shortcuts (input-glue's capture listener) and before the document's defaults (a sheet's Escape, a list's ⌘A), its `keycapture` before its `key`.
-let BodyHeard; const atBody = (e, kind, g) => { (e.$body ??= {})[kind] = g; if (!globalThis.document?.documentElement) return g; BodyHeard ??= ["keydown", "keyup", "copy", "cut", "paste"].map(t => document.documentElement.addEventListener(t, ev => { const root = document.getElementById("exact-root"), h = root?.firstElementChild?.$body; if (!h || (ev.target !== document.body && ev.target !== document.documentElement)) return; if (t === "keydown") { h.keycapture?.(ev); h.key?.(ev); } else h[t]?.(ev); })); return g; };
-export const onKey = (e, kind, f, l) => { const type = kind === "keyup" ? "keyup" : "keydown"; if (!(e.exactFlowEvents ??= []).includes(type)) e.exactFlowEvents.push(type); return l(type, atBody(e, kind, ev => { if (ev.$stopped || kind === "keycapture" && ev.exactFlowCapture && !ev.exactFlowCapture.includes(e)) return; const outer = KeyEvent; KeyEvent = ev; try { f(ev.key, [ev.key, ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey, ev.code, ev.repeat, !!(ev.isComposing || ev.keyCode === 229 || ev.key === "Process")]); } finally { KeyEvent = outer; } }), kind === "keycapture"); };
-export function onMIDI(e, kind, f) { // a MIDI input's message (LLP 1125 D8), filtered by `midiinputs` in midi.js
-  const pair = [e, f], listeners = Sounds.midi ??= new Set();
-  listeners.add(pair);
-  onEnd(() => listeners.delete(pair));
-}
-function onWindow(kind, listener) {
-  addEventListener(kind, listener);
-  onEnd(() => removeEventListener(kind, listener));
-}
-// The window's, heard by every connected element that declares it (studio diary R17).
-export const onUnload = (e, kind, f, l) => { return onWindow("beforeunload", ev => { if (!e.isConnected) return; const outer = KeyEvent; KeyEvent = ev; try { f(); } finally { KeyEvent = outer; } }); };
-// Enter's default: after every `key` handler on the path (the window's listener is last), unless one prevented it, and after the browser's own default, HTML's `change` on Enter (gallery F26); the field's next key or edit (before it applies; an Enter from a textarea or an editor edits itself) runs it first, so the action reads the text Enter submitted (r27 t2: typing at once after Enter submitted the next text)
-export const onSubmit = (e, kind, f, l) => { return l("keydown", ev => { if (ev.key === "Enter" && !ev.isComposing && ev.keyCode !== 229 && !ev.$submit) { ev.$submit = true; addEventListener("keydown", w => { if (w !== ev || ev.defaultPrevented) return; const run = () => { if (run.done) return; run.done = true; e.removeEventListener("keydown", run, true); e.removeEventListener("beforeinput", run, true); f(); }; e.addEventListener("keydown", run, true); if (ev.target.localName !== "textarea" && !ev.target.isContentEditable) e.addEventListener("beforeinput", run, true); setTimeout(run); }, { once: true }); } }); };
-// A package view's declared event (LLP 1133.021 §9 item 2): a message `{"exact:event": name, "args": […]}` runs `f` with the arguments as the runtime holds values of `types` (facts.rs `surface_type_json`): a record by position, a field left out none.
-const fromJSON = (j, t) => typeof t === "string" ? j : Array.isArray(t) ? (t[0] === "?" ? (j == null ? null : fromJSON(j, t[1])) : t[0] === "e" ? j : (Array.isArray(j) ? j : []).map(x => fromJSON(x, t[1]))) : Object.entries(t).map(([f, u]) => fromJSON(j?.[f] ?? null, u)); export const viewEvent = (name, types, f) => text => { let m; try { m = JSON.parse(text); } catch { return; } if (m?.["exact:event"] === name) f(...types.map((t, i) => fromJSON(m.args?.[i] ?? null, t))); };
-// Only from the origin of the src the app committed (glue.js `guestMessageAuthorized`, LLP 1020 D2): a guest that navigated away is not heard; an opaque sandbox's origin is "null".
-export const onMessage = (e, kind, f, l) => { if (e.localName !== "iframe") return l("exact-native", ev => { if (ev.detail?.kind === "message") f(ev.detail.value); }); /* a GPU canvas's surface (x.message) */ return onWindow("message", ev => { if (ev.source === e.contentWindow && guestMessageAuthorized(e, ev.origin)) f(typeof ev.data === "string" ? ev.data : JSON.stringify(ev.data)); }); };
-// The port's offsets, as the web host sends them (`glue.js` `attach`); an action taking one more parameter hears the `ScrollEvent` record.
-export const onScroll = (e, kind, f, l) => { return l(kind, () => { if (e.$bootScroll) { e.$bootScroll = false; return; } e.$bootScrollEnd = false; f(e.scrollLeft, e.scrollTop, [e.scrollLeft, e.scrollTop, e.scrollWidth, e.scrollHeight, e.clientWidth, e.clientHeight, ...(e.$list?.scrollAnchor() ?? [null, 0])]); }); }; export const onScrollend = (e, kind, f, l) => { return l(kind, () => { if (e.$bootScrollEnd) { e.$bootScrollEnd = false; return; } f(); }); }; // the boot's restored offset ends no reader's scroll, unless a smooth restore went on to deliver scrolls
-// A scroll drag's start and release, one tracker for both (navigation.js `scrollDrag`; Charlie, 2026-11-10): the release's `ScrollDragEvent` is its velocity and no target, which a browser never says.
-export const onScrollDrag = (e, kind, f, l) => { if (!e.$scrollDrag) { e.$scrollDrag = {}; scrollDrag(e, l, () => e.$scrollDrag.scrolldragstart?.(), (vx, vy) => e.$scrollDrag.scrolldragend?.([vx, vy, null, null])); } e.$scrollDrag[kind] = f; };
-// Pull to refresh is a native port's; the web has none (`glue.js` attaches nothing).
-export const onRefresh = () => {};
-export const onDblclick = (e, kind, f, l) => { return l(kind, ev => { ev.preventDefault(); f(); }); };
-// pointer.js (LLP 1005 §Events, 1056 §3)
-export const onPointer = (e, kind, f, l) => { return pointer(e, kind, kind === "pointermove" ? f : (r, ev) => { const outer = Propagating; Propagating = ev; try { f(r); } finally { Propagating = outer; } }); };
-// UI Events' `contextmenu` is a PointerEvent: where the secondary click was (studio diary R22).
-// A text field's own edit menu stays the browser's (navigation.js `editMenu`); a control's input has none, so its node's handler runs (#487). The nearest handler alone hears it, as on the wasm host and macOS (review b5-b 3).
-export const onContextmenu = (e, kind, f, l) => { return l(kind, ev => { if (editMenu(ev.target)) return; ev.preventDefault(); ev.stopPropagation(); f(record(e, ev)); }); };
-// DOM's own, bubbling to every ancestor's handler; one that calls `preventDefault()` keeps the scroll (a pinch is a Control-held wheel) from happening (studio diary R3).
-export const onWheel = (e, kind, f, l) => { return e.addEventListener("wheel", ev => { if (ev.$stopped || e.matches(":disabled") || inertAncestor(e)) return; const outer = KeyEvent; KeyEvent = ev; try { f([...record(e, ev).slice(0, 2), ev.deltaX, ev.deltaY, ev.deltaMode, ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey]); } finally { KeyEvent = outer; } }, { passive: false }); };
-// Files dropped from outside, each a `doc:` handle, and a file drag's enter and leave (files.js, documents-glue.js; studio diary R19).
-export const onFileDrop = (e, kind, f, l) => { return OnHooks.drop?.(e, f); }; export const onFileDrag = (e, kind, f, l) => { return OnHooks.drag?.(e, kind, f); };
-// Normal blur commits before focusout chooses its DOM path. Flush callbacks run before post-flush focus commands or autofocus; retired owners never dispatch teardown blur.
-export const onFocus = (e, kind, f, l) => { const own = Owner, run = () => e.isConnected && !own?.gone && f(); return l(kind, () => Flushing ? FocusQueue.push(run) : run()); };
-// the nearest handler hears the ClipboardEvent record, a paste's files minted `doc:` handles (files.js); the default (a field's own paste) proceeds unless it calls preventDefault() (#125)
-export const onClipboard = (e, kind, f, l) => { if (kind === "paste") OnHooks.pasteWarm?.(); return l(kind, atBody(e, kind, ev => { ev.stopPropagation(); const outer = KeyEvent; KeyEvent = ev; try { f([ev.clipboardData?.getData("text/plain") ?? "", kind === "paste" ? OnHooks.pasted?.(ev) ?? [] : []]); } finally { KeyEvent = outer; } })); };
-export const onToggle = (e, kind, f, l) => l(kind, ev => f([ev.oldState, ev.newState])); export const onFrameCapture = (e, kind, f, l) => l("exactcapture", ev => f(["path", "width", "height", "error", "message"].map(k => ev.detail[k]))); /* a capture's `FrameCapture`, always the refusal (frame-navigation.js, LLP 1020.002 D7) */ export const onFrameNavigation = (e, kind, f) => { inflight.n++; import("./frame-navigation.js").then(m => m.watch(e, (name, r) => { if (name === kind) f(m.positional(r)); })).finally(() => inflight.n--); }; // an iframe's navigation records, the subset a page sees (frame-navigation.js, LLP 1020.002 D2)
-export const onAtompress = (e, kind, f, l) => l(kind, ev => { if (Array.isArray(ev.detail)) f(ev.detail); }); // a press on an inline atom (LLP 1045.000 D7), its `AtomEvent` record the event's detail (atoms.js, markup-editor.js)
-export const onSelectionChange = (e, kind, f, l) => { return sourceField(e) ? l(kind, () => f(inputRecord(e, e.value, false))) : onEnd(onSelection(e, (text, a, b, rects) => f([text, a, b, rects]))); };
-// ---------------------------------------------------------------- presence (LLP 1063)
-// `-exact-exit-animation` and `-exact-layout-transition`: the web host's own presence-glue.js, fetched after the first
-// painted frame by a plan with either row (its node calls `pr`; a bound layout transition's, `lt`; a bound exit's, `px`), plays both. Each commit it
-// measures the views that declare a layout transition, or may gain one (a bound one's, as the wasm host's style op), before the
-// tree changes and plays back each that moved after; a region's removed root that declares an exit stays, out of flow at its
-// last box, until its animations end, where it was: `clear` passes over it. Until the piece is here, rows jump and leave at once.
-let Pres = null, Presence = null, Present = null, Leave = null, Sh = null; // Sh: shared.js, loaded with presence-glue.js, runs the commits that hand on a shared element's name in a view transition (LLP 1013.000 D7)
-/** The after-paint pieces on their way (the agent waits for them before an
- * operation, as glue.js's `agentSettled` waits for `pieces.pending()`). */
-export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), decorationPiece(), OnHooks.loading].filter(Boolean)).then(() => {}, () => {});
-const EXIT = "--exact-exit-animation"; export const exitOf = n => (n.$exit ?? n.style.getPropertyValue(EXIT)).trim(); // an element's exit: a bound one's value from the commit's start (presence-bindings.js `px`), else its style's
-/** A virtualized list's row wrapper `el` leaves with the exit its row's `root` declares (list.js): whether it stays,
- * leaving, for presence-glue.js to remove. */
-export function exitView(el, root) { const css = root && exitOf(root); if (!Pres || !css) return false; Pres.exit(el, css); return exiting(el); }
-const Created = [];
-export function pr(e) {
-  Created.push(e);
-  if (Presence || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-  inflight.n++;
-  Presence = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => { globalThis.exact ??= {}; return Promise.all([import("./presence-glue.js"), import("./shared.js").then(m => { Sh = m; })]); })
-    .then(() => {
-      const x = globalThis.exact;
-      Pres = x.presenceLive = x.presence(document.getElementById("exact-root"));
-      Created.length = 0;
-      // After a commit's tree: which views declare the row now (the created
-      // ones), and every tracked one that moved plays back from where it was.
-      Present = () => Pres.after({ ops: [...Created.splice(0).filter(e => e.isConnected).map(e => ({ op: "create", id: viewId(e) })), ...(Probes?.restyled() ?? [])] }, Views);
-      // A removed region node that declares an exit leaves with it (the
-      // kernel's `exit`: a destroyed root whose parent stays).
-      Leave = n => {
-        const css = n.nodeType === 1 && exitOf(n);
-        if (css) Pres.exit(n, css);
-        if (!exiting(n) && !sheetLeaves(n)) n.remove();
-      };
-    })
-    .catch(err => say(`presence: unavailable; motion skipped: ${err.message}`)).finally(() => inflight.n--);
-}
-/** The motion piece (motion.js over `motion.wasm` and the web host's
- * `motion-glue.js`), fetched after the first painted frame by a plan that
- * uses motion; `f(m)` runs at once when it is here, else once it is. */
-let Motion = null, Mo = null;
-function motion(f) {
-  if (Mo) return f(Mo);
-  if (typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-  if (!Motion) {
-    inflight.n++;
-    Motion = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import("./motion.js"))
-      .then(m => m.engine({ clock, wall: () => performance.now() - start, views: Views, viewId, hooks: Hooks, say, inflight }))
-      .then(m => { Mo = m; After.push(() => Mo.flush()); })
-      .catch(err => say(`motion: ${err.message}`)).finally(() => inflight.n--);
-  }
-  Motion.then(() => Mo && f(Mo));
-}
-/** A node the motion engine follows (the kernel's motion seam): `f` gives
- * its `translate`, `scale`, `rotate`, `opacity`, `transition` and release velocity as the
- * plan binds them, told the engine at every commit that changes them. */
-export function mo(e, f) {
-  const id = viewId(e);
-  onEnd(() => motion(m => m.gone(id)));
-  effect(() => { const v = f(); motion(m => m.observe(id, v)); });
-}
-/** `swiperight` and `swipeleft`: the motion piece's (motion-glue.js `attachSwipe`, one
- * for both); the action runs when the hold passes the knee that way (motion.js `action`). */
-export function onSwipe(e, f) { e.$swipe = f; motion(m => m.swipe(e)); } export function onSwipeLeft(e, f) { e.$swipeleft = f; motion(m => m.swipe(e)); }
-/** A height drag's owner (the node a handle's `heightDragFor` names): its
- * numeric height and `transition`, told the motion engine as they change. */
-export function mh(e, f) {
-  const id = viewId(e);
-  onEnd(() => motion(m => m.gone(id)));
-  effect(() => { const v = f(); motion(m => m.height(id, v)); });
-}
-/** `heightrelease`: motion-glue's height drag on the handle's named ancestor. */
-export function onHeight(e, f) { e.$heightrelease = f; onEnd(() => motion(m => m.gone(viewId(e)))); motion(m => m.heightDrag(e)); }
-/** `transformgeometry`: the pair's geometry, the page's observation. */
-export function onTGeom(e, f) { e.$tgeom = f; }
-/** `transformrelease`: motion-glue's transform drag on the handle, holding
- * its named ancestor's translate and scale inside its parent clip (LLP 1057.001 §4). */
-export function onTRelease(e, f) { e.$trelease = f; onEnd(() => motion(m => m.gone(viewId(e)))); motion(m => m.transformDrag(e)); }
-/** A `reorderFor` grip on the strict ancestor it names, and a
- * virtualized list's `reorderdrop`: Arrange, motion-glue's reorder drag
- * over the list's preview (list.js) and the motion piece (arrange.js). The
- * grip names its view (`data-view`): the list's browser half pins the row
- * a contact on it holds by that name (collection-glue.js `liveView`). */
-export function onReorder(e) {
-  const id = viewId(e);
-  e.dataset.view = id;
-  onEnd(() => motion(m => m.gone(id)));
-  motion(m => m.reorderHandle(e));
-}
-export function onDrop(e, f) { e.$reorderdrop = f; motion(() => {}); }
-/** `pan`: the web host's input piece's (input-glue.js), after first paint. */
-export function onPan(e, f) {
-  e.$pan = f; e.exactHandlers ??= e.dataset.exactOn.split(" ");
-  const id = viewId(e); let p;
-  input();
-  e.addEventListener("pointerdown", ev => (p ??= Input?.pan(e, id, (t, g) => e.addEventListener(t, g)))?.(ev));
-}
-/** `panrelease`: its velocity is the motion piece's tracker (LLP 1057 §10.6). */
-export function onPanRelease(e, f) { e.$panrelease = f; motion(() => {}); }
-/** A node's `wrap-flow` (LLP 1043.000): an absolutely positioned `both`
- * is an exclusion the text around it flows past, laid out by the text flow
- * piece (flow.js over the web host's `textflow-glue.js`), fetched after
- * first paint by a plan with the row. */
-let Flow = null, Fl = null;
-const Wraps = new Set();
-export function wf(e, f) {
-  Wraps.add(e);
-  onEnd(() => Wraps.delete(e));
-  effect(() => { e.$wrap = f(); });
-  if (Flow || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-  inflight.n++;
-  Flow = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))).then(() => import("./flow.js"))
-    .then(m => m.flow({ views: Views, viewId, wraps: Wraps, clock, wall: () => performance.now() - start, say }))
-    .then(m => { Fl = m; Before.push(() => Fl.before()); After.push(() => Fl.after()); (globalThis.exact ??= {}).flowSettle = () => Fl.settle(); Fl.after(); })
-    .catch(err => say(`text flow: ${err.message}`)).finally(() => inflight.n--);
-}
-export { onResize, onIntersect } from "./observers.js";
-/** Page geometry (LLP 1051.000), fetched after first paint by `geo`; unavailable before loading.
- * Answers use the runner's Geometry: x, y, width, height, provisional, unavailable. */
-let Geo = null, Geometry = null;
-export const geoLoading = () => Geometry; // its load once `geo` asked (else null): a first element size (observers.js) waits for it
-export function geo() {
-  if (Geometry || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-  inflight.n++;
-  Geometry = new Promise(r => requestAnimationFrame(() => r())).then(() => import("./geometry-glue.js"))
-    .then(() => { Geo = globalThis.exact.geometry(document.getElementById("exact-root")); })
-    .catch(err => say(`geometry: ${err.message}`)).finally(() => inflight.n--);
-}
-function geoRead(op, id) {
-  const out = new Float64Array(4), bits = Geo ? Geo.read(op, liveById(id), out) : 0;
-  return bits & 1 ? [out[0], out[1], out[2], out[3], !!(bits & 2), false] : [0, 0, 0, 0, false, true];
-}
-export const x_frame = id => geoRead(0, id), x_measure = id => geoRead(1, id);
-export const x_rangeFrame = (id, start, end) => { const out = new Float64Array(4), bits = Geo ? Geo.range(liveById(id), start, end, out) : 0;
-  return bits & 1 ? [...out, !!(bits & 2), false] : [0, 0, 0, 0, false, true]; };
-export { decorationRecord, atomFacesRecord } from './shape.js'; import { startDecoration, decorationPiece } from './editor.js';
-export const decorate = e => startDecoration(e, {own:Owner, onEnd, inflight, say});
-/** `elementFromPoint(x,y)` (LLP 1094 D10): nearest front-most untransformed id at a viewport point; none before loading. `elementsFromPoint` returns every one. */
-export const x_elementFromPoint = (x, y) => { const root = document.getElementById("exact-root"), n = Geo?.point(x, y)?.closest('[id]:not([id=""])'); return n && n !== root && root.contains(n) && n.id || null; };
-export const x_elementsFromPoint = (x, y) => Geo?.namedPoints(x, y) ?? [];
-/** A Markdown field (LLP 1045 D5): markup-editor.js over its wasm replaces
- * the textarea on demand. Runtime writes proxy to the editor; its events
- * forward to the detached textarea's handlers. */
-let Editor = null;
-export function mde(e) {
-  if (typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
-  inflight.n++;
-  if (!Editor) {
-    Editor = import("./markup-editor.js").then(() => globalThis.exact.installMarkupEditor);
-    Hosts.format = (id, name, arg) => Editor.then(() => liveById(id)?.exactMarkup?.format(name, arg ?? ""));
-  }
-  Editor.then(install => {
-    if (!e.isConnected) return;
-    const id = viewId(e);
-    install(e, {
-      live: n => n.isConnected,
-      replace(n) {
-        Ids.set(n, id); Views.set(id, n);
-        Object.defineProperties(e, { value: { configurable: true, get: () => n.value, set: v => { n.value = v; } }, ...Object.fromEntries(["selectionStart", "selectionEnd", "selectionDirection"].map(k => [k, { configurable: true, get: () => n[k] }])) });
-        for (const t of ["input", "beforeinput", "selectionchange", "change", "focus", "blur", "keydown", "pointerenter", "pointerleave", "click", "atompress"]) n.addEventListener(t, ev => {
-          const forwarded = new ev.constructor(t, ev); forwarded.$stopped = ev.$stopped; if (ev.defaultPrevented) forwarded.preventDefault();
-          if (!e.dispatchEvent(forwarded)) ev.preventDefault(); if (forwarded.$stopped) ev.$stopped = true;
-        }, t === "keydown"); // before the editor applies its own key default
-        new MutationObserver(ms => { for (const m of ms) { const v = e.getAttribute(m.attributeName); v == null ? n.removeAttribute(m.attributeName) : n.setAttribute(m.attributeName, v); } n.exactMarkup?.sync(); }).observe(e, { attributes: true });
-      },
-      select: (n, p) => { const [formats, mixed, unavailable, atom, ...link] = p.split("\n"); e.$select?.([formats, mixed === "1", link.join("\n"), unavailable, atom ?? ""]); },
-    });
-  }).catch(err => say(`markup editor: ${err.message}`)).finally(() => inflight.n--);
-}
-/** `select`: the editor's selection facts (runner Event::Select); a field's `InputEvent` (x2apps codeedit #2). */
-export function onSelect(e, f) { e.$select = f; e.addEventListener("select", () => { if (textField(e)) f(inputRecord(e, e.value, false)); }); }
-/** The `InputEvent` record (contract/types selection.rs's order); a type
- * with none has its caret after its text, a control 0, 0, `none`. */
-function inputRecord(e, value, checked, event) {
-  const n = e.value?.length ?? 0, field = sourceField(e);
-  return [value, checked, field ? e.selectionStart ?? n : 0, field ? e.selectionEnd ?? n : 0, field ? e.selectionDirection ?? "none" : "none", event?.inputType ?? "", event?.data ?? null, event?.cancelable ?? false, event?.isComposing ?? false];
-}
-/** Press feedback (LLP 1061): the web host's input piece shows it, from
- * the node's own `--exact-press` (css.rs). */
-export const pressFeedback = () => input(); if (DEVELOPMENT_STORE) globalThis.__exactPressFeedback = pressFeedback; // (a development build's only: the dev page's hold asks for it so, as a bundled page serves no rt.js; not on `exact`, which says the runtime is up)
-/** The web host's input piece (input-glue.js), after first paint: pans. */
-let Input = null, Inputs = null;
-function input() {
-  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return Inputs;
-  inflight.n++;
-  // Its link handler asks the wasm's route table; this runtime routes its own.
-  const x = globalThis.exact ??= {}; (x.wasm ??= {}).exact_route_match ??= () => 0;
-  const to = (id, p, k) => Views.get(id)?.[k]?.(...p.split(",").map(Number));
-  return Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
-    Input = m.createInputHandlers({ root: document.getElementById("exact-root"), views: Views, retiredViews: new WeakSet(), ready: () => true,
-      inertAncestor, agentMode: clock.agent, pick: el => x.files?.activate(el), dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
-      velocity: { sample: (...a) => Mo?.pan.sample(...a), velocity: (...a) => Mo?.pan.velocity(...a) }, log: say }); Input.arrive(); // the stack as it stands, for the focus to follow (LLP 1115.000 D4.2)
-  }).catch(err => say(`input: ${err.message}`)).finally(() => inflight.n--);
-}
-/** A `head` (LLP 1048.003 D1): its node, as the kernel keeps it, an inert
- * element in the tree, and its fields, the page's while it is the innermost
- * active head (document.js, as runner/src/head.rs). */
-export function hd(p, fields) {
-  const t = document.createElement("template");
-  t.$exactTree = true;
-  if (Adopt) p.insertBefore(t, at(p)); else p.append(t);
-  onEnd(head(t, fields, effect, After));
-}
-function range(p) {
-  if (Adopt) return [mark(p), null];
-  const a = document.createComment(""), b = document.createComment("");
-  p.append(a, b);
-  return [a, b];
-}
-// A view leaving with its exit animation stays where it was until it ends
-// (presence-glue.js removes it): never moved, since moving cancels a CSS animation.
-const exiting = n => n.nodeType === 1 && n.hasAttribute("data-exiting");
-function leave(n) { const shell = n.nodeType === 1 && n.hasAttribute("data-exact-list-item") ? n : null; n = shell ? listRow(shell) : n; if (n && !exiting(n)) Leave ? Leave(n) : sheetLeaves(n) || n.remove(); if (shell?.parentNode) unwrapListItem(shell); }
-function clear(a, b) { Paint?.list(a.parentNode); for (let n = a.nextSibling; n !== b;) { const m = n.nextSibling; leave(n); n = m; } }
-function build(b, f, own) {
-  const frag = document.createDocumentFragment(); frag.$listOwner = listOwner(b.parentNode);
-  const s = scope(() => f(frag), own);
-  b.before(frag); Paint?.list(b.parentNode);
-  return s;
-}
-/** A region's first arm while adopting: built in place, then its end anchor. */
-function adoptArm(p, f, own) { const s = f ? scope(() => f(p), own) : null; return [s, mark(p)]; }
-/** `when`: arm 0 while the subject holds, else arm 1 (or nothing). */
-export function when(p, subject, a0, a1) {
-  let [a, b] = range(p), own = Owner;
-  let arm = -1, s = null;
-  effect(() => {
-    const want = subject() ? 0 : a1 ? 1 : -1;
-    if (want === arm) return;
-    arm = want;
-    const view = presentArm(want < 0 ? null : want ? a1 : a0, subject, want);
-    if (!b) return untracked(() => { [s, b] = adoptArm(p, view, own); });
-    untracked(() => { if (s) end(s); clear(a, b); s = view ? build(b, view, own) : null; });
-  }).$r = () => [a, b]; // the region's range, for shared.js
-}
-/** `match`: arm 0 with the bound value while the subject is `some`, else arm 1. */
-export function match(p, subject, a0, a1) {
-  let [a, b] = range(p), own = Owner;
-  let arm = -1, s = null;
-  const bound = sig(null);
-  effect(() => {
-    const v = subject(), want = v != null ? 0 : a1 ? 1 : -1;
-    if (v != null) write(bound.n, v);
-    if (want === arm) return;
-    arm = want;
-    const view = presentArm(want < 0 ? null : want ? a1 : p2 => a0(p2, bound), subject, want, bound);
-    if (!b) return untracked(() => { [s, b] = adoptArm(p, view, own); });
-    untracked(() => { if (s) end(s); clear(a, b); s = view ? build(b, view, own) : null; });
-  }).$r = () => [a, b]; // the region's range, for shared.js
-}
-/** `each`: rows by key in item order; a kept row keeps its elements, its
- * item and position are signals its bindings read. */
-export function each(p, list, key, row, pure) {
-  row = presentRows(row, list, key);
-  let [a, b] = range(p), own = Owner;
-  let rows = new Map(), single = false, order = null;
-  effect(() => {
-    const items = list(), parent = b?.parentNode ?? p; // rows go where the end anchor is: at an arm's top, `p` is the fragment the arm was built in
-    // A key that reads more than its item and index (a slot) is read tracked, re-keying the rows as the runner's; a pure one only where needed.
-    const keys = pure ? null : items.map((item, i) => key(() => item, () => i)), keyAt = i => keys ? keys[i] : key(() => items[i], () => i);
-    untracked(() => {
-      if (b) p = a.parentNode; // Conditional arms leave their build fragment.
-      // Rows moving or leaving are adopted rows (a row waiting for its slice
-      // shows its rendered values until then, and adopts at the current ones).
-      if (b && LazyAt < Lazy.length) adoptAll();
-      // Keys that didn't move: new items to their rows, nothing else (LLP 1071.000 D2).
-      if (pure && order && items.length === order.length) {
-        let i = 0;
-        for (; i < items.length; i++) {
-          const item = items[i], r = order[i];
-          if (r.item.n.v === item) continue;
-          const k = keyAt(i);
-          if (rowKey(k) !== r.k) break;
-          writeItem(r.item.n, item);
-        }
-        if (i === items.length) return;
-      }
-      // A row's place in the last pass is its `at`; repeats count once a key repeats.
-      const next = new Map(), seen = new Map();
-      items.forEach((item, i) => {
-        const k = rowKey(keyAt(i), next, seen);
-        if (k.startsWith("d")) journal.push(`each: repeated key ${k}`);
-        let r = rows.get(k);
-        if (r) { rows.delete(k); r.old = r.at; if (!Object.is(r.item.n.v, item)) writeItem(r.item.n, item); if (r.index.n.v !== i) write(r.index.n, i); }
-        else if (!b) {
-          // Adopting: the row's elements are in place, in item order.
-          r = { k, item: sig(item), index: sig(i) }; AdoptedLists.add(p);
-          if (single && i && performance.now() > AdoptBy) {
-            // Past the adoption's budget, a row of one element waits for a
-            // slice (`lazy`); a press on it or any commit adopts it first.
-            let e = at(p);
-            while (e && e.nodeType !== 1) e = e.nextSibling;
-            if (!e) throw new Mismatch(`adoption: expected a row, found nothing`);
-            p.$n = e.nextSibling;
-            r.start = r.end = e;
-            lazy([p, r, row, own]);
-          } else {
-            const next = at(p), last = next ? next.previousSibling : p.lastChild;
-            r.s = scope(() => row(p, r.item, r.index, r.k), own);
-            // A row of one element is that element, as a fresh build keeps it
-            // (a region at its top would have put its own anchors beside it).
-            const first = last ? last.nextSibling : p.firstChild;
-            if (first && first.nodeType === 1 && first.nextSibling === at(p)) r.start = r.end = first;
-            else { r.start = document.createComment(""); p.insertBefore(r.start, first ?? at(p)); r.end = mark(p); }
-            if (!i) single = r.start.nodeType === 1;
-          }
-        }
-        else {
-          r = { k, item: sig(item), index: sig(i) };
-          const frag = document.createDocumentFragment(); frag.$listOwner = listOwner(parent);
-          r.s = scope(() => row(frag, r.item, r.index, r.k), own);
-          // A row of one element is that element (a region at its top would
-          // have put its own anchors beside it); any other is bracketed.
-          if (frag.childNodes.length === 1 && frag.firstChild.nodeType === 1) r.start = r.end = frag.firstChild;
-          else { r.start = document.createComment(""); r.end = document.createComment(""); frag.prepend(r.start); frag.append(r.end); }
-          r.frag = frag;
-        }
-        r.k = k; next.set(k, r);
-      });
-      const list = order = [...next.values()];
-      for (let i = 0; i < list.length; i++) list[i].at = i;
-      // Every row goes and the region is all its parent holds: emptied at once.
-      if (rows.size && b && !Leave && list.every(r => r.frag) && !a.previousSibling && !b.nextSibling && !viewChildren(parent).some(r => r.getAttribute("navigationPresentation") === "modal")) { // not where the parent holds a modal route, which may leave (navigation.js `sheetLeaves`)
-        endAll(rows);
-        parent.textContent = "";
-        parent.append(a, b);
-      }
-      else if (rows.size) { endAll(rows); for (const r of rows.values()) { let n = r.start; while (n) { const m = n.nextSibling; leave(n); if (n === r.end) break; n = m; } } }
-      // Order, from the last row back: kept rows on the longest run already in
-      // order stay; any other moves before the row after it; new rows go in
-      // one fragment per run.
-      if (b) {
-        const stay = inOrder(list);
-        let anchor = b, batch = null, first = null;
-        const flush = () => { if (batch) { parent.insertBefore(batch, anchor); anchor = first; batch = null; } };
-        for (let i = list.length - 1; i >= 0; i--) {
-          const r = list[i];
-          if (r.frag) { if (batch) batch.prepend(r.frag); else batch = r.frag; first = r.start; r.frag = null; continue; }
-          flush();
-          if (!stay.has(i)) {
-            const f = document.createDocumentFragment();
-            let n = r.start; while (n) { const m = n.nextSibling; f.append(n); if (n === r.end) break; n = m; }
-            parent.insertBefore(f, anchor);
-          }
-          anchor = r.start;
-        }
-        flush();
-      }
-      rows = next; Paint?.list(parent);
-      b ??= mark(p);
-    });
-  }).$r = () => [a, b]; // the region's range, for shared.js
-}
-// Adoption in slices (LLP 1048.001): a keyed list's rows adopt in the
-// adoption's own task until its budget runs out, then in tasks of a few
-// milliseconds after it, so no one task holds the page. A press, key or
-// edit on a row still waiting adopts that row before the event reaches it;
-// a list that changes adopts every row still waiting first. A waiting row
-// shows its rendered values, and its bindings take the current ones when it
-// adopts (a structure that no longer matches builds that row afresh).
-const ADOPT_MS = 16, SLICE_MS = 8;
-let AdoptBy = Infinity;
-const Lazy = [], LazyRows = new Map();
-let LazyAt = 0, LazyTask = null;
-const LAZY_EVENTS = ["pointerdown", "mousedown", "touchstart", "click", "keydown", "beforeinput", "input", "change", "focusin"];
-// Passive: a waiting row must never make the page's touches wait for script.
-const LAZY_OPTS = { capture: true, passive: true };
-function lazy(x) { Paint?.wait(x[1].start); Lazy.push(x); LazyRows.set(x[1].start, x); }
-function adoptLazy(x) {
-  const [p, r, row, own] = x;
-  LazyRows.delete(r.start);
-  // A row whose list left (its region's arm ended) has nothing to adopt.
-  if (r.s || own?.gone || !r.start.isConnected) return;
-  const save = p.$n, a = Adopt;
-  p.$n = r.start; Adopt = true;
-  try { r.s = scope(() => row(p, r.item, r.index, r.k), own); }
-  catch (e) {
-    if (!(e instanceof Mismatch)) throw e;
-    say(`each: a row built afresh: ${e.message}`);
-    Adopt = false;
-    const frag = document.createDocumentFragment(), old = r.start; frag.$listOwner = listOwner(p);
-    r.s = scope(() => row(frag, r.item, r.index, r.k), own);
-    if (frag.childNodes.length === 1 && frag.firstChild.nodeType === 1) r.start = r.end = frag.firstChild;
-    else { r.start = document.createComment(""); r.end = document.createComment(""); frag.prepend(r.start); frag.append(r.end); }
-    old.replaceWith(frag);
-  } finally { Adopt = a; p.$n = save; }
-}
-function adoptAll() { while (LazyAt < Lazy.length) adoptLazy(Lazy[LazyAt++]); lazyDone(); }
-function lazyDone() {
-  if (LazyAt < Lazy.length || !Lazy.length) return;
-  Lazy.length = LazyAt = 0; LazyRows.clear();
-  inflight.n--;
-  const root = document.getElementById("exact-root");
-  for (const t of LAZY_EVENTS) root?.removeEventListener(t, onLazy, LAZY_OPTS);
-}
-function adoptAt(target) {
-  for (let n = target; n && n.nodeType === 1; n = n.parentNode) { const x = LazyRows.get(n); if (x) { adoptLazy(x); Paint?.flush(); break; } }
-}
-const onLazy = ev => adoptAt(ev.target);
-function slice() {
-  LazyTask = null;
-  const end = performance.now() + SLICE_MS;
-  while (LazyAt < Lazy.length && performance.now() < end) adoptLazy(Lazy[LazyAt++]);
-  Paint?.flush();
-  if (LazyAt < Lazy.length) LazyTask = post(slice); else lazyDone();
-}
-const post = f => globalThis.scheduler?.postTask ? scheduler.postTask(f, { priority: "user-visible" }) : setTimeout(f);
-// ---------------------------------------------------------------- boot
-/** Build the view into `#exact-root` and start the clock. */
-export function mount(f) {
-  const root = document.getElementById("exact-root");
-  // A press on a `retainFocus` node keeps the focus where it is (an
-  // editor's), as the web host's glue does: the browser's focus move on
-  // pointerdown is prevented, unless the contact is on an editor.
-  root?.addEventListener("pointerdown", ev => {
-    const t = ev.target;
-    if (!(t.closest?.("input, textarea, select") || t.isContentEditable) && t.closest?.('[retainFocus="true"]')) ev.preventDefault();
-  });
-  // Under the agent, and in a render, the clock is the driver's: no timer runs by itself.
-  clock.agent = agentMode(); if (!clock.agent && typeof window !== "undefined") reloadOnGone(window); // (a build kept no more: the page again, once)
-  Store.load(); if (Store.map.size && checkpoint().kept) { for (const r of Resources) { if (r.store) { r.baked = true; } } } // Ask again each page answer that read the store when the device's store holds the app's own entries, which the render never had (LLP 1048.000 D6); `res` does so for one made later. A dev reload's carried answers have no page checkpoint, so this rule does not apply to them, as in the runner's carried boot.
-  let built = false;
-  Adopt = !!(checkpoint().kept && root.firstElementChild);
-  // Elapsed time continues from where a render's clock stopped.
-  start = clock.start = performance.now() - clock.now;
-  const adopting = Adopt;
-  // What the reader did before the runtime ran (the capture script), and
-  // what each edited control showed then: the commit writes the state's
-  // values, which the reader had changed.
-  const early = globalThis.exact?.taps?.() ?? [];
-  const shown = early.filter(t => t.type !== "click").map(t => [t.target, t.target.value, t.target.checked]);
-  AdoptBy = performance.now() + ADOPT_MS;
-  Booting = true; let booted = commit(() => { scope(() => f(root)); for (const p of AdoptedLists) { let n = at(p); while (n && n.nodeType !== 1) n = n.nextSibling; if (n) throw new Mismatch("adoption: a list's document holds more rows than its items"); } built = true; }, adopting ? "adopt" : "boot"); AdoptedLists.clear();
-  Adopt = false; AdoptBy = Infinity;
-  if (!built) { Lazy.length = LazyAt = 0; LazyRows.clear(); }
-  const adopted = adopting && built;
-  if (!built && adopting) {
-    // The document isn't this plan's projection: build afresh (and say so).
-    say(`adoption abandoned ${Why}`);
-    root.textContent = "";
-    booted = commit(() => { scope(() => f(root)); built = true; }, "boot");
-  }
-  // A boot whose settlement refused (a derive outside its type) is refused whole, as `Runner::boot` fails: nothing shows.
-  Booting = false; if (!built || booted === false) { root.textContent = ""; throw new Error(`boot refused ${Why}`); }
-  say(`boot: ${root.getElementsByTagName("*").length} nodes, epoch ${clock.epoch}`); // the runner's journal line (LLP 1012 logs)
-  if (adopted) say("adopted the document");
-  autofocus(root); // the document's autofocus (LLP 1035.000 D9), then each commit's mounts (`commit`, focus.js)
-  // Rows waiting are in flight, for the agent's `clock settle`.
-  if (Lazy.length) { inflight.n++; for (const t of LAZY_EVENTS) root.addEventListener(t, onLazy, LAZY_OPTS); LazyTask = post(slice); }
-  root.dataset.bootMs = String(Math.round(performance.now()));
-  // Replayed once, in order, on the same elements (LLP 1048.001 D5), each
-  // edited control first showing what the reader left in it (its row, if it
-  // waits for a slice, adopted first, so adoption doesn't write over it).
-  for (const t of early) adoptAt(t.target);
-  for (const [e, v, c] of shown) if (e.isConnected) { if (e.type === "checkbox" || e.type === "radio") e.checked = c; else if (e.type !== "file") e.value = v; }
-  for (const t of early) if (t.target.isConnected) t.type === "click" ? t.target.click() : t.target.dispatchEvent(new Event(t.type, { bubbles: true }));
-}
-/** The page's checkpoint (LLP 1048.000 D6): the time the render stopped at, and by resource name the `source` and `answers`
- * its document used, each `[args, value, open, reads]`: one, or a list's elements', where a new element looks first at `next`. */
-let Checkpoint = null, READER = new Set(["exactViewport", "exactPage"]); // a document's answer from the reader's own device was the render's: `res` asks it again, as a bake's (LLP 1048.007 D2)
-export function checkpoint() {
-  if (Checkpoint) return Checkpoint;
-  Checkpoint = { kept: null };
-  const el = typeof document !== "undefined" && document.querySelector('script[type="application/vnd.exact.checkpoint"]');
-  if (!el) return Checkpoint;
-  const cp = JSON.parse(el.textContent), open = new Set(cp.open), readers = new Set(cp.readers); Checkpoint.revalidate = !!cp.revalidate; Checkpoint.kept = new Map();
-  cp.answers.forEach(([name, source, args, value], k) => { if (!Checkpoint.kept.has(name)) { Checkpoint.kept.set(name, { source, answers: [], next: 0 }); } Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k)]); });
-  // A drive starts at zero even when its document was rendered on a wall clock.
-  const driven = AGENT_ADMITTED && typeof location !== "undefined" && new URLSearchParams(location.search).has("agent") && !globalThis.__exactRender;
-  Checkpoint.time = clock.now = driven ? 0 : cp.time || 0;
-  return Checkpoint;
-}
-/** A declared resource's page answer when it names `source` and fits `type` (a list's element's: each.js `keptMember`). */
-function keptAnswer(name, source, type) { const kept = checkpoint().kept?.get(name), answer = kept?.source === source ? kept.answers[0] : undefined; return answer && (!type || conforms(answer[1], type)) ? answer : undefined; }
-/** A checkpoint value (`push_value`, host/web/src/page.rs) as a runtime value: lists and records are arrays, unit and `none` null, `some(v)` v. */
-const value_ = v => v === null || typeof v !== "object" ? v : Array.isArray(v) ? v.map(value_) : "r" in v ? v.r.map(value_) : "s" in v ? value_(v.s) : "n" in v ? Number(v.n) : null;
+    } catch {}
+  },
+};
+// A release build's DEVELOPMENT_STORE is null: it inspects nothing, and its bundle drops the inspection's code.
+export const Inspections = DEVELOPMENT_STORE
+  ? resourceInspection(true, () => clock.now)
+  : { track() {}, begin() {}, placeholder() {}, take() {}, fail() {} };
+// Requests in flight, for the agent's `clock settle`.
+export const inflight = { n: 0 };
+// A development build's only: the dev page's hold asks for it so, as a bundled page serves no rt.js; not on `exact`,
+// which says the runtime is up.
+if (DEVELOPMENT_STORE) globalThis.__exactPressFeedback = pressFeedback;
+// The elements the app marks `aria-busy="true"` (still loading), by test id else id.
+export const busy = () =>
+  [...document.querySelectorAll('[aria-busy="true"]')].map(el => el.getAttribute('data-testid') ?? el.id);
+export { gridValue } from './grid.js';
+export { Pc } from './lower.js';
+export { svgTransform, svgGeometry } from './svg-transform.js';
+export { ds, x_querySelectorAll } from './dataset.js';
+export { ht } from './hatches.js';
+export { pf } from './perf.js';
+export { onResize, onIntersect } from './observers.js';
+export { decorationRecord, atomFacesRecord } from './shape.js';
 // ---------------------------------------------------------------- the roster (runner/src/stdlib.rs)
-// Read untracked (an action's body, a handler's curried argument evaluated as the event arrives) it is the clock now:
-// the commit's time, or outside one the time the runner would evaluate the arguments at. A derive, resource or the
-// tree reads it tracked, as of the last commit: an advance that fired nothing committed no new time.
-export const x_performanceNow = () => { NowRead = true; if (Listener) return read(Now); if (!Writes) time(); return clock.now; };
-export * from "./roster.js"; // the roster's pure entries
-// ---------------------------------------------------------------- localized strings (LLP 1060)
-// The plan's tables, base first: [name, rtl, {key: text}]. The locale slot
-// holds the table the viewer's launch locale reads before state initializes;
-// `t` reads that table, else the base.
-let Texts = []; export const Chosen = { tag: null }; // the language the app chose with `setLocale` (chosen.js), null while it follows the page's
-export function strings(tables) { Texts = tables; }
-/** RFC 4647 lookup of `tag`, by default the app's chosen language, else the page's locale (an agent's `?locale`): the longest
- * subtag prefix a table is named for, without case, else the base. A render has no launch locale: the base (LLP 1060 D4). */
-export function locale(tag = Chosen.tag) {
-  if (tag == null) { tag = Texts[0]?.[0] ?? ""; if (!globalThis.__exactRender) try { tag = reportPlace().split("\0")[0]; } catch {} }
-  for (;;) {
-    const t = Texts.find(r => r[0].toLowerCase() === tag.toLowerCase());
-    if (t) return t[0];
-    const i = tag.lastIndexOf("-");
-    if (i < 0) return Texts[0]?.[0] ?? "";
-    tag = tag.slice(0, i);
-  }
-}
-const table = name => Texts.find(r => r[0] === name);
-/** `t(key, name=value…)`: MF2 simple messages, `{name}` or `{$name}`; an unfilled name keeps its spelling; `\{ \} \\` escape. budget.js's `x_t` bounds it. */
-export function text(name, key, pairs, emit) {
-  const text = table(name)?.[2][key] ?? Texts[0][2][key];
-  if (text == null) throw new Refusal(`t: no text ${key}`);
-  const out = [], put = emit ?? (piece => out.push(piece)), at = n => { for (let i = 0; i < pairs.length; i += 2) if (pairs[i] === n) return pairs[i + 1]; }; let from = 0;
-  for (const m of text.matchAll(/\\([{}\\])|\{\s*\$?([A-Za-z_][\w-]*)\s*\}/g)) { put(text.slice(from, m.index)); put(m[1] ?? at(m[2]) ?? m[0]); from = m.index + m[0].length; }
-  put(text.slice(from)); return out;
-}
-/** The resolved table sets the document's `lang` and `dir` (LLP 1060, ruled). */
-let LocaleSlot = null;
-/** `exactTime.resolvedLocale`: the table the strings read, "" with none (runner/src/runner/time.rs). */
-export const resolvedLocale = () => resolvedLanguage()?.[0] ?? "";
-/** The resolved table's `[lang, dir]`, which a rendered page carries (render.mjs), or null with no table. */
-export const resolvedLanguage = () => { const t = LocaleSlot && (table(LocaleSlot()) ?? Texts[0]); return t ? [t[0], t[1] ? "rtl" : "ltr"] : null; };
-export function language(slot) {
-  LocaleSlot = slot;
-  // Set the locale slot and refresh exactTime in one commit, as the host's first set_place does
-  commit(() => { W(slot, locale()); for (const r of Resources) if (r.source === "exactTime") R(r); }, "place");
-  if (typeof document !== "object" || !document.documentElement) return;
-  effect(() => { [document.documentElement.lang, document.documentElement.dir] = resolvedLanguage(); });
-}
-export * from "./router.js"; import { routerValid } from "./router.js"; // the router (LLP 1038), its own file
-export { queues, gated } from "./schedule.js"; // queued sends and gated tasks (LLP 1092), their own file
-export { timerWaits } from "./timer-waits.js"; export { resEach } from "./each.js";
+export * from './roster.js'; // the roster's pure entries
+// the router (LLP 1038), its own file
+export * from './router.js';
+import { routerValid } from './router.js';
+export { queues, gated } from './schedule.js'; // queued sends and gated tasks (LLP 1092), their own file
+export { timerWaits } from './timer-waits.js';
+export { resEach } from './each.js';

@@ -814,7 +814,12 @@ extension TableListMacTests {
         }
     }
 
+    /// Rows that leave the window are built anew, or rebound to new items
+    /// (LLP 1078): either way a row's separator is its own item's.
     func testWindowedSeparatorUsesItsAuthoredRowsLocalAppearanceAcrossRemounting() throws {
+        for reuse in [false, true] { try windowedSeparatorAppearance(reuse: reuse) }
+    }
+    private func windowedSeparatorAppearance(reuse: Bool) throws {
         let source = """
         component WindowedRowScheme
           state seed = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -842,7 +847,8 @@ extension TableListMacTests {
                     text `Row ${r}`
 
         """
-        let f = try TableFixture(count: 0, source: source)
+        fixture?.close()
+        let f = try TableFixture(count: 0, source: source, reuse: reuse)
         fixture = f
         let first = try f.node("windowed-0")
         let firstRow = try XCTUnwrap(f.feed.rows.first { $0.root == first.id })
@@ -850,8 +856,9 @@ extension TableListMacTests {
         XCTAssertNotNil(firstRow.node.props["listItemKey"])
 
         f.scroll(to: 4_000)
-        XCTAssertNil(f.presenter.views[first.id], "the old authored row left the mounted window")
-        XCTAssertNil(f.presenter.views[firstRow.node.id], "the old wrapper left the mounted window")
+        XCTAssertFalse(f.presenter.views[first.id] === first && first.props["testId"] == "windowed-0", "the old authored row left the mounted window")
+        XCTAssertFalse(f.shows(firstRow.node, item: 0), "the old wrapper left the mounted window")
+        XCTAssertEqual(f.presenter.views[firstRow.node.id] == nil, !reuse, "destroyed, or rebound to another item")
         let portRows = f.table.rows(in: f.table.convert(f.clip.bounds, from: f.document))
         let mountedRow = try XCTUnwrap(f.feed.rows.first { NSLocationInRange($0.index, portRows) }, "a visible row is mounted after scrolling")
         let row = try XCTUnwrap(f.presenter.views[mountedRow.root])
@@ -903,7 +910,7 @@ extension TableListMacTests {
 
         f.scroll(to: 0)
         let returned = try f.node("windowed-0")
-        XCTAssertFalse(returned === first, "returning creates the current authored row again")
+        if !reuse { XCTAssertFalse(returned === first, "returning creates the current authored row again") }
         f.window.appearance = NSAppearance(named: .darkAqua)
         try press("windowed-light")
         var picture = try separatorPicture(f, name: "painted-windowed-returned-light")
@@ -946,8 +953,13 @@ extension TableListMacTests {
         try assertSeparator(f, picture, row: "edge-0", present: false, note: "reset removes the painted separator")
     }
 
+    /// Rows that leave the window are built anew, or rebound to new items (LLP 1078).
     func testWindowedSeparatorOwnershipSurvivesRemountingAndChromeChanges() throws {
-        let f = try TableFixture(count: 0, source: Self.separatorSource(windowed: true))
+        for reuse in [false, true] { try windowedSeparatorOwnership(reuse: reuse) }
+    }
+    private func windowedSeparatorOwnership(reuse: Bool) throws {
+        fixture?.close()
+        let f = try TableFixture(count: 0, source: Self.separatorSource(windowed: true), reuse: reuse)
         fixture = f
         let first = try f.node("edge-0"), own = try f.node("edge-1")
         let wrapped = try XCTUnwrap(f.feed.rows.first { $0.root == own.id })
@@ -955,9 +967,10 @@ extension TableListMacTests {
         XCTAssertNotNil(wrapped.node.props["listItemKey"])
         try checkInteriorSeparators(f, name: "windowed-start", last: false)
         f.scroll(to: 4_000)
-        XCTAssertNil(f.presenter.views[first.id], "the old first row left the mounted window")
+        XCTAssertFalse(f.presenter.views[first.id] === first && first.props["testId"] == "edge-0", "the old first row left the mounted window")
+        XCTAssertEqual(f.presenter.views[first.id] == nil, !reuse, "destroyed, or rebound to another item")
         f.scroll(to: 0)
-        XCTAssertFalse(try f.node("edge-0") === first)
+        if !reuse { XCTAssertFalse(try f.node("edge-0") === first) }
         XCTAssertTrue(try f.node("edge-1").wrote("border_style_bottom"))
         try checkInteriorSeparators(f, name: "windowed-return", last: false)
         let retained = try f.node("edge-1")

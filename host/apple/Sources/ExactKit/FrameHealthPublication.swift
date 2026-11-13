@@ -2,7 +2,7 @@ import Foundation
 import QuartzCore
 
 /// Coalesce reader updates across the process. Common run-loop modes keep scrolling live;
-/// existing hooks and lifecycle changes supply updates without a polling timer.
+/// existing frame, landing and apply passes and lifecycle changes supply updates without a polling timer.
 enum FrameHealthPublication {
     private final class Reader { weak var health: FrameHealth? }
     private static var readers = (0..<16).map { _ in Reader() }
@@ -27,6 +27,7 @@ enum FrameHealthPublication {
             for reader in readers {
                 guard let health = reader.health, health.publicationDirty else { continue }
                 health.publicationDirty = false
+                health.publicationForced = false
                 autoreleasepool { health.changed?() }
             }
         }

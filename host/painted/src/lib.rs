@@ -91,6 +91,7 @@ pub mod presence_secrets;
 pub mod presenter;
 pub mod raster;
 mod scroll_anchor;
+mod sound;
 mod surface_haptics;
 mod surfaces;
 mod tamber;

@@ -2402,7 +2402,12 @@ drag starts with `playSound(…, group="drag")` on `pointerdown` and changes wit
 what is left of its file, and a voice that had no `pan=` is panned from then on,
 so give one that will pan its starting pan in `playSound` (a mono sound is 3 dB
 quieter once panned, even centred). The web plays the first sound after the page's first
-tap or key; Linux, Windows and Android keep the record and play nothing.
+tap or key. Android plays through an arm loaded at the first sound, sharing Apple's
+mixer. Its `audio_session` defaults to `"ambient"`: mixing, no audio focus, and
+silent while the ringer is silent or vibrating. `"playback"` takes focus;
+`"playback-mix"` mixes without ducking other audio. Android stops effects in the
+background and when headphones are unplugged; the next foreground effects open
+the output again. Linux and Windows keep the record and play nothing.
 
 ```contract
 sound "assets/ding.wav"

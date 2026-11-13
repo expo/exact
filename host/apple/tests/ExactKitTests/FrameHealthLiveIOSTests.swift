@@ -72,6 +72,9 @@ final class FrameHealthLiveIOSTests: XCTestCase {
         XCTAssertFalse(link.wantsLowLatencyEventDispatch)
         XCTAssertEqual(link.preferredFrameRateRange, .default)
         XCTAssertEqual(FrameClock.shared.linksMade, clock)
+        _ = session.frameHealth.setAgentCapture("start")
+        session.frameHealth.agentCaptureUntil = CACurrentMediaTime() - 1
+        observer.health.agentCaptureUntil = CACurrentMediaTime() - 1
         let observed = expectation(description: "native scroll updates reach the passive observer")
         var seen = false
         session.frameHealth.changed = {
@@ -81,6 +84,9 @@ final class FrameHealthLiveIOSTests: XCTestCase {
         scroll.contentSize = CGSize(width: 320, height: 4000)
         scroll.setContentOffset(CGPoint(x: 0, y: 100), animated: true)
         wait(for: [observed], timeout: 10)
+        XCTAssertEqual(observer.health.historyStatus().callbacks, 0, "expired detail capture keeps no native-scroll callbacks")
+        XCTAssertEqual(session.frameHealth.captureID, 0)
+        XCTAssertEqual(observer.health.captureID, 0)
         XCTAssertEqual(FrameClock.shared.linksMade, clock, "observation did not add display demand")
         scroll.removeFromSuperview()
         XCTAssertFalse(session.frameHealth.nativeScrollActive, "detachment closes observation without waiting for another update")

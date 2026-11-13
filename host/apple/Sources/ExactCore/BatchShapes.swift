@@ -230,7 +230,7 @@ extension BatchReader {
 extension BatchOp {
     package var isAdapter: Bool {
         switch op {
-        case .create, .props, .style, .children, .paragraph, .frame, .content, .present, .roots, .destroy, .roles: return false
+        case .create, .props, .style, .children, .paragraph, .frame, .content, .present, .roots, .destroy, .renew, .roles: return false
         default: return true
         }
     }
@@ -299,7 +299,7 @@ package struct BatchFields {
             op.w = try number("w") ?? 0; op.h = try number("h") ?? 0
             op.property = try string("property") ?? ""
             if op.op == .content { op.fitHeight = try number("fitHeight") }
-        case .destroy: break
+        case .destroy, .renew: break
         case .roles: op.style = try object("roles")
         default: op.payload = fields.mapValues(\.any)
         }

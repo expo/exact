@@ -372,23 +372,23 @@ ${patch}`;
 /** `text` without its `// dev-only {` … `// dev-only }` regions: what a
  * build that is not the dev loop's copies of a runtime file (modes.js's
  * live table, LLP 1121 stage 4), so no release page carries it. */
-/** A development build's copy of rt.js with inspect mode's two hooks
- * (LLP 1122 T2b; inspect-dev.js), so rt.js itself, and every other build's
- * copy, has none: an element's view id (`$exactViewId`), and every `each`
- * region with its rows and key function (`$exactEaches`), which a
- * development build's emitter names (regions.rs passes the region id) and
- * which leaves with its scope. Throws when rt.js no longer has the lines
- * they hang on. */
-export function withInspectHooks(text) {
-  const hooks = [
-    [/^export function viewId\(e\) \{.*\n/m, (line) => `${line}globalThis.$exactViewId = viewId;\n`],
-    [/^  let rows = new Map\(\), single = false, order = null;\n/m, (line) => `${line}  if (arguments[5] !== undefined) { const e = { region: arguments[5], rows: () => order ?? [], key, live: () => a.isConnected }; (globalThis.$exactEaches ??= new Set()).add(e); onEnd(() => globalThis.$exactEaches.delete(e)); }\n`],
-  ];
-  for (const [at, hook] of hooks) {
-    if (!at.test(text)) throw new Error(`rt.js: inspect mode's hook has no line to hang on (${at})`);
-    text = text.replace(at, hook);
-  }
-  return text;
+/** The runtime files a development build copies with inspect mode's hooks
+ * (LLP 1122 T2b; inspect-dev.js), so the files themselves, and every other
+ * build's copy, have none: an element's view id (`$exactViewId`, tree.js),
+ * and every `each` region with its rows and key function (`$exactEaches`,
+ * mount.js), which a development build's emitter names (regions.rs passes
+ * the region id) and which leaves with its scope. */
+const INSPECT_HOOKS = {
+  'tree.js': [/^export function viewId\(e\) \{\n[\s\S]*?^\}\n/m, (fn) => `${fn}globalThis.$exactViewId = viewId;\n`],
+  'mount.js': [/^  let rows = new Map\(\),\n    single = false,\n    order = null;\n/m, (line) => `${line}  if (arguments[5] !== undefined) { const e = { region: arguments[5], rows: () => order ?? [], key, live: () => a.isConnected }; (globalThis.$exactEaches ??= new Set()).add(e); onEnd(() => globalThis.$exactEaches.delete(e)); }\n`],
+};
+export const inspectHooked = Object.keys(INSPECT_HOOKS);
+/** `text`, runtime file `file`'s source, with its inspect hook. Throws when
+ * the file no longer has the lines the hook hangs on. */
+export function withInspectHooks(file, text) {
+  const [at, hook] = INSPECT_HOOKS[file];
+  if (!at.test(text)) throw new Error(`${file}: inspect mode's hook has no line to hang on (${at})`);
+  return text.replace(at, hook);
 }
 /** B5 (lower.js `RUNTIME`): the arms sheet's host stamp, a digest of the runtime files the build copies first (`files`:
  * `{ path, text }`, lower.js's unstamped source among them), so a runtime whose helpers or rule builder changed under a

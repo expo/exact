@@ -277,7 +277,7 @@ export function apkRecord(app, apk = readerApk(app)) {
   try { return JSON.parse(readFileSync(resolve(dirname(apk), 'exact-build.json'), 'utf8')); } catch { return null; }
 }
 /** The reader's own sources, which every APK compiles. */
-export const READER_SOURCES = ['canvas/src', 'app/src'].map((d) => resolve(READER, d));
+export const READER_SOURCES = ['canvas/src', 'app/src', 'soundarm', '../apple/soundarm'].map((d) => resolve(READER, d));
 
 // A reader failure whose cleanup succeeded.
 const RELAY_CLEANED_ERROR = 70;
@@ -678,10 +678,10 @@ export function zipEntry(zip, name) {
 
 /** Why an APK's library is not the one its build staged, or null (LLP 1159.002 D2): Gradle can keep an earlier
  * build's library in its merged intermediates and report the task up to date (QUEUE, "Gradle's file watching"). */
-export function keptLibrary(staged, packaged, dirs) {
+export function keptLibrary(staged, packaged, dirs, name = "libexactcanvas.so") {
   const made = loadedImage(staged), held = packaged ? loadedImage(packaged) : null;
   if (made === held) return null;
-  return `the APK holds ${held ? `a libexactcanvas.so that is not the one this build made (${held.slice(0, 12)} in the APK, ${made.slice(0, 12)} staged, by what each loads)` : 'no libexactcanvas.so'}. Gradle kept an earlier build's: delete ${dirs.join(' and ')} and build again`;
+  return `the APK holds ${held ? `a ${name} that is not the one this build made (${held.slice(0, 12)} in the APK, ${made.slice(0, 12)} staged, by what each loads)` : `no ${name}`}. Gradle kept an earlier build's: delete ${dirs.join(' and ')} and build again`;
 }
 
 /** The smallest alignment of an ELF64 file's PT_LOAD segments (its program headers' p_align). */
@@ -931,6 +931,27 @@ export function stageGpuLibraries(libraries, jniLibs) {
   return libraries.length ? [`-PgpuModules=${libraries.map((library) => basename(library)).join(',')}`] : [];
 }
 
+/** The optional sound arm: a separate ELF, never linked into libexactcanvas. */
+export function soundLibraryCommand(library, env) {
+  const mixer = resolve(READER, '../apple/soundarm'), arm = resolve(READER, 'soundarm');
+  const cc = env.CC_aarch64_linux_android, wrapper = /aarch64-linux-android(\d+)-clang\.cmd$/i.exec(cc);
+  // spawnSync cannot execute an NDK .cmd wrapper without a shell.
+  const compiler = wrapper ? [cc.replace(wrapper[0], 'clang.exe'), `--target=aarch64-linux-android${wrapper[1]}`] : [cc];
+  return [...compiler, '-std=gnu11', '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror',
+    '-Wl,-z,max-page-size=16384', '-Wl,-soname,libexact_sound.so', '-I', mixer,
+    resolve(mixer, 'sound_mixer.c'), resolve(arm, 'sound_wav.c'), resolve(arm, 'sound_arm.c'),
+    '-laaudio', '-lm', '-o', library];
+}
+
+export function stageSoundLibrary(jniLibs, env) {
+  const library = resolve(jniLibs, 'libexact_sound.so');
+  mkdirSync(jniLibs, { recursive: true });
+  const [command, ...args] = soundLibraryCommand(library, env);
+  const built = spawnSync(command, args, { env, stdio: 'inherit' });
+  if (built.status !== 0) throw new Error('Android sound arm did not build');
+  return library;
+}
+
 /** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_painted::canvas_jni!`; a game's
  * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets and its icon and banner
  * (`androidIcons`), where the Gradle shell packages them (host/android/app), then `:app:assembleRelease`. An app with
@@ -984,6 +1005,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   // The reader loads one name whatever the app; the plan names `assets/…` under the APK's `app/`.
   copyFileSync(built(crate), resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so'));
   const gpuArgs = stageGpuLibraries(gpu, resolve(staged, 'jniLibs/arm64-v8a'));
+  const sound = stageSoundLibrary(resolve(staged, 'jniLibs/arm64-v8a'), env);
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
@@ -1012,6 +1034,8 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   const apk = bundle ? resolve(dirs.app, 'outputs/bundle/release/app-release.aab') : readerApk(app);
   const kept = keptLibrary(readFileSync(resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so')), zipEntry(readFileSync(apk), `${bundle ? 'base/' : ''}lib/arm64-v8a/libexactcanvas.so`), [dirs.app, dirs.canvas]);
   if (kept) { console.error(`exact android: ${kept}`); return null; }
+  const keptSound = keptLibrary(readFileSync(sound), zipEntry(readFileSync(apk), `${bundle ? 'base/' : ''}lib/arm64-v8a/libexact_sound.so`), [dirs.app], 'libexact_sound.so');
+  if (keptSound) { console.error(`exact android sound: ${keptSound}`); return null; }
   writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, library: built(crate), workspace: app.workspace ?? app.dir,
     sources: [...READER_SOURCES, ...[resolve(app.dir, 'modules/android')].filter(existsSync)] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.

@@ -510,6 +510,7 @@ open class ExactActivity : Activity() {
         configure()
         view.running(true)
         Exact.hidden(false)
+        requests.foreground(true)
         if (measured) Exact.owner?.windowFrames?.attach(window)
         Extensions.started()
     }
@@ -537,6 +538,7 @@ open class ExactActivity : Activity() {
     override fun onStop() {
         stopped = true
         Exact.owner?.windowFrames?.detach()
+        requests.foreground(false)
         Exact.hidden(true)
         if (reads()) pads.background()
         if (reads()) Extensions.stopped(isChangingConfigurations)

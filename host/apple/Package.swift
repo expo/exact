@@ -107,7 +107,7 @@ let tests: [Target] = [
     // The sound arm's C mixer (LLP 1096 D8), rendered offline by the tests,
     // and its AVAudioEngine calls (ARC, cleaning up on a caught exception, as
     // the arm's build); the arm itself is a dylib build.mjs makes, never a product.
-    .target(name: "ExactSoundRender", path: "soundarm", exclude: ["SoundArm.swift"], sources: ["sound_render.c", "sound_engine.m"], publicHeadersPath: ".", cSettings: [.unsafeFlags(["-fobjc-arc", "-fobjc-arc-exceptions"])]),
+    .target(name: "ExactSoundRender", path: "soundarm", exclude: ["SoundArm.swift"], sources: ["sound_mixer.c", "sound_render.c", "sound_engine.m"], publicHeadersPath: ".", cSettings: [.unsafeFlags(["-fobjc-arc", "-fobjc-arc-exceptions"])]),
     // The video arm's media session coordinator (LLP 1098 D7), driven by the
     // tests over stand-in players; the arm itself is build.mjs's dylib.
     .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift"], sources: ["NowPlaying.swift"]),

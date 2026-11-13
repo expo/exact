@@ -1046,15 +1046,15 @@ async function main(args, lockHeld = false) {
   const hasSound = carries('sound'), soundBuilt = resolve(webBuildDir, soundLoadName);
   if (hasSound) {
     const sound = (f) => resolve(root, 'host/apple/soundarm', f), triple = webArgs[webArgs.indexOf('-target') + 1], flags = ['-O2', '-fobjc-arc', '-fobjc-arc-exceptions'];
-    const objects = ['sound_render.c', 'sound_engine.m'].map((file) => {
-      const object = resolve(swiftBuildRoot, 'arms', `${file.replace('.', '-')}-${createHash('sha256').update(readFileSync(sound(file))).update(readFileSync(sound('sound_render.h'))).update(`${triple} ${sdk} ${flags.join(' ')}`).digest('hex').slice(0, 16)}.o`);
+    const objects = ['sound_mixer.c', 'sound_render.c', 'sound_engine.m'].map((file) => {
+      const object = resolve(swiftBuildRoot, 'arms', `${file.replace('.', '-')}-${createHash('sha256').update(readFileSync(sound(file))).update(readFileSync(sound('sound_render.h'))).update(readFileSync(sound('sound_mixer.h'))).update(`${triple} ${sdk} ${flags.join(' ')}`).digest('hex').slice(0, 16)}.o`);
       if (existsSync(object)) return object;
       mkdirSync(dirname(object), { recursive: true });
       run('xcrun', ['--sdk', sdkName, 'clang', '-c', ...flags, '-target', triple, sound(file), '-o', `${object}.${process.pid}.tmp`]);
       renameSync(`${object}.${process.pid}.tmp`, object); return object;
     });
     const soundArgs = [...ownArgs(webArgs).map(value => value === 'ExactWebArm' ? 'ExactSoundArm' : value === resolve(root, 'host/apple/webarm/WebArm.swift') ? sound('SoundArm.swift') : value === webBuilt ? soundBuilt : value === 'WebKit' ? 'AVFoundation' : value), '-import-objc-header', sound('sound_render.h'), ...objects];
-    arms.push(arm(soundArgs, [sound('SoundArm.swift'), sound('sound_render.c'), sound('sound_engine.m'), sound('sound_render.h')], soundBuilt));
+    arms.push(arm(soundArgs, [sound('SoundArm.swift'), sound('sound_mixer.c'), sound('sound_mixer.h'), sound('sound_render.c'), sound('sound_engine.m'), sound('sound_render.h')], soundBuilt));
   }
   // The MIDI arm (LLP 1125 D6): CoreMIDI on a thread of its own; tvOS has none.
   const hasMidi = !tv && carries('midi'), midiBuilt = resolve(webBuildDir, 'libexact_midi.dylib'), midiSource = resolve(root, 'host/apple/midiarm/MIDIArm.swift'), midiRing = resolve(root, 'host/apple/midiarm/midi_ring.h');

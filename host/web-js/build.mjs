@@ -29,7 +29,7 @@ import { transformSync, parseSync, Visitor } from 'rolldown/utils';
 import { copyGpuCache } from './gpu-cache.mjs';
 import { analyze } from './page-style.mjs';
 import { bundleHostModule, gateAgent, localImports, stageHostGlue } from './glue.mjs';
-import { bakedRustSource, buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, fresh, moduleGrants, webCompiler, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
+import { bakedRustSource, buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, fresh, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
 import { developmentStore } from '../../scripts/agent-launch.mjs';
 import { settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, withInterfaceStyle, withLook } from '../web/look.mjs';
@@ -223,12 +223,12 @@ const compiler = webCompiler();
 const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', input, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : 'inherit', encoding: 'utf8', env: { ...process.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(',') } });
 if (cargo.status !== 0) { if (checkOnly) process.stderr.write(cargo.stderr ?? ''); process.exit(cargo.status ?? 1); }
 compiler.done();
-const runtime = ['rt.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'beat.js', 'regions.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
+const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'beat.js', 'regions.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
 for (const f of runtime) cpSync(resolve(here, f === 'timer-observations.js' ? '../web/' + f : f), resolve(gen, f));
 // The live table's runtime is the dev loop's build's alone.
 if (!devReload) writeFileSync(resolve(gen, 'modes.js'), withoutDev(readFileSync(resolve(here, 'modes.js'), 'utf8')));
 // Inspect mode's hooks in the runtime are the dev loop's build's alone (module.mjs `withInspectHooks`).
-if (devReload) writeFileSync(resolve(gen, 'rt.js'), withInspectHooks(readFileSync(resolve(here, 'rt.js'), 'utf8')));
+if (devReload) for (const f of inspectHooked) writeFileSync(resolve(gen, f), withInspectHooks(f, readFileSync(resolve(here, f), 'utf8')));
 // The arms sheet's host stamp (lower.js, LLP 1071.001 part B): a digest of the runtime array above as copied (the mode
 // and inspect transforms included), lower.js's own unstamped source among it; not the files copied after this.
 { const lower = readFileSync(resolve(here, 'lower.js'), 'utf8'); writeFileSync(resolve(gen, 'lower.js'), withRuntimeStamp(lower, runtime.map(f => ({ path: f, text: f === 'lower.js' ? lower : readFileSync(resolve(gen, f), 'utf8') })))); }

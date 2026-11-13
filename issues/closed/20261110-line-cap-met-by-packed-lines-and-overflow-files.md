@@ -1,6 +1,7 @@
 # Files at the 1,500-line cap stay under it by packing lines, and code is placed where there is room
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Each of the four files is split by concern and written one statement to a line, with the code the cap had misplaced moved to its owner: host/web-js/rt.js into seven modules (3f0bb666 and this commit), scripts/agent.mjs into the driver's modules with `--reader` as `open`'s option (ed29bfd7, dda177c5, e4e2f9fa), and js/src/prelude.js into a script per concern, which takes binary.js's image options and answer timers (9f478841, d2c9aa41, d013c494, 88d0fbe0).
 **Systems:** host/web-js/rt.js, scripts/agent.mjs, js/src/prelude.js, js/src/binary.js
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

@@ -775,6 +775,11 @@ uint32_t exact_timer_waits(ExactRuntime rt, uint32_t kinds, double cutoff, uint3
 /* Delegate ordinary live timers to per-task native timers. Batches carry
  * nativeTimers with each instance's original deadline, interval and tolerance. */
 uint32_t exact_native_timers(ExactRuntime rt, uint32_t enabled);
+/* Nonzero: a list row that leaves its list's window is rebound to the item
+ * the window needs next (LLP 1078), in this runtime and every later boot.
+ * Each of its views is said `renew` before its props and style: the
+ * presenter drops what it keeps by view, as a new view has none of it. */
+uint32_t exact_row_reuse(ExactRuntime rt, uint32_t on);
 /* Deliver only this timer instance. A cancelled generation cannot fire a replacement. */
 uint32_t exact_fire_native_timer(ExactRuntime rt, uint32_t index, uint64_t generation, double now_ms);
 uint32_t exact_advance(ExactRuntime rt, double now_ms, uint32_t mode);

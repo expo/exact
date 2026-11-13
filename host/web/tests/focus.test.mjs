@@ -442,7 +442,7 @@ test('action dialog commands keep modal focus and preserve bare close as window 
     // finding by id is enough. Inside a function, its `close` and `postMessage` leave the window's alone.
     await page.addScriptTag({content: `window.journal=[];window.quit=0;window.close=()=>quit++;window.hostCommands=(() => {const liveById = id => document.getElementById(id);\n${source}\nconst say = line => journal.push(line); return {showModal: showModal(say), close: close(say)};})();`});
     const glue = readFileSync(new URL('../glue.js', import.meta.url), 'utf8');
-    const runtime = readFileSync(new URL('../../web-js/rt.js', import.meta.url), 'utf8');
+    const runtime = readFileSync(new URL('../../web-js/events.js', import.meta.url), 'utf8');
     await page.addScriptTag({content: `(() => {
       const el = document.querySelector('#form'), views = new Map([[1, el]]), retiredViews = new Set(), inputReady = true, page = null;
       window.wasmClosed = []; window.jsClosed = [];
