@@ -894,22 +894,21 @@ export const linuxBinary = (app, bin = app.crate('linux')) => resolve(app.target
 /** The command that builds it. An app outside this repo gets the root's
  * profiles on the command line, as its Apple build does (injectedProfiles). */
 export const linuxBuild = (app, bin = null) => ['cargo', 'build', ...injectedProfiles(app), '--profile', HOST_DEV, '-p', app.crate('linux'), ...(bin ? ['--bin', bin] : [])];
-/** The executable (and Apple bundle) as Xcode and Visual Studio name a project's: the app's name, less what a file name cannot carry (LLP 1030 D2); `windowsFile` is a Windows build's name for a Cargo product. */
 /** What an iOS bundle's root holds beside the executable, which a name the same but for case would collide with
- * (expo/exact-build#89): the bundle's own files and folders, the static trees (`APPLE_STATIC_TREES`, here in lower
- * case), localizations, Metal libraries and icons. */
+ * (expo/exact-build#89): its own files and folders, the static trees (`APPLE_STATIC_TREES`), localizations and icons. */
 const BUNDLE_ROOT = new Set(['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities', 'frameworks', 'plugins',
-  'extensions', 'appclips', 'watch', 'info.plist', 'pkginfo', '_codesignature', 'embedded.mobileprovision', 'sc_info', 'receipt.json', 'assets.car', 'metadata.appintents', 'exactsvgfilter.metallib']);
+  'extensions', 'appclips', 'watch', 'info.plist', 'pkginfo', '_codesignature', 'embedded.mobileprovision', 'sc_info', 'receipt.json', 'assets.car', 'metadata.appintents', 'exactsvgfilter.metallib', 'privacyinfo.xcprivacy', 'exactresources']);
 const inBundleRoot = (name) => BUNDLE_ROOT.has(name.toLowerCase()) || /\.(lproj|metallib|bundle|framework|appex)$|^appicon.*\.png$/i.test(name);
-/** The executable's name: the app's, made a file name, and given an " App" suffix when it would name one of the
- * bundle's own entries (an app called "Assets" or "Frameworks"), so such an app still builds. */
-export const executableName = (app) => {
-  const name = app.displayName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').replace(/^[. ]+|[. ]+$/g, '') || app.id.split('.').pop();
-  return inBundleRoot(name) ? `${name} App` : name;
+/** The executable (and Apple bundle) as Xcode and Visual Studio name a project's: the app's name, less what a file name cannot carry (LLP 1030 D2); `windowsFile` is a Windows build's name for a Cargo product. */
+export const executableName = (app) => app.displayName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').replace(/^[. ]+|[. ]+$/g, '') || app.id.split('.').pop();
+/** Match CFBundle's decomposed executable path so codesign excludes the main executable from its resource seal (directory
+ * traversal preserves the file name's spelling).
+ * `flat`: an iOS or tvOS executable, at the bundle's root, takes an " App" suffix when its name is one of the root's
+ * entries (an app called "Assets"), so the app builds; a Mac executable sits alone in Contents/MacOS and keeps its name. */
+export const appleExecutableName = (app, flat = false) => {
+  const name = executableName(app);
+  return (flat && inBundleRoot(name) ? `${name} App` : name).normalize('NFD');
 };
-/** Match CFBundle's decomposed executable path so codesign excludes the main executable
- * from its resource seal. Directory traversal preserves the filename's spelling. */
-export const appleExecutableName = (app) => executableName(app).normalize('NFD');
 /** The App Clip `host.ios.appClip` declares, or null: its bundle id (`<app id>.Clip`, as Xcode names one), its
  * name (the app's) and the executable's name. An App Clip is an app (LLP 1126 D12): the clip bundle runs the whole
  * app under this second identity, using the same executable target. The web build names its id in the origin's
@@ -925,7 +924,7 @@ export const appClip = (app) => {
   const clip = app.manifest.host?.ios?.appClip;
   if (!clip) return null;
   const id = clip.id ?? `${app.id}.Clip`, name = clip.name ?? app.displayName;
-  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }) };
+  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }, true) };
 };
 export const windowsFile = (app, path) => basename(path) === `${app.crate('windows')}.exe` ? `${executableName(app)}.exe` : basename(path);
 export function bakeTarget(platform) {

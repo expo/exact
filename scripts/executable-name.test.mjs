@@ -1,15 +1,18 @@
 import { expect, test } from 'bun:test';
-import { executableName } from './app.mjs';
+import { APPLE_STATIC_TREES } from '../host/apple/assets.mjs';
+import { appleExecutableName, executableName } from './app.mjs';
 
-// An app named like one of the bundle's own entries builds, under an executable that does not collide with it
-// (expo/exact-build#89).
-test("an executable that would name one of the bundle's own entries gets an App suffix", () => {
-  const named = (displayName) => executableName({ displayName, id: 'com.example.x' });
-  expect(named('Notes')).toBe('Notes');
-  expect(named('Café')).toBe('Café');
-  for (const name of ['Assets', 'assets', 'Frameworks', 'PlugIns', 'Info.plist', 'Watch', 'deck', 'en.lproj', 'AppIcon60x60@2x.png', 'Shaders'])
-    expect(named(name)).toBe(`${name} App`);
-  // The file-name cleanup still runs first, and an empty name still falls back to the id's last part.
-  expect(named('a/b')).toBe('a-b');
-  expect(named('..')).toBe('x');
+// An iOS app named like one of its bundle root's own entries builds, under an executable that does not collide
+// with it; a Mac or Windows executable, which shares no folder with them, keeps the app's name (expo/exact-build#89).
+test("only a flat bundle's executable that would name one of the root's entries gets an App suffix", () => {
+  const app = (displayName) => ({ displayName, id: 'com.example.x' });
+  expect(appleExecutableName(app('Notes'), true)).toBe('Notes');
+  for (const name of ['Assets', 'assets', 'Frameworks', 'PlugIns', 'Info.plist', 'PrivacyInfo.xcprivacy', 'ExactResources', 'Watch', 'en.lproj', 'AppIcon60x60@2x.png']) {
+    expect(appleExecutableName(app(name), true)).toBe(`${name} App`);
+    expect(appleExecutableName(app(name))).toBe(name);
+    expect(executableName(app(name))).toBe(name);
+  }
+  // Every tree the build copies to the bundle root is reserved, whatever its case.
+  for (const tree of APPLE_STATIC_TREES) expect(appleExecutableName(app(tree.toUpperCase()), true)).toBe(`${tree.toUpperCase()} App`);
+  expect(appleExecutableName(app('Café'), true)).toBe('Café'.normalize('NFD'));
 });
