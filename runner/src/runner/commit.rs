@@ -821,11 +821,14 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Ask resource `r` in place of the stand-in the launch shows, at the
-    /// next settlement that can. The ask replaces whatever is in flight, as
-    /// a refresh does, and is sent as an ordinary one (LLP 1162.000 D1).
+    /// Ask resource `r` in place of the stand-in the launch shows: at the
+    /// next settlement when its source can answer now, else at `data_ready`.
+    /// The ask replaces whatever is in flight, as a refresh does, and is
+    /// sent as an ordinary one (LLP 1162.000 D1).
     pub(super) fn ask_at_launch(&mut self, r: usize) {
-        if !self.refresh_next.contains(&r) {
+        if !self.source_ready(self.plan.str(self.resource_row(r).source)) {
+            self.resources[r].stale = true;
+        } else if !self.refresh_next.contains(&r) {
             self.launch.push(r);
             self.refresh_next.push(r);
         }

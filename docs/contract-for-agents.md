@@ -727,7 +727,11 @@ kept for the resource is forgotten, so a launch never shows an answer since repl
 `logs` says `too big to keep` once, naming the resource and what to do. An
 identifying argument that changes every launch (the launch's time or seed) never
 matches the kept one: pass it after `with`, as `resource lib = library() with
-time.epochAtZero`; the compiler and `logs` both say so.
+time.epochAtZero`; the compiler and `logs` both say so. A source declared in
+`app.contract` keeps no answer, as the launch asks it at boot, and neither does a
+resource whose identifying arguments read a declared resource, which a launch
+starts on its placeholder: pass such an argument after `with` when it does not
+identify the answer.
 An answer that must never reach the device's storage (a one-time code, a message
 shown once) ends its line with `transient`: `resource code = otp(request) as shape
 Code transient`. It is never kept, a launch starts from its placeholder, and an

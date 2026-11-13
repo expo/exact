@@ -29,9 +29,11 @@ pub struct Checkpoint {
     /// 1016.000 D5): the runtime shows each and asks it again, which
     /// subscribes the runtime to it.
     pub open: Vec<usize>,
-    /// The indices in `answers` of those that read what the store holds, not
-    /// only randomness: the runtime takes each as a store reader's, since the
-    /// render never had the device's store.
+    /// The indices in `answers` of those whose own ask read what the store
+    /// holds, not only randomness: the runtime takes each as a store
+    /// reader's, since the render never had the device's store. One that
+    /// read the store only through its arguments is not: it is asked when
+    /// they change (`Runner::asks_on_store_change`).
     pub readers: Vec<usize>,
 }
 
@@ -42,9 +44,9 @@ impl<D: DataSource> Runner<D> {
     /// already has: it isn't asked again at boot or at `data_ready`, only
     /// when its arguments or inputs change, as any answer is. The clock
     /// starts at the render time; the host's clock and store then apply as
-    /// ordinary updates. An answer that read the store is a store reader's,
-    /// since the render never had the device's store: it is asked again
-    /// when the device's store holds the app's own entries, showing the
+    /// ordinary updates. An answer whose own ask read the store is a store
+    /// reader's, since the render never had the device's store: it is asked
+    /// again when the device's store holds the app's own entries, showing the
     /// rendered answer meanwhile, and whenever the store changes. An open
     /// stream's answer is asked again too: the render's stream ended with
     /// the render. An element of a resource over a list that the boot makes
@@ -104,12 +106,12 @@ impl<D: DataSource> Runner<D> {
     /// What a document projected from this runner now was projected from
     /// (LLP 1048.000 D6): every answer of the app's sources, the location,
     /// the clock, what is still pending, the open streams, and the answers
-    /// that read the store. The runner's own facts (delivery, the viewport,
-    /// surface records) are the runtime's to answer, never a checkpoint's,
-    /// and so are a module's names: a render answers them from the web's
-    /// declaration, never the reader's device (a battery, a permission's
-    /// status), and a seeded answer is not asked again, so the device would
-    /// never be read.
+    /// whose own ask read the store. The runner's own facts (delivery, the
+    /// viewport, surface records) are the runtime's to answer, never a
+    /// checkpoint's, and so are a module's names: a render answers them from
+    /// the web's declaration, never the reader's device (a battery, a
+    /// permission's status), and a seeded answer is not asked again, so the
+    /// device would never be read.
     pub fn document_checkpoint(&self, location: &str) -> Checkpoint {
         let mut pending: Vec<String> = (self.pending().into_iter())
             .filter(|(_, ticket)| !self.is_open_stream(*ticket))

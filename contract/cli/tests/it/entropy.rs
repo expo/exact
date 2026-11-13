@@ -180,10 +180,11 @@ fn sign_in(r: &mut Runner<Writer>) -> [u32; 5] {
 }
 
 /// D2, "Asking again": a draw does not make a resource ask again, so a write
-/// to the store asks again the resources that read it, directly or through
-/// their arguments, and not one that only drew randomness or took an argument
-/// derived from a draw (expo/exact#54: Convex's socket, which draws its
-/// session id, was opened again by every sign-in).
+/// to the store asks again the resources whose own ask read it, and not one
+/// that only drew randomness (expo/exact#54: Convex's socket, which draws its
+/// session id, was opened again by every sign-in). A resource whose arguments
+/// read a reader is asked when they change: `watch(session)` keeps its
+/// arguments, as `session` answers the same.
 #[test]
 fn a_store_write_asks_again_what_read_the_store_not_what_only_drew() {
     let plan = contract::bake(contract::compile(WRITES).unwrap(), Writer::default()).unwrap();
@@ -196,7 +197,7 @@ fn a_store_write_asks_again_what_read_the_store_not_what_only_drew() {
     )
     .unwrap();
     // token (drew), session (read), both (drew and read), connect(id), watch(session).
-    assert_eq!(sign_in(&mut r), [0, 1, 1, 0, 1]);
+    assert_eq!(sign_in(&mut r), [0, 1, 1, 0, 0]);
     // Still the device's: bake keeps no value for either.
     assert!(r.resource_draws_entropy("id") && r.resource_reads_store("id"));
     assert!(r.resource_reads_store("live"));
@@ -224,7 +225,7 @@ fn a_reload_carries_which_readers_only_drew() {
     )
     .unwrap();
     assert_eq!(asks(&mut reloaded), [0; 5], "every answer was carried");
-    assert_eq!(sign_in(&mut reloaded), [0, 1, 1, 0, 1]);
+    assert_eq!(sign_in(&mut reloaded), [0, 1, 1, 0, 0]);
 }
 
 const LATER: &str = r#"
@@ -250,11 +251,12 @@ component App
       text trailed testId="trailed"
 "#;
 
-/// An upstream answer that starts reading the store and gives the same value
-/// leaves its dependent's cached arguments as they were; the dependent is
-/// asked again by a store write from then on all the same.
+/// An upstream answer that starts reading the store is asked again by a store
+/// write from then on, and while it gives the same value its dependents keep
+/// their arguments and ask nothing, whether they read it directly or through
+/// a derive.
 #[test]
-fn an_argument_that_starts_reading_the_store_makes_its_dependent_ask_again() {
+fn a_store_write_asks_no_dependent_whose_arguments_stay() {
     let plan = contract::bake(contract::compile(LATER).unwrap(), Writer::default()).unwrap();
     let mut r = Runner::boot(
         plan,
@@ -279,5 +281,5 @@ fn an_argument_that_starts_reading_the_store_makes_its_dependent_ask_again() {
         "the same answer: both keep their arguments"
     );
     r.act("signIn", vec![]).unwrap();
-    assert_eq!(asks(&mut r), enabled.map(|n| n + 1));
+    assert_eq!(asks(&mut r), [enabled[0] + 1, enabled[1], enabled[2]]);
 }

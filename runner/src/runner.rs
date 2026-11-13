@@ -728,7 +728,7 @@ impl<D: DataSource> Runner<D> {
         }
         let same_logic = carried.is_none_or(|c| c.data_revision.as_deref() == data.revision());
         data.bind(&plan);
-        // A cold boot forgets the kept answers no declared reader seeds; an
+        // A cold boot forgets the kept answers no resource seeds (`kept::obsolete`); an
         // app granting Health forgets them all, at every boot (LLP 1069.008.000 D7).
         let private = crate::device::keeps_no_answers(data.grants());
         let obsolete_kept = match carried {
@@ -972,11 +972,11 @@ impl<D: DataSource> Runner<D> {
             Seed::Checkpoint(checkpoint) => runner.seed_checkpoint(checkpoint),
             _ => (vec![false; runner.resources.len()], Vec::new()),
         };
-        // Store-reading resources when the data source is not ready (a TypeScript module before
-        // its host loads it, LLP 1027 D4): the answer kept from the last launch seeds the first
-        // frame if its identifying arguments still match and its value still fits; the compiled
-        // empty-store placeholder is the fallback (settlement); either way the resource is asked
-        // again at `data_ready`.
+        // A data module's store readers when it is not ready (a TypeScript module before its host
+        // loads it, LLP 1027 D4): the answer kept from the last launch seeds the first frame if its
+        // identifying arguments still match and its value still fits; the compiled empty-store
+        // placeholder is the fallback (settlement); either way the resource is asked again at
+        // `data_ready`.
         let ready = runner.data.ready();
         runner.keeping.on = !private && (!ready || carried.is_some_and(|c| c.keeps_answers));
         runner.seed_at_boot(&seeded, ready, private);
@@ -984,11 +984,7 @@ impl<D: DataSource> Runner<D> {
         // its own store, a store reader's, shows until it answers: asked now
         // when its source can answer, else at `data_ready`.
         for i in again {
-            if !ready {
-                runner.resources[i].stale = true;
-            } else {
-                runner.ask_at_launch(i);
-            }
+            runner.ask_at_launch(i);
         }
         runner.pending_mut = vec![false; runner.plan.mutations.len()];
         runner.then_due = vec![f64::INFINITY; runner.plan.mutations.len()];

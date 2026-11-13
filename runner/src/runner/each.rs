@@ -123,7 +123,7 @@ impl<D: DataSource> Runner<D> {
         let answer = page.take(args)?;
         let (value, again, reads) = (answer.value.clone(), answer.again, answer.reads);
         self.seed_reads(i, reads);
-        if again && self.data.ready() {
+        if again && self.source_ready(self.plan.str(self.resource_row(i).source)) {
             self.launch.push(i);
             force.push(i);
         } else if again {
