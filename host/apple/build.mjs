@@ -1241,10 +1241,8 @@ async function main(args, lockHeld = false) {
       // A development device archive ships no dSYM, and its debug map (the stabs naming each object it was linked
       // from) holds paths under the app's build directory, which name the app. They go after the link: a per-app
       // -oso_prefix in the link made SwiftPM compile the scratch again for every app (expo/exact-build#177).
-      if (device && args.includes('--development')) {
-        const stripped = read('strip', ['-S', executable]);
-        if (stripped.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${stripped.stderr || stripped.error?.message || stripped.status}`);
-      }
+      const debugMap = device && args.includes('--development') ? read('strip', ['-S', executable]) : null;
+      if (debugMap && debugMap.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${debugMap.stderr || debugMap.error?.message || debugMap.status}`);
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.
