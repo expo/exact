@@ -643,31 +643,34 @@ function compilerCargo(verb, env = process.env) {
 }
 const COMPILER = resolve(ROOT, 'target/debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
 /** A Contract compiler built elsewhere from this checkout (`EXACT_CONTRACT_BIN`, a path to its binary), which `exact
- * contract` runs instead of building one, so a machine without Rust can check an app (a build service hands one out
- * per SDK snapshot). Its optional `<binary>.commit` names the exact2 commit it was built from; one that is not this
- * checkout's HEAD is set aside, since a compiler from other sources would answer for another language. */
+ * contract` runs instead of building one, so a machine without Rust can check an app: a build service hands one out
+ * per SDK snapshot (expo/exact-build#172). Its `<binary>.commit` says what it was built from, as two words: the
+ * exact2 commit and the Rust target triple. It is used only when that commit is this checkout's HEAD with no edits to
+ * tracked files and the triple is this machine's, since a compiler from other sources answers for another language.
+ * `{path}` when it is used; `{path: null, why}` when it is set but set aside, `why` saying what would fix it. */
 export function prebuiltCompiler(env = process.env) {
   const path = env.EXACT_CONTRACT_BIN;
-  if (!path) return null;
-  if (!existsSync(path)) {
-    console.error(`exact: EXACT_CONTRACT_BIN names ${path}, which does not exist; building the compiler here instead`);
-    return null;
-  }
+  if (!path) return {path: null, why: null};
+  const aside = why => {
+    console.error(`exact: EXACT_CONTRACT_BIN is set aside: ${why}`);
+    return {path: null, why};
+  };
+  if (!existsSync(path)) return aside(`${path} does not exist`);
   const stamp = `${path}.commit`;
-  if (existsSync(stamp)) {
-    const built = readFileSync(stamp, 'utf8').trim();
-    const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).stdout?.trim();
-    if (head && built !== head) {
-      console.error(`exact: EXACT_CONTRACT_BIN was built from exact2 ${built.slice(0, 10)}, and this checkout is ${head.slice(0, 10)}; building the compiler here instead`);
-      return null;
-    }
-  }
-  return path;
+  if (!existsSync(stamp)) return aside(`${stamp}, which names the exact2 commit and target it was built for, does not exist`);
+  const [built = '', triple = ''] = readFileSync(stamp, 'utf8').trim().split(/\s+/);
+  const here = {'darwin-arm64': 'aarch64-apple-darwin', 'darwin-x64': 'x86_64-apple-darwin', 'linux-arm64': 'aarch64-unknown-linux-gnu', 'linux-x64': 'x86_64-unknown-linux-gnu'}[`${process.platform}-${process.arch}`];
+  if (triple !== here) return aside(`it was built for ${triple || 'no named target'}, and this machine is ${here ?? `${process.platform}-${process.arch}`}`);
+  const git = args => spawnSync('git', ['-C', ROOT, ...args], {encoding: 'utf8'});
+  const head = git(['rev-parse', 'HEAD']).stdout?.trim();
+  if (built !== head) return aside(`it was built from exact2 ${built.slice(0, 10) || '(none)'}, and this checkout is at ${head?.slice(0, 10) || 'no commit'}: git -C ${ROOT} checkout ${built || '<its commit>'}, or install rustup to build the compiler here`);
+  if (git(['diff', '--quiet', 'HEAD', '--']).status !== 0) return aside(`this checkout has edits to tracked files, which the prebuilt compiler does not have: undo them, or install rustup to build the compiler here`);
+  return {path, why: null};
 }
 /** `exact new` starts the compiler's build apart from this shell, so the builder's first `contract vocab` or
  * `contract build` does not wait the minute a cold one takes (a port's first lookup, 67 s). A fresh one is a no-op. */
-function prebuildCompiler() {
-  if (prebuiltCompiler()) return;
+function prebuildCompiler(prebuilt) {
+  if (prebuilt.path) return;
   const { args, env } = compilerCargo('build');
   const child = spawn('cargo', args, { detached: true, stdio: 'ignore', env });
   child.on('error', () => {});
@@ -676,13 +679,13 @@ function prebuildCompiler() {
 }
 
 export function contract(args, env = process.env) {
-  const prebuilt = prebuiltCompiler(env), cargo = prebuilt ? null : compilerCargo('run', env), binary = prebuilt ?? COMPILER;
+  const {path: prebuilt, why} = prebuiltCompiler(env), cargo = prebuilt ? null : compilerCargo('run', env), binary = prebuilt ?? COMPILER;
   if (!prebuilt && !existsSync(binary)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
   // `build --json` is one JSON array on stdout and nothing on stderr: the compiler's diagnostics, then app.ts's.
   const json = args[0] === 'build' && args.includes('--json');
   const options = {stdio: ['inherit', json ? 'pipe' : 'inherit', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26};
   const result = prebuilt ? spawnSync(prebuilt, args, {...options, env}) : spawnSync('cargo', [...cargo.args, '--', ...args], {...options, env: cargo.env});
-  if (result.error) throw new Error(prebuilt ? `EXACT_CONTRACT_BIN ${prebuilt}: ${result.error.message}` : `cargo: ${result.error.message} (install rustup from https://rustup.rs)`);
+  if (result.error) throw new Error(prebuilt ? `EXACT_CONTRACT_BIN ${prebuilt}: ${result.error.message}` : `cargo: ${result.error.message} (${why ? `EXACT_CONTRACT_BIN is set aside: ${why}` : 'install rustup from https://rustup.rs'})`);
   // Cargo's own failures exit 101; one that is not rustup's refuses `+<pin>` before the compiler runs.
   if (!prebuilt && result.status === 101) { const fault = cargoProxyFault(cargo.pin, cargo.env); if (fault) console.error(`exact contract: ${fault}`); }
   // A build of an app's `app.contract` refreshes the types its `app.ts` imports (LLP 1116.001 D4.5); of unsaved text
@@ -783,13 +786,14 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
   // The web's rows alone for an app (LLP 1153 D1.6); a native platform's are checked by the verb that first needs it.
   const report = sdkReport(process.env, game ? {} : { only: 'web' });
   // An app needs Rust only for exact2's own tools, the compiler among them, which EXACT_CONTRACT_BIN can stand in for.
-  if (report.some(row => row.name === 'rustup' && !row.ok) && (game || !prebuiltCompiler())) {
+  const prebuilt = prebuiltCompiler();
+  if (report.some(row => row.name === 'rustup' && !row.ok) && (game || !prebuilt.path)) {
     printReport(report, {onlyMissing: true});
-    throw new Error(`exact new needs Rust (rustup) to build exact2's own tools, the compiler among them; install it, then run exact new again${game ? '' : ', or set EXACT_CONTRACT_BIN to a compiler built from this checkout'}`);
+    throw new Error(`exact new needs Rust (rustup) to build exact2's own tools, the compiler among them; install it, then run exact new again${game ? '' : prebuilt.why ? `; EXACT_CONTRACT_BIN is set aside: ${prebuilt.why}` : ', or set EXACT_CONTRACT_BIN to a compiler built from this checkout'}`);
   }
   // A game is a path here, as an app is: `game/new.mjs` alone takes a bare name for game/games.
   console.log(game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms}));
-  prebuildCompiler();
+  prebuildCompiler(prebuilt);
   if (report.some(row => !row.ok)) {
     // Builders read a bare "still needs" list as the reason a later command failed (bench diaries,
     // 2026-10-07/08): say when nothing on it blocks the app.
