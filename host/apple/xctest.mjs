@@ -256,9 +256,13 @@ export async function iosTestRuns({ pkg, products, destination, udid, env, canva
   const touchOnly = hostedTests(testDir, 'touch').filter(selected);
   const hostedOnly = hostedTests(testDir).filter(selected).filter(t => !touchOnly.includes(t));
   const failures = [];
+  // A test still running at its allowance fails, and the run goes on with the next test in a new
+  // process: a test that hangs (as a share sheet waiting on a simulator's `sharingd` can) costs its
+  // allowance, not the rest of the run
   const testRun = (xctestrun, selection, runEnv, parallel = true) => {
     try {
       runApple('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', destination, '-collect-test-diagnostics', 'never',
+        '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '600',
         '-parallel-testing-enabled', parallel ? 'YES' : 'NO', ...(parallel ? ['-parallel-testing-worker-count', '2'] : []), ...selection], { cwd: pkg, stdio: 'inherit', env: runEnv });
     } catch (e) { failures.push(e); }
   };
