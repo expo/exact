@@ -24,9 +24,33 @@ The port of a large React Native app (iOS device, exact2 `94b8671f`) saw the fir
 
 Only the code path was checked; the timings are the reporter's, and how the 0.4 s divides among the steps above was not measured. `ExactLaunch` already records `modulePrepared` and `dataStep`, which would divide it.
 
+## Measured
+
+Weatherlight (a 217-line TypeScript module, a GPU canvas that loads after first pixel) on an iPhone 16 Pro Max, iOS 27.0.1, main at `84f51d7f` with a stderr line at each step, cold launches by `devicectl`. Fifteen of a development build and ten of a release build.
+
+| After the first frame | Release, median (range) | Development, median |
+|---|---|---|
+| First draw to the block `firstDrawn` posts to the main queue | 37.5 ms (36 to 117) | 33.5 ms |
+| Notification categories read and written | 20.8 ms (4 to 100) | 11 to 60 ms |
+| `prepareAppModule` | 4.3 ms (2.5 to 18) | 2.6 ms |
+| The module's top level on the owner thread | 10.2 ms (8 to 16) | 8.3 ms |
+| Back to the main queue | 7.6 ms (3.5 to 114) | 3.6 ms |
+| `dataReady` to the first request in the executor | 2.0 ms | 1.6 ms |
+| Workers started and their transports made | under 1 ms | 0.2 ms |
+| **First request in the executor** | **127 ms (53 to 274)** | **104 ms** |
+
+The first frame was 156 ms after process start at the median (release).
+
+- **The wait is turns of the main queue, not the module.** In the four launches of the 25 whose first request left before the canvas's world started, the whole chain took 53 to 59 ms. In every other launch it took 93 ms or more: the world's start holds the main thread for about 45 ms, and the chain waits behind it at whichever of its three main-queue turns comes next. This is a correlation across launches, not a profile.
+- **The module's evaluation is 8 to 16 ms here** and grows with the module; the comment above `prepareData` has 325 ms for a 2 MB one.
+- **The notification step is newer than the report.** `declareNotificationCategories` entered the chain on 2026-11-12 (`ac741eca`); the reporter's build (`94b8671f`) ran `prepareAppModule` directly. A launch that declares no notification actions and keeps none no longer asks the notification centre.
+- **Starting the workers costs nothing measurable.** The transport's own first use is inside the first exchange and was not measured.
+
+Not measured: the reporter's app, a launch with a preload against the same launch without, and the time from an answer to its commit.
+
 ## Fix
 
-Measure first, with the launch trace's module and data steps. Then the likely moves: load and evaluate the module on the owner thread while the first frame is being drawn, committing only after first pixel, so step 2 overlaps the paint; and make the independent lane's transport when the module is prepared, not at the first request.
+The likely moves, in the order the measurement gives them: ask the resources without waiting for turns of the main queue that the first frame's own work is also waiting for; load and evaluate the module on the owner thread while the first frame is being drawn, committing only after first pixel, so step 2 overlaps the paint; and make the independent lane's transport when the module is prepared, not at the first request.
 
 ## Owner
 
