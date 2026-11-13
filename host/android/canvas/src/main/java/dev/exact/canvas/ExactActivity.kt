@@ -628,7 +628,7 @@ open class ExactActivity : Activity() {
         val development = packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.GET_META_DATA)
             .metaData?.getBoolean("dev.exact.development", false) == true
         if (!development) return
-        // The data module's `console` lines to logcat under `exact-app` (`host/painted/src/canvas/journal.rs`).
+        // The data module's `console` lines to logcat under `exact-app` (`host/painted/src/android.rs`, `console`).
         android.system.Os.setenv("EXACT_LOG_CONSOLE", "1", true)
         // rows=0: no kept rows, every frame walks every row (exact2's EXACT_ROWS), to compare.
         if (intent.getStringExtra("rows") == "0") android.system.Os.setenv("EXACT_ROWS", "0", true)

@@ -198,7 +198,7 @@ pub use device::{configure, window, Told};
 #[cfg(target_os = "android")]
 #[path = "canvas/jni.rs"]
 pub mod jni;
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 #[path = "canvas/journal.rs"]
 mod journal;
 #[cfg(any(target_os = "android", test))]
