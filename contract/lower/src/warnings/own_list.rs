@@ -9,7 +9,7 @@
 
 use super::{path, WALKS};
 use crate::LowerError;
-use contract_syntax::{Expr, FnDecl, Node, TemplatePart};
+use contract_syntax::{Expr, FnDecl, Node};
 use contract_types::{infer, Ref, Scope, Shapes, Ty};
 use std::collections::BTreeSet;
 
@@ -60,65 +60,8 @@ fn walks(e: &Expr, name: &str, fns: &[FnDecl], depth: usize) -> bool {
     {
         return true;
     }
-    let mut found = false;
-    children(e, &mut |x, binds| {
-        found |= !binds.contains(&name) && walks(x, name, fns, depth);
-    });
-    found
-}
-
-/// Each sub-expression of `e` with the names it binds there.
-fn children<'e>(e: &'e Expr, f: &mut impl FnMut(&'e Expr, &[&str])) {
-    match e {
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    f(x, &[]);
-                }
-            }
-        }
-        Expr::Ternary(a, b, c, _) => {
-            for x in [a, b, c] {
-                f(x, &[]);
-            }
-        }
-        Expr::Binary(_, a, b, _) => {
-            f(a, &[]);
-            f(b, &[]);
-        }
-        Expr::Unary(_, inner, _)
-        | Expr::Some(inner, _)
-        | Expr::NamedArg(_, inner, _)
-        | Expr::Typed(inner, _, _)
-        | Expr::Member(inner, _, _) => f(inner, &[]),
-        Expr::Call(_, items, _) | Expr::List(items, _) => {
-            for x in items {
-                f(x, &[]);
-            }
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            f(subject, &[]);
-            f(some, &[var.as_str()]);
-            f(none, &[]);
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            f(value, &[]);
-            f(body, &[name.as_str()]);
-        }
-        Expr::Arrow { params, body, .. } => {
-            let names: Vec<&str> = params.iter().map(String::as_str).collect();
-            f(body, &names);
-        }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {}
-    }
+    e.scoped_operands()
+        .any(|(x, binds)| !binds.contains(name) && walks(x, name, fns, depth))
 }
 
 impl Own<'_> {
@@ -145,10 +88,9 @@ impl Own<'_> {
                 }
             }
         }
-        let mut inner = Vec::new();
-        children(e, &mut |x, binds| inner.push((x, without(rows, binds))));
-        for (x, rows) in inner {
-            self.expr(x, &rows);
+        for (x, binds) in e.scoped_operands() {
+            let binds: Vec<&str> = binds.iter().collect();
+            self.expr(x, &without(rows, &binds));
         }
     }
 

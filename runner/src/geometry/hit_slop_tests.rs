@@ -115,6 +115,17 @@ fn a_one_axis_clip_cuts_that_axis_only() {
 }
 
 #[test]
+fn a_scroll_element_clips_its_children_at_its_scrollport() {
+    // `scroll` scrolls on y with no overflow rows, so its child is not hit
+    // below its box, as `elementFromPoint` misses it on the web.
+    let r = boot(
+        "      scroll id=\"scroller\" width=100 height=100\n        box id=\"child\" width=100 height=300 flex-shrink=0\n",
+    );
+    assert_eq!(hit(&r, 50.0, 50.0), at("child"));
+    assert_eq!(hit(&r, 50.0, 150.0), at("page"));
+}
+
+#[test]
 fn a_negative_or_percentage_slop_is_refused() {
     for value in ["-4px", "10%", "4px -2px"] {
         let source = format!(

@@ -8,6 +8,12 @@ fn main() {
     let is_apple = target_vendor == "apple";
     let has_intl = std::env::var_os("CARGO_FEATURE_INTL").is_some();
 
+    println!("cargo:rustc-check-cfg=cfg(ibex2_android_intl)");
+    let android_intl = target_os == "android"
+        && std::env::var("DEP_HERMES_LEAN_ANDROID_INTL").as_deref() == Ok("1");
+    if android_intl {
+        println!("cargo:rustc-cfg=ibex2_android_intl");
+    }
     build_platform_backends(is_apple);
     if std::env::var_os("CARGO_FEATURE_BINDINGS").is_none() {
         return;
@@ -30,6 +36,9 @@ fn main() {
             "sqlite",
             "structured_clone",
             "harden",
+            "intl_number_format",
+            "intl_case",
+            "intl_datetime",
         ] {
             std::fs::write(out_dir.join(format!("{name}.hbc")), [])
                 .expect("write stub binding bytecode");
@@ -74,7 +83,8 @@ fn main() {
     // (LLP 0057.000 §5.1.1); its icuuc/icuin link lines also come from
     // hermes-lean-sys `icu`, and the icu.dll-only entry points are bound at
     // run time by intl_icu_windows.cc, so no link argument is needed here.
-    let intl_shims = has_intl && (target_os == "linux" || target_os == "windows");
+    let intl_shims =
+        has_intl && (matches!(target_os.as_str(), "linux" | "windows") || android_intl);
     if intl_shims {
         if target_os == "windows" {
             println!("cargo:rerun-if-changed=src/bindings/intl_icu_windows.h");
@@ -95,7 +105,7 @@ fn main() {
     if is_apple {
         installer.flag("-stdlib=libc++");
     }
-    // ICU for the Linux Intl shims is linked by hermes-lean-sys's ICU
+    // ICU for the Linux and Android Intl shims is linked by hermes-lean-sys's ICU
     // features, never here, so a runtime graph carries it exactly once.
     installer.compile("ibex2_bindings_install");
 
@@ -154,7 +164,7 @@ fn main() {
         "cargo:rustc-env=IBEX2_BINDINGS_ENGINE_DIGEST={}",
         required("DEP_HERMES_LEAN_ENGINE_DIGEST")
     );
-    if target_os == "linux" {
+    if target_os == "linux" || android_intl {
         // @ref LLP 0057.000#l1--the-bindings-door — export all three
         // receipt-bound available identities and never the selected one: the
         // one hermes-lean-sys instance that links (there is no build-

@@ -63,10 +63,14 @@ export function eventStream(limit) {
   };
 }
 
+// Every message of a batch but its last says `more`: they reach the mapper
+// one by one, in order, and commit once, as the last one's value (LLP
+// 1016.000 D4). A consumer that ignores it commits each.
+const batch = (message, messages) => messages.forEach((m, i) => message(i < messages.length - 1 ? { ...m, more: true } : m));
+
 // Read an event stream to its end (LLP 1016.000): each read's events are
-// delivered as one message, the newest, carrying how many it replaced — the
-// runner has taken nothing in between, so display data coalesces (D4) and
-// a log sees the gap. What ends the body is the stream's last outcome.
+// delivered then, every one, as one batch (D4). What ends the body is the
+// stream's last outcome.
 async function readEvents(response, limit, message, controller) {
   const parse = eventStream(limit), reader = response.body.getReader(), encoder = new TextEncoder();
   const failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(text) });
@@ -74,8 +78,8 @@ async function readEvents(response, limit, message, controller) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) return failed(1, 'the event stream ended');
-      const events = parse(value);
-      if (events.length) message({ ...events[events.length - 1], coalesced: events.length - 1 });
+      const received = performance.now();
+      batch(message, parse(value).map(e => ({ ...e, coalesced: 0, received })));
     }
   } catch (error) {
     await reader.cancel().catch(() => {});
@@ -191,7 +195,7 @@ function upload(url, method, headers, body, limit, message, signal, admits) {
   });
 }
 
-// A long poll (LLP 1016.000 D8), as the native executor's executor_longpoll.rs:
+// A long poll (LLP 1016.000 D8), as the native executor's longpoll.rs:
 // ask, deliver each 2xx JSON reply as one message whose `id` is the cursor at
 // `from`, and ask again with it in the `cursor` query parameter, one request
 // at a time. A 204, a 304, an empty body or (unless `sameCursorEvent`) the
@@ -231,7 +235,7 @@ export function longPollRefusal(op, method, body) {
 }
 // `url` with query parameter `name` set to `value`, where it is or else appended, every other
 // pair kept byte for byte, as the native hosts' `with_query_value` does
-// (host/apple/src/executor_longpoll.rs). `URLSearchParams.set` would re-serialise the whole
+// (host/executor/src/longpoll.rs). `URLSearchParams.set` would re-serialise the whole
 // query as a form: `/` as `%2F`, `%20` as `+`, a bare `flag` as `flag=`.
 const unreserved = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 // A pair's name decoded as a form's is (`+` a space, a leading U+FEFF kept); a serialised URL's query is ASCII.
@@ -332,29 +336,29 @@ export async function readLongPoll(op, init, limit, message, controller, admits)
 }
 
 // The transport belongs to the resource's abort controller (LLP 1016.000).
-// `protocol` opts the JS TypeScript adapter into D7: ordered frames and a
-// private transport handle; the other adapters still take snapshot delivery.
+// `protocol` opts the JS TypeScript adapter into D7: ordered frames, binary
+// too, and a private transport handle; the other adapters only listen, to
+// text messages delivered as batches (D4).
 // `idleMs` (LLP 1016.000 D11): the socket ends as a Timeout (kind 10) when nothing has arrived for that long, in real
 // time, its opening and each complete message counting, from the moment it is asked.
 export function readSocket(url, limit, message, controller, protocol, idleMs, protocols) {
-  const encoder = new TextEncoder(), MAX_BYTES = 1048576, MAX_FRAMES = 256;
+  // A two-way socket's frames wait at most 256 (D7), a receive-only one's messages 4096 (D4).
+  const encoder = new TextEncoder(), MAX_BYTES = 1048576, MAX_FRAMES = protocol ? 256 : 4096;
   const failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(text) });
   return new Promise((resolve) => {
-    let socket, opened = false, ended = false, newest = null, coalesced = 0, timer = null, queue = [], stamps = [], bytes = 0, sent = 0, quiet = null;
+    let socket, opened = false, ended = false, timer = null, queue = [], stamps = [], bytes = 0, sent = 0, quiet = null;
+    // A two-way socket's frames commit one by one (D7); a receive-only one's waiting messages, as one batch.
     const flush = () => {
       clearTimeout(timer); timer = null;
       if (ended) return;
-      if (protocol) {
-        const frames = queue, received = stamps; queue = []; stamps = []; bytes = 0;
-        frames.forEach((data, i) => { if (!ended) message({ event: '', id: '', data, coalesced: 0, protocol: socket.protocol, received: received[i] }); });
-      } else if (newest !== null) {
-        const m = { event: '', id: '', data: newest, coalesced, protocol: socket.protocol };
-        newest = null; coalesced = 0; message(m);
-      }
+      const frames = queue.map((data, i) => ({ event: '', id: '', data, coalesced: 0, protocol: socket.protocol, received: stamps[i] }));
+      queue = []; stamps = []; bytes = 0;
+      if (protocol) frames.forEach(m => { if (!ended) message(m); });
+      else batch(message, frames);
     };
     const end = (outcome) => {
       if (ended) return;
-      ended = true; clearTimeout(timer); clearTimeout(quiet); queue = []; newest = null; bytes = 0;
+      ended = true; clearTimeout(timer); clearTimeout(quiet); queue = []; stamps = []; bytes = 0;
       controller.signal.removeEventListener('abort', abort);
       try { socket?.close(1000); } catch {}
       resolve(outcome);
@@ -399,19 +403,14 @@ export function readSocket(url, limit, message, controller, protocol, idleMs, pr
       if (!protocol && typeof e.data !== 'string') return end(failed(2, "a binary message: a socket's messages are text"));
       const size = typeof e.data === 'string' ? encoder.encode(e.data).length : e.data.byteLength;
       if (size > limit) {
-        if (protocol) flush();
+        flush();
         return end(failed(2, 'a message exceeds the response ceiling'));
       }
-      if (protocol) {
-        if (queue.length >= MAX_FRAMES || bytes + size > MAX_BYTES + limit) {
-          flush();
-          return end(failed(2, 'socket receive queue exceeds 256 frames or 1 MiB'));
-        }
-        queue.push(e.data); stamps.push(performance.now()); bytes += size;
-      } else {
-        if (newest !== null) coalesced++;
-        newest = e.data;
+      if (queue.length >= MAX_FRAMES || bytes + size > MAX_BYTES + limit) {
+        flush();
+        return end(failed(2, `socket receive queue exceeds ${protocol ? '256 frames' : '4096 messages'} or 1 MiB`));
       }
+      queue.push(e.data); stamps.push(performance.now()); bytes += size;
       timer ??= setTimeout(flush, 0);
     };
     socket.onclose = (e) => {

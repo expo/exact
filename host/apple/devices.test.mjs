@@ -608,3 +608,218 @@ cpSync(process.argv.at(-2), process.argv.at(-1), {recursive: true});
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+// Synthetic profile XML: no installed signing credentials or devices are read.
+function profileText({ mac = false, platforms = [mac ? 'OSX' : 'iOS'], devices = [], allDevices = false, debuggerKey, debug = true, push = 'production', pushKeys = { [mac ? 'com.apple.developer.aps-environment' : 'aps-environment']: push }, id = 'com.example.profile' } = {}) {
+  return `<?xml version="1.0"?><plist version="1.0"><dict>
+    <key>Name</key><string>Synthetic profile</string>
+    <key>TeamIdentifier</key><array><string>TESTTEAM00</string></array>
+    <key>Platform</key><array>${platforms.map(p => `<string>${p}</string>`).join('')}</array>
+    <key>ExpirationDate</key><date>2099-01-01T00:00:00Z</date>
+    ${devices.length ? `<key>ProvisionedDevices</key><array>${devices.map(d => `<string>${d}</string>`).join('')}</array>` : ''}
+    ${allDevices ? '<key>ProvisionsAllDevices</key><true/>' : ''}
+    <key>Entitlements</key><dict>
+      <key>${mac ? 'com.apple.application-identifier' : 'application-identifier'}</key><string>TESTTEAM00.${id}</string>
+      ${debuggerKey ? `<key>${debuggerKey}</key><${debug ? 'true' : 'false'}/>` : ''}
+      ${Object.entries(pushKeys).filter(([, value]) => value).map(([key, value]) => `<key>${key}</key><string>${value}</string>`).join('')}
+      <key>com.apple.security.application-groups</key><array><string>TESTTEAM00.*</string></array>
+      <key>keychain-access-groups</key><array><string>TESTTEAM00.*</string></array>
+    </dict>
+  </dict></plist>`;
+}
+async function fixtureProfile(options) {
+  const { decodeProfile } = await import('./devices.mjs');
+  const profiles = ['darwin', 'linux'].map(os => decodeProfile('/synthetic/profile', os, { read: (command, args) => {
+    expect([command, ...args]).toEqual(os === 'linux'
+      ? ['openssl', 'smime', '-verify', '-inform', 'DER', '-in', '/synthetic/profile', '-noverify']
+      : ['security', 'cms', '-D', '-i', '/synthetic/profile']);
+    return { status: 0, stdout: profileText(options) };
+  } }));
+  expect(profiles[1]).toEqual(profiles[0]);
+  return profiles[0];
+}
+
+for (const [name, debuggerKey, dev, method, push] of [
+  ['development', 'get-task-allow', true, 'development', 'development'],
+  ['Mac debugger entitlement', 'com.apple.security.get-task-allow', true, 'development', 'development'],
+  ['Ad Hoc', undefined, false, 'adhoc', 'production'],
+]) test(`mixed-platform profile decoding: ${name}`, async () => {
+  const { allows, coveringProfiles, profile } = await import('./devices.mjs');
+  const p = await fixtureProfile({ platforms: ['iOS', 'OSX'], devices: ['TEST-PHONE'], debuggerKey, push });
+  expect(p.dev).toBe(dev);
+  expect(p.method).toBe(method);
+  expect(p.aps).toBe(push);
+  expect(allows(p, ['aps-environment'])).toBe(true);
+  expect(coveringProfiles('TEST-PHONE', 'com.example.profile', [p])).toEqual(dev ? [p] : []);
+  if (dev) expect(profile('TEST-PHONE', 'com.example.profile', ['aps-environment'], { installed: [p], named: null, team: null })).toBe(p);
+});
+
+test('profile decoding keeps debugger entitlements when no platform is listed', async () => {
+  for (const debuggerKey of ['get-task-allow', 'com.apple.security.get-task-allow']) {
+    const p = await fixtureProfile({ platforms: [], devices: ['TEST-PHONE'], debuggerKey });
+    expect(p.dev).toBe(true);
+    expect(p.method).toBe('development');
+  }
+});
+
+for (const platforms of [['OSX'], ['iOS'], ['iOS', 'OSX']]) test(`profile decoding accepts either push key for ${platforms.join('/')}`, async () => {
+  const mac = platforms.length === 1 && platforms[0] === 'OSX';
+  const own = mac ? 'com.apple.developer.aps-environment' : 'aps-environment';
+  const other = mac ? 'aps-environment' : 'com.apple.developer.aps-environment';
+  for (const pushKeys of [{ [other]: 'development' }, { [own]: 'development', [other]: 'production' }]) {
+    const p = await fixtureProfile({ mac, platforms, pushKeys });
+    expect(p.aps).toBe('development');
+    for (const key of Object.keys(pushKeys)) expect(p.entitlements).toContain(key);
+  }
+});
+
+test('an Xcode-managed Mac development profile shape accepts both push spellings', async () => {
+  const { allows } = await import('./devices.mjs');
+  const p = await fixtureProfile({ mac: true, devices: Array.from({ length: 14 }, (_, i) => `TEST-MAC-${i}`),
+    debuggerKey: 'get-task-allow', pushKeys: { 'aps-environment': 'development', 'com.apple.developer.aps-environment': 'development' } });
+  expect(p.platforms).toEqual(['OSX']);
+  expect(p.devices).toHaveLength(14);
+  expect(p.dev).toBe(true);
+  expect(p.method).toBe('development');
+  expect(p.aps).toBe('development');
+  expect(p.entitlements).toContain('aps-environment');
+  expect(p.entitlements).toContain('com.apple.developer.aps-environment');
+  expect(allows(p, ['aps-environment'])).toBe(true);
+});
+
+for (const [name, options, dev, method] of [
+  ['iOS development', { devices: ['TEST-PHONE'], debuggerKey: 'get-task-allow', push: 'development' }, true, 'development'],
+  ['iOS Ad Hoc distribution', { devices: ['TEST-PHONE'], debuggerKey: 'get-task-allow', debug: false }, false, 'adhoc'],
+  ['iOS App Store distribution', { debuggerKey: 'get-task-allow', debug: false }, false, 'appstore'],
+  ['iOS enterprise distribution', { allDevices: true }, false, 'enterprise'],
+  ['Mac development without a debugger entitlement', { mac: true, devices: ['TEST-MAC'], push: 'development' }, true, 'development'],
+  ['Mac development with its debugger entitlement', { mac: true, devices: ['TEST-MAC'], debuggerKey: 'com.apple.security.get-task-allow', push: 'development' }, true, 'development'],
+  ['Mac Developer ID', { mac: true, allDevices: true }, false, 'developerid'],
+  ['Mac App Store', { mac: true }, false, 'appstore'],
+]) test(`profile decoding: ${name}`, async () => {
+  const p = await fixtureProfile(options);
+  expect(p.dev).toBe(dev);
+  expect(p.method).toBe(method);
+  expect(p.appId).toBe('TESTTEAM00.com.example.profile');
+  expect(p.prefix).toBe('TESTTEAM00');
+  expect(p.devices).toEqual(options.devices ?? []);
+  expect(p.platforms).toEqual([options.mac ? 'OSX' : 'iOS']);
+});
+
+test('profile decoding reads each platform\'s push environment and preserves its entitlement key', async () => {
+  for (const mac of [false, true]) for (const push of ['development', 'production', null]) {
+    const p = await fixtureProfile({ mac, push });
+    expect(p.aps).toBe(push);
+    const key = mac ? 'com.apple.developer.aps-environment' : 'aps-environment';
+    expect(p.entitlements.includes(key)).toBe(push !== null);
+  }
+});
+
+test('decoded Mac profiles reach the widget and the app profile searches by build kind', async () => {
+  const { macWidgetProfiles } = await import('./widgets.mjs');
+  const { macProfile } = await import('./presence.mjs');
+  const app = { id: 'com.example.profile' }, team = 'TESTTEAM00', required = ['keychain-access-groups'];
+  for (const [options, distribution, method] of [
+    [{ mac: true, devices: ['TEST-MAC'], push: 'development' }, false, 'development'],
+    [{ mac: true, allDevices: true }, true, 'developerid'],
+    [{ mac: true }, true, 'appstore'],
+  ]) {
+    const owner = await fixtureProfile(options), extension = await fixtureProfile({ ...options, id: app.id + '.widgets' });
+    const installed = [owner, extension], named = null, udid = distribution ? null : 'TEST-MAC';
+    const pair = macWidgetProfiles({ app, team, installed, named, udid, distribution });
+    expect(pair?.app).toBe(owner);
+    expect(pair?.extension).toBe(extension);
+    expect(pair?.keychain).toBe(`${team}.${app.id}`);
+    expect(macProfile(app, required, { installed, named, method, udid })).toBe(owner);
+    expect(macWidgetProfiles({ app, team, installed, named, udid, distribution: !distribution })).toBeNull();
+    for (const other of ['development', 'developerid', 'appstore'].filter((m) => m !== method)) expect(macProfile(app, required, { installed, named, method: other, udid: 'TEST-MAC' })).toBeNull();
+    if (!distribution) expect(macWidgetProfiles({ app, team, installed, named, udid: 'OTHER-MAC' })).toBeNull();
+    if (!distribution) expect(macProfile(app, required, { installed, named, udid: 'OTHER-MAC' })).toBeNull();
+  }
+});
+
+// #325: a Mac build's push grant signs, under a Mac profile that allows it, push's Mac key in the profile's
+// environment, the application identifier and the team, with that team's identity; or names what is missing.
+test('a Mac build signs push from a development or Developer ID profile that allows it (LLP 1133.010 D7)', async () => {
+  const { macProvisioning, macProfile, macProfileIdentity } = await import('./presence.mjs');
+  const app = { id: 'com.example.profile' };
+  const compat = { reach: { profileEntitlements: ['com.apple.developer.aps-environment'] }, inputs: { grantCeiling: 'device.notifications n\ndevice.push' } };
+  const development = await fixtureProfile({ mac: true, devices: ['TEST-MAC'], push: 'development' });
+  const developerId = await fixtureProfile({ mac: true, allDevices: true, push: 'production' });
+  const noPush = await fixtureProfile({ mac: true, devices: ['TEST-MAC'], push: null });
+  const iosOne = await fixtureProfile({ devices: ['TEST-MAC'], push: 'development' });
+  const installed = [noPush, iosOne, development, developerId];
+  const find = (a, required, options) => macProfile(a, required, { ...options, installed, named: null, udid: 'TEST-MAC' });
+  const said = [];
+  const dev = macProvisioning(app, compat, { find, log: (l) => said.push(l) });
+  expect(dev.profile).toBe(development);
+  expect(dev.entitlements).toEqual({ 'com.apple.application-identifier': 'TESTTEAM00.com.example.profile',
+    'com.apple.developer.team-identifier': 'TESTTEAM00', 'com.apple.developer.aps-environment': 'development' });
+  expect(said[0]).toMatch(/^macOS profile: "Synthetic profile" \(team TESTTEAM00, development\) signs com\.apple\.developer\.aps-environment for device\.push/);
+  const shipped = macProvisioning(app, compat, { release: true, method: 'developerid', find, log: () => {} });
+  expect(shipped.profile).toBe(developerId);
+  expect(shipped.entitlements['com.apple.developer.aps-environment']).toBe('production');
+  // The identity is the profile's team's, whichever names it: the development one by team, its certificate checked
+  // as an explicit EXACT_IDENTITY's is; a Developer ID one of another team is refused.
+  const teams = { DEV: ['TESTTEAM00', false], OTHER: ['OTHERTEAM0', false], SHA: ['TESTTEAM00', true] };
+  const teamOf = (sha1, distribution) => teams[sha1]?.[1] === distribution ? teams[sha1][0] : null;
+  expect(macProfileIdentity(development, 'X', { find: () => 'DEV', teamOf })).toBe('DEV');
+  expect(() => macProfileIdentity(development, 'X', { find: () => 'OTHER', teamOf })).toThrow(/is team TESTTEAM00's, and OTHER is not that team's Apple Development identity/);
+  expect(() => macProfileIdentity(development, 'X', { find: () => 'SHA', teamOf })).toThrow(/not that team's Apple Development identity/);
+  expect(() => macProfileIdentity(development, 'X', { find: () => '-', teamOf })).toThrow(/not that team's Apple Development identity/);
+  expect(macProfileIdentity(developerId, 'SHA', { distribution: true, teamOf })).toBe('SHA');
+  expect(() => macProfileIdentity(developerId, 'DEV', { distribution: true, teamOf })).toThrow(/is team TESTTEAM00's; sign with that team's Developer ID/);
+  // No profile allows push: the build signs none and says what the app reports; a release ships so (§9 P7), where
+  // a row a release must keep is refused.
+  const none = (a, required, options) => macProfile(a, required, { ...options, installed: [noPush, iosOne], named: null, udid: 'TEST-MAC' });
+  const told = [];
+  expect(macProvisioning(app, compat, { find: none, log: (l) => told.push(l) })).toBeNull();
+  expect(told[0]).toMatch(/^device\.push: this build signs no com\.apple\.developer\.aps-environment, since no development macOS provisioning profile .* pushPermissionState\(\)\.available is false/);
+  expect(macProvisioning(app, compat, { release: true, find: none, log: () => {} })).toBeNull();
+  const attest = { ...compat, reach: { profileEntitlements: ['com.apple.developer.aps-environment', 'com.apple.developer.devicecheck.appattest-environment'] } };
+  expect(() => macProvisioning(app, attest, { release: true, find: none, log: () => {} })).toThrow(/^grant-needs-profile: device\.attestation: no development macOS provisioning profile on this Mac for com\.example\.profile/);
+  // A named profile that does not fit is refused, saying why.
+  expect(() => macProfile(app, ['com.apple.developer.aps-environment'], { installed, named: noPush, udid: 'TEST-MAC' })).toThrow(/EXACT_MAC_PROFILE \(Synthetic profile\) does not allow com\.apple\.developer\.aps-environment/);
+  expect(() => macProfile(app, [], { installed, named: iosOne, udid: 'TEST-MAC' })).toThrow(/is for iOS, not macOS/);
+  expect(() => macProfile(app, [], { installed, named: development, udid: 'OTHER-MAC' })).toThrow(/does not include this Mac/);
+  // Nothing in the grants needs a profile: no provisioning at all.
+  expect(macProvisioning(app, { reach: {}, inputs: { grantCeiling: 'device.notifications n' } }, { find: () => { throw new Error('asked'); } })).toBeNull();
+});
+
+// One profile serves the Mac widgets and the grants: the newest widget profile lacks push and an older one has both,
+// so the older is chosen for both and the identity stays the widgets' team's; with none that does both, nothing is
+// signed for the grants. An ad hoc build signs no profile's entitlements.
+test('a Mac build with widgets and push resolves one profile and one team for both (LLP 1133.010 D7)', async () => {
+  const { macSigning, macProfile } = await import('./presence.mjs');
+  const { macWidgetProfiles } = await import('./widgets.mjs');
+  const app = { id: 'com.example.profile' }, team = 'TESTTEAM00';
+  const compat = { reach: { profileEntitlements: ['com.apple.developer.aps-environment'] }, inputs: { grantCeiling: 'device.notifications n\ndevice.push' } };
+  const later = (p, days) => ({ ...p, expires: new Date(Date.now() + days * 864e5) });
+  const both = later(await fixtureProfile({ mac: true, devices: ['TEST-MAC'], push: 'development' }), 100);
+  const newest = later({ ...await fixtureProfile({ mac: true, devices: ['TEST-MAC'], push: null }), path: '/newest' }, 300);
+  const extension = await fixtureProfile({ mac: true, devices: ['TEST-MAC'], id: app.id + '.widgets' });
+  const widgetProfiles = (options) => macWidgetProfiles({ ...options, installed: [newest, both, extension], named: null, udid: 'TEST-MAC' });
+  const widgets = { team, profiles: widgetProfiles({ app, team }) };
+  expect(widgets.profiles.app).toBe(newest);
+  const otherTeam = { ...both, team: 'OTHERTEAM0', path: '/other' };
+  const find = (a, required, options) => macProfile(a, required, { ...options, installed: [otherTeam], named: null, udid: 'TEST-MAC' });
+  const signed = macSigning(app, compat, { current: 'DEV', widgets, find, widgetProfiles, log: () => {} });
+  expect(signed.provisioning.profile).toBe(both);
+  expect(signed.widgets.profiles.app).toBe(both);
+  expect(signed.widgets.profiles.extension).toBe(extension);
+  expect(signed.sha1).toBe('DEV');
+  expect(signed.provisioning.entitlements['com.apple.developer.team-identifier']).toBe(team);
+  // No profile of the widgets' team does both: the grants sign nothing, and another team's profile is never taken.
+  const said = [];
+  const alone = macSigning(app, compat, { current: 'DEV', widgets, find, log: (l) => said.push(l),
+    widgetProfiles: (options) => macWidgetProfiles({ ...options, installed: [newest, extension], named: null, udid: 'TEST-MAC' }) });
+  expect(alone).toEqual({ provisioning: null, widgets, sha1: 'DEV' });
+  expect(said[0]).toMatch(/with the Mac widgets' App Group and shared Keychain group for team TESTTEAM00 \(one profile signs both\)/);
+  // Without widgets the profile's team's identity signs.
+  const identityFor = (profile) => `identity of ${profile.team}`;
+  expect(macSigning(app, compat, { current: 'DEV', find, identityFor, log: () => {} }).sha1).toBe('identity of OTHERTEAM0');
+  // Ad hoc: nothing is signed, and the build says why.
+  const adHoc = [];
+  expect(macSigning(app, compat, { current: '-', find, identityFor, log: (l) => adHoc.push(l) }).provisioning).toBeNull();
+  expect(adHoc[0]).toMatch(/since this build is signed ad hoc \(EXACT_IDENTITY=-\)/);
+});

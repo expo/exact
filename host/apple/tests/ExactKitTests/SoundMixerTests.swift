@@ -7,7 +7,10 @@
 // A second's lookahead fits: 288 slots (32 sounding, 256 waiting) and a ring
 // of 1024 ops; a voice retracted before it starts frees its slot at once, and
 // a Play with no free slot takes one whose voice ends inside the buffer, its
-// tail mixed first (LLP 1125 D3).
+// tail mixed first (LLP 1125 D3). A change ramps a voice's gain and rate
+// from where they are, moving its end, and reaches one not yet started
+// outright; a pan given to an unpanned voice pans it from centred (LLP 1096
+// D14).
 import AudioToolbox
 import ExactSoundRender
 import XCTest
@@ -422,5 +425,90 @@ final class SoundMixerTests: XCTestCase {
         _ = render(m, at: next)
         XCTAssertEqual(exact_sound_dropped(m), 0, "the replacements took the stopped voices' slots")
         XCTAssertEqual(exact_sound_live(m), 288)
+    }
+
+    func testAChangeRampsTheGainFromWhereItIsAndReachesAWaitingVoiceOutright() {
+        let m = mixer()
+        defer { exact_sound_mixer_free(m) }
+        let t = exact_sound_seconds(ticks(70)), speaker = t + latency
+        XCTAssertTrue(exact_sound_push(m, 1, 1, 0, speaker, 1, 1, 0))
+        // From frame 100 the gain falls to 0 over 200 frames: half way at 200.
+        XCTAssertTrue(exact_sound_change(m, 1, speaker + 100 / rate, 0, .nan, .nan, 200 / rate))
+        // A voice that starts at 400 takes its change outright, ramp or not.
+        XCTAssertTrue(exact_sound_push(m, 1, 2, 1, speaker + 400 / rate, 1, 1, 0))
+        XCTAssertTrue(exact_sound_change(m, 2, speaker, 0.5, .nan, .nan, 1))
+        let out = render(m, at: t)
+        XCTAssertEqual(out[99], 0.5, accuracy: 1e-6)
+        XCTAssertEqual(out[200], 0.25, accuracy: 1e-6)
+        XCTAssertEqual(out[300], 0, accuracy: 1e-6)
+        XCTAssertEqual(out[399], 0, accuracy: 1e-6)
+        XCTAssertEqual(out[400], 0.125, accuracy: 1e-6)
+        // A second change starts from the value the first had reached.
+        let m2 = mixer()
+        defer { exact_sound_mixer_free(m2) }
+        XCTAssertTrue(exact_sound_push(m2, 1, 1, 0, speaker, 1, 1, 0))
+        XCTAssertTrue(exact_sound_change(m2, 1, speaker, 0, .nan, .nan, 200 / rate))
+        XCTAssertTrue(exact_sound_change(m2, 1, speaker + 100 / rate, 1, .nan, .nan, 100 / rate))
+        let again = render(m2, at: t)
+        XCTAssertEqual(again[50], 0.375, accuracy: 1e-6, "the first change ramps until the second's time")
+        XCTAssertEqual(again[100], 0.25, accuracy: 1e-6, "half the gain, then back up from there")
+        XCTAssertEqual(again[150], 0.375, accuracy: 1e-6)
+        XCTAssertEqual(again[200], 0.5, accuracy: 1e-6)
+    }
+
+    func testARateChangeReadsTheRestOfTheSoundAtTheNewRate() {
+        let m = mixer(frames: 2_000)
+        defer { exact_sound_mixer_free(m) }
+        let t = exact_sound_seconds(ticks(80)), speaker = t + latency
+        XCTAssertTrue(exact_sound_push(m, 1, 1, 0, speaker, 1, 1, 0))
+        // 1000 frames in, twice the rate at once: the other 1000 last 500.
+        XCTAssertTrue(exact_sound_change(m, 1, speaker + 1000 / rate, .nan, 2, .nan, 0))
+        let out = render(m, at: t, frames: 2_000)
+        XCTAssertEqual(out[1499], 0.5, accuracy: 1e-6)
+        XCTAssertEqual(out[1500], 0)
+        XCTAssertEqual(exact_sound_live(m), 0)
+    }
+
+    func testTwoRateChangesInOneBufferEachMoveThePositionFromTheirOwnFrame() {
+        let m = mixer(frames: 4_000)
+        defer { exact_sound_mixer_free(m) }
+        let t = exact_sound_seconds(ticks(85)), speaker = t + latency
+        XCTAssertTrue(exact_sound_push(m, 1, 1, 0, speaker, 1, 1, 0))
+        // Twice the rate from frame 1000, back to the file's own from 1500: 1000 + 1000 + 2000 frames of sound.
+        XCTAssertTrue(exact_sound_change(m, 1, speaker + 1000 / rate, .nan, 2, .nan, 0))
+        XCTAssertTrue(exact_sound_change(m, 1, speaker + 1500 / rate, .nan, 1, .nan, 0))
+        let out = render(m, at: t, frames: 4_000)
+        XCTAssertEqual(out[3499], 0.5, accuracy: 1e-6)
+        XCTAssertEqual(out[3500], 0)
+    }
+
+    func testAPanGivenToAnUnpannedVoicePansItFromCentred() {
+        let m = exact_sound_mixer(2, rate)!
+        defer { exact_sound_mixer_free(m) }
+        let p = UnsafeMutablePointer<Float>.allocate(capacity: 2_000)
+        p.initialize(repeating: 1, count: 2_000)
+        samples.append(p)
+        exact_sound_set(m, 0, p, 1_000, 1)
+        exact_sound_latency(m, latency)
+        let t = exact_sound_seconds(ticks(90)), speaker = t + latency
+        XCTAssertTrue(exact_sound_push(m, 1, 1, 0, speaker, 1, 1, 0))
+        XCTAssertTrue(exact_sound_change(m, 1, speaker + 100 / rate, .nan, .nan, -1, 100 / rate))
+        var left = [Float](repeating: 0, count: 512), right = left
+        var stamp = AudioTimeStamp()
+        stamp.mHostTime = ticks(90)
+        stamp.mFlags = .hostTimeValid
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in
+                let list = AudioBufferList.allocate(maximumBuffers: 2)
+                defer { free(list.unsafeMutablePointer) }
+                list[0] = AudioBuffer(mNumberChannels: 1, mDataByteSize: 2048, mData: l.baseAddress)
+                list[1] = AudioBuffer(mNumberChannels: 1, mDataByteSize: 2048, mData: r.baseAddress)
+                _ = exact_sound_render(m, &stamp, 512, list.unsafeMutablePointer)
+            }
+        }
+        XCTAssertEqual(left[99], 1, accuracy: 1e-6, "unpanned until the change")
+        XCTAssertEqual(left[100], Float(cos(Double.pi / 4)), accuracy: 1e-6, "then the panner, centred")
+        XCTAssertEqual(left[200], 1, accuracy: 1e-6)
+        XCTAssertEqual(right[200], 0, accuracy: 1e-6)
     }
 }

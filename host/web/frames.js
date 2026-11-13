@@ -33,7 +33,8 @@ export function createFrameSampler({ origin, log, gather, covers, target }) {
     lifetime = { presented: 0, late: 0, missed: 0, segments: 0 };
     dropped = loafUnmatched = 0; floor = prior = Infinity; recent = []; waiting = []; pending = empty();
   }
-  const running = () => document.getAnimations?.().some(a => a.playState === 'running');
+  // A scroll or view timeline's animation runs while the page scrolls, not per frame.
+  const running = () => document.getAnimations?.().some(a => a.playState === 'running' && !(a.timeline && 'source' in a.timeline));
   function tick(ts) {
     raf = 0;
     if (last != null) sample(ts - last, ts);

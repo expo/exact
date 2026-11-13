@@ -2,7 +2,7 @@
 //! The same subclass wakes the loop when the date may have jumped, for the
 //! loop's turn to retell it (`Presenter::follow_local_offset`).
 #![allow(unsafe_code)]
-use exact_linux::presenter::ContrastPalette;
+use exact_painted::presenter::ContrastPalette;
 use std::{
     cell::Cell,
     rc::Rc,
@@ -85,7 +85,7 @@ impl Changes {
             eprintln!("exact-windows: could not observe system appearance changes");
         }
         let subscribe = || -> windows::core::Result<_> {
-            exact_linux::com::ensure_mta().map_err(windows::core::Error::from_hresult)?;
+            exact_painted::com::ensure_mta().map_err(windows::core::Error::from_hresult)?;
             let settings = UISettings::new()?;
             let changed = self.text_changed.clone();
             let token = settings.TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {

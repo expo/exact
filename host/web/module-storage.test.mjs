@@ -85,7 +85,7 @@ export { refuseCodeFromStrings } from ${JSON.stringify(resolve(ROOT, 'host/web/s
     const sha = new Bun.CryptoHasher('sha256').update(script).digest('hex');
     globalThis.reads = [];
     const win = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {}, debug() {} }, TextEncoder, TextDecoder, structuredClone, setTimeout, clearTimeout,
-      queueMicrotask, URL, Headers, DOMException, crypto, indexedDB: null, MessageChannel, Uint8Array, ArrayBuffer, addEventListener() {} });
+      queueMicrotask, URL, Headers, DOMException, crypto, indexedDB: null, MessageChannel, Uint8Array, ArrayBuffer, AbortController, AbortSignal, addEventListener() {} });
     win.window = win;
     for (const name of ['Promise', 'Error', 'SyntaxError', 'Object', 'Array', 'JSON', 'Symbol', 'Function', 'eval']) win[name] = vm.runInContext(name, win); // what storage.js builds in the realm
     win.document = { createElement: () => ({}), head: { append: el => vm.runInContext(el.textContent, win) } };

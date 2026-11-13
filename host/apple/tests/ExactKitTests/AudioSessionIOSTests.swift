@@ -15,6 +15,11 @@ extension AVAudioSession {
         categorySets += 1
         try countedCategory(category, options: options)
     }
+    @objc fileprivate func countedCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode,
+                                           options: AVAudioSession.CategoryOptions) throws {
+        categorySets += 1
+        try countedCategory(category, mode: mode, options: options)
+    }
     @objc fileprivate func countedActive(_ active: Bool) throws {
         activations.append(active)
         try countedActive(active)
@@ -39,6 +44,7 @@ final class AudioSessionIOSTests: XCTestCase {
     private func counting(_ body: () throws -> Void) throws {
         let selectors: [(Selector, Selector)] = [
             (#selector(AVAudioSession.setCategory(_:options:)), #selector(AVAudioSession.countedCategory(_:options:))),
+            (#selector(AVAudioSession.setCategory(_:mode:options:)), #selector(AVAudioSession.countedCategory(_:mode:options:))),
             (NSSelectorFromString("setActive:error:"), #selector(AVAudioSession.countedActive(_:))),
             (#selector(AVAudioSession.setActive(_:options:)), #selector(AVAudioSession.countedActive(_:options:))),
         ]
@@ -96,8 +102,12 @@ final class AudioSessionIOSTests: XCTestCase {
             XCTAssertEqual(session.categoryOptions, [.mixWithOthers])
             XCTAssertEqual(activations, [], "restoring a call does not activate")
         }
-        AudioSession.release(ObjectIdentifier(holder))
-        XCTAssertEqual(session.category, .ambient)
+        try counting {
+            AudioSession.release(ObjectIdentifier(holder))
+            XCTAssertEqual(categorySets, 0, "a mixing session rests in its own configuration")
+        }
+        XCTAssertEqual(session.category, .playback)
+        XCTAssertEqual(session.categoryOptions, [.mixWithOthers])
         // The category alone matches: a non-mixing app must still clear the option.
         try session.setCategory(.playback, options: [.mixWithOthers])
         AudioSession.configuration = .init("playback")
@@ -119,6 +129,37 @@ final class AudioSessionIOSTests: XCTestCase {
             XCTAssertEqual(categorySets, 1, "ambient is already in force")
             XCTAssertEqual(activations, [], "the inactive session is never activated")
         }
+    }
+
+    /// camchis's iPhone 12 log (#55): a module's output running under the
+    /// prepared ambient, then the request's rise to `.playback`, interrupted
+    /// Podcasts. A mixing app is prepared in its own configuration, so the
+    /// request changes nothing and only activates.
+    func testPlaybackMixPreparesItsOwnConfigurationAndTheRequestOnlyActivates() throws {
+        XCTAssertFalse(ExactEnv.agentFreezes, "this test needs a live surface clock")
+        AudioSession.configuration = .init("playback-mix")
+        try session.setActive(false)
+        try session.setCategory(.soloAmbient)
+        try counting {
+            AudioSession.prepareForSurface()
+            XCTAssertEqual(session.category, .playback)
+            XCTAssertEqual(session.categoryOptions, [.mixWithOthers])
+            XCTAssertEqual(categorySets, 1)
+            AudioSession.prepareForSurface()
+            XCTAssertEqual(categorySets, 1, "the configuration is already in force")
+            XCTAssertEqual(activations, [], "the inactive session is never activated")
+            try AudioSession.activate()
+            XCTAssertEqual(categorySets, 1, "the request finds nothing to change")
+            XCTAssertEqual(activations, [true])
+        }
+        // A plain playback app still prepares ambient: applying `.playback`
+        // early would stop other apps' audio before the request.
+        AudioSession.reset()
+        AudioSession.configuration = .init("playback")
+        try session.setActive(false)
+        try session.setCategory(.soloAmbient)
+        AudioSession.prepareForSurface()
+        XCTAssertEqual(session.category, .ambient)
     }
 
     func testTheHostPreparesBeforeTheModuleCreatesItsSurface() throws {
@@ -273,7 +314,8 @@ final class AudioSessionIOSTests: XCTestCase {
                         AudioSession.releaseCall(call)
                         unchanged("restoration waits for the system's deactivation")
                         AudioSession.callActivated(false)
-                        XCTAssertEqual(session.category, .ambient, "the released sound holds nothing after the call")
+                        XCTAssertEqual(session.category, value == "playback-mix" ? .playback : .ambient,
+                                       "the released sound holds nothing after the call: the session rests")
                         XCTAssertEqual(activations, [], "restoring a call leaves activation to the system")
                     }
                     try counting {
@@ -281,6 +323,164 @@ final class AudioSessionIOSTests: XCTestCase {
                         AudioSession.release(ObjectIdentifier(sound))
                         XCTAssertTrue(activations.contains(false), "the removed player no longer keeps the session active")
                     }
+                }
+            }
+        }
+    }
+
+    func testReleasesAfterTheLastCallClaimWaitForSystemDeactivation() throws {
+        final class Holder {}
+        let holder = Holder(), sound = ObjectIdentifier(holder)
+        for value in ["playback", "playback-mix"] {
+            for video in [false, true] {
+                for kind in ["sound", "player", "capture", "speech"] {
+                    AudioSession.reset()
+                    AudioSession.configuration = .init(value)
+                    var claim: UInt64 = 0
+                    switch kind {
+                    case "sound": try AudioSession.hold(sound)
+                    case "player": AudioSession.playerCame(sound)
+                    case "capture":
+                        claim = AudioSession.claimCapture(mode: .default, options: [.defaultToSpeaker], background: false) { _ in }
+                    default: claim = AudioSession.claimSpeech(type: "transient") { _ in }
+                    }
+                    let call = AudioSession.claimCall(video: video) { _ in }
+                    AudioSession.callActivated(true)
+                    AudioSession.releaseCall(call)
+                    XCTAssertFalse(AudioSession.isCall(call))
+                    XCTAssertTrue(AudioSession.callActive)
+                    let mode = session.mode, options = session.categoryOptions
+                    func unchanged(_ step: String) {
+                        XCTAssertEqual(session.category, .playAndRecord, "\(value) \(kind): \(step)")
+                        XCTAssertEqual(session.mode, mode, step)
+                        XCTAssertEqual(session.categoryOptions, options, step)
+                        XCTAssertEqual(categorySets, 0, step)
+                        XCTAssertEqual(activations, [], step)
+                    }
+                    try counting {
+                        switch kind {
+                        case "sound": AudioSession.release(sound)
+                        case "player": AudioSession.playerWent(sound)
+                        case "capture": AudioSession.releaseCapture(claim)
+                        default: AudioSession.releaseSpeech(claim)
+                        }
+                        unchanged("released before CallKit deactivated")
+                    }
+                    try counting {
+                        AudioSession.callActivated(false)
+                        XCTAssertEqual(session.category, AudioSession.resting.category,
+                                       "the released \(kind) holds nothing after the call: the session rests")
+                        XCTAssertEqual(activations, [], "restoration leaves activation to the system")
+                    }
+                    if kind == "speech" {
+                        XCTAssertNil(AudioSession.spoken)
+                        try AudioSession.hold(sound)
+                        XCTAssertEqual(session.category, .playback)
+                        XCTAssertEqual(session.categoryOptions, AudioSession.configuration.options)
+                        AudioSession.release(sound)
+                        let speech = AudioSession.claimSpeech(type: "transient") { _ in }
+                        XCTAssertNotEqual(speech, 0)
+                        XCTAssertEqual(session.category, .playback)
+                        XCTAssertEqual(session.mode, .voicePrompt)
+                        XCTAssertTrue(session.categoryOptions.contains(.duckOthers))
+                        XCTAssertTrue(session.categoryOptions.contains(.interruptSpokenAudioAndMixWithOthers))
+                        AudioSession.releaseSpeech(speech)
+                    }
+                }
+            }
+        }
+    }
+
+    func testClaimsDuringACallAreRestoredAfterSystemDeactivation() throws {
+        final class Holder {}
+        let holder = Holder(), sound = ObjectIdentifier(holder)
+        for value in ["playback", "playback-mix"] {
+            for releaseBeforeClaim in [false, true] {
+                for kind in ["sound", "capture", "speech"] {
+                    AudioSession.reset()
+                    AudioSession.configuration = .init(value)
+                    let call = AudioSession.claimCall(video: false) { _ in }
+                    AudioSession.callActivated(true)
+                    if releaseBeforeClaim { AudioSession.releaseCall(call) }
+                    let mode = session.mode, options = session.categoryOptions
+                    var claim: UInt64 = 0
+                    try counting {
+                        switch kind {
+                        case "sound": try AudioSession.hold(sound)
+                        case "capture":
+                            claim = AudioSession.claimCapture(mode: .default, options: [.defaultToSpeaker], background: false) { _ in }
+                            XCTAssertNotEqual(claim, 0)
+                        default:
+                            claim = AudioSession.claimSpeech(type: "transient") { _ in }
+                            XCTAssertNotEqual(claim, 0)
+                        }
+                        XCTAssertEqual(session.category, .playAndRecord, kind)
+                        XCTAssertEqual(session.mode, mode, kind)
+                        XCTAssertEqual(session.categoryOptions, options, kind)
+                        XCTAssertEqual(categorySets, 0, kind)
+                        XCTAssertEqual(activations, [], kind)
+                        if !releaseBeforeClaim { AudioSession.releaseCall(call) }
+                        XCTAssertEqual(session.category, .playAndRecord, kind)
+                        XCTAssertEqual(session.mode, mode, kind)
+                        XCTAssertEqual(session.categoryOptions, options, kind)
+                        XCTAssertEqual(categorySets, 0, kind)
+                        XCTAssertEqual(activations, [], kind)
+                    }
+                    try counting {
+                        AudioSession.callActivated(false)
+                        switch kind {
+                        case "sound":
+                            XCTAssertEqual(session.category, .playback)
+                            XCTAssertEqual(session.categoryOptions, AudioSession.configuration.options)
+                        case "capture":
+                            XCTAssertEqual(session.category, .playAndRecord)
+                            XCTAssertEqual(session.mode, .default)
+                            XCTAssertEqual(session.categoryOptions, [.defaultToSpeaker])
+                        default:
+                            XCTAssertEqual(session.category, .playback)
+                            XCTAssertEqual(session.mode, .voicePrompt)
+                            XCTAssertTrue(session.categoryOptions.contains(.duckOthers))
+                            XCTAssertTrue(session.categoryOptions.contains(.interruptSpokenAudioAndMixWithOthers))
+                            XCTAssertEqual(AudioSession.spoken, "transient")
+                        }
+                        XCTAssertEqual(activations, [])
+                    }
+                    switch kind {
+                    case "sound": AudioSession.release(sound)
+                    case "capture": AudioSession.releaseCapture(claim)
+                    default: AudioSession.releaseSpeech(claim)
+                    }
+                    XCTAssertEqual(session.category, AudioSession.resting.category, "nothing held: the session rests")
+                }
+            }
+        }
+    }
+
+    func testAMediaServicesResetRestoresTheCallsConfigurationWithoutActivating() throws {
+        for video in [false, true] {
+            for released in [false, true] {
+                for kind in ["none", "capture", "speech"] {
+                    AudioSession.reset()
+                    switch kind {
+                    case "capture":
+                        _ = AudioSession.claimCapture(mode: .measurement, options: [.defaultToSpeaker], background: false) { _ in }
+                    case "speech": _ = AudioSession.claimSpeech(type: "transient") { _ in }
+                    default: break
+                    }
+                    let call = AudioSession.claimCall(video: video) { _ in }
+                    AudioSession.callActivated(true)
+                    if released { AudioSession.releaseCall(call) }
+                    let mode = session.mode, options = session.categoryOptions
+                    try session.setCategory(.ambient)
+                    try counting {
+                        NotificationCenter.default.post(name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+                        XCTAssertEqual(session.category, .playAndRecord, kind)
+                        XCTAssertEqual(session.mode, mode, kind)
+                        XCTAssertEqual(session.categoryOptions, options, kind)
+                        XCTAssertEqual(activations, [], "a reset never activates")
+                    }
+                    if !released { AudioSession.releaseCall(call) }
+                    AudioSession.callActivated(false)
                 }
             }
         }

@@ -72,12 +72,14 @@ pub use contract_types::strings::Strings;
 /// The data seam, re-exported for an app's build script: the bake asks the
 /// crate its grants for the compatibility id (`Caltrain.grants()`).
 pub use exact_runner::DataSource;
+mod preload;
 pub use logic::{
     apple_linked, linux_entry, native_storage_constructor, rust_entry, web_linked, web_rust_mode,
 };
 pub use manifest::{Activity, Configuration, Manifest, Parameter, Widget};
 pub use map::{plan_digest, SourceMap};
 pub use module_rust::module_rust;
+pub use preload::preload_expression;
 pub use resolve::Origin;
 pub use rust::{compile_path_for_rust, rust};
 pub use sources::{
@@ -556,6 +558,7 @@ pub fn fix_uses(path: &Path) -> Result<(Vec<WrittenUses>, Vec<CompileError>), Ve
 pub fn rerun_if_changed(path: &Path) {
     // The builder also detects restored bytes whose mtime predates the bake.
     println!("cargo:rerun-if-env-changed=EXACT_BAKE_INPUTS");
+    println!("cargo:rerun-if-env-changed=EXACT_BAKE_PACKAGE_DIR");
     println!("cargo:rerun-if-changed={}", path.display());
     let graph = source_graph(path);
     for source in &graph.sources {
@@ -563,20 +566,34 @@ pub fn rerun_if_changed(path: &Path) {
             println!("cargo:rerun-if-changed={}", source.path.display());
         }
     }
-    // Only what exists: Cargo reruns a script whose path is missing on every
-    // build, and a failed build reruns it anyway (a resolution that looked
-    // for a file not there failed, or found one farther up).
+    // Cargo reruns a script whose path is missing on every build. The bake
+    // builder tracks its selected package's optional designs by existence;
+    // a linked bake records them before Cargo. Dependencies and direct Cargo
+    // watch the existing parent so an unchanged package stays warm.
+    let managed = std::env::var_os("EXACT_BAKE_PACKAGE_DIR")
+        .zip(std::env::var_os("CARGO_MANIFEST_DIR"))
+        .is_some_and(|(selected, current)| {
+            std::fs::canonicalize(selected)
+                .ok()
+                .zip(std::fs::canonicalize(current).ok())
+                .is_some_and(|(selected, current)| selected == current)
+        });
     for consulted in graph.consulted.iter().filter(|path| path.exists()) {
         println!("cargo:rerun-if-changed={}", consulted.display());
     }
     // A nearer `node_modules` an install could create or fill: installing
     // edits the `package.json` and lockfile beside it, which exist.
     for consulted in graph.consulted.iter().filter(|path| !path.exists()) {
-        // A package's design not there yet (LLP 1121 D11): its directory,
-        // which making it changes.
+        // A package's design not there yet (LLP 1121 D11).
         if consulted.extension().is_some_and(|e| e == "tamber") {
-            if let Some(dir) = consulted.parent().filter(|d| d.is_dir()) {
-                println!("cargo:rerun-if-changed={}", dir.display());
+            println!(
+                "cargo:metadata=exact-optional-input={}",
+                consulted.display()
+            );
+            if !managed {
+                if let Some(dir) = consulted.parent().filter(|dir| dir.is_dir()) {
+                    println!("cargo:rerun-if-changed={}", dir.display());
+                }
             }
             continue;
         }
@@ -1106,7 +1123,15 @@ fn compile_file_warned(
 /// Boot the plan once against `data` and write every resource's boot value
 /// into the plan as compiled data. The result still validates and its bytes
 /// are a pure function of (source, data).
-pub fn bake<D: DataSource>(mut plan: Plan, data: D) -> Result<Plan, BakeError> {
+pub fn bake<D: DataSource>(plan: Plan, data: D) -> Result<Plan, BakeError> {
+    bake_with_warnings(plan, data).map(|(plan, _)| plan)
+}
+
+/// Bake the first frame and retain warnings about calls deferred until launch.
+pub fn bake_with_warnings<D: DataSource>(
+    mut plan: Plan,
+    data: D,
+) -> Result<(Plan, Vec<String>), BakeError> {
     // The manifest names the app. An unnamed stand-in source preserves it;
     // Runner::boot refuses a nonempty source identity that disagrees.
     if plan.app_id.is_empty() {
@@ -1163,6 +1188,7 @@ pub fn bake<D: DataSource>(mut plan: Plan, data: D) -> Result<Plan, BakeError> {
         }
     }
     b.finish()
+        .map(|plan| (plan, runner.bake_warnings().to_vec()))
         .map_err(|e| BakeError::Runner(RunnerError::Plan(e)))
 }
 

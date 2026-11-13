@@ -8,6 +8,119 @@ import XCTest
 /// standard cell beside it is (Harmony, 2026-10-21). UIKit, so a simulator
 /// runs it.
 final class GroupedCustomRowsIOSTests: GroupedListFixture {
+    func testCustomRadioRowsKeepControlAndWholeRowActivation() throws {
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_GROUPED_REVEAL_PLAN"])
+        ExactGroupedLists.install()
+        let session = ExactApp.shared.makeSession(label: "authored-radio-rows")
+        defer { session.destroy(); window?.isHidden = true }
+        let view = ExactView(session: session), root = UIViewController()
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "native accessibility activation needs UIKit in a hosted app")
+        }
+        window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        view.frame = root.view.bounds
+        root.view.addSubview(view)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: view.bounds.size).error)
+        view.layoutIfNeeded()
+        let p = session.presenter
+        func node(_ name: String) throws -> NodeView {
+            try XCTUnwrap(p.views.values.first { $0.props["testId"] == name })
+        }
+        let row = try node("radio-height")
+        let l = try XCTUnwrap(host(p).lists.values.first { $0.rows[row.id] != nil })
+        var heard: [UInt32] = []
+        let control = p.onControlValue
+        p.onControlValue = { id, value, input, change in
+            if input { heard.append(id) }
+            control?(id, value, input, change)
+        }
+        let agent = Agent(session: session)
+        for (rowName, controlName, label) in [("radio-height", "height-choice", "Height choice"),
+                                               ("radio-ground", "ground-choice", "Explicit ground"),
+                                               ("radio-nested", "nested-choice", "Nested choice")] {
+            let row = try node(rowName), radio = try node(controlName)
+            XCTAssertNil(agent.reveal(["id": Int(radio.id)])["error"])
+            l.collection.layoutIfNeeded()
+            let cell = try XCTUnwrap(l.cell(row.id) as? UICollectionViewListCell)
+            XCTAssertTrue(l.rows[row.id]?.custom == true)
+            XCTAssertTrue(row.superview === cell.contentView, "authored content is carried")
+            XCTAssertTrue(cell.accessories.isEmpty, "a custom row keeps its own radio")
+            XCTAssertFalse(radio.isHidden)
+            XCTAssertFalse(radio.hiddenByHost)
+            XCTAssertTrue(radio.isDescendant(of: cell.contentView))
+            let native = try XCTUnwrap(p.controls.controls[radio.id])
+            XCTAssertTrue(native.isAccessibilityElement)
+            XCTAssertEqual(native.accessibilityLabel, label)
+            XCTAssertFalse(native.accessibilityTraits.contains(.selected))
+            let middle = radio.convert(CGPoint(x: radio.bounds.midX, y: radio.bounds.midY), to: window)
+            let hit = try XCTUnwrap(window.hitTest(middle, with: nil))
+            XCTAssertTrue(hit === radio || hit.isDescendant(of: radio), "the visible control receives the touch")
+            let count = heard.count
+            XCTAssertNil(agent.tap(["id": Int(radio.id)])["error"])
+            XCTAssertEqual(Array(heard.dropFirst(count)), [radio.id], "one input per control tap")
+            XCTAssertEqual(heard.last, radio.id, "the control's tap reaches its input handler")
+            waitFor("the radio is checked") { radio.props["checked"] == "true" }
+            XCTAssertFalse(radio.isHidden)
+            XCTAssertTrue(cell.accessories.isEmpty, "checking adds no native cell accessory")
+            if let control = p.controls.controls[radio.id] {
+                XCTAssertTrue(control.accessibilityTraits.contains(.selected))
+            }
+        }
+        func assertChoice(_ value: String, _ radio: NodeView) throws {
+            waitFor("the bound radio is checked") { radio.props["checked"] == "true" }
+            let state = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any])
+            XCTAssertEqual((state["slots"] as? [String: Any])?["choice"] as? String, value)
+            let control = try XCTUnwrap(p.controls.controls[radio.id])
+            XCTAssertTrue(control.accessibilityTraits.contains(.selected))
+            XCTAssertFalse(radio.isHidden)
+        }
+        for (targetName, rowName, value) in [("radio-height", "radio-height", "height"),
+                                          ("radio-ground", "radio-ground", "ground"),
+                                          ("radio-label", "radio-height", "height"),
+                                          ("radio-ground-label", "radio-ground", "ground")] {
+            let row = try node(rowName), radio = try node("\(value)-choice")
+            XCTAssertNil(agent.reveal(["id": Int(row.id)])["error"])
+            l.collection.layoutIfNeeded()
+            let cell = try XCTUnwrap(l.cell(row.id) as? UICollectionViewListCell)
+            let count = heard.count
+            XCTAssertNil(agent.tap(["id": Int(try node(targetName).id)])["error"])
+            XCTAssertEqual(Array(heard.dropFirst(count)), [radio.id], "one input per row or label tap")
+            try assertChoice(value, radio)
+            XCTAssertEqual(heard.last, radio.id)
+            XCTAssertTrue(cell.accessories.isEmpty, "the carried control shows the selection")
+        }
+        XCTAssertEqual(heard.count, 7)
+        XCTAssertEqual(try node("height-choice").props["checked"], "false")
+        XCTAssertEqual(try node("nested-choice").props["checked"], "false")
+        for value in ["height", "ground", "nested", "height"] {
+            let radio = try node("\(value)-choice")
+            XCTAssertNil(agent.reveal(["id": Int(radio.id)])["error"])
+            let native = try XCTUnwrap(p.controls.controls[radio.id])
+            let count = heard.count
+            XCTAssertFalse(native.accessibilityTraits.contains(.selected))
+            let activated = native.accessibilityActivate()
+            XCTAssertTrue(activated)
+            guard activated else { continue }
+            waitFor("one input from accessibility activation") { heard.count > count }
+            XCTAssertEqual(Array(heard.dropFirst(count)), [radio.id])
+            try assertChoice(value, radio)
+            XCTAssertTrue(native.accessibilityActivate(), "a checked choice accepts activation")
+            XCTAssertEqual(heard.count, count + 1, "a checked choice sends no second input")
+            XCTAssertEqual(native.accessibilityLabel, value == "ground" ? "Explicit ground" : "\(value.capitalized) choice")
+        }
+        let height = try node("height-choice"), label = try node("radio-label")
+        let native = try XCTUnwrap(p.controls.controls[height.id])
+        p.apply(wireBatch([["op": "props", "id": label.id, "set": ["text": "Updated height"]]]))
+        XCTAssertEqual(native.accessibilityLabel, "Updated height", "the row's name follows its text")
+        p.apply(wireBatch([["op": "props", "id": height.id, "set": ["accessibilityLabel": "Explicit height"]]]))
+        XCTAssertEqual(native.accessibilityLabel, "Explicit height")
+        p.apply(wireBatch([["op": "props", "id": height.id, "clear": ["accessibilityLabel"]]]))
+        XCTAssertEqual(native.accessibilityLabel, "Updated height", "clearing an explicit label restores the row name")
+    }
+
     /// A custom row first, a standard row of the same symbol after it.
     func customFirst() -> GroupedListModel {
         GroupedListModel(style: "inset-grouped", sections: [

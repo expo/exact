@@ -144,7 +144,7 @@ internal class Pane(
  * its container's radius and elevation, and its picture. A serial this holds no window for opens one; the same
  * serial again is that surface painted again (a row lit under a finger, another scheme, another font scale), or
  * moved or sized again; `what` 0 closes it. What happens in the window goes back by one call ([Exact.surface]).
- * `host/linux/src/presenter/top.rs` is exact2's side.
+ * `host/painted/src/presenter/top.rs` is exact2's side.
  *
  * Their motion is the platform's. The dialog has what the platform gives its window, with nothing set here: filmed
  * on a Pixel 10 Pro XL (Android 16), it fades and settles into place over about 180 ms as the scrim fades in, and

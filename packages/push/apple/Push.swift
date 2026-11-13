@@ -1,6 +1,8 @@
-// @exact/push on iOS and iPadOS (LLP 1133.004 §9 P3, P4): the APNs device
-// token as a live value, for the app to send to its own server; Exact sends
-// and relays nothing.
+// @exact/push on iOS, iPadOS and macOS (LLP 1133.004 §9 P3, P4): the APNs
+// device token as a live value, for the app to send to its own server; Exact
+// sends and relays nothing. A Mac takes push's entitlement only under a
+// provisioning profile (LLP 1133.010 D7): a build signed without one reads
+// unavailable, as a host without push does.
 //
 // - `subscribePush()` is the one call that may prompt, and only while
 //   `notDetermined`: notification permission is asked then (with the options
@@ -24,6 +26,11 @@ import ExactPackage
 import Foundation
 #if os(iOS)
 import UIKit
+private typealias App = UIApplication
+#elseif os(macOS)
+import AppKit
+import Security
+private typealias App = NSApplication
 #endif
 #if canImport(UserNotifications)
 import UserNotifications
@@ -55,8 +62,8 @@ public final class PushModule: NSObject, ExactPackage {
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
         DispatchQueue.main.async { [self] in
-            #if os(iOS)
-            guard Bundle.main.bundleIdentifier != nil else { return unavailable(name, reply) }
+            #if os(iOS) || os(macOS)
+            guard Bundle.main.bundleIdentifier != nil, Self.entitled else { return unavailable(name, reply) }
             listen()
             switch name {
             case "pushPermissionState": state { reply($0) }
@@ -92,7 +99,18 @@ public final class PushModule: NSObject, ExactPackage {
         token.map { ["apple": ["deviceToken": $0]] as Any } ?? NSNull()
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(macOS)
+    /// Whether the build signs push's entitlement: always on iOS, whose
+    /// bake writes it; on a Mac only under a profile that allows it.
+    private static let entitled: Bool = {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        return SecTaskCopyValueForEntitlement(task, "com.apple.developer.aps-environment" as CFString, nil) != nil
+        #else
+        return true
+        #endif
+    }()
+
     private func listen() {
         guard observers.isEmpty else { return }
         observers.append(NotificationCenter.default.addObserver(forName: ExactPushRegistration.changed, object: nil, queue: .main) { [weak self] note in
@@ -100,7 +118,7 @@ public final class PushModule: NSObject, ExactPackage {
         })
         // The person may change notification permission in Settings: the
         // subscription's readers read again, and a grant registers.
-        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: App.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.state { _ in }
         })
     }
@@ -109,7 +127,7 @@ public final class PushModule: NSObject, ExactPackage {
     private func register() {
         guard !Self.registered else { return }
         Self.registered = true
-        UIApplication.shared.registerForRemoteNotifications()
+        App.shared.registerForRemoteNotifications()
     }
 
     /// The authorization read first: only `prompt` asks, so an authorization

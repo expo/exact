@@ -62,7 +62,7 @@ fn static_trees_omit_finder_metadata_and_keep_other_dotfiles() {
         "mark.DS_Store",
         "mark.png",
     ];
-    for op in ["names", "tree"] {
+    for op in ["names", "tree", "inventory"] {
         let entries = operate(&root, &json!({"op":op}), None).unwrap();
         assert_eq!(
             entries.as_object().unwrap().keys().collect::<Vec<_>>(),
@@ -72,6 +72,8 @@ fn static_trees_omit_finder_metadata_and_keep_other_dotfiles() {
         for name in names {
             let expected = if op == "tree" {
                 json!(STANDARD.encode(name))
+            } else if op == "inventory" {
+                json!({"sha256": format!("{:x}", Sha256::digest(name.as_bytes())), "bytes": name.len()})
             } else {
                 Value::Null
             };
@@ -95,6 +97,33 @@ fn static_trees_omit_finder_metadata_and_keep_other_dotfiles() {
 }
 
 #[test]
+fn a_copy_into_its_own_source_copies_what_the_source_held() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("src");
+    fixture.dir("src/deck");
+    fs::write(fixture.path("src/a.txt"), "a").unwrap();
+    fs::write(fixture.path("src/deck/b.txt"), "b").unwrap();
+    let target = fixture.path("src/output");
+    operate(
+        &root,
+        &json!({"op":"copy", "target":target, "token":TOKEN}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read(target.join("a.txt")).unwrap(), b"a");
+    assert_eq!(fs::read(target.join("deck/b.txt")).unwrap(), b"b");
+    let copied: Vec<_> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        copied.len(),
+        2,
+        "{copied:?}: the target holds no copy of itself"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn a_static_inventory_refuses_a_fifo() {
     let fixture = Fixture::new();
@@ -102,8 +131,10 @@ fn a_static_inventory_refuses_a_fifo() {
     let path = std::ffi::CString::new(fixture.path("assets/pipe").to_str().unwrap()).unwrap();
     // SAFETY: path is a live, NUL-terminated name in this test's private directory.
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
-    let error = operate(&root, &json!({"op":"tree"}), None).unwrap_err();
-    assert!(error.to_string().contains("regular files"), "{error}");
+    for op in ["tree", "inventory"] {
+        let error = operate(&root, &json!({"op":op}), None).unwrap_err();
+        assert!(error.to_string().contains("regular files"), "{error}");
+    }
 }
 
 #[test]

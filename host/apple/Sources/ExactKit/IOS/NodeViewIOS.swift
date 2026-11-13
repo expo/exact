@@ -25,8 +25,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     var textRasterReady = false
     var textRasterFailed = false
     var textLayoutValid = false
-    /// The last frame showed it: Core Animation committed it in a window, not hidden (`Presenter.unshown`).
-    var showed = false
+    /// Whether a frame has shown it where it is (`Presenter.showed`).
+    var shown = Shown.uncopied
     /// What the host's own writers hid (a covered route, a tab a native control
     /// stands in for, a placement); a `display: none` box is hidden besides, as
     /// CSS removes it with its subtree, or its texts paint at its 0×0 frame's
@@ -738,7 +738,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// The end the reader was following moved during their interaction:
     /// settle there when it ends, as a browser's scroll anchoring does.
     package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) }
+        if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) }; pagedDragEnded(scrollView)
         guard scrollView === self.scrollView else { return }
         // A follow of the end that animates ends with its animation.
         if !decelerate, !followEndIfOwed() { endScroll() }
@@ -746,7 +746,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { presenter?.session?.frameHealth.endScroll(scrollView); if scrollView === self.scrollView, !followEndIfOwed() { scrollMayHaveEnded(scrollView) } }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
-        followingEndAnimated = false
+        followingEndAnimated = false; authoredScrollAnimating = false
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
@@ -760,7 +760,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         followsEndAfterInteraction = false
         let maximum = max(-sv.adjustedContentInset.top, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
         anchoredScrollTop = maximum
-        guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5 else { return false }
+        guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5, !authorOwnsScroll(sv) else { return false }
         sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: maximum), in: sv), animated: true)
         return true
     }
@@ -769,7 +769,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
         presenter?.elementScrolls.userScrolled(scrollView) // its own scroller, or a grouped list's collection
         guard scrollView === self.scrollView else { return }
-        followingEndAnimated = false
+        followingEndAnimated = false; authoredScrollAnimating = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
         retainedScrollTop = nil
@@ -793,7 +793,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         #if os(iOS)
         if swipeOwner, scrollView.isTracking { presenter?.swipeActions.painted.scrolled(self) }
         #endif
-        presenter?.transformGeometry.changed()
+        presenter?.transformGeometry.changed(); presenter?.tipsScrolled()
         presenter?.videoVisibility?.changed()
         presenter?.reaimFixedGradients()
         presenter?.scrollPump.scrolled(self)
@@ -921,7 +921,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if outsideX && (style["overflow_x"]?.string ?? "visible") != "visible" { return nil }
             if outsideY && (style["overflow_y"]?.string ?? "visible") != "visible" { return nil }
             let passesThrough = style["pointer_events"]?.string == "none" || cssVisibilityHidden && !inlineRunShows(at: point)
-            if let hit = NodeView.hitChildren(in: self, at: point, with: event, visit: { child in
+            if reachesChildren(at: point), let hit = NodeView.hitChildren(in: self, at: point, with: event, visit: { child in
                 if child === (self.glassSlot ?? self.materialView), Materials.glass(self.materialKind) || self.blurHostsChildren, let contentView = self.materialView?.contentView {
                     // The effect's UIKit bounds check must not hide authored
                     // children in CSS visible overflow. They remain descendants
@@ -1328,7 +1328,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // to match `auto` on such platforms; `none` only hides the track.
         // Indicators and deceleration are the app's once a hatch sets them
         // (LLP 1075.003 §3.5): written when what the style says changes.
-        let snap = style["scroll_snap_type"]?.string == "x mandatory"
+        let snap = snapDeceleration == .fast
         let indicators = (style["scrollbar_width"]?.string ?? "auto") != "none"
         if let sv = scrollView, scrollWritten != "\(snap)|\(ox)|\(oy)|\(indicators)" {
             scrollWritten = "\(snap)|\(ox)|\(oy)|\(indicators)"

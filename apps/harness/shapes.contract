@@ -34,7 +34,8 @@ shape Block
   runs: Run[]
   lines: Line[]
 
-// One transcript entry.
+// One transcript entry (not `Entry`, which a file with `routes` reserves
+// for the router's visits).
 //   id: a decimal number, strictly increasing, never reused
 //   kind: "user" | "assistant" | "more" | "tool" | "notice" | "error" |
 //     "banner" | "image"; a streamed reply is one "assistant" entry (its
@@ -48,7 +49,7 @@ shape Block
 //   link: what the title links to (a tool's file), or ""
 //   model: the label of the model the entry's turn started with ("mock"
 //     for the mock); "" outside a turn (banner, notices, commands)
-shape Entry
+shape LogEntry
   id: string
   kind: string
   busy: bool
@@ -80,6 +81,8 @@ shape ModelChoice
 //   approval: the pending tool call, its id "" when none
 //   retired: how many entries `retire(id)` has dropped (printed, no longer
 //     answered); queued: prompts sent while a turn runs, oldest first
+//   failed: an error entry was added since the last turn started (a model
+//     that could not be reached or answered with an error, a tool refused)
 shape Session
   model: string
   provider: string
@@ -90,7 +93,7 @@ shape Session
   tokensIn: number
   tokensOut: number
   contextPct: number
-  entries: Entry[]
+  entries: LogEntry[]
   approval: Approval
   toast: string
   models: ModelChoice[]
@@ -98,6 +101,7 @@ shape Session
   queued: string[]
   // Which transcript: `/clear` starts a new one.
   epoch: number
+  failed: bool
 
 // Animation frames need only the effective terminal style.
 shape FrameRun

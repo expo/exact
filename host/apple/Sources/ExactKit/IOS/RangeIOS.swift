@@ -93,6 +93,15 @@ extension ControlHost {
 
 /// UIKit's slider, whose VoiceOver adjustments the host makes (`adjustRange`)
 final class RangeSlider: UISlider {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     var adjust: ((RangeSlider, Double) -> Void)?
     /// The value it shows, which its `Float` `value` may round (a step of
     /// 1e-6): kept while the thumb stays where it was put

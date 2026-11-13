@@ -23,13 +23,13 @@ enum KeyboardNavigation {
 }
 
 extension NodeView {
-    /// A box the author made a taker of keys: no button, with `focus`,
-    /// `blur` or `key` handlers, or a canvas that takes input. AppKit keeps a
-    /// custom view that accepts first responder in the Tab loop whatever
-    /// Keyboard Navigation says (measured on macOS 27.0), and focuses it on a
-    /// click (`takesClickFocus`).
+    /// A box the author made a taker of keys: no button or select, with
+    /// `focus`, `blur` or `key` handlers, or a canvas that takes input.
+    /// AppKit keeps a custom view that accepts first responder in the Tab
+    /// loop whatever Keyboard Navigation says (measured on macOS 27.0), and
+    /// focuses it on a click (`takesClickFocus`).
     var takesKeysOfItsOwn: Bool {
-        !isButton && !isRadio && (canvases?.wantsInput(id) == true || !handlers.isDisjoint(with: Self.focusEvents))
+        !isButton && !isSelect && !isRadio && (canvases?.wantsInput(id) == true || !handlers.isDisjoint(with: Self.focusEvents))
     }
     /// Whether Tab stops here. The author's `tabindex` wins: zero or more is
     /// a stop, a negative one never. Without one, a stop by kind follows the
@@ -224,9 +224,9 @@ extension Presenter {
             if v.explicitTabIndex == nil, tables.pressesRow(v) { return false }
         }
         if let index = v.explicitTabIndex, index < 0 { return false }
-        if v.field != nil || v.textArea != nil || v.isDateOrSelect { return true }
+        if v.field != nil || v.textArea != nil || v.isDate { return true }
         if v.kind == "native", v.presenter?.session?.natives.focusTarget(v) != nil { return true }
-        if v.isButton || v.kind == "toggle" || v.pressable { return v.explicitTabIndex != nil || KeyboardNavigation.on || v.takesKeysOfItsOwn }
+        if v.isButton || v.isSelect || v.kind == "toggle" || v.pressable { return v.explicitTabIndex != nil || KeyboardNavigation.on || v.takesKeysOfItsOwn }
         return v.canBecomeKeyView
     }
 }

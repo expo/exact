@@ -56,6 +56,21 @@ impl PanVelocity {
     }
 }
 
+/// `exact_velocity`: the engine's estimate at `now` over `samples`, `(t, x, y)`
+/// triples oldest first, for a contact the host follows outside any runtime
+/// (the frame-health card). Zero as [`VelocityTracker::estimate`] says, and
+/// for a non-finite `now`.
+pub fn velocity(samples: &[f64], now: f64) -> Value {
+    if !now.is_finite() {
+        return Value::ZERO;
+    }
+    let mut tracker = VelocityTracker::new();
+    for sample in samples.chunks_exact(3) {
+        tracker.push(sample[0], Value::new(sample[1], sample[2]));
+    }
+    tracker.estimate(now)
+}
+
 impl<D: DataSource> Bridge<D> {
     /// This runtime's pan tracker (`exact_pan_sample`, `exact_pan_velocity`).
     pub fn pan_velocity(&mut self) -> &mut PanVelocity {
@@ -64,7 +79,8 @@ impl<D: DataSource> Bridge<D> {
 }
 
 /// Export `exact_pan_sample` and `exact_pan_velocity` over `host!`'s
-/// registry; invoked inside `host!`, after `EXACT_RUNTIMES`.
+/// registry, and `exact_velocity`, which needs none; invoked inside `host!`,
+/// after `EXACT_RUNTIMES`.
 #[macro_export]
 macro_rules! pan_velocity_exports {
     () => {
@@ -91,12 +107,41 @@ macro_rules! pan_velocity_exports {
                 |_| 0.0,
             )
         }
+        /// The engine's velocity at `now` over `count` `(t, x, y)` samples at
+        /// `samples`, written to `out[0]` and `out[1]`. No runtime.
+        ///
+        /// # Safety
+        /// `samples` holds `3 * count` values and `out` room for two.
+        #[no_mangle]
+        pub unsafe extern "C" fn exact_velocity(
+            samples: *const f64,
+            count: usize,
+            now: f64,
+            out: *mut f64,
+        ) {
+            if out.is_null() {
+                return;
+            }
+            let samples = match count.checked_mul(3) {
+                // SAFETY: the caller's samples, as above.
+                Some(len) if !samples.is_null() => unsafe {
+                    ::std::slice::from_raw_parts(samples, len)
+                },
+                _ => &[],
+            };
+            let v = $crate::pan_velocity::velocity(samples, now);
+            // SAFETY: the caller's room for two, as above.
+            unsafe {
+                *out = v.x;
+                *out.add(1) = v.y;
+            }
+        }
     };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PanVelocity;
+    use super::{velocity, PanVelocity, Value};
 
     #[test]
     fn a_steady_drag_measures_its_speed_in_px_per_second() {
@@ -166,5 +211,49 @@ mod tests {
         // A refused first sample still ends the old contact.
         assert!(!pan.sample(true, f64::NAN, 0.0, 1.02));
         assert_eq!(pan.estimate(0, 1.02), 0.0);
+    }
+
+    #[test]
+    fn velocity_over_held_samples_is_the_trackers() {
+        // A steady drag at 1000 px/s right and 250 down, at 120 Hz
+        let mut samples = Vec::new();
+        for i in 0..=8 {
+            let t = 2.0 + f64::from(i) / 120.0;
+            samples.extend([
+                t,
+                f64::from(i) * 1000.0 / 120.0,
+                f64::from(i) * 250.0 / 120.0,
+            ]);
+        }
+        let now = 2.0 + 8.0 / 120.0;
+        let steady = velocity(&samples, now);
+        assert!(
+            (steady.x - 1000.0).abs() < 1e-6 && (steady.y - 250.0).abs() < 1e-6,
+            "{steady:?}"
+        );
+        // Lifted a frame later half a pixel back, it still throws forward, where
+        // the last step alone would read -60 px/s
+        let last = samples.len() - 3;
+        samples.extend([
+            now + 1.0 / 120.0,
+            samples[last + 1] - 0.5,
+            samples[last + 2],
+        ]);
+        let lifted = velocity(&samples, now + 1.0 / 120.0);
+        assert!(lifted.x > 500.0, "{lifted:?}");
+        // A trailing partial sample is ignored; one sample, a pause past the
+        // window or a non-finite instant is at rest
+        assert_eq!(velocity(&samples[..samples.len() - 1], now), steady);
+        assert_eq!(velocity(&samples[..3], 2.0), Value::ZERO);
+        assert_eq!(velocity(&samples, now + 1.0), Value::ZERO);
+        assert_eq!(velocity(&samples, f64::NAN), Value::ZERO);
+        assert_eq!(velocity(&samples, f64::NEG_INFINITY), Value::ZERO);
+        // It keeps only the newest 16, as exact.h says: four wild samples
+        // before them change nothing
+        let mut many: Vec<f64> = (0..4)
+            .flat_map(|i| [f64::from(i) * 0.001, 5000.0, -5000.0])
+            .collect();
+        many.extend((0..16).flat_map(|i| [0.01 + f64::from(i) * 0.005, f64::from(i), 0.0]));
+        assert_eq!(velocity(&many, 0.09), velocity(&many[12..], 0.09));
     }
 }

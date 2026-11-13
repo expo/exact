@@ -561,7 +561,8 @@ pub(super) fn align_item_within_area(
         }
         // SelfStart/SelfEnd are resolved to Start/End against the item's own direction in
         // `align_and_position_item`.
-        AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => unreachable!(),
+        AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd
+            | AlignItemsKeyword::Left | AlignItemsKeyword::Right => unreachable!(),
     };
 
     let offset_within_area = if position == Position::Absolute {
@@ -620,7 +621,8 @@ pub(super) fn static_position(
             AlignItemsKeyword::End | AlignItemsKeyword::FlexEnd => edge(rtl),
             AlignItemsKeyword::Center => StaticAlignment::Center,
             // Resolved to Start/End against the item's own direction above.
-            AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => unreachable!(),
+            AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd
+            | AlignItemsKeyword::Left | AlignItemsKeyword::Right => unreachable!(),
         };
         let safe = matches!(alignment.safety, AlignmentSafety::Safe).then(|| of(AlignItemsKeyword::Start));
         (of(alignment.keyword), safe)

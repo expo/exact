@@ -2,7 +2,7 @@
 // everything else stay (quiet.mjs, LLP 1116.021 D3).
 import { expect, test, spyOn } from 'bun:test';
 import { quiet, quietFor } from './quiet.mjs';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { packageShareExtension } from './extensions.mjs';
@@ -49,7 +49,12 @@ test.skipIf(process.platform !== 'darwin')('share packaging reads the parent pli
       app: { id: 'dev.exact.quiet', displayName: 'Quiet', manifest: { share_target: { action: '/share', params: { text: 'text' } } } },
       bundle: dir, directory: resolve(dir, 'build'), sdk: '/sdk', triple: 'fixture', group: 'group.dev.exact.quiet',
       entitlements: plistFile({}), sign() {},
-      runApple: (command, args, options) => command === 'plutil' ? runApple(command, args, options) : { status: 0 },
+      runApple: (command, args, options) => {
+        if (command === 'plutil') return runApple(command, args, options);
+        // Packaging inspects the compiler's output for required-reason API imports.
+        if (args.includes('swiftc')) copyFileSync('/usr/bin/true', args[args.indexOf('-o') + 1]);
+        return { status: 0 };
+      },
     });
     expect(readFileSync(resolve(extension, 'Info.plist'), 'utf8')).toContain('<string>42</string>');
     process.stdout.write('host/apple: Quiet.app (--no-install)\n');

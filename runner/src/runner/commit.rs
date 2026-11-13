@@ -156,6 +156,7 @@ impl<D: DataSource> Runner<D> {
                 // A spent reply's turn read the store: its failure stands, and so does the read.
                 if let Some(i) = self.module_work.reply_reader.take() {
                     self.resources[i].store_reader = true;
+                    self.resources[i].contents_reader = true;
                 }
                 self.uploads = c.uploads;
                 self.failed_mut = c.failed_mut;
@@ -424,7 +425,7 @@ impl<D: DataSource> Runner<D> {
             }
             let target = self.send_target(m);
             let write = self.accept_write(target, source, sargs);
-            let early = !self.data.ready() && !exact_plan::runner_owned_source(source);
+            let early = !self.source_ready(source) && !exact_plan::runner_owned_source(source);
             if early && !queue {
                 if let Err(e) = self.check_send_arguments(m, sargs) {
                     self.discard_later(&later);
@@ -807,7 +808,25 @@ impl<D: DataSource> Runner<D> {
 
     /// Ask resource `r` again, forced, at the next settlement that can.
     pub(super) fn force_refresh(&mut self, r: usize) {
+        // A refresh ends the launch's exemption for every resource and every
+        // wait, not only `r`: a list's members and whatever the refresh's cause
+        // also changed are then asked fresh. The cost is a fetch a preload
+        // could have answered, never an old answer (LLP 1162.000 D1).
+        self.launch.clear();
+        for p in &mut self.pending {
+            p.launch = false;
+        }
         if !self.refresh_next.contains(&r) {
+            self.refresh_next.push(r);
+        }
+    }
+
+    /// Ask resource `r` in place of the stand-in the launch shows, at the
+    /// next settlement that can. The ask replaces whatever is in flight, as
+    /// a refresh does, and is sent as an ordinary one (LLP 1162.000 D1).
+    pub(super) fn ask_at_launch(&mut self, r: usize) {
+        if !self.refresh_next.contains(&r) {
+            self.launch.push(r);
             self.refresh_next.push(r);
         }
     }
@@ -882,8 +901,10 @@ impl<D: DataSource> Runner<D> {
         let reasks = self.overrun_reasks(target, &args, forced);
         self.forget_ticket(target);
         let first = self.pending.len();
+        let launch = matches!(target, Target::Resource(i) if self.launch.contains(&i));
+        let refresh = forced && !launch;
         for request in requests {
-            self.append_request(target, source.clone(), args.clone(), request, forced);
+            self.append_request(target, source.clone(), args.clone(), request, refresh);
         }
         let origin = self.pending[first].origin;
         for p in &mut self.pending[first..] {
@@ -899,13 +920,14 @@ impl<D: DataSource> Runner<D> {
             && request.surface.is_none()
     }
 
+    /// `refresh`: the executor bypasses what it holds for the request.
     pub(super) fn append_request(
         &mut self,
         target: Target,
         source: String,
         args: Vec<Value>,
         request: Request,
-        forced: bool,
+        refresh: bool,
     ) {
         let keepable = Self::keepable(target, &request);
         let ticket = self.next_ticket;
@@ -955,6 +977,7 @@ impl<D: DataSource> Runner<D> {
             long_poll: request.stream && request.long_poll.is_some(),
             replied: false,
             reask_at: None,
+            launch: false,
             reasks: 0,
         });
         self.note_child(ticket, &request);
@@ -978,7 +1001,7 @@ impl<D: DataSource> Runner<D> {
                     _ => RequestClass::Ordered,
                 },
                 request,
-                forced,
+                forced: refresh,
             }));
         // An abort heard before this request was enqueued (in the same
         // commit, or a worker's turn that landed late) names it now.

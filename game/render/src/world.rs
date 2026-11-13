@@ -625,9 +625,6 @@ impl Feed {
             })
             .collect()
     }
-    pub(crate) fn trace_camera(&self, alpha: f32) -> [f64; 3] {
-        self.scene.trace_camera(alpha)
-    }
     /// Frame inputs: interpolated camera and up to 16 positive tick-end lights,
     /// ordered by tick-end camera distance then entity index. Lit samples frame time.
     /// No world queries; retained attachment chains are composed at this alpha.
@@ -643,11 +640,20 @@ impl Feed {
     /// The pointer motion the next frame's camera `MouseLook` turns by: the
     /// simulation's `Sim::unshown_motion` at that frame.
     pub fn unshown_motion(&mut self, motion: glam::Vec2) {
-        self.scene.unshown = motion;
+        self.scene.pointer.unshown = motion;
     }
     /// Whether the fed camera has a `MouseLook` (else no frame reads the motion).
     pub fn mouse_look(&self) -> bool {
-        self.scene.has_look()
+        self.scene.pointer.look.is_some()
+    }
+    /// The camera's contact, if it has a `PointerPan` presentation component.
+    pub fn pointer_pan(&self) -> Option<u64> {
+        self.scene.pointer.contact()
+    }
+    /// Supply the newest host sample for the next frame's `PointerPan`.
+    /// Obtain it from `Sim::frame_pointer`; it is consumed once by `frame`.
+    pub fn pointer_sample(&mut self, sample: Option<exact_game::PointerSample>) {
+        self.scene.pointer.sample = sample;
     }
     /// Frame projection at the CSS-pixel viewport size, including integer scaling.
     pub fn frame_pixels(

@@ -78,6 +78,8 @@ impl Retired {
 
     /// Wait for the thread to end, then drop the surface here.
     pub(crate) fn join(self) {
+        #[cfg(test)]
+        lifetime_tests::joining(self.thread.thread().id());
         let _ = self.thread.join();
         let surface = self.surface;
         crate::swapchains(|| drop(surface));
@@ -350,6 +352,10 @@ fn interactive() {
 
 #[cfg(not(target_vendor = "apple"))]
 fn interactive() {}
+
+#[cfg(test)]
+#[path = "acquire_lifetime_tests.rs"]
+mod lifetime_tests;
 
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) mod tests {

@@ -51,46 +51,11 @@ fn untyped(expr: &Expr, keep_enums: bool) -> Expr {
                     *expr = untyped(inner, keep_enums);
                 }
             }
-            Expr::Template(parts, _) => {
-                for part in parts {
-                    if let TemplatePart::Expr(e) = part {
-                        erase(e, keep_enums);
-                    }
+            _ => {
+                for e in expr.operands_mut() {
+                    erase(e, keep_enums);
                 }
             }
-            Expr::List(items, _) | Expr::Call(_, items, _) => {
-                for item in items {
-                    erase(item, keep_enums);
-                }
-            }
-            Expr::Some(e, _)
-            | Expr::Member(e, _, _)
-            | Expr::NamedArg(_, e, _)
-            | Expr::Unary(_, e, _)
-            | Expr::Arrow { body: e, .. } => erase(e, keep_enums),
-            Expr::Binary(_, a, b, _)
-            | Expr::Let {
-                value: a, body: b, ..
-            } => {
-                erase(a, keep_enums);
-                erase(b, keep_enums);
-            }
-            Expr::Ternary(a, b, c, _)
-            | Expr::Match {
-                subject: a,
-                some: b,
-                none: c,
-                ..
-            } => {
-                erase(a, keep_enums);
-                erase(b, keep_enums);
-                erase(c, keep_enums);
-            }
-            Expr::Number(..)
-            | Expr::Str(..)
-            | Expr::Bool(..)
-            | Expr::None(..)
-            | Expr::Ident(..) => {}
         }
     }
     let mut expr = expr.clone();
@@ -459,12 +424,8 @@ pub(crate) fn cells(children: &[Node]) -> Option<Vec<Node>> {
     fn says(node: &Node) -> bool {
         match node {
             Node::Element { attrs, .. } => attrs.iter().any(|a| a.name == "delete"),
-            Node::When {
-                then, otherwise, ..
-            } => then.iter().chain(otherwise).any(says),
-            Node::Each { body, .. } => body.iter().any(says),
-            Node::Match { some, none, .. } => some.1.iter().chain(none).any(says),
             Node::Use { .. } | Node::Children { .. } => false,
+            node => node.children().any(says),
         }
     }
     fn expand(node: &Node) -> Node {
@@ -547,11 +508,22 @@ impl At {
         self == Self::Row || (self == Self::Section && !matches!(tag, "header" | "footer"))
     }
 
-    fn expand(self, node: &Node) -> Cow<'_, Node> {
+    fn expand<'a>(self, node: &'a Node, styles: &[StyleDecl]) -> Cow<'a, Node> {
         match node {
             Node::Element { tag, .. } if self == Self::Section && self.row(tag) => {
                 Cow::Owned(grouped(node, &|n, swiped| {
-                    crate::grouped::row(n, false, swiped)
+                    crate::grouped::row(n, false, swiped, &|attrs| {
+                        crate::class::rows(
+                            attrs,
+                            &|name| {
+                                styles
+                                    .iter()
+                                    .find(|s| s.name == name)
+                                    .map(|s| s.attrs.as_slice())
+                            },
+                            &[],
+                        )
+                    })
                 }))
             }
             Node::Element { attrs, .. }
@@ -589,7 +561,7 @@ pub fn expand_row_deletes(view: &[Node], styles: &[StyleDecl]) -> Vec<Node> {
     fn node(n: &Node, at: At, styles: &[StyleDecl]) -> Node {
         match n {
             Node::Element { .. } => {
-                let expanded = at.expand(n);
+                let expanded = at.expand(n, styles);
                 let Node::Element {
                     tag,
                     positional,
@@ -738,7 +710,7 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                         w.advise && !holds_actions
                     };
                     // Grouped-row layout precedes admission of any lists it contains.
-                    let expanded = at.expand(node);
+                    let expanded = at.expand(node, styles);
                     let Node::Element {
                         tag,
                         attrs,
@@ -772,19 +744,9 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                     };
                     walk(children, w, styles, out);
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, w, styles, out);
-                    walk(otherwise, w, styles, out);
-                }
                 Node::Each { body, .. } => {
                     let repeated = w.repeated || matches!(w.at, At::Row | At::Section);
                     walk(body, Walk { repeated, ..w }, styles, out)
-                }
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, w, styles, out);
-                    walk(none, w, styles, out);
                 }
                 Node::Use { children, .. } => walk(
                     children,
@@ -796,7 +758,11 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                     styles,
                     out,
                 ),
-                Node::Children { .. } => {}
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, w, styles, out);
+                    }
+                }
             }
         }
     }

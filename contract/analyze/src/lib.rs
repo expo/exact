@@ -90,64 +90,44 @@ pub fn check_surface_arguments(
         }
     }
     fn walk(nodes: &[Node], declared: &BTreeMap<String, Vec<String>>, out: &mut Vec<AnalyzeError>) {
-        for node in nodes {
-            match node {
-                Node::Element {
-                    tag,
-                    attrs,
-                    children,
-                    ..
-                } => {
-                    for attr in attrs
-                        .iter()
-                        .filter(|a| tag == "canvas" && a.name == "surface")
-                    {
-                        let Expr::Call(name, args, span) = &attr.value else {
-                            continue;
-                        };
-                        let Some(fields) = declared.get(name) else {
-                            out.push(finding(format!("unknown surface `{name}`"), *span));
-                            continue;
-                        };
-                        for arg in args {
-                            if let Expr::NamedArg(field, _, span) = arg {
-                                if !fields.contains(field) {
-                                    out.push(finding(
+        for node in Node::walk(nodes) {
+            let Node::Element { tag, attrs, .. } = node else {
+                continue;
+            };
+            for attr in attrs
+                .iter()
+                .filter(|a| tag == "canvas" && a.name == "surface")
+            {
+                let Expr::Call(name, args, span) = &attr.value else {
+                    continue;
+                };
+                let Some(fields) = declared.get(name) else {
+                    out.push(finding(format!("unknown surface `{name}`"), *span));
+                    continue;
+                };
+                for arg in args {
+                    if let Expr::NamedArg(field, _, span) = arg {
+                        if !fields.contains(field) {
+                            out.push(finding(
                                         format!("unknown surface argument `{field}` for `{name}`; the game declares: {} (.shells/surfaces.json, from its last GPU build)", fields.join(", ")),
                                         *span,
                                     ));
-                                }
-                            }
-                        }
-                        if !args.iter().any(|a| matches!(a, Expr::NamedArg(..)))
-                            && args.len() > fields.len()
-                        {
-                            out.push(finding(
-                                format!(
-                                    "surface `{name}` expected at most {} arguments ({}), got {}",
-                                    fields.len(),
-                                    fields.join(", "),
-                                    args.len()
-                                ),
-                                *span,
-                            ));
                         }
                     }
-                    walk(children, declared, out);
                 }
-                Node::Use { children, .. } => walk(children, declared, out),
-                Node::Each { body, .. } => walk(body, declared, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, declared, out);
-                    walk(otherwise, declared, out);
+                if !args.iter().any(|a| matches!(a, Expr::NamedArg(..)))
+                    && args.len() > fields.len()
+                {
+                    out.push(finding(
+                        format!(
+                            "surface `{name}` expected at most {} arguments ({}), got {}",
+                            fields.len(),
+                            fields.join(", "),
+                            args.len()
+                        ),
+                        *span,
+                    ));
                 }
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, declared, out);
-                    walk(none, declared, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }
@@ -833,19 +813,11 @@ fn check_controls(nodes: &[Node], in_canvas: bool) -> Result<(), AnalyzeError> {
                 }
                 check_controls(children, in_canvas || tag == "canvas")?;
             }
-            Node::Each { body, .. } => check_controls(body, in_canvas)?,
-            Node::When {
-                then, otherwise, ..
-            } => {
-                check_controls(then, in_canvas)?;
-                check_controls(otherwise, in_canvas)?;
+            node => {
+                for list in node.child_lists() {
+                    check_controls(list, in_canvas)?;
+                }
             }
-            Node::Match { some, none, .. } => {
-                check_controls(&some.1, in_canvas)?;
-                check_controls(none, in_canvas)?;
-            }
-            Node::Use { children, .. } => check_controls(children, in_canvas)?,
-            Node::Children { .. } => {}
         }
     }
     Ok(())
@@ -856,44 +828,19 @@ fn check_controls(nodes: &[Node], in_canvas: bool) -> Result<(), AnalyzeError> {
 /// @ref LLP 1086 D12 — EX7 resource freshness diagnostics.
 pub fn resource_clock_warnings(file: &File) -> Vec<AnalyzeError> {
     fn live(expr: &Expr, names: &dyn Fn(&str) -> bool) -> bool {
-        use contract_syntax::TemplatePart;
         match expr {
-            Expr::Call(name, args, _) => {
-                name == "performanceNow" || names(name) || args.iter().any(|e| live(e, names))
-            }
+            Expr::Call(name, _, _) if name == "performanceNow" || names(name) => true,
             Expr::Ident(name, _) => names(name),
-            Expr::List(args, _) => args.iter().any(|e| live(e, names)),
-            Expr::Template(parts, _) => parts
-                .iter()
-                .any(|p| matches!(p, TemplatePart::Expr(e) if live(e, names))),
-            Expr::Some(e, _)
-            | Expr::Unary(_, e, _)
-            | Expr::Member(e, _, _)
-            | Expr::NamedArg(_, e, _)
-            | Expr::Typed(e, _, _) => live(e, names),
-            Expr::Binary(_, a, b, _) => live(a, names) || live(b, names),
-            Expr::Ternary(a, b, c, _) => live(a, names) || live(b, names) || live(c, names),
-            Expr::Match {
-                subject,
-                var,
-                some,
-                none,
-                ..
-            } => {
-                live(subject, names)
-                    || live(some, &|name| name != var && names(name))
-                    || live(none, names)
-            }
-            Expr::Arrow { params, body, .. } => live(body, &|name| {
-                !params.iter().any(|p| p == name) && names(name)
-            }),
+            // A `let`'s name is live exactly when its value is.
             Expr::Let {
                 name, value, body, ..
             } => {
                 let value = live(value, names);
                 live(body, &|n| if n == name { value } else { names(n) })
             }
-            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) => false,
+            _ => expr
+                .scoped_operands()
+                .any(|(e, binds)| live(e, &|name| !binds.contains(name) && names(name))),
         }
     }
     let mut functions = BTreeMap::new();

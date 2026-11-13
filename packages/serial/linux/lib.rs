@@ -14,10 +14,10 @@
 //! - Under the agent's driver it also offers the ports `EXACT_DEVICE_FIXTURE` names (a pseudo-terminal a drive made,
 //!   D19 item 3); the Linux host runs headless on a Mac too, where the same POSIX calls drive the pty.
 //!
-//! The package names only `exact_linux` and `std`, so the C library's termios and ioctl calls are declared here,
+//! The package names only `exact_painted` and `std`, so the C library's termios and ioctl calls are declared here,
 //! with their structures and constants for each OS the host runs on.
 
-use exact_linux::package::{json, Context, Json, Notifier, Package, Reply};
+use exact_painted::package::{json, Context, Json, Notifier, Package, Reply};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};

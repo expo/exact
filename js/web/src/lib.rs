@@ -284,7 +284,7 @@ impl Module {
                             ))
                         }
                         Outcome::Response(response) => response.body,
-                        Outcome::Message(_) | Outcome::Closed { .. } => {
+                        Outcome::Message(_) | Outcome::Messages(_) | Outcome::Closed { .. } => {
                             return Err(unavailable(
                                 "a stream message supplied to JavaScript checkpoint",
                             ))
@@ -534,6 +534,8 @@ fn outcome_json(outcome: Outcome) -> Result<Json, DataError> {
         // The web's wasm host keeps every socket listening (LLP 1016.000 D7):
         // no two-way socket ends here.
         Outcome::Closed { .. } => return Err(unavailable("a socket close supplied to fetch")),
+        // The runner hands a mapper a batch's messages one at a time.
+        Outcome::Messages(_) => return Err(unavailable("a batch of messages supplied to fetch")),
     })
 }
 
@@ -571,7 +573,7 @@ impl DataSource for Module {
                 | DataError::BadArguments(e)
                 | DataError::UnknownSource(e)
                 | DataError::Interface(e)
-                | DataError::DeferredAtBake(e)
+                | DataError::DeferredAtBake { message: e, .. }
                 | DataError::Overrun(e)
                 | DataError::Failed(_, e, _),
             ) => exact_runner::DrawReply {

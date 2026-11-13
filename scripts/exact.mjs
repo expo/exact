@@ -47,6 +47,7 @@ const { freeSpace, ROOM_GB } = await import('./filesystem.mjs');
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { grantAdvice } from './grant-advice.mjs';
+import { installIn } from './package-manager.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
 const { applyPattern, createApp, createGame, patternList, wireSnapback } = await import('../game/new.mjs');
@@ -56,11 +57,12 @@ const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/buil
 const { closeFilesystemReader } = await import('./filesystem.mjs');
 const { builtAppMatches, jsTargetBuild } = await import('../host/web/serve.mjs');
 const { signRelease } = await import('../host/apple/assets.mjs');
+const { appleCrossReport, CROSS_IOS_ROWS, hasCrossSdk, iosSimulatorTarget } = await import('../host/apple/sdk.mjs');
 const { chromium } = await import('./agent-launch.mjs');
 const { androidLockCommand, androidSdk, androidSdkPackages, androidSdkFix, androidJavaEnv, androidJavaFix, androidToolchainEnv } = await import('./agent-android.mjs');
 const { hermesAndroidBundle } = await import('./hermes-android.mjs');
 const { guardFlags, helpText } = await import('./help.mjs');
-const { backendOrigin } = await import('../js/bake/src/typescript.mjs');
+const { backendOrigin, literalBackendOrigin } = await import('../js/bake/src/typescript.mjs');
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
 const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url)) ? await import('../snapback4/web/device-build.mjs') : null;
 const { generate: gameVocabulary } = await import('../game/vocab.mjs');
@@ -75,14 +77,15 @@ export const executableIn = (bundle, app) => resolve(bundle, 'Contents/MacOS', a
 export const commandOf = (app) => app.manifest.app?.command ?? app.name;
 /** Where `install` puts the app. */
 export const installedAt = (app) => resolve(APPLICATIONS, `${appleExecutableName(app)}.app`);
-/** The targets a Mac cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
- * TypeScript, a Hermes bundle; each is needed only for its destination (and only with Xcode). */
+
+/** The targets this host cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
+ * TypeScript, a Hermes bundle, and only for its destination: on a Mac with Xcode; on Linux with the cross SDK (an ARM simulator). */
 export function appleCrossTargets(os = process.platform, cpu = process.arch) {
-  if (os !== 'darwin') return [];
+  if (!['darwin', 'linux'].includes(os)) return [];
   return [
-    { target: cpu === 'x64' ? 'x86_64-apple-ios' : 'aarch64-apple-ios-sim', destination: 'iOS Simulator' },
+    { target: os === 'linux' ? iosSimulatorTarget(process.env.EXACT_IOS_SIM_ARCH ?? 'arm64').target : cpu === 'x64' ? 'x86_64-apple-ios' : 'aarch64-apple-ios-sim', destination: 'iOS Simulator' },
     { target: 'aarch64-apple-ios', destination: 'iOS device' },
-    { target: 'aarch64-apple-tvos-sim', destination: 'tvOS Simulator' },
+    ...(os === 'darwin' ? [{ target: 'aarch64-apple-tvos-sim', destination: 'tvOS Simulator' }] : []),
   ];
 }
 /** The cross targets `setup` installs: the simulators', and the iOS device's wherever a device build can run (Xcode
@@ -93,7 +96,7 @@ export const appleSetupTargets = (os = process.platform, cpu = process.arch, dev
  * Xcode the Apple build selects (host/apple/devices.mjs `useXcode`: Xcode.app
  * when xcode-select names the Command Line Tools) is the one asked. */
 function iphoneosSdk(os = process.platform) {
-  if (os !== 'darwin') return false;
+  if (os !== 'darwin') return os === 'linux' && hasCrossSdk('iphoneos');
   const selected = spawnSync('xcode-select', ['-p'], {encoding: 'utf8'}).stdout?.trim() ?? '';
   const xcode = '/Applications/Xcode.app/Contents/Developer';
   const env = !process.env.DEVELOPER_DIR && selected.includes('CommandLineTools') && existsSync(xcode) ? {...process.env, DEVELOPER_DIR: xcode} : process.env;
@@ -413,7 +416,7 @@ export async function setup({check = false, platform = null, device = false} = {
     if (proxy) throw new Error(`${proxy}, then rerun exact setup`);
     // The nightly builds the web's wasm: with -Zbuild-std from rust-src for size, and without it (a --wasm dev build) from its own wasm32 std.
     // A game's web bake lints its logic on the same nightly, so it takes clippy too.
-    run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
+    run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
     webToolchainEnv(process.env); // Fetch the nightly standard library's locked sources too.
     if (output('wasm-bindgen', ['--version']) !== `wasm-bindgen ${bindgen}`)
       run('cargo', [`+${pin.channel}`, 'install', 'wasm-bindgen-cli', '--version', bindgen, '--locked', '--force']);
@@ -474,7 +477,7 @@ export async function setup({check = false, platform = null, device = false} = {
     }
   }
   const rows = sdkReport(process.env, { only: platform, device });
-  const report = platform ? (await platformReport(platform, rows, { device })).map(row => ({ ...row, required: true })) : rows;
+  const report = [...(platform ? (await platformReport(platform, rows, { device })).map(row => ({ ...row, required: true })) : rows), cratesRow()];
   printReport(report);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
@@ -484,6 +487,16 @@ export async function setup({check = false, platform = null, device = false} = {
   console.log(needed.length
     ? `SDK tools ready, except for ${needed.join('; ')}. Build scripts select the pinned stable/nightly without changing rustup default.`
     : 'SDK tools ready. Build scripts select the pinned stable/nightly without changing rustup default.');
+}
+/** Whether Cargo's cache holds every source exact2's lock names. Its tools build `--locked --offline`, and offline
+ * Cargo resolves the whole lock, so a single missing crate stops the first of them (a clean CI worker's, with
+ * "no matching package named `wat` found"). Setup's own row, not `sdkReport`'s: a build fetches what is missing
+ * once, and a platform's first build must not be refused for it. `manifest` is the workspace's (a test's own). */
+export function cratesRow(env = process.env, manifest = resolve(ROOT, 'Cargo.toml')) {
+  const fetched = spawnSync('cargo', ['fetch', '--locked', '--offline', '--manifest-path', manifest], { cwd: ROOT, encoding: 'utf8', env: cargoEnvironment(env) });
+  const said = (fetched.stderr ?? '').split('\n').find(line => line.startsWith('error: '))?.slice(7);
+  return { name: 'Cargo crates', have: fetched.status === 0 ? 'in Cargo cache' : said ?? fetched.error?.message ?? 'not all fetched',
+    want: "exact2's Cargo.lock", ok: fetched.status === 0, fix: `cargo fetch --locked --manifest-path ${manifest} (exact setup does)`, required: true, need: null };
 }
 /** Every prerequisite at once (LLP 1086 D6): what is installed, what the SDK
  * pins, and, for what only some apps need, which ones. A row is `required`
@@ -495,7 +508,7 @@ export function platformRowNames(platform, { os = process.platform, cpu = proces
   const host = `Hermes bundle (${hermesTarget(os, cpu)})`, ios = device ? 'aarch64-apple-ios' : appleCrossTargets(os, cpu)[0]?.target;
   const rows = platform === 'android' ? [...androidSdkPackages().map(p => p.name), 'Android NDK', 'Android JDK'] : ({
     web: ['Bun', 'node_modules', 'Chrome'],
-    ios: ['Xcode', 'iOS SDK', `Hermes bundle (${ios})`, `Rust ${ios}`],
+    ios: [...(os === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK']), `Hermes bundle (${ios})`, `Rust ${ios}`],
     macos: ['Xcode', host],
     linux: [host],
   }[platform] ?? []);
@@ -606,7 +619,7 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
       .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
     rows.push(row('clang and swift on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
       `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
-  }
+  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
   const hostName = `Hermes bundle (${hermesTarget() ?? 'no host bundle'})`;
@@ -881,20 +894,20 @@ export const packageSpecifier = (dir, short, root = ROOT) => `file:${pathFrom(di
 /** `exact add <module> [<app>]` (LLP 1133.001 D8): the app depends on one of exact2's standard modules by a path into
  *  this checkout, as an app consumes exact2 by path, so the module never differs from the SDK it compiles against. */
 export function add(args, say = console.log) {
-  const [module, name] = args, short = String(module ?? '').replace(/^@exact\//, '');
+  const [module, name] = args.filter(a => !a.startsWith('--')), short = String(module ?? '').replace(/^@exact\//, '');
   const read = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
   // A standard module (an interface), or a TypeScript library of exact2's own (`@exact/oauth`, LLP 1146 D5).
   const standard = readdirSync(resolve(ROOT, 'packages')).filter((p) => read(resolve(ROOT, 'packages', p, 'exact.json'))?.kind === 'interface'
     || read(resolve(ROOT, 'packages', p, 'package.json'))?.exports?.['.']?.types !== undefined);
-  if (!standard.includes(short)) throw new Error(`add: ${module ? `no standard module ${module}` : 'name a module'}; exact2's are ${standard.join(', ')} (exact add geolocation)`);
-  if (!name && !process.env.EXACT_APP_DIR) throw new Error('add: name the app (exact add geolocation <app>), or run bun exact.mjs add in it');
+  if (!standard.includes(short)) throw new Error(`add: ${module ? `no standard module ${module}` : 'name a module'}; exact2's are ${standard.join(', ')} (bun exact.mjs add geolocation)`);
+  if (!name && !process.env.EXACT_APP_DIR) throw new Error('add: name the app (bun scripts/exact.mjs add geolocation <app>), or run bun exact.mjs add in it');
   const app = resolveApp(name), at = resolve(app.dir, 'package.json'), manifest = read(at);
   if (!manifest) throw new Error(`add: ${app.dir} has no package.json; an app exact new made has one`);
   const key = `@exact/${short}`, spec = packageSpecifier(app.dir, short);
   if (manifest.dependencies?.[key] !== spec) writeFileSync(at, JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, [key]: spec } }, null, 2) + '\n');
-  if (spawnSync(process.execPath, ['install'], { cwd: app.dir, stdio: 'inherit' }).status !== 0) throw new Error(`add: bun install failed in ${app.dir}`);
+  const { manager, installed } = installIn(app.dir, `add: ${key} is in its package.json`, !args.includes('--no-install'));
   const grants = read(resolve(ROOT, 'packages', short, 'exact.json'))?.grants ?? [];
-  say(`add: ${key} is ${spec}. Name what you use: use … from "${key}" in app.contract, or import from it in app.ts${grants.length ? `; and in app.ts grant ${grantAdvice(grants)} (exact docs a capability that asks permission)` : ''}.`);
+  say(`add: ${key} is ${spec}${installed ? '' : `, not installed: run ${manager} install`}. Name what you use: use … from "${key}" in app.contract, or import from it in app.ts${grants.length ? `; and in app.ts grant ${grantAdvice(grants)} (bun exact.mjs docs a capability that asks permission)` : ''}.`);
   const maven = read(resolve(ROOT, 'packages', short, 'android/exact.json'))?.maven ?? [];
   if (maven.length) say(`For Android, after importing the package, run: ${androidLockCommand(app)}`);
 }
@@ -1060,18 +1073,16 @@ export function ended(${scope[0]}) {
       mark(main, '// exact:hatches', `import * as ${scope}Hatch from './${file}';\nexport function ${scope}(x) { ${scope}Hatch.built(x); }\nexport function ${scope}Ended(x) { ${scope}Hatch.ended(x); }`, `import it and export ${scope} and ${scope}Ended from yours`);
     }
   }
-  // The generated Linux crate does not run Rust hatches yet; only an authored one includes them (its build.rs).
-  if (!existsSync(resolve(dir, 'linux')) && manifest.host?.linux) todo.push('Linux: the generated Linux crate runs no Rust hatches, so none is written for it; the app runs there without this one');
-  if (existsSync(resolve(dir, 'linux'))) {
-    // Linux, and Windows and Android over the same presenter: one file the app's Linux crate includes (its
-    // build.rs, as apps/native-fixture/linux/build.rs: contract::native::rust_hatch_entry).
-    platforms.push('linux');
+  if (has('linux', 'linux', 'windows')) {
+    // Linux, and Windows and Android over the same presenter: one file the app's Linux crate includes (a generated
+    // crate's bake writes it in; an authored one's build.rs, as apps/native-fixture/linux/build.rs: rust_hatch_entry).
+    platforms.push(...(has('linux', 'linux') ? ['linux'] : []), ...(manifest.host?.windows ? ['windows'] : []));
     const main = resolve(dir, 'modules/linux/hatches.rs'), snake = (word ?? scope).replaceAll('-', '_');
     if (write(main, `// ${title}'s hatches on a painting host (Linux, and Windows over the same presenter). Written by
 // \`exact hatch\`; yours from here. There is no platform object here: a hatch draws into its node's overlay
 // (a whole recording that replaces the last), observes the input that lands in its box, and changes Contract
 // state only by acting on authored nodes: click(), focus(), blur(), input(text).
-use exact_linux::hatches::{App, Context, Element, Hatches, Window};
+use exact_painted::hatches::{App, Context, Element, Hatches, Window};
 
 #[derive(Default)]
 pub struct AppHatches;
@@ -1118,9 +1129,12 @@ pub type ExactHatches = AppHatches;
 
 // exact:functions (exact hatch adds a word's functions above this line)
 `)) {
-      // The crate's build script includes the file. One that asks for its hatches only has to run again (a new mtime).
+      // The crate's build script includes the file. One that asks for its hatches only has to run again (a new mtime),
+      // as a generated crate's does (.exact/shells, scripts/app-shells.mjs).
       const build = resolve(dir, 'linux/build.rs'), text = existsSync(build) ? readFileSync(build, 'utf8') : '';
-      if (/\brust_hatch(es|_entry)\b/.test(text)) writeFileSync(build, text);
+      const shells = ['linux', 'windows'].map(kind => resolve(dir, '.exact/shells', kind, 'build.rs')).filter(existsSync);
+      if (!existsSync(resolve(dir, 'linux'))) for (const file of shells) writeFileSync(file, readFileSync(file));
+      else if (/\brust_hatch(es|_entry)\b/.test(text)) writeFileSync(build, text);
       else todo.push(`${build}: include the hatches in the app's Linux crate, as apps/native-fixture/linux/build.rs does\n    contract::native::rust_hatch_entry(&app_dir, &manifest, &target) gives the entry's text and the run call its main makes`);
     }
     if (scope === 'element') {
@@ -1362,7 +1376,8 @@ async function main(argv) {
     const rest = flags.filter((_, i) => i !== at && i !== at + 1 || at < 0);
     if (rest.some(flag => !['--check', '--device'].includes(flag)) || at >= 0 && (!flags.includes('--check') || !['ios', 'macos', 'android', 'web', 'linux', 'windows'].includes(platform)) || flags.includes('--device') && platform !== 'ios')
       throw new Error('Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]]');
-    if (['ios', 'macos'].includes(platform) && process.platform !== 'darwin') throw new Error(`${platform} needs a Mac with Xcode`);
+    // iOS also builds on Linux with the cross SDK, whose rows the check reports (app-shells.mjs bringPlatform agrees).
+    if (platform === 'macos' && process.platform !== 'darwin' || platform === 'ios' && !['darwin', 'linux'].includes(process.platform)) throw new Error(`${platform} needs a Mac with Xcode${platform === 'ios' ? ', or Linux with the Apple cross SDK' : ''}`);
     return setup({check:flags.includes('--check'), platform, device:flags.includes('--device')});
   }
   if (verb === 'list') return list();
@@ -1410,7 +1425,7 @@ async function main(argv) {
   if (verb === 'backend') {
     const dir = resolve(name), parent = resolve(dir, '..');
     const source = readFileSync(resolve(dir, 'app.ts'), 'utf8');
-    const origin = backendOrigin(dir) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(source)?.[1];
+    const origin = backendOrigin(dir) ?? literalBackendOrigin(source, (await import('rolldown/utils')).parseSync);
     if (!origin) throw new Error('exact backend: app.ts needs a literal const origin (bun exact.mjs snapback --port N writes it)');
     const url = new URL(origin);
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw new Error('exact backend: the origin must be loopback to launch a local server');
@@ -1431,7 +1446,7 @@ async function main(argv) {
     console.log(wireSnapback(dir, { port: port < 0 ? null : args[port + 1] ?? '', online: args.includes('--online') ? true : null, artifactOnly: args.includes('--artifact-only'), rebuild: args.includes('--rebuild') }));
     app.manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
     const updated = readFileSync(resolve(dir, 'app.ts'), 'utf8');
-    const nextOrigin = backendOrigin(dir) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(updated)?.[1];
+    const nextOrigin = backendOrigin(dir) ?? literalBackendOrigin(updated, (await import('rolldown/utils')).parseSync);
     await snapbackDevice.devicePreflight(app, nextOrigin ? [nextOrigin] : []);
     return;
   }

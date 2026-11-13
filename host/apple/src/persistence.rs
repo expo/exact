@@ -20,6 +20,13 @@ impl<D: DataSource> Host<D> {
             return;
         }
         for write in writes {
+            if !write.name.starts_with(exact_runner::Store::KEPT)
+                && !write.name.starts_with(exact_runner::Store::STATE)
+            {
+                if let Some(preloads) = &self.preloads {
+                    preloads.drop_secret(&write.name);
+                }
+            }
             self.pending_store_stamps.remove(&write.name);
             if write.durable {
                 self.pending_store_writes

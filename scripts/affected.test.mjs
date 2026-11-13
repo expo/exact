@@ -1,14 +1,15 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { GLOBAL, Graph, Repo, auditProfile, cargoTests, commands, jsSources, rustLiterals, rustSource, select, suites } from './affected.mjs';
-import { classesReached } from '../host/apple/xctest.mjs';
+import { classesReached, hostedTests } from '../host/apple/xctest.mjs';
 
-/** A repository of `files` (path → text) and Cargo packages (`{ name, dir, deps }`), with its metadata given. */
+/** A repository of `files` (path → text) and Cargo packages (`{ name, dir, deps }`), with its metadata given; a package
+ * with a `build.rs` among the files has a build script. */
 function fixture(files, packages) {
-  const root = mkdtempSync(resolve(tmpdir(), 'affected-'));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-')));
   for (const [path, text] of Object.entries(files)) {
     mkdirSync(dirname(resolve(root, path)), { recursive: true });
     writeFileSync(resolve(root, path), text);
@@ -16,7 +17,8 @@ function fixture(files, packages) {
   const id = name => `path+file://${name}`;
   const metadata = {
     workspace_members: packages.map(p => id(p.name)),
-    packages: packages.map(p => ({ id: id(p.name), name: p.name, source: null, manifest_path: resolve(root, p.dir, 'Cargo.toml'), targets: [{ kind: ['lib'], test: true, src_path: resolve(root, p.dir, 'src/lib.rs') }], dependencies: [] })),
+    packages: packages.map(p => ({ id: id(p.name), name: p.name, source: null, manifest_path: resolve(root, p.dir, 'Cargo.toml'), targets: [{ kind: ['lib'], test: true, src_path: resolve(root, p.dir, 'src/lib.rs') },
+      ...(`${p.dir}/build.rs` in files ? [{ kind: ['custom-build'], test: false, src_path: resolve(root, p.dir, 'build.rs') }] : [])], dependencies: [] })),
     resolve: { nodes: packages.map(p => ({ id: id(p.name), deps: (p.deps ?? []).map(d => ({ pkg: id(d), dep_kinds: [{ kind: null }] })) })) },
   };
   const all = { ...files, ...Object.fromEntries(packages.map(p => [`${p.dir}/Cargo.toml`, ''])), 'Cargo.toml': '' };
@@ -30,27 +32,27 @@ const ids = (graph, changed) => select(graph, changed, suites(graph.repo).filter
 test('Cargo, imports and the names a test gives select a suite; what shared code dispatches to does not', () => {
   const { graph, done } = fixture({
     'kernel/src/lib.rs': 'pub fn layout() {}\n#[cfg(test)]\nmod tests { const APP: &str = include_str!("../../apps/demo/app.contract"); }\n',
-    'host/linux/src/lib.rs': '// A library names a host only to build for it.\nconst OTHER: &str = "host/apple/Sources/A.swift";\n',
-    'host/linux/tests/it.rs': 'fn fixture() { std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/other"); }\n',
+    'host/painted/src/lib.rs': '// A library names a host only to build for it.\nconst OTHER: &str = "host/apple/Sources/A.swift";\n',
+    'host/painted/tests/it.rs': 'fn fixture() { std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/other"); }\n',
     'host/apple/Sources/A.swift': '',
     'host/apple/build.mjs': "export const sources = 'Sources';\n",
-    'scripts/app.mjs': "import '../host/apple/build.mjs';\nexport const hosts = ['host/apple', 'host/linux'];\n",
+    'scripts/app.mjs': "import '../host/apple/build.mjs';\nexport const hosts = ['host/apple', 'host/painted'];\n",
     'scripts/app.test.mjs': "import { hosts } from './app.mjs';\nimport { test } from 'bun:test';\ntest('x', () => resolveApp('demo'));\n",
     'apps/demo/app.contract': 'use Card from "./card.contract"\n',
     'apps/demo/card.contract': '',
     'apps/other/app.contract': '',
     'docs/guide.md': '',
-  }, [{ name: 'exact-kernel', dir: 'kernel' }, { name: 'exact-linux', dir: 'host/linux', deps: ['exact-kernel'] }]);
+  }, [{ name: 'exact-kernel', dir: 'kernel' }, { name: 'exact-painted', dir: 'host/painted', deps: ['exact-kernel'] }]);
   try {
-    expect(ids(graph, ['kernel/src/lib.rs'])).toEqual(['cargo:exact-kernel', 'cargo:exact-linux']);
+    expect(ids(graph, ['kernel/src/lib.rs'])).toEqual(['cargo:exact-kernel', 'cargo:exact-painted']);
     // Only the tested package's tests are built: the kernel's include of the app is its own.
     expect(ids(graph, ['apps/demo/card.contract'])).toEqual(['bun:scripts/app.test.mjs', 'cargo:exact-kernel']);
-    expect(ids(graph, ['apps/other/app.contract'])).toEqual(['cargo:exact-linux']);
+    expect(ids(graph, ['apps/other/app.contract'])).toEqual(['cargo:exact-painted']);
     // The CLI imports the Apple build script, so its file is an input, but not the sources it builds from.
     expect(ids(graph, ['host/apple/build.mjs'])).toEqual(['bun:scripts/app.test.mjs']);
     expect(ids(graph, ['host/apple/Sources/A.swift'])).toEqual([]);
     expect(ids(graph, ['docs/guide.md'])).toEqual([]);
-    expect(ids(graph, [GLOBAL[1]])).toEqual(['bun:scripts/app.test.mjs', 'cargo:exact-kernel', 'cargo:exact-linux']);
+    expect(ids(graph, [GLOBAL[1]])).toEqual(['bun:scripts/app.test.mjs', 'cargo:exact-kernel', 'cargo:exact-painted']);
   } finally { done(); }
 });
 
@@ -58,12 +60,12 @@ test('a suite names what it reads by path, flag, call or property, never by pros
   const rust = rustLiterals([
     '#[ignore = "async lane: bun scripts/async.mjs runs it"]',
     'let a = repo().join("apps"); let b = dir.path().join("host");',
-    'Command::new("cargo").args(["test", "-p", "exact-linux"]);',
+    'Command::new("cargo").args(["test", "-p", "exact-painted"]);',
     'if kind == "bench" {} let c = format!("../../apps/{app}/app.contract");',
   ].join('\n'));
-  expect(rust.map(l => l.text)).toEqual(['apps', 'host', 'cargo', 'test', '-p', 'exact-linux', 'bench', '../../apps/']);
+  expect(rust.map(l => l.text)).toEqual(['apps', 'host', 'cargo', 'test', '-p', 'exact-painted', 'bench', '../../apps/']);
   expect(rust.find(l => l.text === 'apps').receiver).toBe('repo()');
-  expect(rust.find(l => l.text === 'exact-linux').prev).toBe('-p');
+  expect(rust.find(l => l.text === 'exact-painted').prev).toBe('-p');
   expect(rust.find(l => l.text === 'bench').compared).toBe(true);
   const { literals, imports } = jsSources("import a from './a.mjs'; resolve(import.meta.dir, '..', 'apps'); spawn('bun', ['scripts/agent.mjs', 'web', '--app', 'excord']); const t = `scripts/fixtures/${n}.contract`; process.env.EXACT_WEB_DIST;", 'x.mjs');
   expect(imports).toEqual(['./a.mjs']);
@@ -110,10 +112,13 @@ test("Rust's test modules, #[path] and include_str! are what they say; a deleted
     expect([later.library.map(l => l.text), later.test]).toEqual([['../x.json'], []]);
   }
   const { graph, done } = fixture({
-    'core/src/lib.rs': 'mod test_steps;\npub mod model;\nmod presenter;\n#[cfg(test)]\nmod more_tests;\n',
+    'core/src/lib.rs': 'mod test_steps;\npub mod model;\nmod presenter;\n#[cfg(test)]\nmod more_tests;\nconst S: &str = include_str!("shipped.txt");\n',
+    'core/src/shipped.txt': '',
     // (A library module's directory holds its own test modules: those stay test code.)
     'core/src/presenter.rs': '#[cfg(test)]\nmod presenter_tests;\n', 'core/src/presenter/presenter_tests.rs': '', 'core/src/test_steps.rs': '', 'core/src/more_tests.rs': 'mod helper;\n',
     'core/src/more_tests/helper.rs': '', 'core/src/model.rs': '', 'core/tests/it.rs': '#[path = "../src/model.rs"]\nmod model;\n',
+    // (A module the build script declares, which a test includes too, is the build script's.)
+    'core/build.rs': 'mod engine_os;\nfn main() {}\n', 'core/engine_os.rs': '', 'core/tests/os.rs': '#[path = "../engine_os.rs"]\nmod engine_os;\n',
     'user/src/lib.rs': '', 'scripts/gone.test.mjs': "import { test } from 'bun:test';\ntest('g', () => readFileSync(resolve(ROOT, 'scripts/fixtures/gone.contract')));\n",
   }, [{ name: 'core', dir: 'core' }, { name: 'user', dir: 'user', deps: ['core'] }]);
   try {
@@ -124,6 +129,10 @@ test("Rust's test modules, #[path] and include_str! are what they say; a deleted
     expect(ids(graph, ['core/src/model.rs'])).toEqual(['cargo:core', 'cargo:user']);
     expect(ids(graph, ['core/src/presenter/presenter_tests.rs'])).toEqual(['cargo:core']);
     expect(ids(graph, ['core/src/test_steps.rs'])).toEqual(['cargo:core', 'cargo:user']);
+    // An include's bare name is beside the including file, and what the library includes a dependent's input
+    expect(ids(graph, ['core/src/shipped.txt'])).toEqual(['cargo:core', 'cargo:user']);
+    expect(ids(graph, ['core/engine_os.rs'])).toEqual(ids(graph, ['core/build.rs']));
+    expect(ids(graph, ['core/engine_os.rs'])).toEqual(['cargo:core', 'cargo:user']);
   } finally { done(); }
   const deleted = fixture({ 'scripts/gone.test.mjs': "import { test } from 'bun:test';\ntest('g', () => readFileSync(resolve(ROOT, 'scripts/fixtures/gone.contract')));\n" }, []);
   try {
@@ -148,8 +157,8 @@ test('a path that starts with the code\'s own directory, its package\'s or the r
       + 'fn named() -> String { format!("{dir}/../named/a.txt", dir = env!("CARGO_MANIFEST_DIR")) }\n'
       + 'const SCHEMA: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tables/schema.json"));\n',
     // Count a library's include of another unit's file through `concat!`, as through a plain path
-    'tools/contract/src/lib.rs': 'pub const DATA: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../host/linux/data.txt"));\n',
-    'tools/named/a.txt': '', 'tools/tables/schema.json': '', 'host/linux/data.txt': '',
+    'tools/contract/src/lib.rs': 'pub const DATA: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../host/painted/data.txt"));\n',
+    'tools/named/a.txt': '', 'tools/tables/schema.json': '', 'host/painted/data.txt': '',
     'tools/corpus/a.contract': '',
     'tools/contract/corpus/a.contract': '',
   }, [{ name: 'contract', dir: 'tools/contract' }]);
@@ -165,7 +174,7 @@ test('a path that starts with the code\'s own directory, its package\'s or the r
     expect(ids(graph, ['tools/corpus/a.contract'])).toEqual(['cargo:contract']);
     expect(ids(graph, ['tools/named/a.txt'])).toEqual(['cargo:contract']);
     expect(ids(graph, ['tools/tables/schema.json'])).toEqual(['cargo:contract']);
-    expect(ids(graph, ['host/linux/data.txt'])).toEqual(['cargo:contract']);
+    expect(ids(graph, ['host/painted/data.txt'])).toEqual(['cargo:contract']);
   } finally { done(); }
 });
 
@@ -191,7 +200,7 @@ test("an app's tests read every crate its build compiles for their host, and its
 
 // What the lane runs a selection's Rust tests by gives each test binary what Cargo gives it.
 test('a selected package\'s tests run as Cargo runs them, and a failure is said as Cargo says it', () => {
-  const root = mkdtempSync(resolve(tmpdir(), 'affected-cargo-'));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-cargo-')));
   try {
     const crate = (name, failing) => {
       mkdirSync(resolve(root, name, 'src'), { recursive: true });
@@ -231,7 +240,7 @@ test('an environment variable a suite reads stands for the build it names', () =
 });
 
 test("a change to Swift test files alone reaches their classes and those of the files that name them, per platform", () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'affected-xctest-'));
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-xctest-')));
   const files = {
     'A.swift': 'import XCTest\n\nfinal class ATests: XCTestCase {\n    static let shared = 1\n}\n',
     'Uses.swift': 'final class UsesTests: XCTestCase {\n    func testIt() { XCTAssertEqual(ATests.shared, 1) }\n}\n',
@@ -265,6 +274,24 @@ test("a change to Swift test files alone reaches their classes and those of the 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('hosted touch tests run on the simulator whose XCTest runner injects their input', () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'hosted-touch-')));
+  writeFileSync(resolve(dir, 'History.swift'), `final class HistoryTests: XCTestCase {
+    func testStack() {
+      throw missing("scene", "a native stack")
+    }
+    func testMenu() {
+      throw missing("scene", "a native stack")
+      throw missing("touch", "XCTest opens its menu")
+    }
+  }`);
+  try {
+    const hosted = hostedTests(dir), touch = hostedTests(dir, 'touch');
+    expect(touch).toEqual(['ExactKitTests/HistoryTests/testMenu']);
+    expect(hosted.filter(t => !touch.includes(t))).toEqual(['ExactKitTests/HistoryTests/testStack']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('the commands run each workspace once, the Bun files together and every app test file', () => {
   const run = commands([
     { suite: { kind: 'cargo', name: 'a', manifest: 'Cargo.toml' } }, { suite: { kind: 'cargo', name: 'b', manifest: 'Cargo.toml' } },
@@ -284,7 +311,7 @@ test('the commands run each workspace once, the Bun files together and every app
 });
 
 function commandFixture() {
-  const root = mkdtempSync(resolve(tmpdir(), 'affected-commands-'));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-commands-')));
   const files = ['Cargo.toml', 'game/Cargo.toml', 'core/src/lib.rs', 'game/src/lib.rs', 'scripts/sample.test.mjs',
     'apps/demo/web/src/lib.rs', 'apps/demo/first.test.contract', 'apps/demo/second.test.contract'];
   for (const file of files) {
@@ -347,7 +374,7 @@ test('--run executes later Cargo and Bun commands after a failure and retains fa
     expect(missing.ran.map(c => c[0]), missing.stderr).toEqual(['cargo', 'cargo']);
     expect(missing.status, missing.stderr).toBe(1);
   } finally { done(); }
-});
+}, 60_000); // It spawns Cargo and Bun, which a loaded machine starts slowly
 
 test('--audit executes every app test command after a failure', () => {
   const { run, done } = commandFixture();
@@ -358,7 +385,7 @@ test('--audit executes every app test command after a failure', () => {
       expect(result.status, result.stderr).toBe(status);
     }
   } finally { done(); }
-});
+}, 60_000); // It spawns Cargo and Bun, which a loaded machine starts slowly
 
 test('an audit makes every unit outside the inputs unreadable, Cargo manifests aside', () => {
   const { repo, root, done } = fixture({ 'apps/demo/app.contract': '', 'apps/other/app.contract': '', 'host/apple/A.swift': '', 'kernel/lib.rs': '' }, []);
@@ -433,7 +460,7 @@ test("this checkout's parity suites follow the paint walk and their own gallery"
   const catalogue = suites(repo).filter(s => s.kind === 'parity');
   expect(catalogue.map(s => s.id).sort()).toEqual(['parity:motion', 'parity:svg']);
   const picked = changed => select(graph, changed, catalogue).map(s => s.suite.id).sort();
-  expect(picked(['host/linux/src/paint.rs'])).toEqual(['parity:motion', 'parity:svg']);
+  expect(picked(['host/painted/src/paint.rs'])).toEqual(['parity:motion', 'parity:svg']);
   expect(picked(['apps/svg-gallery/app.contract'])).toEqual(['parity:svg']);
   // `smoke.mjs`, which both legs run, imports both scripts
   expect(picked(['scripts/motionparity.mjs'])).toEqual(['parity:motion', 'parity:svg']);

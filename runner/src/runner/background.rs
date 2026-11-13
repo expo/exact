@@ -101,7 +101,7 @@ impl<D: DataSource> Runner<D> {
                 | super::DataError::BadArguments(m)
                 | super::DataError::Unavailable(m)
                 | super::DataError::Interface(m)
-                | super::DataError::DeferredAtBake(m)
+                | super::DataError::DeferredAtBake { message: m, .. }
                 | super::DataError::Overrun(m)
                 | super::DataError::Failed(_, m, _),
             ) => {

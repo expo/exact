@@ -338,3 +338,35 @@ fn lost_device_refuses_readback_allocation_and_submission() {
         "loss must not submit more work"
     );
 }
+
+#[test]
+fn weak_adapter_limits_preserve_the_ink_abi_or_name_the_missing_capacity() {
+    // Mesa cdc6a0bf: v3dv_device.c:get_device_properties and v3d_limits.h.
+    // https://gitlab.freedesktop.org/mesa/mesa/-/tree/cdc6a0bfed71b22cfbb5ce7f6b778ee3fdedf409/src/broadcom
+    let mut available = ::wgpu::Limits {
+        max_texture_dimension_1d: 4096,
+        max_texture_dimension_2d: 4096,
+        max_color_attachments: 4,
+        max_inter_stage_shader_variables: 15, // wgpu: 64 / 4 - 1 for position
+        max_compute_workgroup_size_x: 256,
+        max_compute_workgroup_size_y: 256,
+        max_compute_workgroup_size_z: 256,
+        ..Default::default()
+    };
+    let requested = requested_limits(available.clone()).unwrap();
+    assert!(requested.check_limits(&available));
+    assert!(requested.max_vertex_attributes >= 12);
+    assert!(requested.max_inter_stage_shader_variables >= 13);
+    assert!(requested.max_sampled_textures_per_shader_stage >= 7);
+    available.max_inter_stage_shader_variables = 12;
+    assert_eq!(
+        requested_limits(available.clone()).unwrap_err().to_string(),
+        "device: Ink needs max_inter_stage_shader_variables >= 13, adapter offers 12"
+    );
+    available.max_inter_stage_shader_variables = 15;
+    available.max_color_attachment_bytes_per_sample = 4;
+    assert_eq!(
+        requested_limits(available).unwrap_err().to_string(),
+        "device: Ink needs max_color_attachment_bytes_per_sample >= 8, adapter offers 4"
+    );
+}

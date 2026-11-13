@@ -2,6 +2,10 @@ import Foundation
 import XCTest
 #if os(iOS)
 import UIKit
+private typealias TestApp = UIApplication
+#elseif os(macOS)
+import AppKit
+private typealias TestApp = NSApplication
 #endif
 @testable import ExactKit
 
@@ -59,15 +63,15 @@ final class PushRegistrationTests: XCTestCase {
         XCTAssertNil(read()["error"], "a token clears the failure")
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(macOS)
     /// An app delegate with no answering methods is given them, and they hand
     /// the system's answer to the host.
     func testADelegateWithoutTheMethodsIsGivenThemAndTheyAnswerTheHost() throws {
         let delegate = BareDelegate()
         XCTAssertTrue(PushRegistration.install(on: delegate))
-        _ = delegate.perform(PushRegistration.selectors[0], with: UIApplication.shared, with: Data([0xab, 0x12]))
+        _ = delegate.perform(PushRegistration.selectors[0], with: TestApp.shared, with: Data([0xab, 0x12]))
         XCTAssertEqual(read()["token"] as? String, "ab12")
-        _ = delegate.perform(PushRegistration.selectors[1], with: UIApplication.shared, with: NSError(domain: "t", code: 1, userInfo: [NSLocalizedDescriptionKey: "offline"]))
+        _ = delegate.perform(PushRegistration.selectors[1], with: TestApp.shared, with: NSError(domain: "t", code: 1, userInfo: [NSLocalizedDescriptionKey: "offline"]))
         XCTAssertEqual(read()["error"] as? String, "offline")
         XCTAssertNil(read()["token"])
     }
@@ -77,7 +81,7 @@ final class PushRegistrationTests: XCTestCase {
     func testAnInheritedImplementationIsKept() throws {
         let delegate = EmbedderDelegate()
         XCTAssertFalse(PushRegistration.install(on: delegate), "nothing added")
-        _ = delegate.perform(PushRegistration.selectors[0], with: UIApplication.shared, with: Data([0xcd]))
+        _ = delegate.perform(PushRegistration.selectors[0], with: TestApp.shared, with: Data([0xcd]))
         XCTAssertEqual(delegate.heard, ["cd"], "the embedder's own method ran")
         XCTAssertNil(read()["token"], "the host learns only what the embedder forwards")
     }
@@ -89,16 +93,16 @@ final class PushRegistrationTests: XCTestCase {
     }
 }
 
-#if os(iOS)
-private final class BareDelegate: UIResponder {}
+#if os(iOS) || os(macOS)
+private final class BareDelegate: NSObject {}
 
 /// An embedder's delegate whose registration callbacks are its superclass's.
-private class EmbedderBase: UIResponder {
+private class EmbedderBase: NSObject {
     var heard: [String] = []
-    @objc func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    @objc func application(_ application: TestApp, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         heard.append(deviceToken.map { String(format: "%02x", $0) }.joined())
     }
-    @objc func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {}
+    @objc func application(_ application: TestApp, didFailToRegisterForRemoteNotificationsWithError error: Error) {}
 }
 private final class EmbedderDelegate: EmbedderBase {}
 #endif

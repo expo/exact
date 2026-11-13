@@ -529,6 +529,11 @@ fn an_idle_timeout_is_refused_by_name_on_the_wasm_host() {
         crate::batch::request_refusal(&request.idle_timeout(60_000)),
         Some("an idle timeout is unavailable on the web's wasm host")
     );
+    // A Rust source's two-way socket (LLP 1016.003) is refused, not opened to only listen.
+    assert_eq!(
+        crate::batch::request_refusal(&Request::socket("wss://example.test/feed")),
+        Some("Request::socket is unavailable on the web's wasm host")
+    );
 }
 
 /// LLP 1016.000 D10 on the web page: an upload's op says so (the page sends

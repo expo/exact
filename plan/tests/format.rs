@@ -749,8 +749,8 @@ fn a_huge_announced_count_reserves_little_before_it_is_refused() {
     // (count > remaining), and never reserved 16M entries first.
     let plan = sample();
     let mut bytes = plan.encode();
-    // strings count sits right after the 52-byte header.
-    bytes[52..56].copy_from_slice(&(1u32 << 24).to_le_bytes());
+    // The strings count sits right after the 60-byte header.
+    bytes[60..64].copy_from_slice(&(1u32 << 24).to_le_bytes());
     assert!(matches!(Plan::decode(&bytes), Err(PlanError::BadCount(_))));
 }
 
@@ -1031,13 +1031,18 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
     assert_eq!(same, plan);
 }
 
-/// Agent vocabulary on view rows changes the plan format. Every host needs
-/// a new binary (LLP 1030 D3a). The digest covers
-/// all of `tables/format.json`, including comments.
+/// Version 6 adds the header's `surface` (LLP 1101.003 D9), which every host
+/// checks before it boots a plan; declared sources add the `fetches` and
+/// `fetch_parts` tables (LLP 1162.001); the format slot, each strings table's
+/// format data and the format locale a localized roster entry takes last come
+/// with formatting by locale (LLP 1054.000.003 D6). Every plan-reading host
+/// needs a new binary, including Apple, web, Linux, Windows, Android and
+/// terminal (LLP 1030 D3a). The digest covers all of `tables/format.json`,
+/// including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0x472359df4b8253b4,
+        FORMAT_DIGEST, 0x8b14_235d_0dcd_36d3,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }
@@ -1099,4 +1104,39 @@ fn resumed_type_interning_keeps_the_first_equal_row_and_retyped_enums() {
     assert_eq!(resumed.record("enum", &[]), next_record);
     assert_eq!(resumed.string_enum(&[]), next_record);
     assert_ne!(resumed.record("enum", &[]), next_record);
+}
+
+/// LLP 1101.003 D9: the header names the plan's surface, and each decoder
+/// refuses the other's by name before reading a table. A plan no compiler
+/// wrote (an empty surface) is a GUI plan.
+#[test]
+fn each_decoder_takes_only_its_own_surface() {
+    let mut terminal = sample();
+    terminal.surface = "terminal".into();
+    let bytes = terminal.encode();
+    let refused = PlanError::WrongSurface {
+        plan: "terminal".into(),
+        host: "gui",
+    };
+    assert_eq!(Plan::decode(&bytes).unwrap_err(), refused);
+    assert_eq!(
+        Plan::decode_static(bytes.clone().leak()).unwrap_err(),
+        refused
+    );
+    assert_eq!(Plan::decode_terminal(&bytes).unwrap(), terminal);
+    assert_eq!(terminal.redecode().unwrap(), terminal);
+    for surface in ["gui", ""] {
+        let mut gui = sample();
+        gui.surface = surface.into();
+        let bytes = gui.encode();
+        assert_eq!(Plan::decode(&bytes).unwrap(), gui);
+        assert_eq!(gui.redecode().unwrap(), gui);
+        assert_eq!(
+            Plan::decode_terminal(&bytes).unwrap_err(),
+            PlanError::WrongSurface {
+                plan: "gui".into(),
+                host: "terminal",
+            }
+        );
+    }
 }

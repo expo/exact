@@ -231,6 +231,7 @@ pub struct Placed<D> {
     spawn: Spawn<D>,
     app_id: String,
     grants: String,
+    preloads: Vec<exact_runner::request::Preload>,
     revision: Option<String>,
     /// Taken at construction: a moved source's handle still reaches it on its
     /// owner, and a built instance shares its template's.
@@ -289,6 +290,7 @@ impl<D: DataSource + 'static> Placed<D> {
             storage_changed: Default::default(),
             app_id: source.app_id().to_string(),
             grants: source.grants().to_string(),
+            preloads: source.preloads().to_vec(),
             revision: source.revision().map(str::to_string),
             interrupt: source.interrupt(),
             native: source.native(),
@@ -708,6 +710,20 @@ fn turn<D: DataSource>(
                 }
                 return Err(unavailable(request.long_poll_refusal().unwrap_or_default()));
             }
+            // A Rust source's two-way socket (`Request::socket`, LLP 1016.003): its turns
+            // are the main thread's, so it is refused rather than opened to only listen.
+            // A TypeScript module's socket, whose request names its fetch, listens as
+            // LLP 1016.000 D7 declares for a worker.
+            Ok(Some(Answer::Later(request)))
+                if request.socket
+                    && request.fetch.is_none()
+                    && request.listen.is_none()
+                    && !request.is_process() =>
+            {
+                return Err(unavailable(
+                    "Request::socket is unavailable in a worker-placed source; place it on main",
+                ));
+            }
             // A wait for the answer's own timer is the runner's to keep
             // until due (LLP 1027.000 D1): it yields, as a fetch does.
             Ok(Some(Answer::Later(request)))
@@ -806,6 +822,10 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
 
     fn app_id(&self) -> &str {
         &self.app_id
+    }
+
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &self.preloads
     }
 
     fn grants(&self) -> &str {

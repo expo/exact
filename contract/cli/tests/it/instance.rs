@@ -212,13 +212,13 @@ fn a_childs_task_is_moved_to_the_root_keyed_on_what_opens_it() {
         e.message.starts_with(
             "only the root, the root file's first component (`A`), may declare a `task`"
         ) && e.message.contains(
-            "`task reveal when top(nav).name == \"icons\" key=top(nav).id` with `after(1, reveal)`"
+            "`task reveal when top(nav).name == \"icons\" key=top(nav).id` with `change(reveal)`"
         ),
         "{}",
         e.message
     );
     // The repair it names compiles, in the root.
-    let fixed = "routes nav\n  home \"/\"\n  icons \"/icons\"\ncomponent A\n  state n = 0\n  task reveal when top(nav).name == \"icons\" key=top(nav).id\n    after(1, reveal)\n  action reveal\n    n = n + 1\n  view\n    text \"x\"\n";
+    let fixed = "routes nav\n  home \"/\"\n  icons \"/icons\"\ncomponent A\n  state n = 0\n  task reveal when top(nav).name == \"icons\" key=top(nav).id\n    change(reveal)\n  action reveal\n    n = n + 1\n  view\n    text \"x\"\n";
     contract::compile(fixed).unwrap_or_else(|e| panic!("{e}"));
 }
 

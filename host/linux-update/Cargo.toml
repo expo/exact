@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 exact-linux = { path = "../linux" }
+exact-painted = { path = "../painted" }
 exact-runner = { path = "../../runner" }
 exact-update = { path = "../../update" }
 ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false }

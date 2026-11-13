@@ -1,0 +1,28 @@
+# Weather Now on Apple platforms: the core host over the baked plan, whose
+# sources are all declared in Contract (LLP 1162.001). It has no data module,
+# so it borrows Hello's source, which answers nothing, and links no `exact-js`.
+[package]
+name = "weather-now-apple"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Weather Now on Apple platforms: declared sources and no JavaScript engine"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "weather_now_apple"
+crate-type = ["rlib"]
+test = false
+bench = false
+
+[dependencies]
+ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }
+exact-logic = { path = "../../../logic" }
+exact-apple = { path = "../../../host/apple" }
+hello-data = { path = "../../hello/data" }
+
+[build-dependencies]
+contract = { path = "../../../contract/cli" }
+exact-bake = { path = "../../../bake" }
+hello-data = { path = "../../hello/data" }

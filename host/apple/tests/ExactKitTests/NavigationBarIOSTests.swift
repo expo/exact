@@ -1173,7 +1173,7 @@ final class NavigationBarIOSTests: XCTestCase {
         XCTAssertEqual(control.segmentViews.map(\.accessibilityIdentifier), ["segment-all", "segment-missed"])
         XCTAssertEqual(control.segmentViews.map(\.accessibilityLabel), [nil, nil], "no name of their own: UIKit's, their words")
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        XCTAssertEqual(tabs.viewControllers?.map(\.tabBarItem.accessibilityIdentifier), ["tab-home", "tab-second"])
+        XCTAssertEqual(tabs.tabControllers?.map(\.tabBarItem.accessibilityIdentifier), ["tab-home", "tab-second"])
     }
 
     /// LLP 1115 D5 with no `navigate` handler on the root: the button and

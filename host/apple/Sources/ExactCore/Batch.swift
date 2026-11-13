@@ -133,6 +133,7 @@ public struct BatchOp {
     package var ids: [UInt32] = []
     package var runs: [InlineText] = []
     package var x = 0.0, y = 0.0, w = 0.0, h = 0.0
+    package var fitHeight: Double?
     package var property = ""
     // Rare adapters retain their existing input shape. Common ops never build it.
     package var payload: [String: Any] = [:]

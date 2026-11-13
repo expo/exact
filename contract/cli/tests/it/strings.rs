@@ -765,3 +765,82 @@ fn set_locale_takes_one_tag_and_needs_tables() {
         "type-strings-missing"
     );
 }
+
+/// LLP 1054.000.003 D6: the formatters follow the table the app shows.
+const FORMATS: &str = r#"component App
+  state at = 1790000000000
+  state n = 1234.5
+  state first = formatNumber(1234.5, "decimal")
+  action pick(value: string)
+    setLocale(value)
+  view
+    column
+      text `${formatNumber(n, "decimal")} ${formatDate(at, 0, "medium")} ${formatTime(at, 0, "short")}` testId="shown"
+      text first testId="first"
+"#;
+
+#[test]
+fn the_formatters_follow_the_shown_table_and_the_viewer_s_forced_hour_cycle() {
+    // With only English tables the plan carries no format data: en-US.
+    let english = AppDir::new(
+        FORMATS,
+        &[("strings/en.json", "{}"), ("strings/en-US.json", "{}")],
+    );
+    let plan = english.compile().unwrap();
+    assert!(plan.format.is_none());
+    assert!(plan
+        .locales
+        .iter()
+        .all(|row| plan.str(row.format).is_empty()));
+    let r = launch(&plan, "de-DE", Vec::new());
+    assert_eq!(text(&r, "shown"), "1,234.5 Sep 21, 2026 2:13 PM");
+
+    let app = AppDir::new(
+        FORMATS,
+        &[("strings/en.json", "{}"), ("strings/de.json", "{}")],
+    );
+    let plan = app.compile().unwrap();
+    assert!(plan.format.is_some());
+    // The first frame and an initializer read the launch's table.
+    let mut r = launch(&plan, "de-DE", Vec::new());
+    assert_eq!(text(&r, "shown"), "1.234,5 21.09.2026 14:13");
+    assert_eq!(text(&r, "first"), "1.234,5");
+    // A forced 12-hour clock is the viewer's; the region is the table's.
+    r.set_place_formatted("de-DE", "UTC", None, Some("en-GB-u-hc-h12"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(text(&r, "shown"), "1.234,5 21.09.2026 02:13 PM");
+    r.set_place_formatted("de-DE", "UTC", None, Some("de-DE"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(text(&r, "shown"), "1.234,5 21.09.2026 14:13");
+    // `setLocale` moves the formats with the text; `""` hands them back.
+    r.act("pick", vec![Value::str("en")]).unwrap();
+    assert_eq!(text(&r, "shown"), "1,234.5 Sep 21, 2026 2:13 PM");
+    r.act("pick", vec![Value::str("")]).unwrap();
+    assert_eq!(text(&r, "shown"), "1.234,5 21.09.2026 14:13");
+    // A place no table matches reads the base's, `en`'s data.
+    r.set_place("ja-JP", "Asia/Tokyo", None).unwrap();
+    assert_eq!(text(&r, "shown"), "1,234.5 Sep 21, 2026 2:13 PM");
+}
+
+/// A table named with a Unicode extension is that table: its format slot
+/// keeps the whole name, and the viewer's forced cycle follows a space.
+#[test]
+fn a_table_named_with_an_extension_formats_as_itself() {
+    let app = AppDir::new(
+        FORMATS,
+        &[
+            ("strings/en.json", "{}"),
+            ("strings/de-u-ca-gregory.json", "{}"),
+        ],
+    );
+    let plan = app.compile().unwrap();
+    let mut r = launch(&plan, "de-u-ca-gregory", Vec::new());
+    assert_eq!(text(&r, "shown"), "1.234,5 21.09.2026 14:13");
+    r.set_place_formatted("de-u-ca-gregory", "UTC", None, Some("de-DE-u-hc-h12"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(text(&r, "shown"), "1.234,5 21.09.2026 02:13 PM");
+    assert_eq!(r.slot("#format"), Some(&Value::str("de-u-ca-gregory h12")));
+}

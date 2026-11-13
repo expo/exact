@@ -1,89 +1,144 @@
-//! CF_UNICODETEXT, copied while the clipboard is open and its memory locked.
-#![allow(unsafe_code)]
-use windows_sys::Win32::{
-    Foundation::{GlobalFree, HWND},
-    System::{DataExchange::*, Memory::*},
-};
+//! Windows clipboard formats for @exact/clipboard (LLP 1133.006).
+//! PNG is offered first, then an sRGB bitmap when valid, then optional text.
 
-const UNICODE_TEXT: u32 = 13;
-pub(super) struct Clipboard(pub isize);
-struct Open;
-impl Drop for Open {
-    fn drop(&mut self) {
-        // SAFETY: constructed only after this thread opened the clipboard.
-        unsafe {
-            CloseClipboard();
+mod image;
+pub use image::Image;
+
+#[cfg(windows)]
+mod system;
+#[cfg(windows)]
+pub(crate) use system::Clipboard;
+
+use std::cell::RefCell;
+
+/// One validated clipboard item. Preparing it does not change the clipboard.
+#[derive(Default)]
+pub struct Item {
+    /// Unicode text, when the item carries text/plain.
+    pub text: Option<String>,
+    /// Decoded pixels with colour information, without text or EXIF metadata.
+    pub image: Option<Image>,
+}
+
+impl Item {
+    /// The bounded agent disclosure: types and dimensions, never image bytes.
+    pub fn description(&self, agent: bool) -> serde_json::Value {
+        use serde_json::json;
+        let mut types = Vec::new();
+        let mut platform_types = Vec::new();
+        if self.text.is_some() {
+            types.push("text/plain");
         }
+        if let Some(image) = &self.image {
+            types.push("image/png");
+            platform_types.push("PNG");
+            if image.dib.is_some() {
+                platform_types.push("CF_DIBV5");
+            }
+        }
+        if self.text.is_some() {
+            platform_types.push("CF_UNICODETEXT");
+        }
+        let mut shown = json!({
+            "types": types, "platformTypes": platform_types,
+            "pasteboard": if agent { "memory" } else { "Windows" },
+        });
+        if let Some(text) = &self.text {
+            shown["text"] = json!(text.chars().take(200).collect::<String>());
+        }
+        if let Some(image) = &self.image {
+            shown["image"] = image.description();
+        }
+        shown
     }
 }
-fn error() -> String {
-    format!("Windows clipboard: {}", std::io::Error::last_os_error())
+
+thread_local! {
+    // The Windows carrier has one session per window thread. Its agent
+    // pasteboard is also used by the presenter's text clipboard adapter.
+    pub(crate) static PRIVATE: RefCell<Item> = RefCell::new(Item::default());
 }
-impl Clipboard {
-    fn open(&self) -> Result<Open, String> {
-        // SAFETY: the carrier keeps this window alive longer than its presenter.
-        if unsafe { OpenClipboard(self.0 as HWND) } == 0 {
-            return Err(error());
-        }
-        Ok(Open)
+
+/// Replace this thread's clipboard with a prepared item. Under the agent
+/// keep it in memory; otherwise require the host window on this thread.
+/// Nothing is emptied for an empty item.
+pub fn write(item: Item, agent: bool) -> Result<(), String> {
+    if item.text.is_none() && item.image.is_none() {
+        return Ok(());
     }
+    if agent {
+        PRIVATE.with(|board| *board.borrow_mut() = item);
+        return Ok(());
+    }
+    #[cfg(windows)]
+    return system::write(&item);
+    #[cfg(not(windows))]
+    Err("Windows clipboard is unavailable on this host".into())
 }
-impl exact_linux::presenter::clipboard::Clipboard for Clipboard {
+
+#[cfg(any(windows, test))]
+pub(super) fn text_bytes(text: &str) -> Vec<u8> {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n")
+        .encode_utf16()
+        .chain(Some(0))
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn run_headless<D: exact_runner::DataSource + Default>(
+    config: &mut exact_painted::app::Config,
+    started: std::time::Instant,
+) -> i32 {
+    let adapter: Box<dyn exact_painted::presenter::clipboard::Clipboard> = if substituting() {
+        Box::new(Memory)
+    } else {
+        #[cfg(windows)]
+        match Clipboard::headless() {
+            Ok(adapter) => Box::new(adapter),
+            Err(error) => {
+                eprintln!("exact-windows: {error}");
+                return 1;
+            }
+        }
+        #[cfg(not(windows))]
+        return 1;
+    };
+    exact_painted::app::run_headless::<D>(config, started, Some(adapter))
+}
+
+#[cfg(any(windows, test))]
+fn substituting() -> bool {
+    exact_painted::picker::agent()
+        && std::env::var("EXACT_DEVICE").as_deref() != Ok("real")
+        && !std::env::var("EXACT_AGENT_BIND")
+            .unwrap_or_default()
+            .split(',')
+            .any(|s| s == "clipboard")
+}
+
+#[cfg(any(windows, test))]
+struct Memory;
+#[cfg(any(windows, test))]
+impl exact_painted::presenter::clipboard::Clipboard for Memory {
     fn read_text(&mut self) -> Result<Option<String>, String> {
-        let _open = self.open()?;
-        // SAFETY: the clipboard remains open; GlobalSize bounds the UTF-16
-        // slice. Unlock before closing, and never free the clipboard's memory.
-        unsafe {
-            if IsClipboardFormatAvailable(UNICODE_TEXT) == 0 {
-                return Ok(None);
-            }
-            let memory = GetClipboardData(UNICODE_TEXT);
-            if memory.is_null() {
-                return Err(error());
-            }
-            let bytes = GlobalSize(memory);
-            if bytes < 2 {
-                return Ok(Some(String::new()));
-            }
-            let pointer = GlobalLock(memory).cast::<u16>();
-            if pointer.is_null() {
-                return Err(error());
-            }
-            let units = std::slice::from_raw_parts(pointer, bytes / 2);
-            let end = units.iter().position(|u| *u == 0).unwrap_or(units.len());
-            let text = String::from_utf16_lossy(&units[..end]);
-            GlobalUnlock(memory);
-            Ok(Some(text))
-        }
+        Ok(PRIVATE.with(|board| board.borrow().text.clone()))
     }
     fn write_text(&mut self, text: &str) -> Result<(), String> {
-        let text = text
-            .replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .replace('\n', "\r\n");
-        let units: Vec<_> = text.encode_utf16().chain(Some(0)).collect();
-        let _open = self.open()?;
-        // SAFETY: write only within the allocated block. Ownership passes to
-        // Windows only after SetClipboardData succeeds; failures free our block.
-        unsafe {
-            let memory = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2);
-            if memory.is_null() {
-                return Err(error());
-            }
-            let pointer = GlobalLock(memory).cast::<u16>();
-            if pointer.is_null() {
-                let e = error();
-                GlobalFree(memory);
-                return Err(e);
-            }
-            std::ptr::copy_nonoverlapping(units.as_ptr(), pointer, units.len());
-            GlobalUnlock(memory);
-            if EmptyClipboard() == 0 || SetClipboardData(UNICODE_TEXT, memory).is_null() {
-                let e = error();
-                GlobalFree(memory);
-                return Err(e);
-            }
-        }
-        Ok(())
+        write(
+            Item {
+                text: Some(text.into()),
+                image: None,
+            },
+            true,
+        )
+    }
+}
+#[cfg(any(windows, test))]
+impl Drop for Memory {
+    fn drop(&mut self) {
+        PRIVATE.with(|board| *board.borrow_mut() = Item::default());
     }
 }

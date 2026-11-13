@@ -7,12 +7,14 @@ import { expect, test } from 'bun:test';
 
 import { scrollDrag } from '../navigation/scroll.js';
 
+const OUTSIDE = {};
 const scroller = () => {
-  const el = { scrollLeft: 0, scrollTop: 0 }, heard = {}, said = [], options = [];
+  // A touch's `target` is `OUTSIDE` when it began outside the scroller.
+  const el = { scrollLeft: 0, scrollTop: 0, contains: target => target !== OUTSIDE }, heard = {}, said = [], options = [];
   scrollDrag(el, (type, fn, o) => { heard[type] = fn; options.push(o); }, () => said.push(['start']), (vx, vy) => said.push(['end', vx, vy]));
-  // `touches`: the fingers down after the event, as [identifier, x, y];
+  // `touches`: the fingers down after the event, as [identifier, x, y, target];
   // `changed`: those it is about (a lift's are no longer in `touches`).
-  const finger = ([identifier, clientX, clientY]) => ({ identifier, clientX, clientY });
+  const finger = ([identifier, clientX, clientY, target = el]) => ({ identifier, clientX, clientY, target });
   const touch = (type, t, touches, changed = touches) => heard[type]({ timeStamp: t, touches: touches.map(finger), changedTouches: changed.map(finger) });
   const scroll = (left, top, t) => { el.scrollLeft = left; el.scrollTop = top; heard.scroll({ timeStamp: t }); };
   return { said, options, touch, scroll };
@@ -73,4 +75,25 @@ test('an axis the drag did not scroll is 0, and a scroll with no touch down or a
   s.touch('touchend', 200, [], [[1, 150, 200]]);
   // The finger drifted sideways, but the scroller moved only down the page.
   expect(s.said).toEqual([['start'], ['end', 0, 1]]);
+});
+
+// `TouchEvent.touches` is every finger on the surface (Touch Events, `touches`), and the scroller hears only its own
+// fingers' events: a finger resting outside it must neither hold its drag open nor begin one at a later scroll.
+test('a finger outside the scroller neither holds its drag open nor makes a later scroll a drag', () => {
+  const s = scroller();
+  s.touch('touchstart', 0, [[1, 100, 300]]);
+  for (let t = 16; t <= 96; t += 16) { s.touch('touchmove', t, [[1, 100, 300 - t]]); s.scroll(0, t, t + 5); }
+  // A finger lands on the header (the scroller hears nothing of it), then the scroller's lifts.
+  s.touch('touchend', 100, [[2, 10, 10, OUTSIDE]], [[1, 100, 204]]);
+  expect(s.said).toEqual([['start'], ['end', 0, 1]]);
+  s.touch('touchstart', 500, [[3, 100, 300]]);
+  for (let t = 16; t <= 96; t += 16) { s.touch('touchmove', 500 + t, [[3, 100, 300 - t]]); s.scroll(0, 100 + t, 505 + t); }
+  s.touch('touchend', 600, [], [[3, 100, 204]]);
+  expect(s.said.slice(2)).toEqual([['start'], ['end', 0, 1]]);
+  // A tap while a finger rests outside, then a programmatic scroll with no finger down.
+  const r = scroller();
+  r.touch('touchstart', 0, [[2, 10, 10, OUTSIDE], [1, 100, 300]], [[1, 100, 300]]);
+  r.touch('touchend', 50, [[2, 10, 10, OUTSIDE]], [[1, 100, 300]]);
+  r.scroll(0, 100, 600);
+  expect(r.said).toEqual([]);
 });

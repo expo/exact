@@ -251,6 +251,7 @@ impl DataSource for Module {
                 module.directories = self.directories.clone();
                 module.host.secrets = self.host.secrets.replacement();
                 module.document_owner = self.document_owner;
+                module.preloads = self.preloads;
                 module.native_factory = self.native_factory;
                 // It keeps the placement (`Placed::replacement`), not `placed`'s word.
                 module.keeps_plan = self.keeps_plan;
@@ -261,6 +262,10 @@ impl DataSource for Module {
 
     fn app_id(&self) -> &str {
         &self.app_id
+    }
+
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.preloads
     }
 
     fn grants(&self) -> &str {
@@ -363,7 +368,9 @@ impl DataSource for Module {
     fn bind(&mut self, plan: &Plan) {
         self.reached = plan.sources.iter().any(|row| {
             let name = plan.str(row.name);
-            !exact_plan::runner_owned_source(name) && plan.module_named(name).is_none()
+            !exact_plan::runner_owned_source(name)
+                && plan.module_named(name).is_none()
+                && plan.fetch_named(name).is_none()
         }) || plan.surfaces.iter().any(|row| {
             self.canvas_surfaces
                 .iter()
@@ -476,9 +483,9 @@ impl DataSource for Module {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        // A resource whose answer the bake's storage refusal ended (an
-        // uncaught `code: 'bake'`) is the device's to answer: that is
-        // `DeferredAtBake` (aab190948), and the runner shows its placeholder.
+        // An uncaught storage or stream-option refusal marked `code: 'bake'`
+        // is the device's to answer: that is `DeferredAtBake` (aab190948),
+        // and the runner shows its placeholder.
         // At bake, an error the source raises itself stays fatal, even after a
         // refusal it caught (kanban2 #5).
         let answer = self.begin(Some(store), Some(target), source, args);

@@ -34,30 +34,47 @@ final class PageFactsSoonMacTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         session.tellPage()
         XCTAssertNotNil(session.readsOnLineKnown, "a synchronous tell learns whether the plan reads onLine")
-        // Wait for the activation the first draw starts to finish, so a
-        // system notice the click raises below (the window made key) takes
-        // the synchronous path and can't add to `noticesInFlight`.
-        let calm = Date(timeIntervalSinceNow: 10)
-        while session.dataGeneration != session.generation || session.activationInFlight, Date() < calm {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        waitFor("the first draw's activation settles") {
+            session.dataGeneration == session.generation && !session.activationInFlight
         }
         XCTAssertEqual(session.dataGeneration, session.generation, "the first draw's activation settles")
         XCTAssertFalse(session.activationInFlight)
+        session.tellPage()
+
+        let add = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "add" })
+        let press = try XCTUnwrap(session.presenter.onPress)
+        var landings: [String] = []
+        var unchangedNotices = 0
+        session.onLandForTests = { kind, batch in
+            if case .notice = kind {
+                landings.append("notice")
+                if session.changesNothing(batch) { unchangedNotices += 1 }
+            }
+        }
+        session.onApplyForTests = { batch in
+            if batch.input != nil { landings.append("press") }
+        }
+        defer { session.onLandForTests = nil; session.onApplyForTests = nil }
 
         // The owner busy as it is while the data source activates.
         let held = DispatchSemaphore(value: 0)
+        defer { held.signal() }
         Owner.shared.post { held.wait() }
         session.dataPreparing = true
         let started = Date()
         session.tellPageSoon()
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.05, "the main thread does not wait for the busy owner")
         XCTAssertEqual(session.noticesInFlight, 3, "the facts, the root font size and the display scale are on the owner")
+        XCTAssertTrue(landings.isEmpty)
         held.signal()
         session.dataPreparing = false
 
-        let add = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "add" })
-        XCTAssertNil(session.agentInstance.tap(["op": "tap", "id": Int(add.id)])["error"])
-        XCTAssertEqual(session.noticesInFlight, 0, "the notice's batches land before the press's, which the owner made after them")
+        // AppKit click tracking can run the main-queue hop that lands the
+        // notices, hiding a missing join in apply. Dispatch without yielding.
+        press(add.id)
+        XCTAssertEqual(landings, ["notice", "notice", "notice", "press"], "the notices land before the later press batch applies")
+        XCTAssertEqual(unchangedNotices, 3, "notices that skip apply must still land before the press")
+        XCTAssertEqual(session.noticesInFlight, 0)
         XCTAssertNotNil(session.presenter.views.values.first { $0.props["text"] == "1" }, "and the press applies")
     }
 }

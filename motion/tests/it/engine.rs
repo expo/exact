@@ -109,6 +109,38 @@ fn the_clock_is_a_seek() {
     );
 }
 
+/// An underdamped spring passes through rest near each turning point before
+/// it settles; it ends at its settle time whatever the frames sampled, as
+/// its lowered frames do (LLP 1003 §4, §7).
+#[test]
+fn a_spring_ends_at_its_settle_time_at_any_frame_rate() {
+    let run = |hz: Option<f64>, end: f64| {
+        let mut engine = engine_with(vec![Transition::new(
+            TransitionProperty::Property(Property::Opacity),
+            0.0,
+            TimingFunction::Spring(SpringConfig::default()),
+        )]);
+        engine.observe(opacity(0.0)).unwrap();
+        let settle = engine.settle_time().unwrap();
+        let mut k = 1.0;
+        while let Some(t) = hz.map(|hz| k / hz).filter(|&t| t < end) {
+            engine.advance(t).unwrap();
+            k += 1.0;
+        }
+        engine.advance(end).unwrap();
+        let value = engine.value(NODE, Property::Opacity).unwrap().x.to_bits();
+        (settle, value, engine.quiescent())
+    };
+    let (settle, ..) = run(None, 0.0);
+    for end in [settle - 0.01, 1.4667, 1.6, settle + 0.5] {
+        let seek = run(None, end);
+        for hz in [30.0, 50.0, 60.0, 120.0, 240.0] {
+            assert_eq!(run(Some(hz), end), seek, "{hz} Hz to {end}");
+        }
+        assert_eq!(seek.2, end >= settle, "done at {end} only from {settle}");
+    }
+}
+
 #[test]
 fn the_same_inputs_give_the_same_bits() {
     let run = || {

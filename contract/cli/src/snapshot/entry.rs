@@ -1,6 +1,6 @@
 //! Compile an entry's reachable component tree with typed, replaceable data. No request, timer or handler enters this plan.
 
-use super::{check, referenced_styles, refusal, visit_nodes};
+use super::{check, referenced_styles, refusal};
 use crate::{
     manifest::{Activity, Configuration, WatchEntry, Widget, WATCH_KIND},
     CompileError, Manifest,
@@ -171,9 +171,11 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
     };
     for field in &declared.fields {
         let expected = match field.name.as_str() {
-            "width" | "height" | "horizontalViewportSegments" | "verticalViewportSegments" => {
-                "number"
-            }
+            "width"
+            | "height"
+            | "horizontalViewportSegments"
+            | "verticalViewportSegments"
+            | "keyboardHeight" => "number",
             "prefersReducedMotion" | "prefersReducedTransparency" | "accessibilityTextSize" => {
                 "bool"
             }
@@ -403,7 +405,7 @@ pub(super) fn compile_file(
         let before = reached.len();
         for c in &file.components {
             if reached.contains(&c.name) {
-                visit_nodes(&c.view, &mut |n| {
+                Node::walk(&c.view).for_each(|n| {
                     if let Node::Use { name, .. } = n {
                         reached.insert(name.clone());
                     }
@@ -482,7 +484,7 @@ pub(super) fn compile_file(
         }
     };
     for c in &file.components {
-        visit_nodes(&c.view, &mut |n| {
+        Node::walk(&c.view).for_each(|n| {
             if let Node::Element { attrs, .. } = n {
                 font_attrs(attrs);
             }
@@ -558,6 +560,7 @@ pub(super) fn compile_file(
             placeholder: None,
             each: None,
             transient: false,
+            keep: false,
             gate: None,
             span: at,
         });

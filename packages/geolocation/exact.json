@@ -116,6 +116,7 @@
       "substitute": {
         "answers": "geolocationStatus",
         "raise": {
+          "grant": "device.geolocation",
           "when": {
             "accuracy": "approximate"
           },

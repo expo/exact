@@ -14,9 +14,22 @@ export function environment() {
     "safe-area-inset-right": r2(parseFloat(cs.paddingRight) || 0),
     "safe-area-inset-bottom": r2(parseFloat(cs.paddingBottom) || 0),
     "safe-area-inset-left": r2(parseFloat(cs.paddingLeft) || 0),
-    "keyboard-inset-height": r2(Math.max(0, innerHeight - (visualViewport?.height ?? innerHeight))),
+    "keyboard-inset-height": keyboardInset(),
     ...foldEnv()
   };
+}
+/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
+export function keyboardInset(platform = globalThis) {
+  const rect = platform.navigator?.virtualKeyboard?.boundingRect;
+  if (rect?.height > 0) {
+    return r2(rect.height);
+  }
+  const vv = platform.visualViewport;
+  return vv ? r2(Math.max(0, platform.innerHeight - vv.height - vv.offsetTop)) : 0;
+}
+/** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
+export function onKeyboard(changed, platform = globalThis) {
+  platform.navigator?.virtualKeyboard?.addEventListener?.("geometrychange", changed);
 }
 // Read CSS when the JS fold interfaces are absent (LLP 1078 D6). Share agent substitutes with agent-navigation.js; they change facts, not CSS env() resolution (D7).
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -29,7 +42,7 @@ function readFold() {
       s.y,
       s.width,
       s.height
-    ]);
+    ]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
     return {
       posture,
       cols: new Set(rects.map((r) => r[0])).size,
@@ -229,8 +242,25 @@ export const preferences = () => {
 };
 // a dev pin's scheme is the system's (LLP 1122 D4; dev.js), else the manifest's fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs), as `UIUserInterfaceStyle` is an iOS app's
 export const displayMode = () => DISPLAY_MODES[preferences() >>> 29 & 7];
+// @ref LLP 1101.003 D6 — Media Queries 4's `update`: 0 `fast` (a screen, and a page that cannot ask), 1 `slow`, 2 `none` (print). The preference bits have no room for it; the wasm host takes it through `exact_set_update`.
+let updateQueries;
+const updates = () => updateQueries ??= ["(update: slow)", "(update: none)"].map(q => globalThis.matchMedia?.(q));
+export const UPDATES = ["fast", "slow", "none"];
+export const updateCode = () => updates()[1]?.matches ? 2 : updates()[0]?.matches ? 1 : 0;
 /** A phone-sized screen (its short side under 600 CSS px): the GPU tier's class when the adapter says nothing it knows, and never `high` (LLP 1139.003 D2). */ export const handheld = (platform = globalThis) => Math.min(platform.screen?.width ?? Infinity, platform.screen?.height ?? Infinity) < 600;
-export const onPreferences = (changed) => queries().forEach(([q]) => q.addEventListener("change", changed));
+export const onPreferences = (changed) => {
+  queries().forEach(([q]) => q.addEventListener("change", changed));
+  updates().forEach(q => q?.addEventListener?.("change", changed));
+  // A window can move between displays without changing its logical size.
+  let resolution;
+  const watch = () => {
+    resolution?.removeEventListener?.("change", rescaled);
+    resolution = globalThis.matchMedia?.(`(resolution: ${globalThis.devicePixelRatio || 1}dppx)`);
+    resolution?.addEventListener("change", rescaled);
+  };
+  const rescaled = () => { watch(); changed(); };
+  watch();
+};
 // LLP 1069.000 D2/D6: pack page facts; agent preferences replace browser readings except display scale.
 // Picture sharing is agent-only; persisted pageshow events count back/forward cache restores.
 export function pageReporter(agent, platform = globalThis) {

@@ -548,7 +548,8 @@ fn the_host_commands_are_listed_and_answer_by_name() {
 fn a_function_shows_its_signature_rules_and_example() {
     let out = stdout(&vocab(&["formatNumber"]));
     assert!(out.starts_with("formatNumber: standard function\n  signature: formatNumber(number, \"compact\" | \"decimal\" | \"currency\" | \"percent\"[, \"USD\" | "), "{out}");
-    assert!(out.contains("Intl.NumberFormat(\"en-US\")"), "{out}");
+    assert!(out.contains("Intl.NumberFormat"), "{out}");
+    assert!(out.contains("format locale"), "{out}");
     assert!(
         out.contains("example: `formatNumber(1481.47, \"currency\", \"USD\")` is `\"$1,481.47\"`"),
         "{out}"

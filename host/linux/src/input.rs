@@ -14,7 +14,7 @@ use evdev::{
 use std::os::fd::AsRawFd;
 
 mod pad;
-pub use crate::gamepad::Reading as PadReading;
+pub use exact_painted::gamepad::Reading as PadReading;
 pub use pad::MAX_PADS;
 
 /// One thing the user did.
@@ -191,14 +191,17 @@ impl Glide {
 }
 
 /// A pad's identity and motors, as the registry takes them.
-type Registering = (crate::pads::Identity, Option<Box<dyn crate::pads::Output>>);
+type Registering = (
+    exact_painted::pads::Identity,
+    Option<Box<dyn exact_painted::pads::Output>>,
+);
 
 /// Every device that points, types or plays.
 pub struct Input {
     devices: Vec<(Device, Option<Absolute>)>,
     // A pad, its index, its state, and whether its connection was reported.
-    pads: Vec<(Device, crate::gamepad::Opened)>,
-    /// Each pad's identity and motors, for the registry (`crate::pads`)
+    pads: Vec<(Device, exact_painted::gamepad::Opened)>,
+    /// Each pad's identity and motors, for the registry (`exact_painted::pads`)
     /// when it is first read, by index; `None` once it is there.
     to_register: Vec<Option<Registering>>,
     keyboard: Keyboard,
@@ -223,7 +226,7 @@ impl Input {
                     let announced = false;
                     pads.push((
                         d,
-                        crate::gamepad::Opened {
+                        exact_painted::gamepad::Opened {
                             index,
                             state,
                             announced,
@@ -271,7 +274,7 @@ impl Input {
                 continue;
             }
             let pad = matches!(absolute, Some(Absolute::Pad(_)));
-            pointing.push(crate::presenter::Pointing {
+            pointing.push(exact_painted::presenter::Pointing {
                 relative: pointer || pad,
                 absolute: absolute.is_some() && !pad,
                 touch: has(KeyCode::BTN_TOUCH),
@@ -285,12 +288,12 @@ impl Input {
             pads,
             to_register,
             keyboard: Keyboard::default(),
-            touch_only: crate::presenter::touch_only(&pointing),
+            touch_only: exact_painted::presenter::touch_only(&pointing),
         }
     }
 
     /// Whether a touch screen is the only pointing device open
-    /// ([`crate::presenter::touch_only`]).
+    /// ([`exact_painted::presenter::touch_only`]).
     pub fn touch_only(&self) -> bool {
         self.touch_only
     }
@@ -316,41 +319,42 @@ impl Input {
     /// reports' times moved into the host's clock by `now_ms`, its time at
     /// this read.
     fn read_pads(&mut self, now_ms: f64, out: &mut Vec<InputEvent>) {
-        use crate::gamepad::{change, Fetch};
+        use exact_painted::gamepad::{change, Fetch};
         let epoch_ms = |t: std::time::SystemTime| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .map_or(0., |d| d.as_secs_f64() * 1000.)
         };
         let now = (epoch_ms(std::time::SystemTime::now()), now_ms);
-        let readings = crate::gamepad::read(&mut self.pads, now, |d| match d.fetch_events() {
-            Ok(events) => Fetch::Changes(
-                events
-                    .filter_map(|e| {
-                        let at = epoch_ms(e.timestamp());
-                        Some((change(e.event_type().0, e.code(), e.value())?, at))
-                    })
-                    .collect(),
-            ),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                Fetch::Nothing
-            }
-            Err(_) => Fetch::Gone,
-        });
+        let readings =
+            exact_painted::gamepad::read(&mut self.pads, now, |d| match d.fetch_events() {
+                Ok(events) => Fetch::Changes(
+                    events
+                        .filter_map(|e| {
+                            let at = epoch_ms(e.timestamp());
+                            Some((change(e.event_type().0, e.code(), e.value())?, at))
+                        })
+                        .collect(),
+                ),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    Fetch::Nothing
+                }
+                Err(_) => Fetch::Gone,
+            });
         for (index, reading, at) in readings {
             // The registry a package reads has the same pads by index.
             match (reading, self.to_register.get_mut(index as usize)) {
                 (Some(r), Some(waiting)) => {
                     if let Some((identity, motors)) = waiting.take() {
-                        crate::pads::connect(index, identity, motors);
+                        exact_painted::pads::connect(index, identity, motors);
                     }
-                    crate::pads::read(index, r);
+                    exact_painted::pads::read(index, r);
                 }
-                (None, _) => crate::pads::disconnect(index),
+                (None, _) => exact_painted::pads::disconnect(index),
                 _ => {}
             }
             out.push(InputEvent::Pad {
@@ -805,6 +809,16 @@ mod tests {
             );
         }
         assert_eq!(keyboard.event(17, 3, None), None);
+        // What the painted host's WASD test types (`surface_controls_tests.rs` there).
+        assert_eq!(
+            [17, 30, 31, 32].map(|code| key(code, false)),
+            [
+                Some(("KeyW", "w")),
+                Some(("KeyA", "a")),
+                Some(("KeyS", "s")),
+                Some(("KeyD", "d")),
+            ]
+        );
         assert_eq!(keyboard.event(0xffff, 1, None), None);
         assert_eq!(key(59, false), Some(("F1", "F1")));
         assert_eq!(key(87, false), Some(("F11", "F11")));

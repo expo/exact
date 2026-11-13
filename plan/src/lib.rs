@@ -198,6 +198,12 @@ pub enum PlanError {
     BadMagic,
     /// A running host received a snapshot, or the snapshot reader received another entry.
     WrongEntry,
+    /// A plan compiled for another surface than the host's (LLP 1101.003
+    /// D9): a terminal plan on a GUI host, or a GUI plan on the terminal.
+    WrongSurface {
+        plan: String,
+        host: &'static str,
+    },
     UnsupportedVersion(u32),
     FormatDigestMismatch {
         expected: u64,
@@ -353,6 +359,17 @@ impl CodeError {
 }
 
 impl Plan {
+    /// This plan's bytes through the decoder of its own surface's hosts
+    /// (LLP 1101.003 D9): how a tool that reads a plan of either surface, a
+    /// type generator, checks one a caller built.
+    pub fn redecode(&self) -> Result<Plan, PlanError> {
+        let bytes = self.encode();
+        match self.surface.as_str() {
+            "terminal" => Plan::decode_terminal(&bytes),
+            _ => Plan::decode(&bytes),
+        }
+    }
+
     /// The rules the row codecs cannot express: region topology and timer
     /// progress. Called by the generated `validate`, so every loaded or built
     /// plan has passed it.
@@ -564,6 +581,17 @@ impl Plan {
             }
         }
         for (i, t) in self.timers.iter().enumerate() {
+            if t.change
+                && (!t.keyed
+                    || !t.once
+                    || t.frame
+                    || t.interval_ms != 0
+                    || t.wait != 0
+                    || t.max_ms != 0
+                    || t.tolerance_ms != 0)
+            {
+                return Err(PlanError::TimerWait { timer: i as u32 });
+            }
             if (t.tolerance_ms != 0 && (t.wait != 0 || t.frame))
                 || t.wait > 4
                 || (t.wait != 0 && t.frame)
@@ -574,7 +602,7 @@ impl Plan {
             if t.frame && (t.interval_ms != 0 || t.once) {
                 return Err(PlanError::FrameTimer { timer: i as u32 });
             }
-            if !t.frame && t.interval_ms == 0 {
+            if !t.frame && !t.change && t.interval_ms == 0 {
                 return Err(PlanError::ZeroInterval { timer: i as u32 });
             }
         }
@@ -968,6 +996,7 @@ pub const RUNNER_OWNED_SOURCES: &[&str] = &[
     "exactViewport",
     "exactPage",
     "exactSurface",
+    "exactCanvasPerformance",
     "exactTime",
     "exactTransport",
     "exactMIDI",
@@ -1068,6 +1097,22 @@ impl Plan {
     pub fn resource_each(&self, r: &ResourcesRow) -> Option<(Code, Code)> {
         let mut each = r.each.iter().map(|a| self.arg(a).expr);
         Some((each.next()?, each.next()?))
+    }
+
+    /// The declared row of source `name`, when the runner answers it with
+    /// one HTTP request (LLP 1162.001).
+    pub fn fetch_named(&self, name: &str) -> Option<&FetchesRow> {
+        self.fetches
+            .iter()
+            .find(|f| self.str(self.sources[f.source.0 as usize].name) == name)
+    }
+
+    /// A declared source's parts in `range`, each as `(name, value)`.
+    pub fn fetch_parts(&self, range: FetchPartsRange) -> impl Iterator<Item = (&str, &str)> {
+        let start = range.start as usize;
+        self.fetch_parts[start..start + range.len as usize]
+            .iter()
+            .map(|p| (self.str(p.name), self.str(p.value)))
     }
 
     /// The native module row of source `name`, when a module answers it

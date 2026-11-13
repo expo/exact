@@ -78,6 +78,14 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
     }
     private(set) var open: Open?
+    private var animations = 0
+    var inTransition: Bool { animations > 0 }
+
+    private func track(_ animator: UIContextMenuInteractionAnimating?) {
+        guard let animator else { return }
+        animations += 1
+        animator.addCompletion { [weak self] in self?.animations -= 1 }
+    }
 
     func isOpen(_ pop: NodeView) -> Bool { open?.popover === pop && open?.toggled == true }
     func close(_ pop: NodeView) {
@@ -360,7 +368,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         // A run's picture as the finger lands: UIKit asks for the configuration
         // before a press it starts has drawn (measured), so the picture holds
         // none, such as a tappable ancestor's dim
-        if let run, let container = Self.container(of: source), let lines = RunLines(run, in: source, over: container) {
+        if let run, let container = LiftTarget.container(of: source), let lines = RunLines(run, in: source, over: container) {
             owner.runPreview = Self.runPreview(lines, of: source)
         }
         let configuration = UIContextMenuConfiguration(identifier: NSNumber(value: run?.id ?? source.id), previewProvider: { [weak self, weak owner] in
@@ -495,13 +503,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// §5.1): it hides the node, lifts it and returns it. A run of text cannot
     /// lift its paragraph, which UIKit would hide whole: it lifts a picture of
     /// what lies under the run's lines (`runPreview`), and the paragraph stays
-    /// shown. Both rise over `container(of:)`.
+    /// shown. Both rise over `LiftTarget.container(of:)`.
     private func targeted(_ configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
         guard let owner = open, let source = owner.source, live(source),
               (configuration.identifier as? NSNumber)?.uint32Value == (owner.inlineID ?? source.id) else { return nil }
         if let id = owner.inlineID {
             // Nil where the run no longer shows lines, its text gone
-            guard let run = presenter?.inlineText(id), let container = Self.container(of: source),
+            guard let run = presenter?.inlineText(id), let container = LiftTarget.container(of: source),
                   let lines = RunLines(run, in: source, over: container) else { return nil }
             // The picture the finger landed on, else one taken now, from the run's place now
             guard let preview = owner.runPreview ?? Self.runPreview(lines, of: source) else { return nil }
@@ -511,17 +519,32 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         // A view the touch fell on that has left the window gives way to the node
         let shown = owner.touched.flatMap { $0.window == nil ? nil : $0 } ?? source
+        if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
         let parameters = UIPreviewParameters()
-        parameters.visiblePath = Self.rounded(shown)
-        guard let target = Self.target(shown) else { return nil }
+        parameters.visiblePath = LiftTarget.rounded(shown)
+        guard let target = LiftTarget.target(shown) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)
+    }
+
+    /// A box inside a canvas child its surface places, lifted from where the
+    /// surface draws it: UIKit draws nothing of the child (its layer's empty
+    /// mask), so the picture is the screen's there.
+    static func placedPreview(of shown: UIView, in source: NodeView) -> UITargetedPreview? {
+        guard let container = LiftTarget.container(of: source) else { return nil }
+        let area = source.drawnRect(source.convert(shown.bounds, from: shown), in: container)
+        guard area.width >= 1, area.height >= 1,
+              let picture = container.resizableSnapshotView(from: area, afterScreenUpdates: false, withCapInsets: .zero) else { return nil }
+        let parameters = UIPreviewParameters()
+        parameters.backgroundColor = .clear
+        return UITargetedPreview(view: picture, parameters: parameters, target: UIPreviewTarget(container: container, center: CGPoint(x: area.midX, y: area.midY)))
     }
 
     /// The run's words cut out of its paragraph's ink until `restore`. UIKit
     /// hides a view it lifts, but the paragraph stays shown, and its words
     /// showed beside their picture as the picture grew (filmed, iOS 27.1).
     private func hideRun(_ owner: Open, _ lines: RunLines) {
-        guard owner.hiddenInk == nil, let ink = owner.source?.textRasterLayer, ink.mask == nil else { return }
+        // A placed canvas child's ink is not what the screen shows: its surface's copy is.
+        guard owner.hiddenInk == nil, owner.source?.placedAncestor == nil, let ink = owner.source?.textRasterLayer, ink.mask == nil else { return }
         let path = UIBezierPath(rect: ink.bounds)
         for box in lines.boxes { path.append(UIBezierPath(rect: lines.container.layer.convert(box, to: ink))) }
         CATransaction.begin()
@@ -572,24 +595,6 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         source.activate(at: source.convert(owner.point, to: nil))
     }
 
-    /// `view`'s outline in its own coordinates where its corners are rounded,
-    /// else nil. One radius, round or Apple's continuous, is UIKit's own
-    /// rounded rectangle, which UIKit keeps through the lift's morph: UIKit
-    /// applies any other path only after the morph's first frames, which show
-    /// the node square (measured, iOS 27.1). One radius within the tolerance the
-    /// layer's own (`applyBoxLayer`) has.
-    private static func rounded(_ view: UIView) -> UIBezierPath? {
-        guard let node = view as? NodeView else {
-            return view.layer.cornerRadius > 0 ? UIBezierPath(roundedRect: view.bounds, cornerRadius: view.layer.cornerRadius) : nil
-        }
-        let corners = node.cornerSizes(in: node.bounds), shape = node.style["corner_shape"]
-        if let corner = corners.first, corner.width > 0, corners.allSatisfy({ abs($0.width - corner.width) < 0.01 && abs($0.height - corner.width) < 0.01 }),
-           shape == nil || CornerShape(shape)?.isAppleContinuous == true {
-            return UIBezierPath(roundedRect: node.bounds, cornerRadius: corner.width)
-        }
-        return corners.contains(where: { $0.width > 0 }) ? node.roundedPath(in: node.bounds) : nil
-    }
-
     /// A run's lines where the screen shows them in `container`: their boxes,
     /// and their outline as UIKit outlines text lines, with the padding UIKit
     /// gives them (`UIPreviewParameters(textLineRects:)`), in the coordinates of
@@ -609,14 +614,16 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
         /// Nil where the run shows no lines.
         init?(_ run: InlineText, in source: NodeView, over container: UIView) {
-            let boxes = source.inlineRects(run).map { source.convert($0, to: container) }.filter { !$0.isEmpty }
+            // Where the screen shows them: through a canvas child's placement, which the surface draws them at.
+            let placed = source.placedAncestor?.placement != nil
+            let boxes = source.inlineRects(run).map { placed ? source.drawnRect($0, in: container) : source.convert($0, to: container) }.filter { !$0.isEmpty }
             guard let outline = UIPreviewParameters(textLineRects: boxes.map { NSValue(cgRect: $0) }).visiblePath?.copy() as? UIBezierPath,
                   !outline.bounds.isEmpty else { return nil }
             let area = outline.bounds
             outline.apply(CGAffineTransform(translationX: -area.minX, y: -area.minY))
             var box: CALayer?, inner: CGRect?
             if let found = ContextMenuHost.box(of: source, below: container), !ContextMenuHost.covers(found.layer, area, in: container.layer) {
-                let shape = ContextMenuHost.rounded(found) ?? UIBezierPath(rect: found.bounds)
+                let shape = LiftTarget.rounded(found) ?? UIBezierPath(rect: found.bounds)
                 // Inside its border, then placed: a rotated box's placed rectangle is no longer upright, and a rectangle inside it is taken
                 let placed = UIBezierPath(rect: ContextMenuHost.innerRect(of: shape).inset(by: ContextMenuHost.borders(of: found)))
                 placed.apply(ContextMenuHost.placement(of: found, in: container))
@@ -808,7 +815,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// paragraph paints more than its layer's fill.
     private static func padding(_ lines: RunLines, of source: NodeView) -> UIView? {
         let container = lines.container, area = lines.area, reach = lines.reach
-        guard !source.boxDrawn, source.boxFill == nil, source.style["background_image"] == nil, source.layer.borderWidth == 0, let parent = source.superview else { return nil }
+        // A placed canvas child's run is drawn by its surface: only the screen shows it.
+        guard source.placedAncestor == nil, !source.boxDrawn, source.boxFill == nil, source.style["background_image"] == nil,
+              source.layer.borderWidth == 0, let parent = source.superview else { return nil }
         // From the nearest view under the paragraph that covers the reach opaquely, or the box the padding extends: nothing behind it shows
         let root = sequence(first: parent, next: { $0.superview }).first {
             $0.layer.opacity >= 1 && ($0.layer.backgroundColor?.alpha ?? 0) >= 1 && ($0.layer === lines.box || covers($0.layer, reach, in: container.layer))
@@ -1163,36 +1172,6 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         return layer.contents != nil || layer.delegate is CoverageImageView || layer is CAShapeLayer || layer is CATextLayer || layer is CAGradientLayer || layer is CAReplicatorLayer || layer is CAEmitterLayer
     }
 
-    /// The view UIKit highlights, lifts and returns a preview over: the view of
-    /// the controller that holds `view` (its route's, a sheet's, or the root
-    /// controller's in an app with no routes), which the bars stay above.
-    /// UIKit's own is the view's superview, and an ancestor that clips, such as
-    /// a strip that scrolls sideways, then cuts the preview, its corners and its
-    /// shadow as it grows (as it cuts a collection view's cell). The superview
-    /// where no controller holds it; nil outside a window.
-    private static func container(of view: UIView) -> UIView? {
-        guard view.window != nil, let parent = view.superview else { return nil }
-        return sequence(first: parent, next: { $0.superview }).first(where: { $0.next is UIViewController }) ?? parent
-    }
-
-    /// Where UIKit highlights, lifts and returns `view` itself: over
-    /// `container(of:)`, centered on the view, with the view's transform, as
-    /// UIKit's own target for a view carries it (`UITargetedPreview(view:parameters:)`),
-    /// and each ancestor's scale and rotation; converting the center takes the
-    /// translations.
-    private static func target(_ view: UIView) -> UIPreviewTarget? {
-        guard let container = container(of: view), let parent = view.superview else { return nil }
-        var transform = view.transform
-        for ancestor in sequence(first: parent, next: { $0.superview }) {
-            if ancestor === container { break }
-            let t = ancestor.transform
-            transform = transform.concatenating(CGAffineTransform(a: t.a, b: t.b, c: t.c, d: t.d, tx: 0, ty: 0))
-        }
-        transform.tx = 0
-        transform.ty = 0
-        return UIPreviewTarget(container: container, center: view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: container), transform: transform)
-    }
-
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configuration: UIContextMenuConfiguration, highlightPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
         targeted(configuration)
     }
@@ -1269,11 +1248,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// Showing: the focus is set aside, or UIKit's type-to-select brings
     /// the software keyboard up over the menu (MenuFocusIOS.swift).
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
+        track(animator)
         menus?.focus.setAside()
         if let owner = open, let pop = owner.popover { owner.toggled = true; presenter?.popoverEvents.changed(pop, open: true) }
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
+        track(animator)
         let focus: () -> Void = { [weak self] in self?.menus?.focus.restore() }
         if let animator { animator.addCompletion(focus) } else { focus() }
         guard let owner = open, owner.configuration === configuration else { return }
@@ -1320,7 +1301,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         return ["kind": "contextmenu", "source": owner.source.map { Int($0.id) as Any } ?? NSNull(),
                 "popover": owner.popover.map { Int($0.id) as Any } ?? NSNull(),
                 "preview": owner.preview.map { Int($0.id) as Any } ?? NSNull(),
-                "phase": owner.committed ? "commit" : "open"]
+                "phase": owner.committed ? "commit" : inTransition ? "transition" : "open"]
     }
 }
 #endif

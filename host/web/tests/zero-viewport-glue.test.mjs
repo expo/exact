@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { glueDeclarations } from './glue-fixture.mjs';
 
 const source = readFileSync(new URL('../glue.js', import.meta.url), 'utf8');
-const declarations = glueDeclarations(source, ['bootNow', 'mediaChanged', 'pageChanged']);
+const declarations = glueDeclarations(source, ['bootNow', 'reportColors', 'resizeRunner', 'mediaChanged', 'pageChanged']);
 
 // Run the host through its ABI call. The stand-in accepts only a positive
 // viewport, then stops before DOM adoption, which the built-app test covers.

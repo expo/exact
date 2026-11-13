@@ -327,8 +327,8 @@ test('a reload: the persisted states, and the evidence that something saved was 
   assert.deepEqual(persistedStates('/no/such/app'), []);
   const dir = mkdtempSync(resolve(tmpdir(), 'verify-persist-'));
   try {
-    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  state goal = 2000 persist\n  state last-seen = "" persist // kept\n  state draft = ""\n  state label = "persist"\n  state note = "x" // persist\n  state tab = "home"  persist  \n  view\n    text "x"\n');
-    assert.deepEqual(persistedStates(dir), ['goal', 'last-seen', 'tab']);
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  state goal = 2000 persist\n  state last-seen = "" persist // kept\n  state draft = ""\n  state label = "persist"\n  state note = "x" // persist\n  state tab = "home"  persist  \n  state typed-goal: number = 8 persist\n  state saved: string[] = [] persist\n  state typed: string = "persist"\n  view\n    text "x"\n');
+    assert.deepEqual(persistedStates(dir), ['goal', 'last-seen', 'tab', 'typed-goal', 'saved']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 
   const node = (testId, value, extra = {}) => ({ id: 1, type: 'TextInput', depth: 1, props: { testId, value }, ...extra });
@@ -473,6 +473,15 @@ test('the app\'s server: its entry, the URL app.ts calls, and why it cannot be r
     const setting = { 'app.ts': "export const API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8080';\nexport const grants = `net.fetch ${API}`;\n", 'app.json': JSON.stringify({ env: ['API_BASE_URL'], server: { database: false } }), 'server.ts': 'Bun.serve({});\n' };
     put(setting);
     assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8080');
+    // An app whose backend is one socket names its origin alone: the server is there.
+    put({ ...setting, 'app.ts': "const CONVEX = 'ws://127.0.0.1:3210';\nexport const grants = `net.websocket ${CONVEX}`;\n" });
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:3210');
+    // A socket elsewhere does not stand for the server when the app names an http: one, whichever comes first.
+    put({ ...setting, 'app.ts': "const FEED = 'ws://127.0.0.1:4791';\nconst API = 'http://127.0.0.1:8080';\nexport const grants = `net.websocket ${FEED}\\nnet.fetch ${API}`;\n" });
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8080');
+    // …in a module app.ts imports, too.
+    put({ ...setting, 'app.ts': "import { API } from './api';\nconst FEED = 'ws://127.0.0.1:4791';\nexport const grants = `net.websocket ${FEED}\\nnet.fetch ${API}`;\n", 'api.ts': "export const API = 'http://127.0.0.1:8090';\n" });
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8090');
     put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n' });
     assert.deepEqual([appServer(dir, {}).url, appServer(dir, {}).refusal], ['http://127.0.0.1:8787', null]);
     put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n', '.env.local': 'API_BASE_URL=http://localhost:9000\n' });
@@ -1027,7 +1036,7 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     assert.ok(readFileSync(resolve(dir, 'out/shots/web-relaunch.png')).equals(readFileSync(resolve(dir, '.exact/verify/web-relaunch.png'))));
     assert.match(clean.stdout, /^screenshots \(\.exact\/verify, copied to out\/shots\): /m);
     const bare = verify('--shots');
-    assert.deepEqual([bare.status, bare.stdout, bare.stderr], [2, '', 'verify: --shots takes a directory: the screenshots are copied there, under the names in .exact/verify/\n']);
+    assert.deepEqual([bare.status, bare.stdout, bare.stderr], [2, '', 'verify: --shots needs a value (--shots <dir>)\n']);
 
     const tests = resolve(dir, 'app.test.contract'), authored = readFileSync(tests, 'utf8');
     const property = '\nafter "like" "liking writes nothing"\n  writes none\n';

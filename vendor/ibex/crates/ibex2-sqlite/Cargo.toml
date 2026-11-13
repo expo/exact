@@ -9,6 +9,12 @@ publish = false
 
 [dependencies]
 ibex2 = { path = "../ibex2", default-features = false }
+# Apple's SQLite owns its filesystem locking probes; bundling SQLite brings
+# statfs/fstatfs calls with no approved required-reason use into the app.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rusqlite = { version = "0.40.2", features = ["hooks", "limits", "extra_check"] }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "limits", "extra_check"] }
 
 [dev-dependencies]

@@ -11,7 +11,7 @@
 //! @ref LLP 1030.000 §4 stage 4 (bundle publishing)
 //!
 //! A **bundle** is the static envelope of LLP 1023 D2 — `exact.json` — plus
-//! the files it names by digest: `app.plan` and the assets. The **store** is a
+//! the files it names by digest: `app.plan`, the asset index and the assets. The **store** is a
 //! directory in the app's container holding the bundles this client has:
 //!
 //! ```text
@@ -19,6 +19,7 @@
 //! <dir>/blobs/<sha256>                    each file's bytes, once
 //! <dir>/entries/<canonical envelope sha256>/exact.json
 //! <dir>/entries/<canonical envelope sha256>/app.plan          linked to its blob
+//! <dir>/entries/<canonical envelope sha256>/assets.json       likewise: the asset index
 //! <dir>/entries/<canonical envelope sha256>/assets/<name>     likewise
 //! ```
 //!
@@ -61,7 +62,8 @@ pub use gpu::code_digest as gpu_code_digest;
 pub use binary::{Activate, Baked};
 pub use client::{Client, Outcome};
 pub use envelope::{
-    canonical_bytes, check_asset_names, sha256_hex, Card, Envelope, FileCard, StreamCard,
+    canonical_bytes, check_asset_names, sha256_hex, AssetIndex, Card, Envelope, FileCard,
+    StreamCard,
 };
 pub use store::{
     head_url, AssetSet, Check, Embedded, EmbeddedAsset, Generation, PreparedSelection, Selection,
@@ -80,3 +82,8 @@ pub const ENVELOPE_MAJOR: u64 = 1;
 /// The most an envelope may weigh, in bytes (LLP 1026 D11: the head is a
 /// pointer card, not a payload). A bigger body is refused before it is parsed.
 pub const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
+
+/// The most an envelope's asset index may weigh, in bytes: about 20,000
+/// asset cards. The index is a file the envelope names by digest, so the
+/// envelope's own bound does not grow with the asset count.
+pub const MAX_ASSET_INDEX_BYTES: usize = 4 * 1024 * 1024;

@@ -119,20 +119,32 @@ impl Groups {
             | Self::WEBSOCKET.0,
     );
 
-    /// Every group linked into this build. Linux and Windows Intl exist only
-    /// when their over-budget Cargo feature is selected.
-    #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+    /// Every group linked into this build. The `intl` feature enables the
+    /// ICU-backed group where its backend is available.
+    #[cfg(all(
+        any(target_os = "linux", ibex2_android_intl, windows),
+        feature = "intl"
+    ))]
     pub const ALL: Self = Self(Self::PORTABLE_ALL.0 | Self::INTL.0);
     /// Every group linked into this build.
-    #[cfg(not(all(any(target_os = "linux", windows), feature = "intl")))]
+    #[cfg(not(all(
+        any(target_os = "linux", ibex2_android_intl, windows),
+        feature = "intl"
+    )))]
     pub const ALL: Self = Self::PORTABLE_ALL;
 
     /// The ordinary runtime profile. BLOB and WEBSOCKET stay within LLP
     /// 0057.000 D5's 150 KB / 150 µs budget and are installed by default.
-    #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+    #[cfg(all(
+        any(target_os = "linux", ibex2_android_intl, windows),
+        feature = "intl"
+    ))]
     pub const DEFAULT: Self = Self(Self::PORTABLE_ALL.0 | Self::INTL.0);
     /// The ordinary runtime profile. Intl is opt-in under LLP 0057.000 D5/D6.
-    #[cfg(not(all(any(target_os = "linux", windows), feature = "intl")))]
+    #[cfg(not(all(
+        any(target_os = "linux", ibex2_android_intl, windows),
+        feature = "intl"
+    )))]
     pub const DEFAULT: Self = Self::PORTABLE_ALL;
 
     pub const fn empty() -> Self {
@@ -181,7 +193,10 @@ impl Groups {
                 });
             }
         }
-        #[cfg(not(all(any(target_os = "linux", windows), feature = "intl")))]
+        #[cfg(not(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        )))]
         if self.contains(Self::INTL) {
             return Err(GroupError {
                 group: Self::INTL,
@@ -278,7 +293,7 @@ impl fmt::Display for GroupError {
             #[cfg(not(all(windows, feature = "intl")))]
             return write!(
                 f,
-                "binding group INTL is unavailable; enable ibex2's `intl` Cargo feature on Linux or Windows"
+                "binding group INTL is unavailable; enable ibex2's `intl` Cargo feature on Linux, Windows or an Intl-enabled Android bundle"
             );
         }
         write!(
@@ -331,18 +346,27 @@ pub fn scripts(groups: Groups) -> Result<Vec<Script>, GroupError> {
         "fetch" => concat!(env!("CARGO_MANIFEST_DIR"), "/src/bindings/fetch.js"),
         "blob" => concat!(env!("CARGO_MANIFEST_DIR"), "/src/bindings/blob.js"),
         "sqlite" => SQLITE_SOURCE,
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         "intl_number_format" => {
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/src/bindings/intl_number_format.js"
             )
         }
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         "intl_case" => {
             concat!(env!("CARGO_MANIFEST_DIR"), "/src/bindings/intl_case.js")
         }
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         "intl_datetime" => {
             concat!(env!("CARGO_MANIFEST_DIR"), "/src/bindings/intl_datetime.js")
         }
@@ -376,7 +400,10 @@ pub fn scripts(groups: Groups) -> Result<Vec<Script>, GroupError> {
     if groups.contains(Groups::WEBSOCKET) {
         push("websocket");
     }
-    #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+    #[cfg(all(
+        any(target_os = "linux", ibex2_android_intl, windows),
+        feature = "intl"
+    ))]
     if groups.contains(Groups::INTL) {
         push("intl_number_format");
         push("intl_case");
@@ -426,13 +453,22 @@ fn compiled_script(name: &str) -> &'static [u8] {
         }
         "fetch" => aligned_bytecode!(concat!(env!("OUT_DIR"), "/fetch.hbc")),
         "sqlite" => aligned_bytecode!(concat!(env!("OUT_DIR"), "/sqlite.hbc")),
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         "intl_number_format" => {
             aligned_bytecode!(concat!(env!("OUT_DIR"), "/intl_number_format.hbc"))
         }
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         "intl_case" => aligned_bytecode!(concat!(env!("OUT_DIR"), "/intl_case.hbc")),
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         "intl_datetime" => {
             aligned_bytecode!(concat!(env!("OUT_DIR"), "/intl_datetime.hbc"))
         }
@@ -766,7 +802,10 @@ mod tests {
             "blob",
             "websocket",
         ];
-        #[cfg(all(any(target_os = "linux", windows), feature = "intl"))]
+        #[cfg(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ))]
         expected.extend(["intl_number_format", "intl_case", "intl_datetime"]);
         expected.extend(["fetch", "sqlite", "structured_clone"]);
         assert_eq!(names, expected);
@@ -774,7 +813,10 @@ mod tests {
 
     #[test]
     fn intl_group_tracks_the_cargo_feature() {
-        let available = cfg!(all(any(target_os = "linux", windows), feature = "intl"));
+        let available = cfg!(all(
+            any(target_os = "linux", ibex2_android_intl, windows),
+            feature = "intl"
+        ));
         assert_eq!(Groups::DEFAULT.contains(Groups::INTL), available);
         assert_eq!(Groups::ALL.contains(Groups::INTL), available);
         let result = Groups::INTL.validate();
@@ -782,7 +824,7 @@ mod tests {
         if !available {
             assert_eq!(
                 result.unwrap_err().to_string(),
-                "binding group INTL is unavailable; enable ibex2's `intl` Cargo feature on Linux or Windows"
+                "binding group INTL is unavailable; enable ibex2's `intl` Cargo feature on Linux, Windows or an Intl-enabled Android bundle"
             );
         }
     }

@@ -247,10 +247,10 @@ export const answer = ${ids === null ? "() => 'Hello'" : "(source: string, [id]:
     expect(status, stdout + stderr).toBe(0);
     const html = readFileSync(resolve(dist, 'index.html'), 'utf8');
     const checkpoint = JSON.parse(html.match(/<script type="application\/vnd\.exact\.checkpoint"[^>]*>(.*?)<\/script>/s)[1]);
-    expect(checkpoint.open ?? []).toEqual(streaming ? ['each'] : []);
     const titleAnswer = ['title', 'title', [], 'Hello'];
-    const listAnswers = ids === null ? [] : [['each', 'item', [], ids.map(id => ({ r: [itemText(id)] }))]];
+    const listAnswers = (ids ?? []).map(id => ['each', 'item', keeps ? [] : [id], { r: [itemText(id)] }]);
     expect(checkpoint.answers).toEqual(titleFirst ? [titleAnswer, ...listAnswers] : [...listAnswers, titleAnswer]);
+    expect(checkpoint.open ?? []).toEqual(streaming ? listAnswers.map((_, i) => i) : []);
     for (const id of ids ?? []) expect(html).toContain(itemText(id));
     browser = await open({ host: 'web', app: dir, webDist: dist, url: server.url.href });
     await browser.clock('settle');
@@ -680,7 +680,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
   try {
     mkdirSync(app);
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site' } }));
-    const source = 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  item "/item/:id"\n  live "/live" render=request\n  feed "/feed" render=cached\n  notfound render=build\n\n'
+    const source = 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  item "/item/:id"\n  live "/live" render=request\n  feed "/feed" render=cached\n  doc "/doc/:id" render=request\n  notfound render=build\n\n'
       + 'component App\n  resource note = note("rendered") as shape Note\n  view\n    column\n      text top(nav).url\n      text note.text\n';
     writeFileSync(resolve(app, 'app.contract'), source);
     writeFileSync(resolve(app, 'app.ts'), "import type { Answer, Result, Sources } from './app.contract.d.ts';\nexport const appId = 'test.site';\nexport const grants = '';\n"
@@ -699,6 +699,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
       { name: 'item', pattern: '/item/:id', render: 'client', notfound: false },
       { name: 'live', pattern: '/live', render: 'request', notfound: false },
       { name: 'feed', pattern: '/feed', render: 'cached', notfound: false },
+      { name: 'doc', pattern: '/doc/:id', render: 'request', notfound: false },
       { name: 'notfound', pattern: '', render: 'build', notfound: true },
     ]);
     const files = readdirSync(out);
@@ -768,8 +769,9 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     writeFileSync(resolve(out, 'live.md'), '# Live\n');
     const md = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
     expect([md.headers.get('content-type'), md.headers.get('vary'), await md.text()]).toEqual(['text/markdown; charset=utf-8', 'Accept', '# Live\n']);
-    const feedAsked = await fetch(`http://127.0.0.1:${serve.port}/feed`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
-    expect([feedAsked.status, (await feedAsked.text()).includes('>/feed<')]).toEqual([200, true]);
+    const docAsked = await fetch(`http://127.0.0.1:${serve.port}/doc/7`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
+    const docBody = await docAsked.text();
+    expect([docAsked.status, docBody.includes('>/doc/7<'), docBody.includes('>/doc/7.md<')]).toEqual([200, true, false]);
     const file = await raw('/app.js');
     const hosted = await serving(root, out, { fromEnv: true });
     try { expect((await hosted.get('/live')).body).toContain('The note, rendered.'); } finally { await hosted.stop(); }
@@ -794,14 +796,24 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     const next = await get('/live'), old = await fetch(`http://127.0.0.1:${serve.port}/.exact/gen/${id}/app.js`);
     expect([generationIn(next.body) === id, next.body.includes('Changed again.'), old.status, Buffer.from(await old.arrayBuffer()).equals(runtime)]).toEqual([false, true, 200, true]);
     // A source changed since the build: serve builds the site again before it answers a navigation, and answers a
-    // build that fails with its output (LLP 1153.001 D3).
+    // build that fails with its output (LLP 1153.001 D3). A source is one however deep in the app it is.
+    const deep = resolve(app, 'a/b/c/d/e/part.ts'), rebuilds = (text) => text.split('a source changed since the build: building it again').length - 1;
+    mkdirSync(dirname(deep), { recursive: true });
+    writeFileSync(deep, "export const part = 'one';\n");
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      text "Edited."\n'));
     await new Promise(ok => setTimeout(ok, 350));
     expect((await get('/live')).body).toContain('Edited.');
+    await heard((text) => rebuilds(text) === 1);
+    writeFileSync(deep, "export const part = 'two';\n");
+    await new Promise(ok => setTimeout(ok, 350));
+    expect((await get('/live')).status).toBe(200);
+    await heard((text) => rebuilds(text) === 2);
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      nosuchtag "x"\n'));
     await new Promise(ok => setTimeout(ok, 350));
-    const broken = await get('/live');
-    expect([broken.status, broken.body.startsWith("The app's build failed"), broken.body.includes('nosuchtag')]).toEqual([500, true, true]);
+    writeFileSync(resolve(out, 'live.md'), '# Stale live\n');
+    const broken = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
+    const brokenBody = await broken.text();
+    expect([broken.status, brokenBody.startsWith("The app's build failed"), brokenBody.includes('nosuchtag')]).toEqual([500, true, true]);
   } finally {
     await serve?.stop();
     if (server) { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
@@ -1272,3 +1284,32 @@ test('compiler reuse is invalidated by dependency manifests and the workspace lo
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('web builds expose their version inputs in the view and delivery state', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/delivery-version-'));
+  const dist = resolve(dir, 'dist');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Version', app: { id: 'test.delivery-version', name: 'Version' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'shape Build\n  version: string\n  buildNumber: string\ncomponent App\n  resource build = exactDelivery() as shape Build\n  view\n    text `${build.version} (${build.buildNumber})` testId="version"\n');
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) { const file = Bun.file(resolve(dist, new URL(request.url).pathname.slice(1) || 'index.html')); return await file.exists() ? new Response(file) : new Response(null, { status: 404 }); } });
+    for (const [version, buildNumber] of [['2.3.4', '56'], [undefined, undefined], ['', '']]) {
+      const env = { ...process.env, EXACT_APP_DIR: dir };
+      delete env.EXACT_VERSION; delete env.EXACT_BUILD_NUMBER;
+      if (version !== undefined) env.EXACT_VERSION = version;
+      if (buildNumber !== undefined) env.EXACT_BUILD_NUMBER = buildNumber;
+      const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'delivery-version', '--out', dist, '--render', 'none'], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
+      expect(status, stdout + stderr).toBe(0);
+      expect(JSON.parse(readFileSync(resolve(dist, 'app.version.json'), 'utf8'))).toEqual({ version: version ?? '', buildNumber: buildNumber ?? '' });
+      browser = await open({ host: 'web', app: dir, webDist: dist, url: server.url.href });
+      const state = await browser.state();
+      expect(state.resources.build).toEqual({ version: version ?? '', buildNumber: buildNumber ?? '' });
+      expect(state.delivery.version).toBe(version ?? '');
+      expect(state.delivery.buildNumber).toBe(buildNumber ?? '');
+      expect(await browser.carrier.evaluate('document.querySelector("[data-testid=version]").textContent')).toBe(`${version ?? ''} (${buildNumber ?? ''})`);
+      await browser.close(); browser = null;
+    }
+  } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

@@ -1,12 +1,12 @@
 // The Android carrier (LLP 1107): an app's Linux host built for a phone's ABI
 // (`aarch64-linux-android`, the host's Android-gated code, bionic, the phone's
 // own fonts) and run headless under `adb shell`, where the agent protocol is
-// the Linux host's own (LLP 1012 over stdio, `host/linux/src/agent.rs`). It
+// the Linux host's own (LLP 1012 over stdio, `host/painted/src/agent.rs`). It
 // drives the app's runner, kernel and painter on Android; it is not the Canvas
 // reader (LLP 1076 §3.3, `host/android`), which paints through its own Kotlin
 // view. `--reader` drives that one instead (LLP 1107 D1): the APK, installed
 // and launched, answering the same protocol in its own process
-// (`host/linux/src/canvas/agent.rs`) over a socket adb forwards.
+// (`host/painted/src/canvas/agent.rs`) over a socket adb forwards.
 //
 //   bun scripts/agent-android.mjs build <app>              build the app's Linux crate for Android
 //   bun scripts/agent.mjs android --app <app> …            drive it on the first adb device or emulator
@@ -33,11 +33,11 @@ import { writeTamberNames } from './tamber-names.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { homedir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
+import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, gpuModules, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
 import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
@@ -197,7 +197,7 @@ export function androidDeploy(app, bin, env) {
   if (existsSync(resolve(app.dir, 'assets'))) run(['push', resolve(app.dir, 'assets'), `${dir}/`], 'push the assets');
   const vars = Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('EXACT_')));
   // A local plan (`--plan`) is read on the device: copied there with the replacement Rust module the host
-  // reads beside it (`rust/`, host/linux/src/delivery.rs), or the baked plan or logic would run instead.
+  // reads beside it (`rust/`, host/painted/src/delivery.rs), or the baked plan or logic would run instead.
   if (vars.EXACT_PLAN && existsSync(vars.EXACT_PLAN)) {
     const plan = resolve(vars.EXACT_PLAN), rust = resolve(dirname(plan), 'rust');
     run(['push', plan, `${dir}/${basename(plan)}`], 'push the plan');
@@ -483,6 +483,60 @@ async function headless([tool, serial, command, encodedLease]) {
  * the frames that follow, and a window of the top layer comes with its own animation. */
 const SHOT_SETTLE_MS = 400;
 
+/** Power and keyguard facts exposed by Android's dumpsys, including Android 10's policy delegate. */
+export function androidScreenState(power, window) {
+  const wakefulness = /\bmWakefulness=(\w+)/.exec(power)?.[1];
+  if (!wakefulness) throw new Error('Android screen state: dumpsys power has no mWakefulness');
+  const lines = window.split('\n'), heading = lines.findIndex(line => /^\s*KeyguardServiceDelegate\b/.test(line));
+  let delegate = '';
+  if (heading >= 0) {
+    const indent = lines[heading].match(/^\s*/)[0].length;
+    for (const line of lines.slice(heading + 1)) {
+      if (line.trim() && line.match(/^\s*/)[0].length <= indent) break;
+      delegate += line + '\n';
+    }
+  }
+  const flag = (text, names) => {
+    const values = [...text.matchAll(new RegExp(`\\b(?:${names})=(true|false)\\b`, 'g'))].map(match => match[1]);
+    return values.length ? values.includes('true') : null;
+  };
+  const showing = flag(window, 'isKeyguardShowing|mShowingLockscreen') ?? flag(delegate, 'showing');
+  const secure = flag(window, 'isKeyguardSecure') ?? flag(delegate, 'secure');
+  return { wakefulness, showing, secure };
+}
+
+const screenDescription = ({ wakefulness, showing }) => `${wakefulness}, keyguard ${showing == null ? 'unknown' : showing ? 'showing' : 'hidden'}`;
+
+async function prepareAndroidScreen(tool, serial) {
+  const run = (...args) => {
+    const result = spawnSync(tool, ['-s', serial, 'shell', ...args], { encoding: 'utf8', timeout: 5000, maxBuffer: 4 << 20 });
+    if (result.status !== 0) throw new Error(`Android screen state: adb shell ${args.join(' ')}: ${(result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
+    return result.stdout;
+  };
+  const read = () => androidScreenState(run('dumpsys', 'power'), run('dumpsys', 'window', 'policy'));
+  let state = read();
+  const initial = screenDescription(state);
+  if (state.wakefulness !== 'Awake') run('input', 'keyevent', 'KEYCODE_WAKEUP');
+  let dismissed = false;
+  let deadline = Date.now() + 2000;
+  for (;;) {
+    if (state.showing && state.secure !== false) throw new Error(`Android ${state.secure ? 'secure lock screen' : 'lock screen (security unknown)'} is showing (${state.wakefulness}); unlock the device and run the drive again`);
+    if (state.wakefulness === 'Awake' && !state.showing) {
+      const final = screenDescription(state);
+      return initial === final ? final : `${initial} → ${final}`;
+    }
+    const canDismiss = state.wakefulness === 'Awake' && state.showing && state.secure === false;
+    if (Date.now() >= deadline && !(canDismiss && !dismissed)) throw new Error(`Android screen is not ready (${screenDescription(state)}); wake and unlock the device and run the drive again`);
+    if (canDismiss) {
+      run('wm', 'dismiss-keyguard');
+      // Slow wake observations must not consume the first dismissal or its observation budget.
+      if (!dismissed) { deadline = Date.now() + 2000; dismissed = true; }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+    state = read();
+  }
+}
+
 /** The reader carrier's process: launch the app with a driver's socket (the shell's `agent=<name>` extra), have
  * adb forward it, and carry the protocol's lines between this process's stdio and the app. Every line is the app's
  * to answer but `screenshot`, whose picture is the device's (`screencap`), tagged as the app tags a reply. The
@@ -511,10 +565,13 @@ async function relay([serial, id, vars, encodedLease]) {
     // as another app would (a share's `-a android.intent.action.SEND …`, LLP 1133.024 D5).
     const { EXACT_AGENT_INTENT: intent = '', ...launch } = JSON.parse(vars);
     const extras = Object.entries(launch).flatMap(([k, v]) => ['--es', `x_${k.slice('EXACT_'.length).toLowerCase()}`, quote(v)]);
+    console.error(`Android screen before launch: ${await prepareAndroidScreen(tool, serial)}`);
     sh('shell', 'am', 'force-stop', id);
     sh('logcat', '-c');
-    // `lower=0`: the engine samples every animation, so none plays on the reader's own clock.
-    const started = sh('shell', ['am', 'start', '-W', '-n', `${id}/dev.exact.app.MainActivity`, '--es', 'agent', name, '--es', 'lower', '0', ...extras, intent].join(' '));
+    // `--activity-clear-task`: a force-stop ends the app's process but leaves its task, and an activity of another
+    // app in it (the permission controller's dialog a last drive raised) would cover this launch. `lower=0`: the
+    // engine samples every animation, so none plays on the reader's own clock.
+    const started = sh('shell', ['am', 'start', '-W', '--activity-clear-task', '-n', `${id}/dev.exact.app.MainActivity`, '--es', 'agent', name, '--es', 'lower', '0', ...extras, intent].join(' '));
     if (started.status !== 0 || /Error/.test(started.stdout + started.stderr)) throw new Error(`am start ${id}: ${(started.stderr || started.stdout).trim()}`);
     port = Number(sh('forward', 'tcp:0', `localabstract:${name}`).stdout.trim());
     if (!port) throw new Error('adb forward gave no port');
@@ -759,6 +816,50 @@ export function androidIcons(manifest, dir, res) {
   return refs;
 }
 
+/** Whether icons in the bars read dark over a CSS hex colour: its CIE lightness above 49, the threshold the painter's
+ * `look::ink_on` takes for the ink on a fill. A translucent colour is taken as it would be over white. */
+const lightColour = (css) => {
+  const hex = css.length === 4 ? [...css.slice(1)].map((c) => c + c).join('') : css.slice(1);
+  const alpha = hex.length === 8 ? parseInt(hex.slice(6), 16) / 255 : 1;
+  const linear = (i) => {
+    const c = (parseInt(hex.slice(i, i + 2), 16) / 255) * alpha + (1 - alpha);
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const y = 0.2126 * linear(0) + 0.7152 * linear(2) + 0.0722 * linear(4);
+  return (y > 0.008856 ? 116 * Math.cbrt(y) - 16 : 903.3 * y) > 49;
+};
+
+/** The launch window in the app's first-frame background (LLP 1115.001 D3.6): the manifest's `background_color`, and
+ * `color_scheme_dark.background_color` in night mode, as the iOS launch screen and the web page's first paint take
+ * them (a fixed `userInterfaceStyle` takes its side alone, as there). Written under `res` as `ExactAppLaunch`, the
+ * reader's `ExactLaunch` with that colour behind the window and on Android 12's starting window, and the bars' icons
+ * dark over a light colour and light over a dark one, until the host says the page's (`ExactActivity.chrome`).
+ * Returns the activity's theme: null where the manifest names no colour, which leaves the platform's surface. */
+export function androidLaunch(manifest, res) {
+  rmSync(res, { recursive: true, force: true });
+  const style = manifest.userInterfaceStyle, named = manifest.color_scheme_dark?.background_color;
+  let light = manifest.background_color;
+  if (!light) return null;
+  const dark = style === 'light' ? light : named ?? light;
+  if (style === 'dark') light = dark;
+  const write = (dir, body) => {
+    mkdirSync(resolve(res, dir), { recursive: true });
+    writeFileSync(resolve(res, dir, 'exact_launch.xml'), `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n${body}</resources>\n`);
+  };
+  const scheme = (css) => `    <color name="exact_launch">${androidColour(css)}</color>\n    <bool name="exact_launch_light">${lightColour(css)}</bool>\n`;
+  const theme = (splash) => [
+    '    <style name="ExactAppLaunch" parent="ExactLaunch">',
+    '        <item name="android:windowBackground">@color/exact_launch</item>',
+    ...(splash ? ['        <item name="android:windowSplashScreenBackground">@color/exact_launch</item>'] : []),
+    '        <item name="android:windowLightStatusBar">@bool/exact_launch_light</item>',
+    '        <item name="android:windowLightNavigationBar">@bool/exact_launch_light</item>',
+    '    </style>', ''].join('\n');
+  write('values', scheme(light) + theme(false));
+  write('values-night', scheme(dark));
+  write('values-v31', theme(true));
+  return '@style/ExactAppLaunch';
+}
+
 /** CI inputs shared by APK and App Bundle builds (LLP 1030.003 D6, D8). Refuse incomplete signing
  * before compiling; a bundle must use an upload key. Passwords stay in the environment, never command arguments. */
 export function androidReleaseEnvironment(env = process.env, bundle = false) {
@@ -775,11 +876,38 @@ export function androidReleaseEnvironment(env = process.env, bundle = false) {
     ...(env.EXACT_KEYSTORE ? { EXACT_KEYSTORE: resolve(env.EXACT_KEYSTORE) } : {}) };
 }
 
-/** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_linux::canvas_jni!`; a game's
+/** Why a production Android build cannot start, or null. Android is the Linux bake, which refuses production trust with
+ * an update store (`deploy.store.linux` not "0") and no stream to join (bake/src/receipt.rs): said here, before minutes
+ * of Cargo, as the Apple build says its own. */
+export function androidStreamRefusal(name, manifest, env = process.env) {
+  if (env.EXACT_UPDATE_TRUST !== 'production' || env.EXACT_BAKE_ANALYSIS === '1' || manifest.deploy?.store?.linux === '0') return null;
+  if (env.EXACT_UPDATE_RECEIPT || env.EXACT_UPDATE_GENESIS === '1') return null;
+  return `${name}: this Android build bakes production trust, and Android uses the Linux bake, whose update store is on (deploy.store.linux is not "0"), so the build belongs to an update stream. For a binary without Exact updates, set deploy.store.linux to "0" in app.json (deploy.store.android does not turn the bake's store off). To ship into a stream, set EXACT_UPDATE_RECEIPT to its authenticated publisher receipt (scripts/deploy.mjs), or EXACT_UPDATE_GENESIS=1 to start a new one.`;
+}
+
+/** Whether an APK carries GPU libraries beside the app's (LLP 1009 D6): the primary module or a `gpu.modules` entry. */
+export const carriesGpu = (app) => app.hasGpu || gpuModules(app.manifest).length > 0;
+
+/** The app baked for the phone (`buildBake`), the GPU modules first, and each GPU library the bake built, at the
+ * path Cargo gave it: a crate's `[lib] name` names the file, and the bake records that name for the host to open. */
+export function bakeGpuLibraries(app, options, bake = buildBake) {
+  const libraries = [];
+  bake(app, 'linux', ANDROID_TARGET, { ...options, kind: 'android', prepareGpu: (product) => { libraries.push(product); return product; } });
+  return libraries;
+}
+
+/** Each GPU library copied into `jniLibs` under the name its bake recorded, where the host opens it, and the Gradle
+ * argument that has the APK extract them and keep their symbols: the host checks each against its baked digest. */
+export function stageGpuLibraries(libraries, jniLibs) {
+  for (const library of libraries) copyFileSync(library, resolve(jniLibs, basename(library)));
+  return libraries.length ? [`-PgpuModules=${libraries.map((library) => basename(library)).join(',')}`] : [];
+}
+
+/** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_painted::canvas_jni!`; a game's
  * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets and its icon and banner
  * (`androidIcons`), where the Gradle shell packages them (host/android/app), then `:app:assembleRelease`. An app with
- * a GPU module (LLP 1009) is built as a Linux bake is (`buildBake`): the module first, then the library with the
- * module's digest baked in, so the module ships beside it and must reach the device byte for byte (the Gradle shell extracts it and keeps its symbols).
+ * GPU modules (LLP 1009) is built as a Linux bake is (`buildBake`): the modules first, then the library with their
+ * digests baked in, so each ships beside it and must reach the device byte for byte (`stageGpuLibraries`).
  * Gradle wants a JDK (17 or newer) and the SDK's platform. The APK's path, or null. */
 export function buildApk(app, env, profile, writeLocks = false, bundle = false) {
   env = androidReleaseEnvironment(env, bundle);
@@ -793,12 +921,12 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   let icons;
   try { icons = androidIcons(app.manifest, app.dir, resolve(dirs.app, 'icons/res')); }
   catch (error) { for (const line of error.message.split('\n')) console.error(`${app.name}: ${line}`); return null; }
+  const launch = androidLaunch(app.manifest, resolve(dirs.app, 'launch/res'));
   const built = (name) => resolve(app.target, ANDROID_TARGET, profile, `lib${name.replaceAll('-', '_')}.so`);
-  let gpu = null, out = null;
-  if (app.manifest.game || app.hasGpu) {
-    try { buildBake(app, 'linux', ANDROID_TARGET, { profile, env, kind: 'android' }); }
+  let gpu = [], out = null;
+  if (carriesGpu(app)) {
+    try { gpu = bakeGpuLibraries(app, { profile, env }); }
     catch (error) { console.error(error.message); return null; }
-    gpu = built(app.crate('gpu'));
     out = bakedOut(resolve(app.target, ANDROID_TARGET, profile, 'build'), crate);
   } else {
     // JSON on stdout, for the crate's build-script output directory; the compiler's own messages still on stderr.
@@ -815,7 +943,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   const uses = planUses(out);
   // The page-size argument is in every rustflags source the build makes or Cargo was handed (`androidCargo`), but a
   // table in the app's Cargo configuration takes precedence over the build's own and can leave it out.
-  for (const library of [built(crate), gpu].filter(Boolean)) {
+  for (const library of [built(crate), ...gpu]) {
     const alignment = loadAlignment(library);
     if (alignment < 16384) {
       console.error(`${basename(library)} is ${alignment / 1024} KB aligned, so a device with 16 KB pages runs it in page-size compatibility mode: a rustflags table in the app's Cargo configuration ([target.aarch64-linux-android] or [target.'cfg(…)']) replaced the build's flags; add "${ANDROID_PAGE_SIZE}" to its rustflags`);
@@ -827,27 +955,27 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   mkdirSync(resolve(staged, 'jniLibs/arm64-v8a'), { recursive: true });
   // The reader loads one name whatever the app; the plan names `assets/…` under the APK's `app/`.
   copyFileSync(built(crate), resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so'));
-  // The host opens the module by the name its bake recorded, in the APK's extracted library directory.
-  if (gpu) copyFileSync(gpu, resolve(staged, 'jniLibs/arm64-v8a', basename(gpu)));
+  const gpuArgs = stageGpuLibraries(gpu, resolve(staged, 'jniLibs/arm64-v8a'));
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
-  // The module's shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
-  if (gpu) copyShaders(app, resolve(staged, 'assets/app/shaders'));
+  // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
+  if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
   // A game's resolved manifest (with its `app` identity) is the one its shells were generated with.
   // A date or time control's picker is Compose Material 3's, linked only for a plan that has one (LLP 1115.001.000 D2).
   const compose = uses.includes('dates') ? ['-Pcompose=1'] : [];
   const development = JSON.parse(readFileSync(resolve(out, 'compat.json'), 'utf8')).embedded?.trust !== 'production';
   // The token names its hatches read (LLP 1121 D12), beside them in the build.
   if (existsSync(resolve(app.dir, 'modules/android'))) writeTamberNames(app, 'kotlin');
-  const graph = mavenGraph(app, writeLocks, maven);
+  const graph = mavenGraph(app, writeLocks, maven, env);
   if (!graph) return null;
   let assembled;
   try {
     // Without file watching Gradle reads its inputs to decide what is up to date; a watcher that missed an edit
-    // shipped the reader's old classes once (LLP 1159.002 D1).
-    assembled = runGradle(['--no-watch-fs', ...(env.CI ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
+    // shipped the reader's old classes once (LLP 1159.002 D1). A daemon started in the locks' own Gradle home would
+    // outlive the home.
+    assembled = runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
+      ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...(launch ? [`-PappTheme=${launch}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } });
     if (assembled) graph.kept();
   } finally {
     graph.done();
@@ -903,19 +1031,41 @@ function mavenLocksPresent(app, maven) {
  * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
  * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
  * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves
- * (`kept` copies the verification back). Missing locks are refused before Gradle runs. */
-function mavenGraph(app, writeLocks, maven) {
+ * (`kept` copies the verification back), in a Gradle user home of its own (`coldGradleHome`, its variables `env`).
+ * Missing locks are refused before Gradle runs. */
+function mavenGraph(app, writeLocks, maven, env) {
   const placed = resolve(READER, 'gradle/verification-metadata.xml');
-  const none = { args: [], kept() {}, done() {} };
+  const none = { args: [], env: {}, kept() {}, done() {} };
   if (!maven.length) return none;
   const lock = resolve(app.dir, 'gradle.lockfile'), checksums = resolve(app.dir, 'gradle-verification.xml');
   rmSync(placed, { force: true });
   if (existsSync(checksums)) copyFileSync(checksums, placed);
+  const home = writeLocks ? coldGradleHome(env) : null;
   return {
     args: [`-Pmaven=${maven.join(',')}`, `-PmavenLock=${lock}`, ...(writeLocks ? ['--write-locks', '--write-verification-metadata', 'sha256'] : ['--dependency-verification=strict'])],
+    env: home ? { GRADLE_USER_HOME: home } : {},
     kept() { if (writeLocks && existsSync(placed)) copyFileSync(placed, checksums); },
-    done() { rmSync(placed, { force: true }); },
+    done() { rmSync(placed, { force: true }); if (home) rmSync(home, { recursive: true, force: true }); },
   };
+}
+
+/** A new Gradle user home for writing the locks, with nothing resolved in it, as a fresh machine's is. Gradle writes a
+ * checksum for each file it fetches, and from a warm cache it fetches fewer than a fresh machine's strict build
+ * verifies (a BOM's `.module` beside its `.pom`, another version's parent POM), so checksums written warm fail there.
+ * It keeps what is configuration or the tool, never a dependency: the home's `gradle.properties` and init scripts
+ * (`init.gradle`, `init.gradle.kts`, `init.d`: proxies, mirrors, credentials, JVM options) copied, and the wrapper's
+ * distributions linked, so Gradle is not downloaded again. The caller removes it. */
+export function coldGradleHome(env = process.env) {
+  const warm = env.GRADLE_USER_HOME || resolve(homedir(), '.gradle');
+  const home = mkdtempSync(resolve(tmpdir(), 'exact-gradle-locks-'));
+  for (const kept of ['gradle.properties', 'init.gradle', 'init.gradle.kts', 'init.d']) {
+    if (existsSync(resolve(warm, kept))) cpSync(resolve(warm, kept), resolve(home, kept), { recursive: true });
+  }
+  mkdirSync(resolve(warm, 'wrapper/dists'), { recursive: true });
+  mkdirSync(resolve(home, 'wrapper'));
+  // A junction on Windows, which needs no privilege to make.
+  symlinkSync(resolve(warm, 'wrapper/dists'), resolve(home, 'wrapper/dists'), 'junction');
+  return home;
 }
 
 /** What the modules the app uses add to the APK (LLP 1133.001 D4, D5; LLP 1133.002 D6): each bound implementation's
@@ -1042,6 +1192,9 @@ if (import.meta.main && process.argv[2] === 'reverse') {
   if (args.includes('--no-install') && args.includes('--run')) throw new Error('--no-install takes no --run');
   if (bundle) process.env.EXACT_UPDATE_TRUST = 'production';
   const apkWanted = (bundle || args.includes('--apk')) && !args.includes('--headless');
+  const app = resolveApp(name);
+  const unstreamed = androidStreamRefusal(app.name, app.manifest);
+  if (unstreamed) { console.error(unstreamed); process.exit(1); }
   // The pinned toolchain's targets: the app's workspace builds with it, and rustup in the app's own directory, which
   // pins none, would answer for its default.
   // Without rustup (a toolchain installed by hand) Cargo names a missing target itself.
@@ -1050,7 +1203,6 @@ if (import.meta.main && process.argv[2] === 'reverse') {
     console.error(`the pinned toolchain ${PINNED_RUST} has no ${ANDROID_TARGET} target: rustup target add ${ANDROID_TARGET} --toolchain ${PINNED_RUST}`);
     process.exit(1);
   }
-  const app = resolveApp(name);
   // A TypeScript app's library links the Android Hermes bundle: said before minutes of compiling, not at the link.
   const typescript = androidUsesHermes(app, apkWanted ? 'android' : 'linux'), hermes = androidHermesDir();
   if (!hermes && typescript) {

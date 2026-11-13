@@ -163,8 +163,8 @@ final class FrameHealthOverlayMac: NSView {
     /// What to share, as a menu under the Share button.
     private func chooseShare() {
         let menu = NSMenu()
-        for kind in FrameHealthShare.allCases {
-            let item = menu.addItem(withTitle: kind.title, action: #selector(shareItem(_:)), keyEquivalent: "")
+        for kind in FrameHealthShare.choices(screen: false) {
+            let item = menu.addItem(withTitle: kind.title(screen: false), action: #selector(shareItem(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = kind
         }
@@ -181,7 +181,7 @@ final class FrameHealthOverlayMac: NSView {
             NSSharingServicePicker(items: [item]).show(relativeTo: card.shareFrame, of: card, preferredEdge: .minY)
         }
         switch kind {
-        case .report: FrameHealthReport.prepare(health: health.reportSource, session: session) { present(String(decoding: $0, as: UTF8.self)) }
+        case .report, .clockReport: FrameHealthReport.prepare(health: health.reportSource, session: session) { present(String(decoding: $0, as: UTF8.self)) }
         case .summary: present(FrameHealthCardText.summary(reader: reader, rates: rates, display: display, paused: paused,
             health: health).text)
         case .image:

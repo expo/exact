@@ -28,7 +28,8 @@ package enum TextStyle {
                    variations: FontAxis.of(style), features: FontFeature.of(style))
     }
     package static func spec(runs input: [Run], style: NodeStyle, props: [String: String], strut: Run,
-                             color: [Double] = [0, 0, 0, 255], language: String = "", flow: Bool = false) -> Spec {
+                             color: [Double] = [0, 0, 0, 255], language: String = "", flow: Bool = false,
+                             resolveRuns: ([Run]) -> [Run] = { $0 }) -> Spec {
         var runs = input
         let align = alignment(style), rtl = style["direction"]?.string == "rtl"
         func number(_ name: String) -> Double { style[name]?.number ?? 0 }
@@ -36,6 +37,7 @@ package enum TextStyle {
         // for it, as it was measured (`-exact-fit`, LLP 1116.001 D1.4).
         let fit = props["fitScale"].flatMap(Float.init) ?? 1
         if fit != 1 { runs = runs.map { $0.scaled(fit) } }
+        runs = resolveRuns(runs)
         let whiteSpace = ["pre-wrap": 1, "nowrap": 2, "pre-line": 3, "pre": 4][style["white_space"]?.string ?? ""] ?? 0
         // CSS collapses white space before shaping, as the measurer does in
         // Rust with the same function (LLP 1053 G5); Markdown keeps its lines.

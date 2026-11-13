@@ -703,6 +703,31 @@ impl Batch {
                     }
                     write!(s, "}}")
                 }
+                // LLP 1096 D14: only the values the call gave.
+                SoundOp::Set {
+                    id,
+                    at,
+                    gain,
+                    playback_rate,
+                    pan,
+                    ramp,
+                } => {
+                    let _ = write!(
+                        s,
+                        "{{\"op\":\"set\",\"id\":{id},\"at\":{}",
+                        exact_runner::agent::num(*at)
+                    );
+                    for (name, v) in [
+                        ("gain", gain),
+                        ("playbackRate", playback_rate),
+                        ("pan", pan),
+                    ] {
+                        if let Some(v) = v {
+                            let _ = write!(s, ",\"{name}\":{}", exact_runner::agent::num(*v));
+                        }
+                    }
+                    write!(s, ",\"ramp\":{}}}", exact_runner::agent::num(*ramp))
+                }
                 SoundOp::End { id, at } => write!(
                     s,
                     "{{\"op\":\"end\",\"id\":{id},\"at\":{}}}",
@@ -882,11 +907,14 @@ impl Batch {
         self.ops.push(format!("{{\"op\":\"block\",\"id\":{id}}}"));
     }
 
-    /// `{"op":"content","id":…,"w":…,"h":…}` — natural scrollable extent;
-    /// the platform presenter applies its client-size minimum.
-    pub fn content(&mut self, id: u32, w: f32, h: f32) {
+    /// Scrollable extent, with an independent natural height for a fitted
+    /// detent. The presenter applies its client-size minimum to the extent.
+    pub fn content(&mut self, id: u32, w: f32, h: f32, fit_height: Option<f32>) {
+        let fitted = fit_height
+            .map(|h| format!(",\"fitHeight\":{}", crate::style::num(h)))
+            .unwrap_or_default();
         self.ops.push(format!(
-            "{{\"op\":\"content\",\"id\":{id},\"w\":{},\"h\":{}}}",
+            "{{\"op\":\"content\",\"id\":{id},\"w\":{},\"h\":{}{fitted}}}",
             crate::style::num(w),
             crate::style::num(h)
         ));
@@ -1166,7 +1194,7 @@ mod finish_bytes_tests {
                             batch.style(1, "{\"opacity\":0.5}");
                             batch.children(1, &[2, 3]);
                             batch.frame(1, -0., 0.1, 200., 400.);
-                            batch.content(1, 200., 800.);
+                            batch.content(1, 200., 800., None);
                             batch.present(1, "translate", -0., 0.125);
                             batch.surface(&exact_runner::SurfaceUpdate {
                                 view: 1,

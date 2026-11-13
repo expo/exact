@@ -82,8 +82,9 @@ What remains:
   frames, binary, `Closed` and the mutation flag in `module-glue.js`, and
   the op-14 door there, which would also carry the mapper's replies (D7's
   amendment of 2026-10-16).
-- Rust sources: built on native hosts by LLP 1016.003 (GitHub issue #92);
-  the web refuses a Rust socket by name.
+- Rust sources: built on native hosts and the web JS target by LLP 1016.003
+  (GitHub issue #92); the web's wasm host and a worker-placed source refuse
+  a Rust socket by name.
 - A caller's abort signal makes the native handle stale but does not end
   the stream or map `Aborted`, as the web JS target does.
 - Upstream the `buffered_messages` patch to expo/ibex.

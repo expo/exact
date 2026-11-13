@@ -118,12 +118,14 @@ const utcIntl = new vm.Script(`{
  * capture script can neither replay nor wake for — else `eager`. A render that formatted in
  * the default zone does not wait either. The page carries the plan's
  * viewport comparisons as it was laid out by them, which the capture
- * script checks (`wake`). */
+ * script checks (`wake`). A page that would wait is `idle` when the plan
+ * offers tools to a browser's agent, which only the runtime registers
+ * (`exact_runner::activation::offers_tools`). */
 function infer(out) {
-  const { waits: kinds, kept } = out.activation;
+  const { waits: kinds, kept, tools } = out.activation;
   const on = [...out.root.matchAll(/ data-exact-on="([^"]*)"/g)].flatMap(m => m[1].split(' '));
   const waits = !kept && !out.pending.length && !out.outstanding && !out.continuing && !out.open.length && !out.due && !out.zoned && on.every(k => kinds.includes(k));
-  return waits ? 'interaction' : 'eager';
+  return waits ? (tools ? 'idle' : 'interaction') : 'eager';
 }
 
 /** The renderer for one built dist: its server bundle compiled once. */
@@ -160,7 +162,7 @@ export function renderer(dist, { closed = false } = {}) {
   const name = unesc(/<title>([^<]*)<\/title>/.exec(shell)?.[1] ?? '');
   // The head's fields a crawler reads after the title and viewport, as page.rs `page_head` writes them.
   const crawled = (out, location) => {
-    const meta = (key, n, v) => `<meta ${key}="${n}" content="${esc(v)}">`, title = out.title || name;
+    const meta = (key, n, v) => `<meta ${key}="${n}" content="${esc(v)}">`, title = out.title ?? name;
     const canonical = out.canonical ? crawlable(out.canonical, out.origin) : null, image = out.image ? crawlable(out.image, out.origin) : null;
     const url = canonical ?? (out.origin ? crawlable(location, out.origin) : null);
     return (out.description ? meta('name', 'description', out.description) : '') + (out.robots ? meta('name', 'robots', out.robots) : '')
@@ -300,9 +302,9 @@ export function renderer(dist, { closed = false } = {}) {
         const activate = info.activate === 'inferred' ? infer(out) : info.activate;
         const late = info.activate === 'inferred' && activate !== 'interaction' ? preloads : '';
         const wake = activate === 'interaction' && out.wake.length ? ` data-wake="${esc(JSON.stringify(out.wake))}"` : '';
-        const fields = `<title>${esc(out.title || name)}</title><meta name="viewport" content="${viewportMeta}">${crawled(out, url.pathname + url.search)}`;
+        const fields = `<title>${esc(out.title ?? name)}</title><meta name="viewport" content="${viewportMeta}">${crawled(out, url.pathname + url.search)}`;
         const revalidate = info.activate !== 'never' && (out.outstanding || out.continuing);
-        const checkpoint = `{"location":${JSON.stringify(url.pathname + url.search)},"time":${JSON.stringify(out.time)},"logic":null,"answers":${out.answers},"pending":${JSON.stringify(out.pending)}${out.open.length ? `,"open":${JSON.stringify(out.open)}` : ''}${revalidate ? ',"revalidate":true' : ''}}`;
+        const checkpoint = `{"location":${JSON.stringify(url.pathname + url.search)},"time":${JSON.stringify(out.time)},"logic":null,"answers":${out.answers},"pending":${JSON.stringify(out.pending)}${out.open.length ? `,"open":${JSON.stringify(out.open)}` : ''}${out.readers.length ? `,"readers":${JSON.stringify(out.readers)}` : ''}${revalidate ? ',"revalidate":true' : ''}}`;
         const digest = createHash('sha256').update(out.root).digest('hex').slice(0, 16);
         const style = rules ? `<style data-exact-page>${select(rules, tokens(out.root + shell.slice(root)))}</style>\n` : '';
         // A page made per request that waits for the reader names its answers past 1 KB rather than holding them: they

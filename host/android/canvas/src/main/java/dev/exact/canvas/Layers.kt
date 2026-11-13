@@ -18,7 +18,7 @@ internal inline fun Structure.walkColorLayer(ops: IntArray, visit: (Int) -> Unit
 }
 
 /**
- * Nodes exact2's reader animates (host/linux/src/lower.rs): each a RenderNode drawn by reference from its row (op 29),
+ * Nodes exact2's reader animates (host/painted/src/lower.rs): each a RenderNode drawn by reference from its row (op 29),
  * recorded from op 30, moved and faded every display frame from its keyframes (op 31) as a browser's compositor plays
  * them, so no row is recorded again for them. The sampling is the engine's (exact2's motion/src/animation.rs:
  * phases, fill, iterations, direction, keyframe intervals and their easings), on the engine's clock (op 33).

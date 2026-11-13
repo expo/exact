@@ -2,7 +2,7 @@
 ///
 /// `$data` is the app's `DataSource` type (constructed with `Default`, or
 /// the sixth argument's factory for a deferred bytecode module);
-/// `$plan` a `&'static [u8]` of baked plan bytes. Every export takes the
+/// `$plan` a `&'static [u8]` of baked plan bytes. Session exports take the
 /// runtime handle `exact_create` returned (LLP 1031 D2).
 #[macro_export]
 macro_rules! host {
@@ -49,6 +49,36 @@ macro_rules! host {
         /// What every boot links, made from the entry's set in a `const` so
         /// the linker sees nothing else (LLP 1047.001 D3).
         const EXACT_LINKS: $crate::link::Links<$data> = $crate::link::Links::of($linked);
+        /// First statement of main; a prewarmed process reads and sends nothing.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_begin(prewarm: u32) {
+            if EXACT_LINKS.io.is_some() { $crate::launch_preloads::begin(prewarm != 0, $new); }
+        }
+        /// The app delegate initializer, including after prewarming.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_launched() {
+            if EXACT_LINKS.io.is_some() { $crate::launch_preloads::launched($new); }
+        }
+        /// A foreground launch known to have been opened by a person.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_opened() {
+            if EXACT_LINKS.io.is_some() { $crate::launch_preloads::opened($new); }
+        }
+        /// Number of definitions in the launch marks.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_count() -> u32 {
+            $crate::launch_preloads::current().map_or(0, |p| p.count() as u32)
+        }
+        /// One definition's monotonic seconds and first carrying commit.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_mark(index: u32) -> $crate::launch_preloads::LaunchMark {
+            $crate::launch_preloads::current().and_then(|p| p.mark(index as usize)).map_or_else(Default::default, |(_, m)| m)
+        }
+        /// Copy a definition's name; returns the full UTF-8 byte count.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_name(index: u32, out: *mut u8, capacity: usize) -> usize {
+            $crate::launch_preloads::copy_name(index as usize, out, capacity)
+        }
         $crate::pan_velocity_exports!();
         $crate::frame_health_exports!();
 
@@ -648,6 +678,12 @@ macro_rules! host {
         pub extern "C" fn exact_has_hold(rt: u32, token: u64) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u32::from(b.has_hold(token)), |_| 0)
         }
+        /// A scroller marked `scrollTimeline` (the page, for `page` 1) now
+        /// stands at `left`, `top` CSS px: the timelines it drives, presented.
+        #[no_mangle]
+        pub extern "C" fn exact_timeline_scrolled(rt: u32, page: u32, view: u32, left: f64, top: f64) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.timeline_scrolled(page != 0, view, left, top), |n| n)
+        }
         /// Change a held property's presentation.
         #[no_mangle]
         pub extern "C" fn exact_hold_update(rt: u32, token: u64, x: f64, y: f64, now_ms: f64) -> u32 {
@@ -770,6 +806,17 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_surface_record(rt: u32, len: usize) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.surface_record(len), |n| n)
+        }
+
+        /// Whether this canvas name is read by a performance resource.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_requested(rt: u32, len: usize) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_performance_requested(len), |n| n)
+        }
+        /// Publish or clear a canvas's performance record.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_record(rt: u32, len: usize) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_performance_record(len), |n| n)
         }
 
         /// The date: Unix ms at clock zero and minutes east of UTC.
@@ -954,8 +1001,15 @@ macro_rules! host {
 
         /// Nearest logical collection snap position, or NaN when absent.
         #[no_mangle]
-        pub extern "C" fn exact_collection_snap(rt: u32, view: u32, proposed: f64, port: f64, maximum: f64, distance: f64) -> f64 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.collection_snap(view, proposed, port, maximum, distance), |_| f64::NAN)
+        pub extern "C" fn exact_collection_snap(rt: u32, view: u32, proposed: f64, port: f64, minimum: f64, maximum: f64, distance: f64) -> f64 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.collection_snap(view, [proposed, port, minimum, maximum, distance]), |_| f64::NAN)
+        }
+
+        /// The first unmounted `always` snap position past a release toward its
+        /// rest, or NaN when there is none.
+        #[no_mangle]
+        pub extern "C" fn exact_collection_snap_stop(rt: u32, view: u32, release: f64, rest: f64, port: f64, minimum: f64, maximum: f64) -> f64 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.collection_snap_stop(view, [release, rest], [port, minimum, maximum]), |_| f64::NAN)
         }
 
         /// Copy logical text without materializing native views. Input is

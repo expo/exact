@@ -288,7 +288,7 @@ final class HeaderTitleView: UIControl {
             guard let (group, text) = view.shown else { return }
             view.shown = nil
             view.subtitle.font = .preferredFont(forTextStyle: .footnote, compatibleWith: view.traitCollection)
-            view.update(group, title: text)
+            view.update(group, title: text, ink: view.shownInk ?? .label)
         }
         isAccessibilityElement = true
     }
@@ -359,13 +359,18 @@ final class HeaderTitleView: UIControl {
     private var shown: (HeaderTitle, String)?
     private var shownInk: UIColor?
 
-    func update(_ group: HeaderTitle, title text: String) {
+    /// The title drawn from `group`, `text` in the heading's colour `ink`.
+    /// `ink` reaches the label only as its line is built: assigning a
+    /// label's `textColor` recolours all of its attributed text (Apple,
+    /// `UILabel.textColor`), so a coloured symbol in the line would take it.
+    func update(_ group: HeaderTitle, title text: String, ink: UIColor = .label) {
         // Every batch projects the routes again: an unchanged title is left
         // alone, since invalidating its size relaid the whole navigation
         // bar out each time (~1 ms a batch, a fling's every frame).
-        if let shown, shown.0 == group, shown.0.testId == group.testId, shown.1 == text, shownInk?.isEqual(title.textColor) == true { return }
+        if let shown, shown.0 == group, shown.0.testId == group.testId, shown.1 == text, shownInk?.isEqual(ink) == true { return }
         shown = (group, text)
-        shownInk = title.textColor
+        shownInk = ink
+        title.textColor = ink
         #if EXACT_INSPECT
         groupId = group.id
         #endif
@@ -542,8 +547,7 @@ extension NavigationHost {
             return
         }
         let view = c.titleView ?? HeaderTitleView(host: self)
-        view.title.textColor = shape.heading?.ownUIColor("text_color") ?? .label
-        view.update(group, title: shape.title)
+        view.update(group, title: shape.title, ink: shape.heading?.ownUIColor("text_color") ?? .label)
         if c.titleView !== view {
             c.titleView = view
             if item.titleView == nil { item.titleView = view }

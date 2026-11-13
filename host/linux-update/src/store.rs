@@ -7,7 +7,7 @@
 //! the line on a channel the presenter drains (`Presenter::poll_update`).
 //!
 //! Where the store lives: `<data home>/exact/<app id>/update`, the data home
-//! as the app's own directories take it (`exact_linux::picker::xdg_base`),
+//! as the app's own directories take it (`exact_painted::picker::xdg_base`),
 //! and no store without one; `EXACT_UPDATE_DIR` and
 //! `EXACT_UPDATE_ORIGIN` as `exact_update::client` documents, and under
 //! `EXACT_AGENT=1` a fresh temporary directory. The store is opened before
@@ -64,7 +64,7 @@ impl Updates {
     /// binary links no store, the directory cannot be made, or there is no
     /// data directory to put it in and no override names one.
     pub fn open(compat: &str, plan: &[u8], assets: &Path) -> Result<Updates, String> {
-        let base = exact_linux::picker::xdg_base("XDG_DATA_HOME", ".local/share");
+        let base = exact_painted::picker::xdg_base("XDG_DATA_HOME", ".local/share");
         let client = Client::open(base.as_deref(), assets, compat, plan)?;
         Updates::from_client(client)
     }
@@ -215,7 +215,7 @@ impl Updates {
 
     /// What the store has to say, into a runner's delivery facts (LLP 1030
     /// D7): the stream, the running and embedded `seq`, whether an entry is
-    /// staged, the sunset; the binary's own three are left as they were.
+    /// staged, the sunset; the binary's own facts are left as they were.
     pub(crate) fn staged_stream_into(&self, delivery: &mut Delivery) {
         let client = lock(&self.client);
         let embedded = client.embedded();
@@ -359,11 +359,18 @@ mod tests {
     }
 
     fn head(seq: u64, plan: &[u8]) -> Vec<u8> {
-        format!(r#"{{"exact":1,"app":{{"id":"com.exact.host-cache"}},"plan":{{"url":"./app.plan","sha256":"{}","bytes":{}}},"assets":[],"stream":{{"channel":"prod","compatibilityId":"abc","seq":{seq}}}}}"#, exact_update::sha256_hex(plan), plan.len()).into_bytes()
+        format!(r#"{{"exact":1,"app":{{"id":"com.exact.host-cache"}},"plan":{{"url":"./app.plan","sha256":"{}","bytes":{}}},"stream":{{"channel":"prod","compatibilityId":"abc","seq":{seq}}}}}"#, exact_update::sha256_hex(plan), plan.len()).into_bytes()
     }
 
     #[test]
     fn a_stalled_check_allows_selection_session_boot_and_activation() {
+        let mut compat: serde_json::Value = serde_json::from_str(COMPAT).unwrap();
+        compat["embedded"] = serde_json::json!({
+            "seq": 0, "genesis": true, "entryDigest": null, "assets": [],
+            "plan": {"sha256": exact_update::sha256_hex(b"embedded plan"), "bytes": b"embedded plan".len()},
+            "version": "2.3.4", "buildNumber": "56"
+        });
+        let compat = compat.to_string();
         for block_head in [true, false] {
             let base = std::env::temp_dir().join(format!(
                 "exact-linux-stalled-{}-{block_head}",
@@ -372,7 +379,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&base);
             let plan = caltrain::build().unwrap().encode();
             let mut client =
-                Client::open_at(&base, &base, COMPAT, b"embedded plan", Some(ORIGIN)).unwrap();
+                Client::open_at(&base, &base, &compat, b"embedded plan", Some(ORIGIN)).unwrap();
             assert!(matches!(
                 client.check(&mut |url| Ok(if url.ends_with("exact.json") {
                     head(1, &plan)
@@ -398,6 +405,7 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
             let (responsive_tx, responsive_rx) = std::sync::mpsc::channel();
+            let thread_compat = compat.clone();
             let foreground = std::thread::spawn(move || {
                 assert!(!updates.dir().as_os_str().is_empty());
                 let candidate = updates.prepare_activation().unwrap().unwrap();
@@ -406,7 +414,7 @@ mod tests {
                 assert!(updates.prepare_activation().unwrap().is_none());
                 let prepared = updates.prepare_selected().unwrap();
                 assert_eq!(prepared.plan.as_ref(), bytes);
-                let (session, _) = exact_linux::Host::boot(
+                let (session, _) = exact_painted::Host::boot(
                     &bytes,
                     caltrain_data::Caltrain,
                     Box::<exact_kernel::MonospaceMeasurer>::default(),
@@ -417,8 +425,12 @@ mod tests {
                 assert!(session.kernel().live_count() > 0);
                 updates.boot_started();
                 updates.boot_succeeded();
-                let mut delivery = Delivery::default();
+                let mut delivery = Delivery::default().with_compat(&thread_compat);
                 updates.status_into(&mut delivery);
+                assert_eq!(
+                    (&*delivery.version, &*delivery.build_number),
+                    ("2.3.4", "56")
+                );
                 responsive_tx
                     .send((updates, delivery.seq, delivery.staged))
                     .unwrap();
@@ -429,9 +441,13 @@ mod tests {
             assert_eq!(checking.join().unwrap(), "staged seq 2");
             let (updates, seq, staged) = response.unwrap();
             assert_eq!((seq, staged), (1, false));
-            let mut delivery = Delivery::default();
+            let mut delivery = Delivery::default().with_compat(&compat);
             updates.status_into(&mut delivery);
             assert_eq!(delivery.seq, 1);
+            assert_eq!(
+                (&*delivery.version, &*delivery.build_number),
+                ("2.3.4", "56")
+            );
             assert!(delivery.staged);
             drop(updates);
             let _ = std::fs::remove_dir_all(base);

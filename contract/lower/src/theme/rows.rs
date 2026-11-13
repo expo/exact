@@ -489,7 +489,7 @@ pub(crate) fn typed(v: &Expr, typing: &Typing) -> Option<contract_types::Ty> {
     // `for`, a `match` or a `let` around it binds): a root prop or an action
     // as a value is lowering's refusal of its own (Grok's D2 round 2).
     let mut loads = true;
-    scan::exprs(v, &mut |e| {
+    v.walk().for_each(|e| {
         if let Expr::Ident(name, _) = e {
             loads &= matches!(
                 scope.lookup(name),

@@ -15,8 +15,9 @@ impl Parser {
             loop {
                 let token = p.next();
                 let offset = match token.kind {
-                    TokenKind::Ident(w) if w == "from" => 0.0,
-                    TokenKind::Ident(w) if w == "to" => 100.0,
+                    // In any ASCII case, as CSS reads a keyword (CSS Values 4 §6.1).
+                    TokenKind::Ident(w) if w.eq_ignore_ascii_case("from") => 0.0,
+                    TokenKind::Ident(w) if w.eq_ignore_ascii_case("to") => 100.0,
                     TokenKind::Number(n) if p.eat_punct("%") => n,
                     TokenKind::Indent => {
                         return Err(SyntaxError {
@@ -60,6 +61,7 @@ impl Parser {
                     }
                 };
                 p.next();
+                p.unquoted_percent(&aname)?;
                 let value = match p.expr()? {
                     // `-8` is a literal to anyone writing a keyframe.
                     Expr::Unary(UnOp::Neg, inner, span) if matches!(*inner, Expr::Number(..)) => {

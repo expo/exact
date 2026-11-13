@@ -1,0 +1,193 @@
+//! Which control a pointer hovers and which a contact holds down, for the
+//! neutral look (LLP 1115.000 D17): a state adds one thing there, a wash
+//! where a pointer hovers and a stronger one while pressed, and a painted
+//! control is this host's to show them on. Kept on the painter, which reads
+//! them as it walks, and a change of either paints again. Material's field
+//! (LLP 1115.001.000 D6) shows the same two as its state layers, and a text
+//! field is one there.
+//!
+//! What presses in a row of a list whose rows are cells answers the same
+//! way (LLP 1115.000 D16): the look's row is this host's to draw too, and a
+//! row's press is its wash, as the web's sheet has it (`neutral.css`).
+//! Under the Material look a press is a ripple from the touch on whatever
+//! presses (LLP 1115.001 D9; `paint/ripple.rs`).
+use super::*;
+
+impl<D: DataSource> Presenter<D> {
+    /// What shows a state at or above `id`: the control (a press on a
+    /// button's title is the button's), or the nearest node that presses
+    /// when it is in a list's row. A row's own press look replaces the
+    /// wash, as it does on the web: `-exact-press-scale`, the pressed paint
+    /// (LLP 1061 D7, which `:active` lowers to), or `pointerdown`
+    /// or `pointerup` handlers, which draw one. A disabled row shows none.
+    fn feedback_at(&self, id: ViewId) -> Option<ViewId> {
+        let kernel = self.host.kernel();
+        let mut at = Some(id);
+        while let Some(id) = at {
+            let node = kernel.node(id)?;
+            if node.node_type == NodeType::Control
+                || node.node_type == NodeType::TextInput && !crate::paint::look::neutral()
+            {
+                return Some(id);
+            }
+            // Under the Material look every pressable shows its press (LLP
+            // 1115.000 D6's Android row; LLP 1115.001 D9), a row or not.
+            if node.node_type != NodeType::TextInput
+                && self.presses_itself(id)
+                && (kernel.row_holding(id).is_some() || crate::paint::look::material())
+            {
+                let handlers = self.host.runner().handlers_of(id);
+                let own = node.style.written.has(exact_kernel::StyleId::PressScale)
+                    || crate::host::press::paints(node.style)
+                    || handlers.contains(&EventKind::Pointerdown)
+                    || handlers.contains(&EventKind::Pointerup);
+                let off = node.props.bool(PropId::Disabled) == Some(true);
+                return (!own && !off).then_some(id);
+            }
+            at = node.parent;
+        }
+        None
+    }
+
+    /// The control a contact's press shows on.
+    fn pressed_feedback(&self) -> Option<ViewId> {
+        self.contact_hit()
+            .and_then(|key| self.host.kernel().node_by_key(key).map(|node| node.id))
+            .and_then(|id| self.feedback_at(id))
+    }
+
+    /// The control a held `active` shows pressed (`presenter/held.rs`), as
+    /// the real press it stands for, beside any contact's.
+    pub(super) fn held_press_feedback(&self) -> Option<ViewId> {
+        (self.held())
+            .filter(|h| h.state == crate::host::press::HoldState::Active)
+            .and_then(|h| self.feedback_at(h.view))
+    }
+
+    /// Read both again, after anything that moved the pointer or a contact.
+    pub(super) fn refresh_feedback(&mut self) {
+        // A finger hovers nothing; a held contact is not also a hover (but
+        // for a `:hover` look, as CSS's is).
+        let hit = match self.hover_point {
+            Some((x, y)) if !self.direct() => self.hit(x, y),
+            _ => None,
+        };
+        let hover = hit
+            .filter(|_| self.contact.is_none())
+            .and_then(|id| self.feedback_at(id));
+        let pressed = self.pressed_feedback();
+        if self.brush.feedback.1 != pressed {
+            self.ripple(pressed);
+        }
+        if self.brush.feedback != (hover, pressed) {
+            self.brush.feedback = (hover, pressed);
+            self.dirty = true;
+        }
+        self.refresh_looks(Some(hit));
+    }
+
+    /// Material's ripple (`paint/ripple.rs`): the press shown on the last
+    /// control lets go, and one on `pressed` starts at the contact's touch.
+    fn ripple(&mut self, pressed: Option<ViewId>) {
+        if !crate::paint::look::material() {
+            return;
+        }
+        let now = self.brush.ripples.clock(self.host.now());
+        if let Some(old) = self.brush.feedback.1 {
+            self.brush.ripples.release(old, now, false);
+        }
+        let Some(id) = pressed else { return };
+        let Some(key) = self.host.kernel().node(id).map(|n| n.key) else {
+            return;
+        };
+        let touch = self.contact_position();
+        let at = touch
+            .zip(self.box_of(id))
+            .map(|((x, y), b)| (x - b.rect.0, y - b.rect.1));
+        self.brush.ripples.press(id, key, at, now);
+        // In what scrolls the press waits the tap timeout (`ripple.rs`).
+        if touch.is_some_and(|(x, y)| !self.scrollers_at(x, y).chain.is_empty()) {
+            self.brush.ripples.delay(id);
+        }
+    }
+
+    /// The contact was cancelled (a scroller took it): its ripple, if it
+    /// has not shown yet, never does.
+    pub(super) fn cancel_ripple(&mut self) {
+        if let Some(id) = self.brush.feedback.1 {
+            let now = self.brush.ripples.clock(self.host.now());
+            self.brush.ripples.release(id, now, true);
+        }
+    }
+
+    /// The nodes whose `:hover` look holds (LLP 1121 D8): the pointer's hit
+    /// and its ancestors that have one, as CSS's `:hover` matches; none for
+    /// a finger. The focus's `:focus-visible` look holds where its ring
+    /// would show. A state held keeps its look beside them, until what lets
+    /// it go (`held.rs`). A node whose looks moved paints again. `hit`: what
+    /// the pointer hovers now, after it moved (`None`: a paint keeps the
+    /// hover it has, its nodes that live).
+    pub(super) fn refresh_looks(&mut self, hit: Option<Option<ViewId>>) {
+        let mut at = hit.flatten().filter(|_| !self.direct());
+        self.check_hold(hit.map(|_| at));
+        let kernel = self.host.kernel();
+        let mut hovered = Vec::new();
+        if hit.is_none() {
+            hovered = (self.host.looks_shown.hover.iter().copied())
+                .filter(|id| kernel.node(*id).is_some())
+                .collect();
+        }
+        while let Some(id) = at {
+            let Some(node) = kernel.node(id) else { break };
+            if node
+                .looks()
+                .iter()
+                .any(|(s, _)| *s == exact_kernel::LOOK_HOVER)
+            {
+                hovered.push(id);
+            }
+            at = node.parent;
+        }
+        let focus = self.focus.filter(|f| self.brush.ringless != Some(*f));
+        let focus = focus.filter(|f| {
+            kernel.node(*f).is_some_and(|n| {
+                n.looks()
+                    .iter()
+                    .any(|(s, _)| *s == exact_kernel::LOOK_FOCUS_VISIBLE)
+            })
+        });
+        let old = self.host.looks_shown.marks();
+        (self.host.looks_shown.hover, self.host.looks_shown.focus) = (hovered, focus);
+        let new = self.host.looks_shown.marks();
+        let moved: Vec<ViewId> = (old.iter().filter(|m| !new.contains(m)))
+            .chain(new.iter().filter(|m| !old.contains(m)))
+            .map(|m| m.0)
+            .collect();
+        self.repaint_looks(moved);
+    }
+
+    /// Paint `moved` again: their looks were painted or taken off.
+    pub(super) fn repaint_looks(&mut self, moved: Vec<ViewId>) {
+        // A look painted or taken off is no flow damage's small region.
+        if !moved.is_empty() {
+            self.host.flow_damage.repaint();
+        }
+        for id in moved {
+            self.host.look_motion(id);
+            if let Some(node) = self.host.kernel().node(id) {
+                let key = node.key;
+                self.host.row_dirty.node(key);
+                self.dirty = true;
+            }
+        }
+    }
+}
+
+#[path = "held.rs"]
+mod held;
+#[cfg(test)]
+#[path = "looks_tests.rs"]
+mod looks_tests;
+#[cfg(test)]
+#[path = "ripple_tests.rs"]
+mod ripple_tests;

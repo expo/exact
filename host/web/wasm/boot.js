@@ -1,6 +1,6 @@
 import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, SETTLE_DEADLINE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
-import { navigation, launchLocation, reportTime, reportPlace, preferences, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
+import { navigation, launchLocation, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
 import { waitForInflight } from "./agent.js";
 import { forgetList } from "./views.js";
@@ -111,6 +111,24 @@ function activateData() {
 export function boot(...args) {
   return mutate(() => bootNow(...args));
 }
+// Report both schemes as the page draws them, beneath an app's theme (LLP 1095 D4), so the kernel's canvas ink
+// follows the browser's palette at boot and when its contrast changes (src/colors.rs).
+export function reportColors() {
+  const appleRoles = host.wasm?.exact_report_colors && getComputedStyle(document.documentElement).getPropertyValue("--exact-apple-roles").trim();
+  if (!appleRoles) return;
+  const probe = document.body.appendChild(document.createElement("i")), seen = getComputedStyle(probe), colors = [];
+  for (const dark of [false, true]) {
+    probe.style.colorScheme = dark ? "dark" : "light";
+    for (const name of JSON.parse(appleRoles).split(" ")) {
+      if (seen.getPropertyValue(`--exact-apple-${name}`).trim()) {
+        probe.style.color = `var(--exact-apple-${name})`;
+        colors.push([name, dark, seen.color]);
+      }
+    }
+  }
+  probe.remove();
+  host.wasm.exact_report_colors(writeIn(JSON.stringify(colors)));
+}
 async function bootNow(bytes, assets = host.devAssets, current = () => true, module = null, fresh = false) {
   const t = performance.now(), request = ++host.bootAttempt;
   // Decode and load private font faces while the live page keeps running.
@@ -164,28 +182,10 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
       return null;
     }
   }
-  const appleRoles = host.wasm.exact_report_colors && getComputedStyle(document.documentElement).getPropertyValue("--exact-apple-roles").trim();
-  if (appleRoles) {
-    const probe = document.body.appendChild(document.createElement("i")), seen = getComputedStyle(probe), colors = [];
-    for (const dark of [false, true]) {
-      probe.style.colorScheme = dark ? "dark" : "light";
-      for (const name of JSON.parse(appleRoles).split(" ")) {
-        if (seen.getPropertyValue(`--exact-apple-${name}`).trim()) {
-          probe.style.color = `var(--exact-apple-${name})`;
-          colors.push([
-            name,
-            dark,
-            seen.color
-          ]);
-        }
-      }
-    }
-    probe.remove();
-    host.wasm.exact_report_colors(writeIn(JSON.stringify(colors)));
-  }
+  reportColors();
   let len;
   host.wasm.exact_live_clock?.(agentMode ? 0 : 1);
-  // each role look.mjs names, light and dark, as the page draws it, reported so a colour the kernel resolves itself (a canvas's ink) is the page's (src/colors.rs); the page's clock owns time, the agent's when it drives (the timers RFC, D1); kept for every boot
+  // The page's clock owns time, the agent's when it drives (the timers RFC, D1); kept for every boot.
   if (module) {
     const id = module.rust ?? new TextEncoder().encode(JSON.stringify(module.realm.id));
     const payload = new Uint8Array(plan.length + module.receipt.length + id.length);
@@ -204,6 +204,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     const payload = new Uint8Array(host.memory.buffer, ptr, bytes.length + launch.length);
     payload.set(bytes);
     payload.set(launch, bytes.length);
+    host.wasm.exact_set_update?.(updateCode());
     len = host.wasm.exact_boot_plan(bytes.length, innerWidth, innerHeight, launch.length, preferences() | foldBits());
   } else {
     if (host.page?.checkpoint) {
@@ -212,6 +213,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     ptr = host.wasm.exact_in(launch.length);
     // a drive's clock starts at zero (page.rs)
     new Uint8Array(host.memory.buffer, ptr, launch.length).set(launch);
+    host.wasm.exact_set_update?.(updateCode());
     len = host.wasm.exact_boot(innerWidth, innerHeight, launch.length, preferences() | foldBits());
   }
   const batch = JSON.parse(readOut(len));
@@ -575,6 +577,7 @@ export async function main() {
         views,
         retiredViews,
         agentMode,
+        pick: el => ask({ op: "showPicker", view: Number(el.dataset.view) }),
         ready: () => host.inputReady,
         inertAncestor,
         editMenu,

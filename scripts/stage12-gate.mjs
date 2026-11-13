@@ -22,8 +22,9 @@ import { dirname, join, resolve } from 'node:path';
 import { decodePng } from './png.mjs';
 import { WASM_IMAGE_NOISE, bindingShape, bindingsCheck, componentIR, imageBoxes, irShape, namedCrops, namedOf, namedReport, pixelDiff, sameImageBoxes, unionNamed } from './stage12-named.mjs';
 import { s15b2Stage } from './stage12-s15b2.mjs';
-import { baseLength, cellsOf, drive as scaleDrive, overridesOf, pageTop } from './scale-check.mjs';
-import { webDist } from './app.mjs';
+import { baseLength, cellsOf, overridesOf, pageTop } from './scale-check.mjs';
+import { LIBRARY_GATE, buildPlan, drivePlan } from './stage12-drive.mjs';
+export { drivePlan } from './stage12-drive.mjs';
 import { jsTargetBuild } from '../host/web/serve.mjs';
 import { placements } from './library-gate.mjs';
 import { KEYBOARD_UP, keyboardRedrive } from './stage12-keyboard.mjs';
@@ -568,34 +569,6 @@ export const SLOT_HOSTS = ['web-js', 'web-wasm', 'linux', 'macos', 'ios', 'andro
 export const OPTIONAL_HOSTS = ['windows', 'tvos'];
 const skipped = OPTIONAL_HOSTS.map(h => `  ${h}: skipped (no runner on this machine)`);
 
-/** The web's wasm build of the agent's app (`bun host/web/build.mjs
- * <app> --wasm`, into this dist: EXACT_WASM_DIST, or the gate's own). */
-const wasmDist = () => resolve(process.env.EXACT_WASM_DIST ?? join(ROOT, 'target', 'stage12-gate', 'web-wasm-dist'));
-
-/** scale-check's drive on `host`, the web's two targets told apart: each
- * from a dist built for it, refused when the dist is the other's. */
-export function drivePlan(host, plan, png, steps = [], app = null, driver = scaleDrive) {
-  if (host === 'web-js') {
-    if (!jsTargetBuild(webDist())) throw new Error(`the web dist ${webDist()} is not a JS-target build (bun host/web/build.mjs <app>)`);
-    return driver('web', plan, png, steps, app);
-  }
-  if (host === 'web-wasm') {
-    // library-gate's own artifact (apps/library-gate/web, theme2 13:47): a
-    // wasm links what its own plan uses, so another app's refuses a cell
-    // using what that app doesn't (Unlinked).
-    const dist = wasmDist(), build = `EXACT_APP_DIR=${LIBRARY_GATE} EXACT_WEB_DIST=${dist} bun host/web/build.mjs library-gate --wasm`;
-    if (!existsSync(join(dist, '.exact-build.json')) || jsTargetBuild(dist)) throw new Error(`${dist} is not a wasm build (${build})`);
-    if (JSON.parse(readFileSync(join(dist, '.exact-build.json'), 'utf8')).app?.id !== 'com.exact.library-gate') throw new Error(`${dist} is not library-gate's wasm build (${build})`);
-    const was = { dist: process.env.EXACT_WEB_DIST, app: process.env.EXACT_APP_DIR };
-    Object.assign(process.env, { EXACT_WEB_DIST: dist, EXACT_APP_DIR: LIBRARY_GATE });
-    try { return driver('web', plan, png, steps, app); } finally {
-      for (const [k, v] of [['EXACT_WEB_DIST', was.dist], ['EXACT_APP_DIR', was.app]]) if (v === undefined) delete process.env[k]; else process.env[k] = v;
-    }
-  }
-  return driver(host, plan, png, steps, app);
-}
-const LIBRARY_GATE = join(ROOT, 'apps/library-gate');
-
 /** apps/library-gate's plan, compiled from a copy without its app.json (a
  * host takes a plan of its own app's id, or of none), inside the checkout so
  * `@exact/*` resolves through its node_modules, as stage 11's gate does. */
@@ -604,8 +577,7 @@ function libraryPlan(dir) {
   mkdirSync(app, { recursive: true });
   for (const f of ['app.contract', 'app.tamber']) writeFileSync(join(app, f), readFileSync(join(LIBRARY_GATE, f)));
   const plan = join(dir, 'library-gate.plan');
-  const r = run('cargo', ['run', '-q', '-p', 'contract', '--', 'build', join(app, 'app.contract'), '-o', plan]);
-  return compiled(r, plan);
+  return compiled(buildPlan(join(app, 'app.contract'), plan), plan);
 }
 
 /** The last compile's errors, which a line that needed the plan says. */
@@ -852,8 +824,7 @@ function restylePlan(dir, design = null) {
   writeFileSync(join(app, 'app.contract'), readFileSync(join(LIBRARY_GATE, 'app.contract')));
   writeFileSync(join(app, 'app.tamber'), design ?? readFileSync(join(LIBRARY_GATE, 'app.tamber')));
   const plan = join(dir, 'library-gate.plan');
-  const r = run('cargo', ['run', '-q', '-p', 'contract', '--', 'build', join(app, 'app.contract'), '-o', plan]);
-  return compiled(r, plan);
+  return compiled(buildPlan(join(app, 'app.contract'), plan), plan);
 }
 
 /** Each case through the design server on a copy of library-gate: `propose`
@@ -1094,7 +1065,7 @@ export function mutationFails(dir, host = 'linux', drive = undefined) {
     writeFileSync(join(app, 'app.contract'), readFileSync(join(LIBRARY_GATE, 'app.contract')));
     writeFileSync(join(app, 'app.tamber'), tamber);
     const out = join(dir, name, 'library-gate.plan');
-    const r = run('cargo', ['run', '-q', '-p', 'contract', '--', 'build', join(app, 'app.contract'), '-o', out]);
+    const r = buildPlan(join(app, 'app.contract'), out);
     if (!r.ok) throw new Error(`the mutated library-gate did not compile (${name}): ${r.out.slice(-400)}`);
     return out;
   };

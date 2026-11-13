@@ -50,6 +50,7 @@ const exact = globalThis.exact;
 const publishers = new Map(); // name -> first live entry
 const pendingRecords = [];
 let drainingRecords = false;
+let performanceTimer = null;
 let planCarries = new Map();
 let editsAdmitted = false;
 function retainEdits(entry, module = gpu) {
@@ -189,6 +190,7 @@ function lifecycle(code) {
   if (recoveringDevice) recoveringDevice.then(deliver); else deliver();
   if (hidden && !exact.now && raf !== null) { cancelAnimationFrame(raf); raf = null; }
   if (!hidden) schedule();
+  schedulePerformance();
 }
 document.addEventListener("visibilitychange", () => lifecycle(document.hidden ? 0 : 1));
 window.addEventListener("pagehide", () => lifecycle(0));
@@ -272,6 +274,8 @@ function fallback(entry) {
   if (api.recovery?.code === "no-adapter") { entry.unsupported = refusal(api.recovery.error); showRefusal(entry); }
   entry.terminal = true;
   entry.wants = false;
+  if (entry.performance && publishers.get(entry.name) === entry) surfaceRecord(entry.name, null, true);
+  schedulePerformance();
   for (const row of entry.children ?? []) restoreChild(row);
   entry.children = undefined;
   entry.el.style.zIndex = "-1";
@@ -284,7 +288,7 @@ function terminalRecovery(outcome) {
   terminalDevice = true;
   recoveryFailures = RECOVERY_LIMIT;
   api.recovery = outcome;
-  for (const entry of surfaces.values()) fallback(entry);
+  for (const entry of [...surfaces.values()]) fallback(entry);
 }
 function reportRecovery(error, terminal) {
   if (!recoveryErrorLogged || (terminal && !recoveryTerminalLogged)) {
@@ -473,6 +477,10 @@ padPoller(() => [...surfaces.values()].find(e => e.pads && live(e.view) === e &&
 // forgets the baseline, for positional values, and when an argument is gone, which only a whole bind returns to its
 // default. What was sent becomes the baseline only once the module accepts it.
 function bindValues(entry, module, values, at, whole = false) {
+  // The canvas's size goes first: a stamped bind may tick a new world, which
+  // frames itself for its canvas before its first tick (`Game::first_frame`).
+  const r = entry.host.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0 && module.gpu_size && !module.gpu_size(entry.id, r.width, r.height)) console.error("exact gpu:", module.gpu_error());
   const named = values !== null && typeof values === "object" && !Array.isArray(values);
   const last = named && !whole ? entry.bound : null;
   const object = (keys, wire) => `{${keys.map(k => `${JSON.stringify(k)}:${wire.get(k)}`).join(",")}}`;
@@ -511,6 +519,9 @@ function create(entry, module, carry) {
   }
 }
 function attach(entry) {
+  entry.performance = publishers.get(entry.name) === entry && !!exact.wasm.exact_canvas_performance_requested?.(exact.writeIn(entry.name));
+  if (entry.performance) gpu.gpu_performance_reporting?.(entry.id, true);
+  schedulePerformance();
   // A canvas that rested draws again at its new size, at the present time (its last frame's is
   // the start of its rest); one that now wants more frames gets them.
   entry.observer = new ResizeObserver(() => { if (entry.id && !entry.terminal) { render(entry, entry.wants ? frameAt ?? performance.now() : performance.now()); flush(); if (entry.wants) schedule(); } });
@@ -570,8 +581,25 @@ function live(view) {
   const entry = surfaces.get(view);
   return entry?.id && exact.views.get(view) === entry.host && entry.el.isConnected ? entry : null;
 }
-function surfaceRecord(name, json) {
-  pendingRecords.push([name, json]);
+function performanceRecord(entry) {
+  if (!entry.performance || !entry.id || entry.terminal || live(entry.view) !== entry || publishers.get(entry.name) !== entry) return;
+  const metrics = gpu.gpu_performance?.(entry.id, performance.now());
+  if (metrics != null) surfaceRecord(entry.name, metrics, true);
+}
+function schedulePerformance() {
+  const enabled = !hidden && !trapped() && [...publishers.values()].some(e => e.performance && e.id && !e.terminal && live(e.view) === e);
+  if (!enabled && performanceTimer !== null) { clearTimeout(performanceTimer); performanceTimer = null; }
+  if (!enabled || performanceTimer !== null) return;
+  performanceTimer = setTimeout(() => {
+    performanceTimer = null;
+    if (!hidden && !trapped() && !recoveringDevice && !recoveryTimer) {
+      for (const entry of [...publishers.values()]) performanceRecord(entry);
+    }
+    schedulePerformance();
+  }, 1000);
+}
+function surfaceRecord(name, json, performance = false) {
+  pendingRecords.push([name, json, performance]);
   drainRecords();
 }
 function drainRecords() {
@@ -579,8 +607,9 @@ function drainRecords() {
   drainingRecords = true;
   try {
     while (pendingRecords.length) {
-      const [name, json] = pendingRecords.shift();
-      exact.send(exact.wasm.exact_surface_record(exact.writeIn(json == null ? name : `${name}\0${json}`)));
+      const [name, json, performance] = pendingRecords.shift();
+      const publish = performance ? exact.wasm.exact_canvas_performance_record : exact.wasm.exact_surface_record;
+      if (publish) exact.send(publish(exact.writeIn(json == null ? name : `${name}\0${json}`)));
     }
   } finally { drainingRecords = false; }
 }
@@ -590,11 +619,13 @@ function messages(entry, drainAssets = true) {
   reportRestore(entry);
   const record = gpu.gpu_published(entry.id);
   if (record !== undefined && live(entry.view) === entry && publishers.get(entry.name) === entry) surfaceRecord(entry.name, record);
+  performanceRecord(entry);
   const texts = gpu.gpu_messages(entry.id);
   if (texts === undefined) return;
   for (const text of JSON.parse(texts)) {
     if (live(entry.view) !== entry) break;
-    if (text !== "exact:audio") exact.message(entry.host, text);
+    // The host's own: the browser has no audio session here, and no haptics a page can drive (LLP 1009 D10).
+    if (text !== "exact:audio" && !text.startsWith("exact:haptics ")) exact.message(entry.host, text);
   }
 }
 function listen(entry) {
@@ -990,7 +1021,7 @@ const api = {
       const old = publishers.get(name);
       if (old && (!old.el.isConnected || exact.views.get(old.view) !== old.host || surfaces.get(old.view) !== old)) {
         if (surfaces.get(old.view) === old) this.destroy(old.view);
-        else { publishers.delete(name); surfaceRecord(name, null); }
+        else { publishers.delete(name); surfaceRecord(name, null); if (old.performance) surfaceRecord(name, null, true); }
       }
       entry = { view, host, el, name, values, id: 0, wants: false, wantsInput: false, logCursor: 0, terminal: terminalDevice }; surfaces.set(view, entry);
       const carried = planCarries.get(name);
@@ -1022,7 +1053,8 @@ const api = {
     // is the first thing to navigate away from a canvas and back).
     if (entry) { entry.observer?.disconnect(); entry.unlisten?.(); entry.id = 0; }
     surfaces.delete(view);
-    if (entry && publishers.get(entry.name) === entry) { publishers.delete(entry.name); surfaceRecord(entry.name, null); }
+    schedulePerformance();
+    if (entry && publishers.get(entry.name) === entry) { publishers.delete(entry.name); surfaceRecord(entry.name, null); if (entry.performance) surfaceRecord(entry.name, null, true); }
   },
   // A plan restart reassigns view ids. Unique surface names can carry across it;
   // duplicate instances are ambiguous and are deliberately left fresh.

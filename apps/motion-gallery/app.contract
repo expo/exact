@@ -54,7 +54,7 @@ component Gallery
   action shimmer
     page = 2
   view
-    main testId="gallery" width="100%" height="100%" display="flex" flex-direction="column" gap=12 padding=12 background-color="#ffffff" color="#0f172a" font-family="system-ui"
+    main testId="gallery" width="100%" height="100%" box-sizing="border-box" display="flex" flex-direction="column" gap=12 padding=12 background-color="#ffffff" color="#0f172a" font-family="system-ui"
       row gap=8
         button press=fixtures testId="page-1" padding-left=10 padding-right=10 padding-top=4 padding-bottom=4 border-radius=6 background-color=(page == 1 ? "#e2e8f0" : "#f8fafc")
           text "Fixtures" font-size=13

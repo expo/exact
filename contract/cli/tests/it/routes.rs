@@ -757,6 +757,240 @@ component App
 }
 
 #[test]
+fn a_navigation_root_must_be_the_apps_first_element() {
+    let pair =
+        "main navigationKey=\"home\" navigationBack=\"back\"\n  column navigationKey=\"home\"";
+    let indent = |view: &str| {
+        view.lines()
+            .map(|line| format!("  {line}\n"))
+            .collect::<String>()
+    };
+    let mut accepted = Vec::new();
+    for (view, expected) in [
+        (format!("column\n{}", indent(pair)), "lower-route-place"),
+        (
+            format!("column\n  text \"First\"\n{}", indent(pair)),
+            "lower-route-place",
+        ),
+        (format!("column\n{pair}"), "lower-one-root"),
+        (
+            format!("main navigationKey=\"outer\"\n{}", indent(pair)),
+            "lower-route-place",
+        ),
+        (
+            format!(
+                "main navigationKey=\"outer\"\n  column navigationKey=\"outer\"\n{}",
+                indent(&indent(pair))
+            ),
+            "lower-route-place",
+        ),
+        (format!("if true\n{}", indent(pair)), "lower-root-region"),
+    ] {
+        let source = format!("component App\n  view\n{}", indent(&indent(&view)));
+        match contract::compile(&source) {
+            Ok(_) => accepted.push(source),
+            Err(error) => {
+                assert_eq!(error.id, expected, "{error}\n{source}");
+                if expected == "lower-route-place" {
+                    assert!(error.message.contains("first element"), "{error}");
+                }
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "misplaced roots compiled: {accepted:#?}"
+    );
+    let empty_back = format!(
+        "component App\n  view\n    column\n{}",
+        indent(&indent(&indent(
+            &pair.replace("navigationBack=\"back\"", "navigationBack=\"\"")
+        )))
+    );
+    let error = contract::compile(&empty_back).unwrap_err();
+    assert_eq!(error.id, "lower-route-place", "{error}");
+}
+
+#[test]
+fn an_unlinked_tablist_does_not_change_an_ordinary_roots_route_placement() {
+    for tab in [
+        "button role=\"tab\"\n  text \"Home\"",
+        "button role=\"tab\" aria-controls=\"other\"\n  text \"Home\"",
+        "column\n  button role=\"tab\" aria-controls=\"panel\"\n    text \"Home\"",
+    ] {
+        let tab: String = tab
+            .lines()
+            .map(|line| format!("        {line}\n"))
+            .collect();
+        let source = format!(
+            "component App\n  view\n    main navigationKey=\"home\"\n      header\n        text \"Home\" role=\"heading\"\n      column navigationKey=\"home\"\n        text \"Home\"\n      row role=\"tablist\"\n{tab}      column role=\"tabpanel\" id=\"panel\"\n"
+        );
+        let (result, warnings) = contract::compile_warned(&source);
+        result.unwrap_or_else(|error| panic!("{error}\n{source}"));
+        assert!(
+            warnings.iter().all(|w| w.id != "lower-header-routeless"),
+            "{warnings:?}\n{source}"
+        );
+    }
+}
+
+#[test]
+fn a_linked_panel_inside_a_tablist_still_makes_the_root_tabbed() {
+    let source = r#"component App
+  view
+    main navigationKey="home"
+      column navigationKey="home"
+        header
+          text "Home" role="heading"
+      row role="tablist"
+        button role="tab" aria-controls="panel"
+          text "Home"
+        column role="tabpanel" id="panel"
+"#;
+    let error = contract::compile(source).unwrap_err();
+    assert_eq!(error.id, "lower-route-place", "{error}");
+    assert!(
+        error.message.contains("beside the root's tabpanels"),
+        "{error}"
+    );
+}
+
+#[test]
+fn only_a_linked_tabpanel_can_hold_navigation_routes() {
+    let mut accepted = Vec::new();
+    for tabs in [
+        "",
+        "      row role=\"tablist\"\n        button role=\"tab\"\n          text \"Home\"\n",
+        "      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"other\"\n          text \"Home\"\n",
+        "      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"other\"\n          text \"Home\"\n      column role=\"tabpanel\" id=\"other\"\n",
+    ] {
+        let source = format!(
+            "component App\n  view\n    main navigationKey=\"home\"\n      header\n        text \"Home\" role=\"heading\"\n{tabs}      column role=\"tabpanel\" id=\"panel\"\n        column navigationKey=\"home\"\n"
+        );
+        let (result, warnings) = contract::compile_warned(&source);
+        assert!(
+            warnings.iter().any(|w| w.id == "lower-header-routeless"),
+            "{warnings:?}\n{source}"
+        );
+        match result {
+            Ok(_) => accepted.push(source),
+            Err(error) => assert_eq!(error.id, "lower-route-place", "{error}\n{source}"),
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "unlinked panels compiled: {accepted:#?}"
+    );
+}
+
+#[test]
+fn literal_and_computed_tab_links_allow_panel_routes() {
+    for (control, id) in [
+        ("\"panel\"", "\"panel\""),
+        ("(shown ? \"panel\" : \"other\")", "\"panel\""),
+        ("\"panel\"", "(shown ? \"panel\" : \"other\")"),
+    ] {
+        let source = format!(
+            "component App\n  state shown = true\n  view\n    main navigationKey=\"home\"\n      header\n        text \"Home\" role=\"heading\"\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls={control}\n          text \"Home\"\n      column role=\"tabpanel\" id={id}\n        column navigationKey=\"home\"\n"
+        );
+        let (result, warnings) = contract::compile_warned(&source);
+        result.unwrap_or_else(|error| panic!("{error}\n{source}"));
+        assert!(
+            warnings.iter().all(|w| w.id != "lower-header-routeless"),
+            "{warnings:?}\n{source}"
+        );
+    }
+}
+
+#[test]
+fn computed_tab_roles_keep_both_navigation_placements_possible() {
+    for computed in [1, 2, 4, 7] {
+        let role = |bit, literal| {
+            if computed & bit != 0 {
+                format!("(shown ? \"{literal}\" : \"group\")")
+            } else {
+                format!("\"{literal}\"")
+            }
+        };
+        let (list, tab, panel) = (role(1, "tablist"), role(2, "tab"), role(4, "tabpanel"));
+        for route in ["      ", "        "] {
+            let source = format!(
+                "component App\n  state shown = true\n  view\n    main navigationKey=\"home\"\n      header\n        text \"Home\" role=\"heading\"\n      row role={list}\n        button role={tab} aria-controls=\"panel\"\n          text \"Home\"\n      column role={panel} id=\"panel\"\n{route}column navigationKey=\"home\"\n"
+            );
+            let (result, warnings) = contract::compile_warned(&source);
+            result.unwrap_or_else(|error| panic!("{error}\n{source}"));
+            assert!(
+                warnings.iter().all(|w| w.id != "lower-header-routeless"),
+                "{warnings:?}\n{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn literal_role_mismatches_do_not_link_panels() {
+    for (list, tab, panel, control) in [
+        ("group", "tab", "tabpanel", "panel"),
+        ("tablist", "group", "tabpanel", "panel"),
+        ("tablist", "tab", "group", "panel"),
+        ("tablist", "tab", "tabpanel", "other"),
+    ] {
+        let source = format!(
+            "component App\n  view\n    main navigationKey=\"home\"\n      row role=\"{list}\"\n        button role=\"{tab}\" aria-controls=\"{control}\"\n          text \"Home\"\n      column role=\"{panel}\" id=\"panel\"\n        column navigationKey=\"home\"\n"
+        );
+        let error = contract::compile(&source).unwrap_err();
+        assert_eq!(error.id, "lower-route-place", "{error}\n{source}");
+    }
+}
+
+#[test]
+fn only_the_first_linked_tablists_panels_hold_routes() {
+    let source = r#"component App
+  view
+    main navigationKey="home"
+      header
+        text "Home" role="heading"
+      row role="tablist"
+        button role="tab" aria-controls="panel-a"
+          text "A"
+      row role="tablist"
+        button role="tab" aria-controls="panel-b"
+          text "B"
+      column role="tabpanel" id="panel-a"
+      column role="tabpanel" id="panel-b"
+        column navigationKey="home"
+"#;
+    let (result, warnings) = contract::compile_warned(source);
+    assert_eq!(result.unwrap_err().id, "lower-route-place");
+    assert!(warnings.iter().any(|w| w.id == "lower-header-routeless"));
+    let dynamic = source.replace("component App", "component App\n  state shown = true");
+    for source in [
+        dynamic.replacen(
+            "role=\"tablist\"",
+            "role=(shown ? \"tablist\" : \"group\")",
+            1,
+        ),
+        dynamic
+            .replacen(
+                "      row role=\"tablist\"",
+                "      if shown\n        row role=\"tablist\"",
+                1,
+            )
+            .replacen(
+                "        button role=\"tab\" aria-controls=\"panel-a\"\n          text \"A\"",
+                "          button role=\"tab\" aria-controls=\"panel-a\"\n            text \"A\"",
+                1,
+            ),
+        source.replacen("aria-controls=\"panel-a\"", "aria-controls=\"missing\"", 1),
+        source
+            .replace("id=\"panel-a\"", "id=\"panel-c\"")
+            .replace("id=\"panel-b\"", "id=\"panel-a\""),
+    ] {
+        contract::compile(&source).unwrap_or_else(|error| panic!("{error}\n{source}"));
+    }
+}
+
+#[test]
 fn a_root_with_a_key_and_no_back_control_named_is_the_navigation_root() {
     // @ref LLP 1116 D6, LLP 1115 D5 — `navigationBack` is optional: the
     // first root with a `navigationKey` is the navigation root, naming the

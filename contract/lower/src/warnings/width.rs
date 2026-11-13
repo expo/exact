@@ -233,19 +233,12 @@ fn walk(
                     out,
                 );
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, parent, in_list, styles, seen, out);
-                walk(otherwise, parent, in_list, styles, seen, out);
-            }
-            Node::Each { body, .. } => walk(body, parent, in_list, styles, seen, out),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, parent, in_list, styles, seen, out);
-                walk(none, parent, in_list, styles, seen, out);
-            }
             Node::Use { children, .. } => walk(children, Parent::Other, in_list, styles, seen, out),
-            Node::Children { .. } => {}
+            node => {
+                for list in node.child_lists() {
+                    walk(list, parent, in_list, styles, seen, out);
+                }
+            }
         }
     }
 }
@@ -626,19 +619,6 @@ fn text_widths(
                     && tag != "dialog"
                     && last(&layout, "popover").is_none()
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                let yes = text_widths(then, inherited, context, styles, lowered, seen, out);
-                text_widths(otherwise, inherited, context, styles, lowered, seen, out) || yes
-            }
-            Node::Each { body, .. } => {
-                text_widths(body, inherited, context, styles, lowered, seen, out)
-            }
-            Node::Match { some, none, .. } => {
-                let yes = text_widths(&some.1, inherited, context, styles, lowered, seen, out);
-                text_widths(none, inherited, context, styles, lowered, seen, out) || yes
-            }
             Node::Use { children, .. } => text_widths(
                 children,
                 None,
@@ -648,7 +628,14 @@ fn text_widths(
                 seen,
                 out,
             ),
-            Node::Children { .. } => false,
+            // Every list is walked, so not `any`.
+            node => {
+                let mut yes = false;
+                for list in node.child_lists() {
+                    yes |= text_widths(list, inherited, context, styles, lowered, seen, out);
+                }
+                yes
+            }
         };
     }
     scales

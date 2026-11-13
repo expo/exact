@@ -22,7 +22,8 @@ pub fn typescript(plan: &Plan) -> Result<String, String> {
 pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<String, String> {
     // Public callers may construct a Plan directly. Refuse malformed tables
     // before following any indices, just as the runtime decoder does.
-    Plan::decode(&plan.encode()).map_err(|e| format!("invalid plan: {e:?}"))?;
+    plan.redecode()
+        .map_err(|e| format!("invalid plan: {e:?}"))?;
     let quoted = |s: &str| serde_json::to_string(s).expect("a string is JSON");
     let mut out = String::from(
         "// @generated from Contract source signatures; do not edit.\n\
@@ -76,7 +77,7 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
         .flatten()
         .filter(|instruction| instruction.op == Opcode::Send)
         .map(|instruction| plan.str(StrId(instruction.args[1] as u32)))
-        .filter(|source| plan.module_named(source).is_none())
+        .filter(|source| plan.module_named(source).is_none() && plan.fetch_named(source).is_none())
         .map(quoted)
         .collect();
     writeln!(
@@ -94,7 +95,10 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
         let name = plan.str(row.name);
         // The runner's own sources and a native module's names are not the
         // data module's to answer (LLP 1133.002 D13).
-        if exact_plan::runner_owned_source(name) || plan.module_named(name).is_some() {
+        if exact_plan::runner_owned_source(name)
+            || plan.module_named(name).is_some()
+            || plan.fetch_named(name).is_some()
+        {
             continue;
         }
         write!(out, "  {}: {{ args: [", quoted(name)).unwrap();
@@ -247,7 +251,9 @@ fn summary(plan: &Plan, out: &mut String) {
         .iter()
         .filter(|row| {
             let name = plan.str(row.name);
-            !exact_plan::runner_owned_source(name) && plan.module_named(name).is_none()
+            !exact_plan::runner_owned_source(name)
+                && plan.module_named(name).is_none()
+                && plan.fetch_named(name).is_none()
         })
         .collect();
     if sources.is_empty() {

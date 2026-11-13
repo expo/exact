@@ -74,7 +74,7 @@ extension Presenter {
                     // The bar follows the route's scroller drawn under it, as UIKit's follows a list that is the controller's
                     // own: the automatic one, which an app's selection overrides until it gives the edge back with nil.
                     if !found.top.isEmpty || found.band.top > 0.5, navigation.automaticContentScroller(of: route) === v { r.top = sv }
-                    if !found.bottom.isEmpty { r.bottom = sv }
+                    if !found.bottom.isEmpty || found.band.bottom > 0.5 { r.bottom = sv }
                     routes[ObjectIdentifier(route)] = r
                 } else { found = pageBands(of: v, sv, margins: m, area: area, edgeEffect ? judge : nil); own = found.band }
             }
@@ -145,7 +145,10 @@ extension Presenter {
     /// bars or the bar, as a hand-built table runs under its navigation bar
     /// whatever is pinned under it; an open top under the route's cover (the
     /// bar) is reached with no bars at all, as a thread in a box with its
-    /// floating button is. A top with more than bars over the scroller keeps
+    /// floating button is. An open foot over the route's bottom cover (a tab
+    /// bar, kept under `viewport-fit=cover`, where `reachBottom` gives UIKit no
+    /// scroller) is reached with no bars too, as a hand-built table runs under
+    /// its tab bar (#223). A top with more than bars over the scroller keeps
     /// both edges where they are (a footer under it keeps the bottom cover).
     func controlBands(of v: NodeView, in route: NodeView, _ judge: ControlBars, apart: Bool = false) -> Bands {
         guard let sv = v.scrollView else { return Bands() }
@@ -153,7 +156,9 @@ extension Presenter {
         let top = judge.bars(of: v, in: route, top: true), bottom = judge.bars(of: v, in: route, top: false)
         guard let top, apart || bottom != nil else { return Bands() }
         let underBar = apart && top.isEmpty && r.minY > 0.5
-        guard !top.isEmpty || bottom?.isEmpty == false || underBar,
+        var overCover = false
+        if apart, bottom?.isEmpty == true, case .edges(let e)? = navigation.covers[route.id] { overCover = e.bottom > 0.5 && route.bounds.height - r.maxY > 0.5 }
+        guard !top.isEmpty || bottom?.isEmpty == false || underBar || overCover,
               Self.over(top, v), Self.over(bottom ?? [], v) else { return Bands() }
         let band = UIEdgeInsets(top: max(0, r.minY), left: 0, bottom: bottom == nil ? 0 : max(0, route.bounds.height - r.maxY), right: 0)
         return Self.drawn(band, v, sv) ? Bands(band: band, top: top, bottom: bottom ?? []) : Bands()
@@ -193,7 +198,7 @@ extension NodeView {
         // scrollTop would only move the offset, which reads as the reader leaving
         // the end.
         let follows = props["scrollFollowEnd"] == "true" || presenter?.collections.entries[id] != nil
-        let atEnd = follows && sv.contentOffset.y >= end() - 1
+        let atEnd = follows && sv.contentOffset.y >= end() - 1 && !authorOwnsScroll(sv)
         let oldOwn = bandInset, top = sv.contentOffset.y + scrollTopInset(sv)
         more.pageBand = band; more.bandInset = own
         sv.frame = scrollFrame

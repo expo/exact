@@ -408,6 +408,12 @@ extension NodeView {
             ? event.characters : event.characters(byApplyingModifiers: .command)
         return (typed ?? event.charactersIgnoringModifiers)?.lowercased()
     }
+    /// Whether Command is the only modifier held, as the Edit menu's ⌘A and
+    /// ⌘C have it, ignoring Caps Lock, the numeric pad and Fn: a chord with
+    /// another (⇧⌘C) is a different command.
+    static func isCommandAlone(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]) == .command
+    }
 }
 #else
 extension KeyCodes {

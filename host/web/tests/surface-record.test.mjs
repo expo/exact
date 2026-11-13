@@ -311,7 +311,7 @@ test('failed recovery removes clones and backs off instead of retrying each fram
 });
 
 test('a missing adapter leaves a settled fallback through dirty frames and agent settle', async () => {
-  const f=await fixture();
+  const f=await fixture({metricsName:'world', snapshot:()=>'{"fps":60}'});
   // This recovery test has no runner record consumer; keep creation local to
   // the GPU harness instead of entering glue.js's extracted batch fixture.
   f.gpu.gpu_published=()=>undefined;
@@ -328,6 +328,8 @@ test('a missing adapter leaves a settled fallback through dirty frames and agent
   assert.equal(renders,1);
   assert.equal(attempts,1);
   assert.equal(f.exact.gpu.recovery.status,'no device');
+  assert.equal(f.metrics.at(-1),'world', 'a lost device leaves metrics unavailable');
+  assert.equal(f.metricTimers.size,0);
   assert.equal(f.diagnostics.filter(line=>line.includes('exact gpu recovery')).length,1);
   assert.deepEqual([canvas.width,canvas.height],[1,1]);
   const writes=f.sizeWrites.length;
@@ -703,6 +705,18 @@ test('a named update sends the module only the arguments that changed since its 
   assert.deepEqual(last(), [['full', {saved: '<saved>', count: 6}], ['changed', {count: 7}]]);
 });
 
+test('R14 the canvas size reaches the module before each bind, whole or changed, which may tick a new world',async()=>{
+  const f=await fixture(), calls=[];
+  f.gpu.gpu_size=(id,w,h)=>{calls.push(['size',id,w,h]);return true;};
+  f.gpu.gpu_bind_at=id=>{calls.push(['bind',id]);return true;};
+  f.gpu.gpu_bind_changed_at=id=>{calls.push(['changed',id]);return true;};
+  f.create(1);
+  for(const seed of [2,3]) await f.applyBatch({ops:[{op:'surface',id:1,name:'world',values:{seed}}],timers:false,motion:false});
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  const size=['size',1,10,10];
+  assert.deepEqual(calls,[size,['bind',1],size,['bind',1],size,['changed',1],size,['changed',1]]);
+});
+
 test('E10 focused Contract buttons consume activation keys before the world', async () => {
   const f = await fixture({input:true}), canvas=f.create(1), pause=new f.Element('button');
   let prevented=0; pause.click=()=>{};
@@ -767,4 +781,28 @@ test('the canvas backing store is the raster the module draws, at its render sca
   dirty=true; f.gpu.gpu_render_scale=()=>1;
   f.frame();
   assert.deepEqual([canvas.width,canvas.height],[30,30]);
+});
+
+
+test('canvas metrics opt in only the named first publisher and clear on disposal', async () => {
+  let reads = 0;
+  const off = await fixture({ snapshot: () => { reads++; return '{"frames":1}'; } });
+  off.create(1);
+  assert.deepEqual(off.reporting, []);
+  assert.equal(reads, 0);
+  assert.equal(off.metricTimers.size, 0);
+  const on = await fixture({ metricsName: 'world', snapshot: () => { reads++; return '{"frames":1}'; } });
+  on.create(1); on.create(2); on.create(3, 'other');
+  assert.deepEqual(on.reporting, [[1, true]]);
+  assert.ok(on.metrics.includes('world\0{"frames":1}'));
+  assert.equal(on.metricTimers.size, 1);
+  const idle = on.metrics.length; on.pollMetrics();
+  assert.equal(on.metrics.length, idle + 1, 'an idle canvas is sampled without rendering');
+  const before = on.metrics.length;
+  on.destroy(2);
+  assert.equal(on.metrics.length, before);
+  on.destroy(1);
+  assert.equal(on.metrics.at(-1), 'world');
+  assert.equal(on.metricTimers.size, 0);
+  const disposed = reads; on.pollMetrics(); assert.equal(reads, disposed);
 });

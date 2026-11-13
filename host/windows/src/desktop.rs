@@ -1,5 +1,5 @@
 //! The desktop modules' host services on Windows (LLP 1133.025 D11 item 2,
-//! `exact_linux::desktop`): hot keys by `RegisterHotKey`, attention by
+//! `exact_painted::desktop`): hot keys by `RegisterHotKey`, attention by
 //! `FlashWindowEx`, and the login item as a development build's `Run` value.
 //!
 //! - **Hot keys** are registered with a null window, so `WM_HOTKEY` is
@@ -113,9 +113,10 @@ fn run_value(exe: &str, hidden: bool) -> String {
     format!("\"{exe}\" --login{}", if hidden { " hidden" } else { "" })
 }
 
-/// The launch the login item made, from the process's arguments.
+/// The launch the login item made, from the process's arguments: whether
+/// its registration asked `hidden`, or `None` for any other launch.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn login_launch(args: &[String]) -> Option<bool> {
+pub(crate) fn login_launch(args: &[String]) -> Option<bool> {
     let at = args.iter().position(|a| a == "--login")?;
     Some(args.get(at + 1).is_some_and(|a| a == "hidden"))
 }
@@ -123,7 +124,7 @@ fn login_launch(args: &[String]) -> Option<bool> {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod imp {
-    use exact_linux::desktop::{Login, Refusal, Services};
+    use exact_painted::desktop::{Login, Refusal, Services};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use windows_sys::Win32::{
@@ -190,7 +191,7 @@ mod imp {
                 launch: super::login_launch(&args),
                 wake: RefCell::new(None),
             });
-            exact_linux::desktop::install(desktop.clone());
+            exact_painted::desktop::install(desktop.clone());
             desktop
         }
 
@@ -218,9 +219,9 @@ mod imp {
                 return;
             };
             for r in &chord.readers {
-                let event = exact_linux::package::json!({ "id": r.id, "keys": chord.keys });
-                let args = exact_linux::package::json!([r.id, event]).to_string();
-                exact_linux::desktop::activate(r.extension, r.event, args);
+                let event = exact_painted::package::json!({ "id": r.id, "keys": chord.keys });
+                let args = exact_painted::package::json!([r.id, event]).to_string();
+                exact_painted::desktop::activate(r.extension, r.event, args);
             }
             drop(chords);
             if let Some(wake) = &*self.wake.borrow() {

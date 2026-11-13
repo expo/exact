@@ -1,5 +1,5 @@
 ```prompt Give my app its brand colors
-Give the Exact app in this folder its own brand colors in app.tamber, with a dark style the person picks. Use https://github.com/expo/exact/blob/main/docs/recipes/tamber.md as the source for each step. The exact2 checkout has the same page at docs/recipes/tamber.md.
+Give the Exact app in this folder its own brand colors in app.tamber, with a dark style the person picks. Use https://github.com/expo/exact/blob/main/docs/recipes/tamber.md as the source for each step. The Exact checkout has the same page at docs/recipes/tamber.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not give the brand's colors, ask me for them. Do not invent a brand. Ask me whether the person picks a dark style (for example Dim or Black) or the app follows the system only.

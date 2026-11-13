@@ -60,6 +60,7 @@ final class BatchDecodeTests: XCTestCase {
             XCTAssertEqual(a.ids, b.ids, file: file, line: line)
             XCTAssertEqual(a.property, b.property, file: file, line: line)
             XCTAssertEqual([a.x, a.y, a.w, a.h].map(\.bitPattern), [b.x, b.y, b.w, b.h].map(\.bitPattern), file: file, line: line)
+            XCTAssertEqual(a.fitHeight, b.fitHeight, file: file, line: line)
             XCTAssertEqual(a.style, b.style.mapValues(convert), file: file, line: line)
             // A canvas's lists cross as `[address, length]` in the runtime's
             // memory, which the reader copies out (still valid here).
@@ -179,6 +180,7 @@ final class BatchDecodeTests: XCTestCase {
             #"{"op":"paragraph","id":1,"runs":[{"id":2,"parent":1,"paint":true,"props":{"text":"a","href":"/"},"style":{"line_height":1.25,"font_size":17.3,"font_weight":600,"font_family":1,"letter_spacing":0.1,"font_style":"italic","text_decoration_line":"underline","text_color":[[1,2,3,4],[5,6,7,8]],"ignored":[true]},"handlers":["press"]},{"id":3,"parent":2,"style":{"line_height":"21px","text_color":[1,2,3,4]}}]}"#,
             #"{"op":"frame","id":1,"x":-0,"y":0.1,"w":1e3,"h":1.7976931348623157e308}"#,
             #"{"op":"content","id":1,"w":2,"h":3}"#,
+            #"{"op":"content","id":1,"w":2,"h":3,"fitHeight":180.5}"#,
             #"{"op":"present","id":1,"property":"translate","x":-2.5,"y":0.125}"#,
             #"{"op":"destroy","id":1,"ignored":{"deep":[null,true,"x"]}}"#,
             #"{"op":"flow","id":1,"shapes":[{"rect":[0,1,2,3]}]}"#,

@@ -84,6 +84,35 @@ fn stdin_is_the_childs_and_a_signal_to_the_group_reaches_its_children() {
     }
 }
 
+#[cfg(target_vendor = "apple")]
+#[test]
+fn group_listing_uses_libprocs_pid_count_without_a_terminator() {
+    let mut child = sh("read line; exit 0", Stdio::Pipe);
+    let mut pids = [-7 as libc::pid_t; 4];
+    // SAFETY: null queries the count; the second buffer holds its stated byte size.
+    let (estimate, n) = unsafe {
+        (
+            libc::proc_listpgrppids(child.pid, std::ptr::null_mut(), 0),
+            libc::proc_listpgrppids(
+                child.pid,
+                pids.as_mut_ptr().cast(),
+                std::mem::size_of_val(&pids) as libc::c_int,
+            ),
+        )
+    };
+    let members = group_members(child.pid);
+    drop(child.stdin.take());
+    let exit = wait(child.pid).unwrap();
+    let gone = group_members(child.pid);
+
+    assert!(estimate >= 1);
+    assert_eq!(n, 1, "libproc returns a PID count, not a byte count");
+    assert_eq!(pids, [child.pid, -7, -7, -7]);
+    assert_eq!(members, [child.pid]);
+    assert_eq!(exit, Exit::Code(0));
+    assert!(gone.is_empty());
+}
+
 #[test]
 fn a_missing_program_is_not_found_and_lookups_answer() {
     let err = spawn(Command {

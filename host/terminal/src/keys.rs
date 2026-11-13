@@ -124,7 +124,11 @@ impl<D: DataSource> Host<D> {
                 // line the caret stays (LLP 1101.001 P15): the arrows never
                 // leave the field.
                 let up = *dir == "ArrowUp";
-                let width = self.cells_of(f).map_or(1, |r| r.w.max(1) as usize);
+                let width = self.kernel().node(f).map_or(1, |n| {
+                    crate::paint::content_cells(self.kernel(), &self.kernel().env(), &n, 0.0, 0.0)
+                        .w
+                        .max(1) as usize
+                });
                 let value = self.value(f);
                 let lines = visual_lines(&value, width);
                 let caret = self.caret.min(lines.last().map_or(0, |l| l.1));
@@ -272,18 +276,16 @@ fn same_chord(declared: &str, chord: &str) -> bool {
 /// A textarea's visual lines as (first cluster, end cluster) pairs, broken
 /// at newlines and at `width` columns, as the painter lays them out.
 fn visual_lines(value: &str, width: usize) -> Vec<(usize, usize)> {
-    use unicode_width::UnicodeWidthStr;
     let mut lines = vec![(0, 0)];
     let mut col = 0;
-    for (i, g) in value.graphemes(true).enumerate() {
-        if g == "\n" || g == "\r\n" {
+    for (i, (g, w)) in crate::paint::clusters(value).into_iter().enumerate() {
+        if g == "\n" {
             lines.last_mut().expect("a line").1 = i;
             lines.push((i + 1, i + 1));
             col = 0;
             continue;
         }
-        let w = g.width().max(1);
-        if col + w > width && col > 0 {
+        if crate::paint::wraps_before(col, w, width) {
             lines.last_mut().expect("a line").1 = i;
             lines.push((i, i));
             col = 0;
@@ -301,5 +303,37 @@ mod tests {
         assert_eq!(super::visual_lines("ab\ncd", 10), vec![(0, 2), (3, 5)]);
         assert_eq!(super::visual_lines("abcdef", 4), vec![(0, 4), (4, 6)]);
         assert_eq!(super::visual_lines("", 4), vec![(0, 0)]);
+    }
+
+    /// ArrowUp and ArrowDown move through the lines the screen shows: a
+    /// textarea's border and padding are not its lines' columns.
+    #[test]
+    fn arrows_move_through_the_lines_painted() {
+        use crate::host::{Host, Key, Mode};
+        for (value, frame, end, up) in [
+            (
+                "abcdefghijklmnopqrstuvwxy",
+                "border=\"thin solid\" padding=\"0 1ch\"",
+                (7, 3),
+                (7, 2),
+            ),
+            (
+                "abcdefghijkl",
+                "border=\"thin solid\" padding=\"0 1ch\"",
+                (4, 2),
+                (4, 1),
+            ),
+            ("abcdefghijkl", "", (2, 1), (2, 0)),
+        ] {
+            let plan = contract::compile_terminal(&format!(
+                "component App\n  state draft = \"{value}\"\n  action write(v: string)\n    draft = v\n  view\n    column\n      textarea value=draft input=write appearance=\"none\" autofocus=true width=\"10ch\" rows=4 {frame}\n"
+            ))
+            .unwrap();
+            let mut host = Host::boot(plan, (), Mode::Fullscreen, 20, 8).unwrap();
+            host.arm = false;
+            assert_eq!(host.frame().grid.cursor, Some(end), "{value} {frame}");
+            host.key(Key::Named("ArrowUp"));
+            assert_eq!(host.frame().grid.cursor, Some(up), "{value} {frame}");
+        }
     }
 }

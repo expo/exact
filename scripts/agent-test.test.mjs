@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backendFetchPrefixes, churnLines, disabledExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
+import { backendFetchPrefixes, churnLines, disabledExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
 import { axFindings } from './agent-ax.mjs';
 import { withEpoch } from './agent-launch.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
@@ -158,6 +158,29 @@ test('the fetch-loading-error recipe passes its own test', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 }, 180_000);
+
+test('a pick with no picker held names the step that holds one on its host', () => {
+  expect(pickHint('web')).toContain('tap the visible file input or a button');
+  for (const host of ['macos', 'ios', 'linux']) {
+    expect(pickHint(host)).not.toContain('tap the visible file input');
+    expect(pickHint(host)).toContain('tap a button whose action calls showPicker("<input id>")');
+  }
+});
+
+test('modal ancestors remain structural while exposed siblings are findings', () => {
+  const elements = [
+    { i: 0, parent: null, id: 10, via: 'self', role: 'main', name: '' },
+    { i: 1, parent: 0, id: 11, via: 'self', role: 'group', name: '' },
+    { i: 2, parent: 1, id: 12, via: 'self', role: 'dialog', name: 'Setup' },
+    { i: 3, parent: 2, id: 13, via: 'self', role: 'button', name: 'Save' },
+    { i: 4, parent: 1, id: 14, via: 'self', role: 'button', name: 'Behind' },
+    { i: 5, parent: 0, id: 15, via: 'self', role: 'group', name: 'Sidebar' },
+  ];
+  for (const source of ['chrome-cdp', 'appkit']) {
+    const ax = { source, elements, modal: { present: true, element: 2 } };
+    expect(axFindings({ ax }).filter(f => f.kind === 'outside-modal').map(f => f.id)).toEqual([14, 15]);
+  }
+});
 
 test('a presented popover belongs to its AppKit modal for outside-modal findings', () => {
   const elements = [
@@ -834,7 +857,7 @@ test('a native run resolves a fetch fault under the API a setting names', async 
     expect(nativeFetchOrigins(dir, { ...env, API_BASE_URL: 'http://127.0.0.1:7000' })).toEqual(['http://127.0.0.1:7000']);
     // The backend a build selected, and a scaffold's literal origin, still come first.
     expect(nativeFetchOrigins(dir, { ...env, EXACT_BACKEND_ORIGIN: 'http://127.0.0.1:4411' })).toEqual(['http://127.0.0.1:4411']);
-    writeFileSync(join(dir, 'app.ts'), "const origin = 'http://127.0.0.1:4410';\n");
+    writeFileSync(join(dir, 'app.ts'), "// const origin = 'http://comment.invalid';\nexport const origin = ('http://127.0.0.1:4410' satisfies string);\n");
     expect(nativeFetchOrigins(dir, env)).toEqual(['http://127.0.0.1:4410']);
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });

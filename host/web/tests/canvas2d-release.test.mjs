@@ -4,7 +4,7 @@ import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 import { standIns } from './stand-ins.mjs';
 
-const host = glueDeclarations(readFileSync(new URL('../glue.js', import.meta.url), 'utf8'), ['apply', 'bootNow']);
+const host = glueDeclarations(readFileSync(new URL('../glue.js', import.meta.url), 'utf8'), ['apply', 'bootNow', 'reportColors']);
 const runtime = ['rt.js', 'rt-link.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js'];
 const standins = standIns(runtime);
 

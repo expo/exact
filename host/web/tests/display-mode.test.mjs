@@ -22,6 +22,7 @@ test('viewport media changes update resources, rendered text and packed facts', 
       '  devicePosture: string',
       '  horizontalViewportSegments: number',
       '  verticalViewportSegments: number',
+      '  update: string',
       'component App',
       '  resource viewport = exactViewport() as shape Viewport',
       '  view',
@@ -47,6 +48,12 @@ test('viewport media changes update resources, rendered text and packed facts', 
       const real = matchMedia.bind(window), lists = [];
       window.matchMedia = query => {
         const list = real(query), mode = /^\(display-mode: (.+)\)$/.exec(query)?.[1];
+        const update = /^\(update: (.+)\)$/.exec(query)?.[1];
+        if (update) {
+          Object.defineProperty(list, 'matches', { get: () => window.testUpdate === update });
+          lists.push(list);
+          return list;
+        }
         if (mode || query.startsWith("(color-gamut:") || query === "(dynamic-range: high)") {
           const live = real(query);
           Object.defineProperty(list, 'matches', { get: () => {
@@ -58,6 +65,10 @@ test('viewport media changes update resources, rendered text and packed facts', 
           lists.push(list);
         }
         return list;
+      };
+      window.changeUpdate = update => {
+        window.testUpdate = update;
+        for (const list of lists) list.dispatchEvent(new Event('change'));
       };
       window.changeDisplayMode = mode => {
         window.testDisplayMode = mode;
@@ -123,6 +134,14 @@ test('viewport media changes update resources, rendered text and packed facts', 
         changeDisplayMode(mode);
       }, { i, mode });
       await agrees(mode);
+    }
+    // LLP 1101.003 D6: `update` follows its media query, `fast` when neither `slow` nor `none` matches.
+    for (const update of ['none', 'slow', 'fast']) {
+      await page.evaluate(update => changeUpdate(update), update);
+      await page.waitForFunction(async expected => {
+        const state = await exact.agentSettled({ op: 'state' });
+        return state.resources.viewport.update === expected;
+      }, update);
     }
 
     // Keep the browser's CSS fold signals while removing both JavaScript interfaces

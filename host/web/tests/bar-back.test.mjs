@@ -156,7 +156,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a pushe
       ['long', true, 'Back', 'All my conversations', null, false], ['keys', true, '', 'Back', 'Meta+[', false],
       ['disabled', false, null, null, null, false], ['dimmed', false, null, null, null, false],
       ['dimmed-link', false, null, null, null, true], ['content', true, '', 'Back', null, true],
-      ['bare', false, null, null, null, true], ['bare-content', false, null, null, null, true], ['headless', false, null, null, null, true],
+      ['bare', false, null, null, null, true], ['bare-content', false, null, null, null, true], ['headless', true, '', 'Back', null, false],
       ['two', false, null, null, null, true], ['row', false, null, null, null, true], ['titled-tap', true, '', 'Back', null, false],
       ['authored', false, null, null, null, true], ['own-back', false, null, null, null, true], ['pressing', true, '', 'Back', null, false], ['commanded', true, '', 'Back', null, false],
       ['popover-first', true, '', 'Back', null, false], ['foreign', false, null, null, null, true], ['sheet', false, null, null, null, true], ['root', false, null, null, null, true],

@@ -290,7 +290,7 @@ pub fn refusal(input: &str) -> Option<&'static str> {
             .iter()
             .enumerate()
             .map(|(i, p)| match p.strip_suffix('%').and_then(number) {
-                Some(v) if i < 3 => number_text(v * 255.0 / 100.0),
+                Some(v) if i < 3 => exact_num::js(v * 255.0 / 100.0),
                 _ => p.to_string(),
             })
             .collect();
@@ -614,7 +614,7 @@ impl Wide {
             if self.missing[i] {
                 "none".to_string()
             } else {
-                number_text(v)
+                exact_num::js(v)
             }
         };
         let [a, b, c] = [0, 1, 2].map(|i| n(i, self.c[i]));
@@ -752,18 +752,6 @@ pub fn p3_8_to_srgb(c: Rgba8) -> Rgba8 {
         [c.r, c.g, c.b].map(|v| srgb_to_linear(f64::from(v) / 255.0)),
     );
     encode8(lin, c.a)
-}
-
-/// A number as JavaScript's `String(n)` writes it, for finite, moderate values.
-pub fn number_text(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1e15 {
-        return format!("{}", v as i64);
-    }
-    let mut s = format!("{v}");
-    if s.contains('e') {
-        s = format!("{v:.6}");
-    }
-    s
 }
 
 type M3 = [[f64; 3]; 3];

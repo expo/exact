@@ -3,5 +3,6 @@
 // hosts that read it) and a fallback page at each old path (serve and any static host).
 export const redirects: Record<string, string> = {
   '/learn/contract-for-humans/contents': '/learn/contract-for-humans',
+  '/reference/developer/what-exists': '/reference/developer/runtime-font-families-and-aria-disabled',
   '/start-here': '/start',
 };

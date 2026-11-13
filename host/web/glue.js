@@ -1,8 +1,8 @@
-import { listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, preferences, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
+import { listItem, syncListItemRoles, sheetLeaves, sheetFrame, useSheets, liveById, sourceField, popoverCommand, contextAt, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
 import { syncViewportFit } from "./wasm/views.js";
-import { boot, loadRust, main } from "./wasm/boot.js";
+import { boot, loadRust, main, reportColors } from "./wasm/boot.js";
 import { agentInputReady, agent, agentSettled } from "./wasm/agent.js";
 // @ref LLP 1007 §3: the wasm DOM host and its live session state.
 export const host = {};
@@ -423,7 +423,7 @@ export const lists = new Map();
 host.listSelection = undefined;
 host.listSelectionLoading = undefined;
 export const pendingScrolls = new Map();
-export const { followedScrolls, followScroll, settleFollow, rememberScroll } = scrollFollowers(positionContexts);
+export const { followedScrolls, followScroll, settleFollow, rememberScroll, own: ownFollowed, release: releaseFollowed } = scrollFollowers(positionContexts);
 root.addEventListener("pointerdown", (event) => {
   const target = event.target;
   const editor = target.closest?.("input, textarea, select") || target.isContentEditable;
@@ -455,15 +455,39 @@ export const pageFacts = pageReporter(agentMode), pageChanged = () => {
     if (host.wasm.exact_set_display_scale) {
       applyBatch(JSON.parse(readOut(host.wasm.exact_set_display_scale(pageFacts.displayScale()))));
     }
+    // A size the runner has not been told goes with the geometry, in one
+    // commit (LLP 1039 D9): the visual viewport's `resize` can come first.
+    if (host.toldSize !== `${innerWidth}x${innerHeight}`) {
+      resizeRunner();
+    } else if (host.wasm.exact_set_viewport_geometry && document.body) {
+      applyBatch(JSON.parse(readOut(host.wasm.exact_set_viewport_geometry(writeIn(pageGeometry())))));
+    }
   }
 };
 pageFacts.onChange(pageChanged);
-addEventListener("resize", pageChanged);
-// @ref LLP 1069.000 D2, D3
-const mediaChanged = () => {
+// @ref LLP 1039 D9 — the page's geometry as the browser resolves it: the safe-area insets, the segments and the keyboard's overlap
+export const pageGeometry = () => {
+  const env = environment();
+  return JSON.stringify([["top", "right", "bottom", "left"].map(edge => env[`safe-area-inset-${edge}`]), fold().rects, env["keyboard-inset-height"]]);
+};
+// @ref LLP 1069.000 D2, D3 — the size, the preferences and, riding them, the page's geometry: a rotation's insets and size are one commit (LLP 1039 D9)
+const resizeRunner = () => {
   if (host.wasm && host.incarnation && innerWidth > 0 && innerHeight > 0) {
-    applyBatch(presence.resize(JSON.parse(readOut(host.wasm.exact_resize(innerWidth, innerHeight, now(), preferences() | foldBits())))));
+    const told = host.wasm.exact_set_viewport_geometry && document.body ? writeIn(pageGeometry()) : 0;
+    host.wasm.exact_set_update?.(updateCode());
+    const batch = JSON.parse(readOut(host.wasm.exact_resize(innerWidth, innerHeight, now(), preferences() | foldBits(), told)));
+    // Only a size the runner took is told: a refused one is asked again, never followed by geometry alone.
+    if (!batch.error) {
+      host.toldSize = `${innerWidth}x${innerHeight}`;
+    }
+    applyBatch(presence.resize(batch));
   }
+};
+// The window's `resize` comes here alone: the page's facts follow the size, never before it.
+const mediaChanged = (event) => {
+  if (event?.media?.startsWith("(prefers-contrast:")) reportColors();
+  resizeRunner();
+  pageChanged();
   requestAnimationFrame(positionContexts);
 };
 addEventListener("resize", mediaChanged);
@@ -471,11 +495,12 @@ onPreferences(mediaChanged);
 export const foldChanged = mediaChanged;
 onFold(foldChanged);
 // @ref LLP 1078 D6 — the posture and the segment counts ride the facts word beside the preferences; the browser resolves the `env(viewport-segment-*)` lengths itself
-visualViewport?.addEventListener("resize", () => requestAnimationFrame(positionContexts));
+visualViewport?.addEventListener("resize", () => { pageChanged(); requestAnimationFrame(positionContexts); });
+onKeyboard(pageChanged); // LLP 1039 D9: the VirtualKeyboard API moves the keys without a resize
 const symbolStyle = document.createElement("style");
 document.head.append(symbolStyle);
-// @ref LLP 1081 stage 2 — a symbol is drawn in its `color`: a zero-specificity default, so a native face's or a bar's own ink wins. LLP 1116.003 D3.2: the nearest authored accent (`--exact-accent`), as the role is (LLP 1116.001 D2) and UIKit's inherited tint. LLP 1121 stage 9 B: one whose `color` its author wrote (`data-symbol-color`, element.rs) draws in it.
-symbolStyle.textContent = "@property --exact-tint{syntax:\"<color>\";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}:where(img[data-symbol-path][data-symbol-color]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:center;mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}";
+// @ref LLP 1081 stage 2 — a symbol draws in its `color`: a zero-specificity default, so a native face's or a bar's own ink wins.
+symbolStyle.textContent = "@property --exact-tint{syntax:\"<color>\";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:center;mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}";
 // An image's `load` and `error` (LLP 1011 §2) as HTML `<img>` fires them, once per source, the error with its message (rt.js `imageEvent`); a symbol fires neither. A tinted raster paints
 // through its CSS mask (element.rs `host_css`), a CORS fetch: from an origin that sends no CORS headers it paints nothing, so a CORS probe of the source decides. An adopted page's image may have settled before this attached.
 export const IMAGE_ERROR = "the image did not load", CORS_ERROR = "a tinted image from another origin needs CORS (Access-Control-Allow-Origin)", imageProbes = new Map();
@@ -874,9 +899,12 @@ const hostGo = (location) => {
   applyBatch(batch);
   return batch;
 };
+// Any plan the wasm host runs may present a sheet (navigation/routes.js `sheetFrame`).
+useSheets(sheetFrame);
 // the runner's own `go` (LLP 1115.000 D4.3): Forward, and a link to a route (input-glue.js)
 navigation.connect(root, navigate, log, (id) => {
   if (host.inputReady) {
     applyBatch(JSON.parse(readOut(host.wasm.exact_host_back(id, now()))));
   }
-}, globalThis.exact.go = hostGo, (href) => !!host.wasm && host.wasm.exact_route_match(writeIn(href)) === 1, true);
+}, globalThis.exact.go = hostGo, (href) => !!host.wasm && host.wasm.exact_route_match(writeIn(href)) === 1, true,
+  (location) => host.wasm ? readOut(host.wasm.exact_location_of(writeIn(location))) : location);

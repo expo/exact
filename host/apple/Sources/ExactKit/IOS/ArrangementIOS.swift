@@ -308,7 +308,7 @@ final class ArrangementHost {
         adoptOwners()
         syncSafeAreas()
         var now: [UInt32: UIScrollView] = [:]
-        for route in presenter.navigation.controllers.values where !NavigationHost.transparentBar(route.node) {
+        for route in presenter.navigation.controllers.values where !NavigationHost.insetsNoTop(route.node) {
             for node in scrollers(in: route.node, top: true) + scrollers(in: route.node, top: false) {
                 now[node.id] = node.scrollView
             }
@@ -471,7 +471,7 @@ extension NavigationHost {
 
     func arrangementScrollers(in route: RouteController, top: Bool) -> [NodeView] {
         #if os(iOS)
-        if #available(iOS 27.1, *), !Self.transparentBar(route.node) { return presenter.arrangements.scrollers(in: route.node, top: top) }
+        if #available(iOS 27.1, *), !Self.insetsNoTop(route.node) { return presenter.arrangements.scrollers(in: route.node, top: top) }
         #endif
         return []
     }

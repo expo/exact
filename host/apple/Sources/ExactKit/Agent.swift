@@ -422,6 +422,8 @@ public final class Agent {
             nativeSections["observe"] = ExactLaunch.shared.report(for: session)
             nativeSections["media"] = presenter.views.compactMap { id, view in view.video.map { ["id": id, "state": $0.state()] as [String: Any] } }
             nativeSections["mediaSession"] = mediaSessionState() // LLP 1098 D10
+            // LLP 1035.006.000 D6: each tip, as TipKit has it, and whether it shows.
+            nativeSections["tips"] = ["linked": TipLink.installed != nil, "tips": TipLink.installed?.state(owner: presenter) ?? []] as [String: Any]
             // The drive's app storage (trivia F7): none unless it names a scratch store.
             nativeSections["storage"] = ExactEnv.environment["EXACT_AGENT_STORAGE"].map { ["available": true, "store": $0] as [String: Any] }
                 ?? ["available": false, "code": "agent", "message": "storage is unavailable in agent mode unless the drive names a scratch store (--storage <name>)"]
@@ -1111,7 +1113,11 @@ public final class Agent {
                 return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
             }
         }
-        return advanceRunner(to: to, deadline: deadline, floor: floor)
+        let batch = advanceRunner(to: to, deadline: deadline, floor: floor)
+        if batch.error == nil, let limit = clock.fire(at: session.clock ?? to) {
+            return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
+        }
+        return batch
     }
 
     private func advanceRunner(to: Double, deadline: Date, floor: Double) -> Batch {

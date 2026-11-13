@@ -51,8 +51,9 @@ impl Em<'_> {
     }
 
     /// Whether the motion engine follows node `i`: one a swipe holds, a
-    /// swipe's indicator, or one whose `transition` can be a spring (css.rs
-    /// leaves springs to the engine).
+    /// swipe's indicator, one whose `transition` can be a spring (css.rs
+    /// leaves springs to the engine), a transform drag's target, or a drag
+    /// timeline's source.
     pub(crate) fn is_motion_node(&self, i: u32) -> bool {
         let plan = self.plan;
         let row = &plan.node(NodesId(i));
@@ -82,7 +83,10 @@ impl Em<'_> {
             }
         });
         let target = self.transforms.contains(&i);
-        swiped || indicator || spring || target
+        // A drag timeline's source: the motion piece resolves the plan's
+        // timeline names (motion-glue.js `followTimelines`, LLP 1057.003 D5).
+        let source = binding(StyleId::DragTimeline as u16, BindingKind::Style).is_some();
+        swiped || indicator || spring || target || source
     }
 
     /// A node the motion engine follows (rt.js `mo`, the kernel's motion
@@ -108,6 +112,7 @@ impl Em<'_> {
             (StyleId::Rotate, "0"),
             (StyleId::Opacity, "1"),
             (StyleId::Transition, "\"\""),
+            (StyleId::TranslateVelocity, "null"),
         ] {
             values.push(match binding(id as u16, BindingKind::Style) {
                 None => initial.to_string(),

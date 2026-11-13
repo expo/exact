@@ -40,7 +40,7 @@ collects syntax, operator precedence, built-in functions, tags, and events.
 
 ## Run an app
 
-From an exact2 checkout with its pinned Rust toolchain and Bun installed:
+From an Exact checkout with its pinned Rust toolchain and Bun installed:
 
 ```sh
 bun install --frozen-lockfile
@@ -53,7 +53,7 @@ reports unsupported features rather than silently selecting a different result.
 Native builds require their platform tools. See the root
 [quick start](../README.md#quick-start) for toolchain installation.
 
-To scaffold a separate application, run from exact2:
+To scaffold a separate application, run from the Exact checkout:
 
 ```sh
 bun scripts/exact.mjs new ../hello
@@ -118,8 +118,9 @@ Top-level declarations start in column 1. Use spaces for indentation; two spaces
 per level is the formatter's style. Blank lines and `//` comments are ignored.
 There are no semicolons or braces around declaration bodies.
 
-The top-level forms are `component`, `shape`, `fn`, `style`, `keyframes`, `font`,
-`routes`, `use`, and `test`. A file can contain multiple declarations. Used files
+The top-level forms are `component`, `shape`, `fn`, `style`, `decoration`, `atom`,
+`keyframes`, `timeline`, `font`, `sound`, `theme`, `color-profile`, `routes`,
+`members`, `use`, and `test`. A file can contain multiple declarations. Used files
 may supply reusable declarations; the importing file's first component remains
 its root.
 
@@ -154,7 +155,10 @@ A `use` names one of three things:
   `package.json` `exports` maps `.` (and any subpaths) to `.contract` files;
   without `exports`, `index.contract`. A local library is a dependency too:
   `"@me/ui": "file:../ui"` in the app's `package.json`, or a Bun workspace.
-  A package's own relative uses stay inside the package.
+  A build installs a `file:` package again (`bun install --frozen-lockfile`)
+  when its directory no longer matches what `node_modules` holds, so an edit
+  to it reaches the next build. A package's own relative uses stay inside the
+  package.
 
 A library is Contract only: components, shapes, functions, styles, keyframes and
 timelines. It cannot own resources or carry TypeScript; its components take data
@@ -178,9 +182,9 @@ subtraction. `x-1` is still subtraction, but spaces make the intention clearer.
 | Empty list | `[]`, with its element type determined by context |
 
 Use ordinary decimal numbers, double-quoted strings, and backtick templates.
-Single-quoted strings, exponent notation, digit separators, `null`, and
-`undefined` are not the language's literal forms. Strings and template text
-accept the escapes `\n`, `\t`, `\"`, `\\`, ``\` `` and `\$`, and a Unicode code
+Exponent notation is a number (`1e3` is 1000). Single-quoted strings, digit
+separators, `null`, and `undefined` are not the language's literal forms.
+Strings and template text accept the escapes `\n`, `\t`, `\"`, `\\`, ``\` `` and `\$`, and a Unicode code
 point as JavaScript writes it, `\u{2011}` or `\u2011`. Templates can contain
 expressions, quoted strings, and nested templates. Keep an individual string or template on one
 source line.
@@ -250,9 +254,8 @@ derive caption = match selected {
 The `some` branch's binding exists only in that branch. Both arms are required.
 A state initialized to `none` needs enough information elsewhere, usually an
 action's assignment of `some(...)`, to infer the element type, or a declared
-type (`state picked: option<Item> = none`). Actions and the
-view see that type, but derives are typed first: match such a state in the view,
-not in a derive. Similarly, `[]` needs an inferable list element type. A list
+type (`state picked: option<Item> = none`). Actions, derives and the view all see
+that type. Similarly, `[]` needs an inferable list element type. A list
 literal such as `[1, 2]` holds its items, which share one type; a list the screen
 keeps for the session (a selection, open ids) is built in Contract, and a list the
 app keeps across launches comes from the data module.
@@ -315,9 +318,9 @@ blocks. They have no loops, `return`, or `await`. An action calls another action
 of its component, an `action` prop or an injected action as a statement:
 `arrive(path)` runs `arrive`'s statements right there, in the same commit, and
 they too read the state the action started with. So a helper does not see what
-its caller assigned before the call; the compiler refuses such a read and asks
-for the value to be passed (`arrive(next)`). A name that is a host command, such
-as `focus`, stays the command, and calling an action, prop or inject that
+its caller assigned before the call; the compiler warns of such a read
+(`analyze-read-after-assign`) and asks for the value to be passed
+(`arrive(next)`). A name that is a host command, such as `focus`, stays the command, and calling an action, prop or inject that
 shares a host command's name is refused: rename it. A call returns nothing: share calculations through
 `fn`. The compiler infers the state an action writes, through its calls. Do not
 write a `writes` clause.
@@ -350,8 +353,9 @@ component CountLabel
 ```
 
 Functions have no effects, cannot recursively call themselves or form cycles, and
-do not capture component state (they can read `performanceNow()`). Pass values as parameters. Standard-function names
-are reserved against redefinition. See the grammar reference for the complete
+do not capture component state (they can read `performanceNow()`). Pass values as
+parameters. A `fn` with a standard function's name shadows it in free calls
+(`round(1.5)` calls the app's `fn round`). See the grammar reference for the complete
 [standard-function list](contract-grammar.md#standard-functions-and-intrinsics).
 
 The web's string and array methods are written as methods, with their web names
@@ -452,8 +456,9 @@ none of it.
 A virtualized list has exactly one direct `for`, whose body has one flow root.
 A vertical list needs a real height bound (`height`, `max-height`, or growing
 `flex` in a bounded parent). A horizontal one needs a literal `display="flex"` and
-a literal positive `height`, takes `estimated-item-width`, and refuses a nonzero
-`gap` and `justify-content` other than `flex-start`. Padding along the list's
+a positive `height` in points, literal or computed, takes `estimated-item-width`
+(literal or computed) and CSS's `gap` between its cards, and refuses
+`justify-content` other than `flex-start`. Padding along the list's
 axis is room before the first row and after the last, as in CSS: a length or an
 `env()` inset, not a percentage. On iOS a list's pull-to-refresh spinner draws
 below its `padding-top`, so a header laid over that padding does not hide it. A
@@ -462,7 +467,7 @@ as in CSS: `scroll-padding-top` the height of that header brings a row to just
 below it, and the first row to the very top. On iOS the row also lands clear of
 the bars UIKit draws the list under (a header, or a composer it lifts into a
 bar), as `scrollToItem(at:at:animated:)` does: `block="end"` puts the newest
-message just above the composer. Other elements refuse it.
+message just above the composer. Any other scroll container takes it too.
 Virtualized lists nest one level deep (an inner vertical list needs a literal
 `height` or `max-height`); deeper nesting, masonry, wrapping, reversed lists, and
 RTL horizontal collections are not supported.
@@ -996,7 +1001,13 @@ strings: `width="50%"`, `height="auto"`, `padding-top="env(safe-area-inset-top)"
 `width="calc(100% - 24px)"`, and CSS's `min()`, `max()` and `clamp()` over px,
 percentages, the safe-area insets and viewport lengths: `padding-bottom="clamp(15px,
 env(safe-area-inset-bottom), 60px)"`, `bottom="calc(max(15px,
-env(safe-area-inset-bottom)) + 44px)"`, `width="min(50%, 600px)"`. Supported values
+env(safe-area-inset-bottom)) + 44px)"`, `width="min(50%, 600px)"`. `env()` is the
+screen's safe area; `var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`,
+`-left`) is the one where the box is: inside a route, its bars included, so
+`margin-top="calc(-1 * var(--exact-safe-area-inset-top))"` takes a background up
+under the navigation bar (LLP 1123 D9). A route is cleared of its bars by itself, the
+clearance added to its padding unless that padding reads the inset; `-exact-safe-area`
+on the route turns it off per edge (D3, D4). Supported values
 are property-specific; this is not
 an unrestricted browser stylesheet. The compiler and kernel reject unsupported
 names or values. `line-height=1.5` is a ratio; `line-height="24px"` is fixed.
@@ -1123,9 +1134,10 @@ the face's own.
 `font-variant-ligatures` turns the face's ligatures on or off, as CSS does:
 `none` keeps a ligating font such as Fira Code from joining `://` or `->` in an
 address or code, and the other keywords (`no-contextual`,
-`discretionary-ligatures`, …) name one kind each. Text fields take it too. A
-terminal draws no ligatures; Android's native text fields, UIKit's grouped list
-cells and content regions keep the font's own; widgets and the watch refuse it.
+`discretionary-ligatures`, …) name one kind each. Text fields take it too,
+including Android's native fields. A terminal draws no ligatures; UIKit's
+grouped list cells and content regions keep the font's own; widgets and the
+watch refuse it.
 
 Any other OpenType feature of the face is set by tag, as CSS sets it:
 `font-feature-settings="'cv05', 'cv11', 'zero'"` draws Inter's tailed `l`,
@@ -1139,8 +1151,8 @@ feature of the same tag (`cv05` is a different letter in each face). Up to
 sixteen features are named in one value.
 It applies after `font-variant-numeric` and `font-variant-ligatures` and wins
 for a feature it names, so `'tnum' 0` undoes `tabular-nums`; prefer those
-properties where they say it. It reaches text and text fields where
-`font-variant-ligatures` does.
+properties where they say it. It reaches text and text fields, including
+Android's native fields, where `font-variant-ligatures` does.
 
 ## Input, events, and commands
 
@@ -1203,7 +1215,7 @@ scrolling, and delivery commands. Commands are distinct from pure functions:
 `openURL` does not return a Contract value, and a `fn` cannot issue it; to hear
 whether the URL opened, name an element, `openURL(url, "opened")`, whose `change`
 hears `opened` or `failed`. The compiler does not check most commands'
-arguments, and hosts differ: headless Linux carries neither `focus` nor
+arguments, and hosts differ: headless Linux does not carry
 `openURL`. Check the host you target.
 
 A file `input` with no `accept`, an empty `accept`, or `accept="*/*"` offers any
@@ -1313,7 +1325,18 @@ title, an optional second `text` (a value) or a `column` of two texts (a
 subtitle), and an optional trailing accessory — a `forward-chevron` or
 `checkmark` image, a checkbox or switch `input`, or a `button` holding only
 `image "symbol:info"`. `destructive` draws a row red. Any other row is custom
-and keeps its own views. A section written `background-color="transparent"` has no card: its rows sit on the list's background with no separators or corners, as a profile header does (LLP 1084 §6.2). That literal is the only `background-color` a section takes, and not beside a `class`; a section that gains and loses its card is two sections under `if`.
+and keeps its own views. A row with an authored `height`, `background-color` or
+corner radius also keeps its views, including a row laid out as a column. A
+subtitle column does too when it writes any of those or `min-height`. Authored
+`align-items` or `justify-content` on either a nested column or a row laid out
+as a column keeps its views too. Classes count as authored. Such nested
+columns omit subtitle block padding when lowering can establish that their
+row or column writes a box. Literal values and ternary arms are recognized;
+a `none` arm keeps the platform padding. Other expressions keep that padding
+because they may evaluate to `none`. Write explicit padding to control it.
+The title-to-subtitle gap stays the platform's
+unless you write your own gap. A row's own `min-height` alone still works
+on a standard cell. A section written `background-color="transparent"` has no card: its rows sit on the list's background with no separators or corners, as a profile header does (LLP 1084 §6.2). That literal is the only `background-color` a section takes, and not beside a `class`; a section that gains and loses its card is two sections under `if`.
 
 ```text
 list appearance="auto" listStyle="inset-grouped" flex=1
@@ -1417,10 +1440,27 @@ nothing from it. On iOS every viewport unit (`vw`, `vh`, `vmin`, `vmax` and thei
 `s`/`l`/`d` kin) is the window's in every sheet (`vmin` and `vmax` its
 smaller and larger side), as CSS's `vh` is the viewport's and never a
 dialog's, so `height: 50vh` is half the screen at any sheet height
-and `min-height: 100vh` opens the sheet at its tallest. A route that scrolls itself is measured by what it scrolls,
-laid out in the sheet, so give its rows `flex-shrink: 0`. macOS, the web and
-Linux show a modal route as authored and ignore the detent
-(LLP 1075.003 §9.11).
+and `min-height: 100vh` opens the sheet at its tallest. A scrolling route is
+measured the same way; its rows can keep the default `flex-shrink: 1`. On a window
+narrower than 900 pixels the web's sheet opens at the height iOS opens it at, its foot on
+the window's, and stays there: it has no grabber and is not dragged between
+heights. A route pushed inside it stays in it at that height, as in UIKit's
+sheet. It is the tallest sheet in a window under 480 pixels tall (UIKit's compact
+height), and on a touch screen while a text field in it has the focus, as UIKit
+raises a sheet over the keyboard. A wider window shows the card it always does.
+Android shows a modal route as Material's bottom sheet at these heights (`large`
+the window below the status bar, `medium` half that; `fit-content` rests at
+`medium`), dragged between them or down to dismiss, over a scrim
+(`host/android/README.md`). macOS and desktop Linux ignore the detent
+(LLP 1075.003 §9.11, LLP 1115.000 D4.8).
+
+A route pushed while a sheet is on top is shown inside that sheet, which keeps the
+detents of the route that opened it, and Back returns to the route before it in
+the sheet. iOS and macOS show it in the sheet's own navigation stack, the web and
+Android lay it out in the sheet's box, and desktop Linux in the box the sheet's
+own route was laid out in. On Android a drag down or a tap on the scrim closes the
+sheet with what was pushed inside it. A route pushed over a `fullscreen` route is
+a page of its own.
 
 `path("item", value)` checks the route and encodes its parameters. Always build
 locations with it: a template literal as a location is refused and a string
@@ -1538,6 +1578,15 @@ yet.
 (`-exact-drag-timeline`, `animation-timeline`, `animation-range`, `timeline-scope`) are
 declared extensions with bounded behavior, not arbitrary layout animation.
 
+A value that follows a scroll is CSS's scroll-driven animation, not a `scroll` action
+that writes state (one round trip behind the scroll). `scroll-timeline` on a scroller
+names its offset; `view-timeline` on any node names that node crossing its nearest
+scroller; `animation-timeline` names either, or is `scroll()` or `view()`, and
+`animation-range` takes lengths, percentages and the view ranges (`cover`, `contain`,
+`entry`, `exit`, `entry-crossing`, `exit-crossing`). Every host moves the consumer in the
+scroll's own frame, and the web leaves it to the browser
+([agents' guide](contract-for-agents.md#motion-that-follows-a-scroll)).
+
 For direct manipulation, `pan`, `panrelease`, `heightrelease`,
 `transformgeometry`/`transformrelease`, and `reorderdrop` supply measured payloads.
 The transform pair must be declared together. The height, transform and reorder
@@ -1550,8 +1599,8 @@ and [Spark](../apps/spark/app.contract) for complete bindings.
 
 `frame("id")` reads the last laid-out border box where the viewer sees it, as
 `getBoundingClientRect` does: in the viewport, every scroll offset above it
-applied (the page's too), but without transforms. `measure("id")` asks for its
-height-auto layout, at the same origin, under its
+applied (the page's too), and every transform, its own and its ancestors'.
+`measure("id")` asks for its height-auto layout, at the same origin, under its
 current offer; its id is literal. Both are action-only and return `Geometry`,
 including `unavailable` and `provisional`; handle those flags rather than assuming
 layout already happened. Geometry reads are not reactive view expressions.
@@ -1581,7 +1630,10 @@ raw source and has no `iframe` or `video`.
 A hyphenated tag can address the app's native module: the bake checks the tag
 against `app.json`'s `modules` list, and its unknown attributes pass to the
 module unchecked; a known attribute styles or labels the module's box, and one
-the box has no use for is refused. Merely inventing a tag does not create a widget. Native
+the box has no use for is refused. A package view is declared in a dependency's
+`exact.json` `views` and accepts only its declared props and events beyond standard
+box attributes and common module events (`lower-native-attr` for an undeclared
+attribute). Merely inventing a tag does not create a widget. Native
 modules and GPU capabilities are separate optional artifacts; they do not add
 features to every core build. Use [Photo Editor](../apps/photo-editor/app.contract)
 as a concrete native-module example.
@@ -1653,10 +1705,17 @@ device's. See
 [the locale fixture](../host/web-js/conformance/locale) and
 [the string tests](../contract/cli/tests/it/strings.rs).
 
-`formatTime`, `formatDate`, and `formatNumber` are deterministic formatting calls
-with specific accepted format literals. They print en-US whatever the viewer's
-locale, and their vocabulary is not a general `Intl` options object. App-specific
-wording belongs in app `fn`s.
+`formatTime`, `formatDate`, `formatDay` and `formatNumber` are deterministic
+formatting calls with specific accepted format literals. They format in the
+locale of the strings table the app shows, as `Intl` formats it: with a `de` table
+`formatDate(at, offset, "medium")` is `26.09.2026` and `formatNumber(1234.5,
+"decimal")` is `1.234,5`, and `setLocale` moves them with the text. An app with no
+tables, or only English ones, prints en-US. A table's region is its formats' region,
+so an app that wants British dates ships `strings/en-GB.json` (it may be `{}`).
+The viewer's forced 12- or 24-hour clock applies; dates are Gregorian in every
+locale ([formatting by locale](contract-grammar.md#formatting-by-locale)). Their
+vocabulary is not a general `Intl` options object. App-specific wording belongs in
+app `fn`s.
 
 ## Testing, diagnostics, and delivery
 

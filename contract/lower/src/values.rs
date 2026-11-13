@@ -211,7 +211,7 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::UnknownEnumValue { style: StyleId::FontVariantLigatures } => "expected `normal`, `none`, or a space-separated list taking at most one of each pair: `common-ligatures` or `no-common-ligatures`, `discretionary-ligatures` or `no-discretionary-ligatures`, `historical-ligatures` or `no-historical-ligatures`, `contextual` or `no-contextual`".into(),
         StyleValueError::UnknownEnumValue { style } => format!(
             "expected one of {}",
-            style.enum_names().iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ")
+            vocab::authored_names(*style).iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ")
         ),
         StyleValueError::AutoNotAdmitted { .. } => "`auto` is not admitted here".into(),
         StyleValueError::OutOfRange { .. } => "out of the row's range".into(),
@@ -226,10 +226,12 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::BadFontFeatures { .. } => "expected normal, or up to sixteen OpenType features as `\"cv05\", \"tnum\" 1, \"liga\" off`: a quoted four-character tag and an optional non-negative integer, `on` or `off` (CSS Fonts 4 §6.12)".into(),
         StyleValueError::BadCornerShape { .. } => "expected one to four of round, squircle, square, bevel, scoop, notch, superellipse(<number>) or -exact-continuous".into(),
         StyleValueError::BadDragTimeline { .. } => "expected none, or a `--name` and an optional axis (`x` or `y`)".into(),
-        StyleValueError::BadAnimationTimeline { .. } => "expected auto or a `--name`".into(),
-        StyleValueError::BadAnimationRange { .. } => "expected normal, or two distinct lengths (`0px 300px`)".into(),
+        StyleValueError::BadAnimationTimeline { .. } => "expected auto, a `--name`, `scroll([nearest | root | self] [block | inline | x | y])` or `view([axis] [inset])`".into(),
+        StyleValueError::BadAnimationRange { .. } => "expected normal, or one or two distinct ends, each normal, a length or percentage, or a range name (cover, contain, entry, exit, entry-crossing, exit-crossing) with an optional length or percentage (`0px 300px`, `entry 20% cover 50%`)".into(),
         StyleValueError::BadPositionTryFallbacks { .. } => "expected none, or comma-separated attempts, each one to three of flip-block, flip-inline and flip-start, applied in order; flip-x, flip-y and named rules are not implemented".into(),
         StyleValueError::BadTimelineScope { .. } => "expected none, all, or `--name`s separated by commas".into(),
+        StyleValueError::BadTimelineName { .. } => "expected none or one `--name`".into(),
+        StyleValueError::BadViewTimelineInset { .. } => "expected one or two of auto and a length or percentage, the start then the end".into(),
         StyleValueError::BadTransition { .. } => "unsupported transition property or invalid timing components; exact2 supports transform components, opacity, paint and SVG properties, and admitted numeric height transitions; general layout interpolation is not implemented".into(),
         StyleValueError::BadPaint { .. } => "SVG paint is `none`, `currentcolor`, or a colour (hex, `rgb()`, `hsl()`, `hwb()`, a named colour, `light-dark()`); paint servers (`url(#…)`) are refused (LLP 1055 D12)".into(),
         StyleValueError::BadDashArray { .. } => "`stroke-dasharray` is `none` or non-negative numbers separated by spaces or commas".into(),
@@ -317,35 +319,14 @@ fn scheme_colour(a: &Attr, rows: &[StyleId]) -> Result<(), LowerError> {
 /// Whether `e` puts a `-exact-platform-color(` literal into a value it computes.
 fn builds_platform_color(e: &Expr) -> bool {
     let named = |t: &str| t.contains("-exact-platform-color(");
-    match e {
+    let written = match e {
         Expr::Str(t, _) => named(t),
-        Expr::Template(parts, _) => parts.iter().any(|p| match p {
-            contract_syntax::TemplatePart::Text(t) => named(t),
-            contract_syntax::TemplatePart::Expr(e) => builds_platform_color(e),
-        }),
-        Expr::Some(e, _)
-        | Expr::Member(e, _, _)
-        | Expr::NamedArg(_, e, _)
-        | Expr::Unary(_, e, _)
-        | Expr::Typed(e, _, _) => builds_platform_color(e),
-        Expr::Arrow { body, .. } => builds_platform_color(body),
-        Expr::Call(_, args, _) => args.iter().any(builds_platform_color),
-        Expr::Binary(_, l, r, _) => builds_platform_color(l) || builds_platform_color(r),
-        Expr::Ternary(c, y, n, _) => [c, y, n].iter().any(|e| builds_platform_color(e)),
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => [subject, some, none]
+        Expr::Template(parts, _) => parts
             .iter()
-            .any(|e| builds_platform_color(e)),
-        Expr::Let { value, body, .. } => {
-            builds_platform_color(value) || builds_platform_color(body)
-        }
-        Expr::List(items, _) => items.iter().any(builds_platform_color),
-        Expr::Number(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => false,
-    }
+            .any(|p| matches!(p, contract_syntax::TemplatePart::Text(t) if named(t))),
+        _ => false,
+    };
+    written || e.operands().any(builds_platform_color)
 }
 /// `position-area` places a popover against the invoker that opens it (its
 /// implicit anchor, LLP 1021 §5): there is no `anchor-name`, so on any other
@@ -364,6 +345,25 @@ pub(crate) fn check_position_area(attrs: &[Attr]) -> Result<(), LowerError> {
         "lower-css-position-area",
         "`position-area` and `position-try-fallbacks` are admitted on a `popover` only: its anchor is the button whose `popovertarget` opens it. `anchor-name` and `position-anchor` are not implemented",
         a.span,
+    )
+}
+/// A keyword CSS defines that no presenter builds: the row's reason, then
+/// the keywords an author may write instead.
+fn refused_keyword(row: StyleId, name: &str, v: &str, span: Span) -> Result<(), LowerError> {
+    let (id, why) = match row {
+        // @ref LLP 1115.000 D11.6 — `text` and `all` are honoured where a
+        // host has text selection (the web, macOS, iOS).
+        StyleId::UserSelect => ("lower-css-user-select", "it keeps a selection from leaving its element, and the native presenters' text selection ownership has no such bound"),
+        StyleId::WrapFlow => ("lower-attr-value", "CSS Exclusions defines it, and exact2 v1 builds `both` (an exclusion) and `auto` (none)"),
+        _ => ("lower-attr-value", "no presenter builds it"),
+    };
+    err(
+        id,
+        format!(
+            "`{name}=\"{v}\"` is not implemented: {why}. Write one of {}",
+            vocab::authored_names(row).join(", ")
+        ),
+        span,
     )
 }
 /// Refuse `paragraphDirs` except on a `textarea` with a literal
@@ -511,27 +511,30 @@ fn style_value(
                     span,
                 );
             }
-            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own.
-            if v.to_ascii_lowercase().contains("--exact-") {
+            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own,
+            // but for the safe area an author reads (LLP 1123 D9).
+            let read = ["top", "right", "bottom", "left"]
+                .map(|edge| format!("{}{edge}", exact_kernel::style::env::LOCAL_PREFIX));
+            let others = read.iter().fold(v.clone(), |v, name| v.replace(name, ""));
+            if others.to_ascii_lowercase().contains("--exact-") {
                 return err(
                     "lower-attr-value",
                     format!("`--exact-*` names are the host's own; write the author's `-exact-` name: `{}=\"{v}\"`", a.name),
                     span,
                 );
             }
-            // @ref LLP 1115.000 D11.6 — `text` and `all` are honoured where a
-            // host has text selection (the web, macOS, iOS); `contain` names
-            // a selection behaviour no native presenter has.
-            if rows.contains(&StyleId::UserSelect) && v == "contain" {
-                return err("lower-css-user-select", "CSS `user-select=\"contain\"` is not implemented by the native presenters: it keeps a selection from leaving its element, and their text selection ownership has no such bound. Supported values are auto, none, text and all", span);
+            // @ref LLP 1043.000 §3 D1 — the schema's `refused` keywords, which
+            // the wire keeps and `contract vocab` leaves out.
+            if let Some(row) = rows
+                .iter()
+                .find(|row| row.refused_enum_names().contains(&v.trim()))
+            {
+                return refused_keyword(*row, &a.name, v.trim(), span);
             }
             if rows.contains(&StyleId::PositionArea)
                 && !StyleId::PositionArea.enum_names().contains(&v.trim())
             {
                 return err("lower-css-position-area", format!("`position-area=\"{v}\"`: exact2 places an invoker's popover in a subset of CSS `position-area`: {}. Logical areas and other spellings are not implemented by the native top layers", StyleId::PositionArea.enum_names().join(", ")), span);
-            }
-            if rows.contains(&StyleId::WrapFlow) && !matches!(v.as_str(), "auto" | "both") {
-                return err("lower-attr-value", "unsupported `wrap-flow` value: CSS Exclusions defines it; exact2 v1 implements `both` (or `auto`)", span);
             }
             if rows.contains(&StyleId::FlexBasis)
                 && matches!(

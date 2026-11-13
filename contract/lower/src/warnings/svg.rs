@@ -73,19 +73,14 @@ impl<'a> References<'a> {
                     }
                     contains
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    let yes = self.collect(then, svg, true);
-                    self.collect(otherwise, svg, true) || yes
+                // Every list is collected, so not `any`.
+                node => {
+                    let mut yes = false;
+                    for list in node.child_lists() {
+                        yes |= self.collect(list, svg, true);
+                    }
+                    yes
                 }
-                Node::Each { body, .. } => self.collect(body, svg, true),
-                Node::Match { some, none, .. } => {
-                    let yes = self.collect(&some.1, svg, true);
-                    self.collect(none, svg, true) || yes
-                }
-                Node::Use { children, .. } => self.collect(children, svg, true),
-                Node::Children { .. } => false,
             };
         }
         contains

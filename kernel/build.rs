@@ -59,6 +59,8 @@ struct PropRow {
 struct EnumDef {
     values: Vec<String>,
     default: String,
+    #[serde(default)]
+    refused: Vec<String>,
 }
 #[derive(Deserialize)]
 struct StyleRow {
@@ -619,7 +621,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     // ---- StyleId / StyleCodec --------------------------------------------
     writeln!(w, "/// Wire codec of a style row.").unwrap();
     writeln!(w, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]").unwrap();
-    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, PositionTryFallbacks, Enum }}").unwrap();
+    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
     writeln!(w, "/// One style row; the discriminant is the mask bit.").unwrap();
     writeln!(w, "#[repr(u8)]").unwrap();
     writeln!(
@@ -744,6 +746,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     writeln!(w, "            _ => &[],").unwrap();
     writeln!(w, "        }}").unwrap();
     writeln!(w, "    }}").unwrap();
+    write_refused_enum_names(w, schema);
     for (method, doc, pred) in [
         (
             "admits_auto",
@@ -1289,7 +1292,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
             Codec::ColorValue => "value.color_value(id)?".to_string(),
             Codec::KeywordColor(keyword) => format!("value.keyword_color(id, {keyword:?})?"),
             Codec::Vec2 => "value.vec2(id)?".to_string(),
-            Codec::Enum(name) if matches!(name.as_str(), "GridAutoFlow" | "JustifyItems" | "TextDecorationLine") => format!(
+            Codec::Enum(name) if matches!(name.as_str(), "GridAutoFlow" | "JustifyItems" | "TextDecorationLine" | "ScrollSnapType" | "ScrollSnapAlign") => format!(
                 "{name}::from_css(value.text(id)?).ok_or(StyleValueError::UnknownEnumValue {{ style: id }})?"
             ),
             Codec::Enum(name) => format!(
@@ -1440,8 +1443,9 @@ fn strip_prose(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => serde_json::Value::Object(
             map.into_iter()
-                // A style row's `hosts` says what a host draws, which no wire carries.
-                .filter(|(k, _)| !k.starts_with('_') && k != "hosts")
+                // A style row's `hosts` says what a host draws and an enum's `refused` what
+                // an author may not write, which no wire carries.
+                .filter(|(k, _)| !k.starts_with('_') && k != "hosts" && k != "refused")
                 .map(|(k, v)| (k, strip_prose(v)))
                 .collect(),
         ),

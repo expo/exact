@@ -8,7 +8,9 @@ import { need } from '../../scripts/coverage.mjs';
 
 const { unavailable } = chromium();
 const test = need('chrome', unavailable, { test: bunTest });
-let server, suite, cdp, evaluate, protocol;
+let server, cdp, evaluate, protocol;
+// The shared browser registers its shutdown hook at the file's level, before beforeAll runs.
+const suite = unavailable ? null : await cdpBrowser();
 beforeAll(async () => {
   if (unavailable) return;
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
@@ -17,7 +19,6 @@ beforeAll(async () => {
       headers: { 'content-type': new URL(req.url).pathname.endsWith('.js') ? 'text/javascript' : 'text/html' },
     });
   }});
-  suite = await cdpBrowser();
   ({ cdp } = suite);
   const { sessionId } = await suite.page();
   const call = (method, params) => cdp.send(method, params, sessionId);
@@ -72,10 +73,8 @@ test('the production page reset leaves native and appearance-none checkboxes bor
     return {native:read(native),plain:read(plain)};
   })()`);
   expect(result.native).toEqual({appearance:'auto',boxSizing:'border-box',padding:'0px',width:13,height:13});
-  expect(result.plain.appearance).toBe('none');
-  expect(result.plain.boxSizing).toBe('border-box');
-  expect(result.plain.padding).toBe('10px');
-  expect(result.plain.width).toBe(200);
+  expect(result.plain.appearance).toBe('none'); expect(result.plain.boxSizing).toBe('border-box');
+  expect(result.plain.padding).toBe('10px'); expect(result.plain.width).toBe(200);
 });
 
 bunTest('LE feedback preserves u64 identity and rejects invalid geometry before admission', () => {
@@ -97,8 +96,7 @@ test('LLP 1010 §6.9: a padding change alone, which keeps a border-box list\'s s
   expect(r).toEqual({ reported: true, idle: true, size: 180, grew: 1 }); });
 test('actual nested scrollport, content padding, mounted rows, and coalesced scroll without authored handler', async () => {
   const result = await evaluate(`(() => { const f=fixture(); f.controller.commit([f.snapshot()]); f.port.scrollTop=110; for(let i=0;i<100;i++) f.port.dispatchEvent(new Event('scroll')); const queued=f.frames.size; f.flush(); return {queued,last:f.reports.at(-1),inner:f.port.clientWidth,anchor:getComputedStyle(f.views.get(1)).overflowAnchor}; })()`);
-  expect(result.queued).toBe(1);
-  expect(result.last.top).toBe(50);
+  expect(result.queued).toBe(1); expect(result.last.top).toBe(50);
   expect(result.last.height).toBe(180);
   expect(result.last.width).toBe(result.inner);
   expect(result.last.rowWidth).toBe(result.inner - 24);
@@ -237,8 +235,11 @@ test('observer baseline: hidden pending row resumes on an external show without 
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));f.flush();
     return {hidden,last,idle:f.reports.length===n,pending:f.frames.size};
   })()`);
-  expect(result.hidden).toBe(0);expect(result.last.rows[0].size).toBe(40);
-  expect(result.idle).toBe(true);expect(result.pending).toBe(0);
+  expect(result.hidden).toBe(0);expect(result.last.rows[0].size).toBe(40);expect(result.idle).toBe(true);expect(result.pending).toBe(0);
+});
+test('a row hidden with its root, as a list with a gap hides one, has no extent: the rest measure and a scroll reports', async () => {
+  const r=await evaluate(`(() => {const f=fixture();for(const v of [4,5]) f.views.get(v).style.display='none';f.controller.commit([f.snapshot()]);f.flush();const first=f.reports.at(-1)?.rows.map(r=>r.size);f.port.scrollTop=110;f.port.dispatchEvent(new Event('scroll'));f.flush();return {first,n:f.reports.length,top:f.reports.at(-1).top,rows:f.reports.at(-1).rows.map(r=>r.size)};})()`);
+  expect(r.first).toEqual([40,0]);expect(r.n).toBe(2);expect(r.top).toBe(50);expect(r.rows).toEqual([40,0]);
 });
 test('collection read reuse: correction-free commit reads only list and port baselines', async () => {
   const result=await evaluate(`(() => {const f=fixture(),reads=(${collectionReads})(f);
@@ -450,9 +451,8 @@ test('collection read reuse: zero-height attached rows measure, hidden and detac
     f.views.get(4).style.display='';row.remove();f.controller.commit([f.snapshot('3')]);f.flush();const detached=f.reports.length;
     f.views.get(1).prepend(row);row.style.height='12.75px';f.controller.commit([f.snapshot('4')]);f.flush();
     return {zero,hidden,detached,last:f.reports.at(-1),count:f.reports.length,pending:f.frames.size};})()`);
-  expect(result.zero).toBe(0);expect(result.hidden).toBe(1);expect(result.detached).toBe(1);
-  expect(result.last.revision).toBe('4');expect(result.last.rows[0].size).toBe(12.75);
-  expect(result.count).toBe(2);expect(result.pending).toBe(0);
+  expect(result.zero).toBe(0);expect(result.hidden).toBe(1);expect(result.detached).toBe(1);expect(result.last.revision).toBe('4');
+  expect(result.last.rows[0].size).toBe(12.75);expect(result.count).toBe(2);expect(result.pending).toBe(0);
 });
 test('integer DOM end retains fractional measured extent in actual collection feedback', async () => {
   const result = await evaluate(`(() => {

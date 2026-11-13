@@ -1,10 +1,10 @@
 //! @exact/global-shortcuts on Windows (LLP 1133.025 D3): a chord registered
 //! system-wide while something reads it, through the host's one hot-key
-//! table (`exact_linux::desktop`, `RegisterHotKey`), which raises
+//! table (`exact_painted::desktop`, `RegisterHotKey`), which raises
 //! `globalshortcut` as a person's activation when it is pressed. Under the
 //! agent the runner's substitute answers, unless the drive binds it.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 
 pub struct GlobalShortcuts {
     context: Context,

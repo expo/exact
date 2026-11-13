@@ -509,10 +509,11 @@ fn the_design_readers_structure_moves_for_what_the_plan_keeps() {
 /// @ref LLP 1121 D8 (stage 8 B): a node's `:hover` and `:focus-visible`
 /// looks are the sheet's rules for its set, with a varying token as its
 /// property; the node names its set; `:active` is the node's press paint, an
-/// absolute opacity included; a node without looks has neither.
+/// absolute opacity included; a node without looks has neither; with no
+/// boundary on the page, a look's colour adds no rule for one.
 #[test]
 fn state_looks_are_sheet_rules_for_the_nodes_set() {
-    let part = ":active\n          background-color = \"surface.card\"\n          opacity = 0.6\n          -exact-press-scale = 0.95\n        :hover\n          border-color = \"brand\"\n        :focus-visible\n          background-color = \"surface.card\"\n";
+    let part = ":active\n          background-color = \"surface.card\"\n          opacity = 0.6\n          -exact-press-scale = 0.95\n        :hover\n          border-color = \"brand\"\n        :focus-visible\n          background-color = \"surface.card\"\n          color = \"brand\"\n";
     let view = format!("component App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    column\n      column testId=\"card\" press=go background-color=\"#ffffff\"\n        {part}        text \"c\"\n      column testId=\"same\" press=go\n        {part}        text \"d\"\n      column testId=\"plain\" press=go\n        text \"p\"\n      column testId=\"cleared\" press=go opacity=0.5\n        :hover\n          opacity = \"unset\"\n        text \"u\"\n");
     let out = emitted("looks", DESIGN, &view);
     assert_eq!(
@@ -558,60 +559,59 @@ fn state_looks_are_sheet_rules_for_the_nodes_set() {
         "an explicit clear, as a static row's: {}",
         out.css
     );
-}
-
-/// A look's `color` is its rule's (CSS's `a:hover { color }`), a varying
-/// token as its property, so the link's text inherits it as the browser
-/// does and follows the scheme; the base keeps its own.
-#[test]
-fn a_looks_color_is_its_rules_with_the_token() {
-    let view = "component App\n  view\n    link href=\"/a\" color=\"surface.card\"\n      :hover\n        color = \"text.primary\"\n      text \"a\"\n";
-    let out = emitted("look-color", DESIGN, view);
-    let hover = out
-        .css
-        .find("[data-exact-looks=\"1\"]:hover")
-        .expect("a hover rule");
-    let rule = &out.css[hover..];
-    let rule = &rule[..rule.find('}').unwrap()];
     assert!(
-        rule.contains("color:var(--x-text-primary") && rule.contains("!important"),
-        "{rule}"
+        !out.css.contains("data-x-lc"),
+        "a page with no boundary carries no rule for one: {}",
+        out.css
     );
-    assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
 }
 
-/// A look's `color` is also a rule for the boundaries below that its colour
-/// reaches (`modes.js` marks them `data-x-lc`), which write the colour around
-/// them again: the look's token, so it resolves in the boundary's modes,
-/// the focus's after the hover's. A look with no `color` has none.
+/// A look's `color` is its own rule's (CSS's `a:hover { color }`), a varying
+/// token as its property, while the base keeps its own. It is also a rule for
+/// the boundaries below that its colour reaches (`modes.js` marks them
+/// `data-x-lc`), which write the colour around them again: the look's token,
+/// so it resolves in the boundary's modes, the focus's after the hover's,
+/// ranked below the boundary's own look and by position. A look with no
+/// `color` has none.
 #[test]
-fn a_looks_color_reaches_a_boundary_below() {
+fn a_looks_color_is_its_rule_and_reaches_a_boundary_below() {
     let view = "component App\n  view\n    column\n      link href=\"/a\" color=\"surface.card\"\n        :hover\n          color = \"text.primary\"\n        :focus-visible\n          color = \"#123456\"\n        column -exact-mode=\"dark-style=dim\"\n          text \"a\"\n      link href=\"/b\"\n        :hover\n          background-color = \"surface.card\"\n        text \"b\"\n";
-    let css = emitted("look-color-below", DESIGN, view).css;
+    let out = emitted("look-color-below", DESIGN, view);
+    let css = out.css;
     let below = |at: &str| css.find(at).unwrap_or_else(|| panic!("{at} in {css}"));
     let on = ":not(:disabled,[disabled]:not([disabled=\"false\"]))";
+    let own = &css[below(&format!("[data-exact-looks=\"1\"]:hover{on}{{"))..];
+    assert!(
+        own[..own.find('}').unwrap()].contains("color:var(--x-text-primary)!important"),
+        "{own}"
+    );
+    assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
+    // The holder ranks in `:where()`, and the nearest position repeats its
+    // attribute most, so the boundary's own look and a nearer one win.
+    let near = "[data-x-lc~=\"1:1\"]".repeat(3);
     let hover = below(&format!(
-        "[data-exact-looks=\"1\"]:hover{on} [data-x-lc~=\"1\"]{{color:var(--x-text-primary)!important;}}"
+        ":where(:where(html:not([data-exact-input=touch])) [data-exact-looks=\"1\"]:hover{on}) {near},"
     ));
     below(&format!(
-        "[data-exact-looks=\"1\"][data-exact-held~=hover]{on} [data-x-lc~=\"1\"]{{"
+        ":where(:where(html:not([data-exact-input=touch])) [data-exact-looks=\"1\"]:hover{on}) [data-x-lc~=\"3:1\"]{{color:var(--x-text-primary)!important;}}"
+    ));
+    below(&format!(
+        ":where([data-exact-looks=\"1\"][data-exact-held~=hover]{on}) [data-x-lc~=\"3:1\"]{{"
     ));
     let focus = below(&format!(
-        "[data-exact-looks=\"1\"][data-exact-held~=focus-visible]{on} [data-x-lc~=\"1\"]{{color:rgba(18,52,86,1)!important;}}"
+        ":where([data-exact-looks=\"1\"][data-exact-held~=focus-visible]{on}) [data-x-lc~=\"3:1\"]{{color:rgba(18,52,86,1)!important;}}"
     ));
     assert!(hover < focus, "{css}");
-    assert!(!css.contains("[data-x-lc~=\"2\"]"), "{css}");
+    assert!(!css.contains("[data-x-lc~=\"1:2\"]"), "{css}");
 }
 
 /// LLP 1121 stage 9 B: under a written token colour, a mode boundary below
 /// writes the token again as its implied row, no author's, so the kernel's
 /// symbol under the boundary takes no written colour; one beside it does.
 /// So does one under a boundary whose own bound colour clears or is refused,
-/// step after step; a written value there is said. The JS target marks those under a boundary for
-/// symbols.js to decide by its implied row (`$xs`) and its binding
-/// (`$ink`), and the one beside as written.
+/// step after step; a written value there is said.
 #[test]
-fn a_symbol_under_a_mode_boundary_is_decided_as_the_kernel_decides() {
+fn a_mode_boundarys_implied_colour_is_not_authored() {
     let dir = std::env::temp_dir().join(format!("exact-web-js-modes-ink-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -636,9 +636,8 @@ fn a_symbol_under_a_mode_boundary_is_decided_as_the_kernel_decides() {
     );
     // A boundary whose own bound colour clears, or takes a value the row
     // refuses, keeps its implied row, one clear after another included; a
-    // value its author wrote is said. The JS target's rule (symbols.js
-    // `inked`: the implied row first, then the binding) agrees at each step.
-    let js = |v: &str| !matches!(v, "inherit" | "unset" | "currentcolor" | "nope" | "nada");
+    // value its author wrote is said.
+    let written = |v: &str| !matches!(v, "inherit" | "unset" | "currentcolor" | "nope" | "nada");
     let steps = [
         "unset",
         "currentcolor",
@@ -659,31 +658,6 @@ fn a_symbol_under_a_mode_boundary_is_decided_as_the_kernel_decides() {
             kernel.node_by_key(kernel.find_by_test_id(v)[0]).unwrap().id
         };
         host.dispatch(button, exact_runner::Event::Press);
-        assert_eq!(said(&host, "bound-under"), js(v), "after {v}");
+        assert_eq!(said(&host, "bound-under"), written(v), "after {v}");
     }
-    let sites = crate::emit::Sites::new(&plan).unwrap();
-    let parts = crate::style::project(&plan, &sites, &mut Vec::new()).unwrap();
-    let props = |id: &str| {
-        let part = parts.iter().flatten();
-        let mut part = part.filter(|p| p.props.get("data-testid").is_some_and(|t| t == id));
-        part.next().unwrap().props.clone()
-    };
-    assert!(props("beside").contains_key("data-symbol-color"));
-    let under = props("under");
-    assert!(!under.contains_key("data-symbol-color"), "{under:?}");
-    assert_eq!(under.get("data-symbol-ink").map(String::as_str), Some("11"));
-    assert_eq!(
-        props("boundary").get("data-exact-ink").map(String::as_str),
-        Some("b")
-    );
-    let bound = props("bound-under");
-    assert_eq!(
-        bound.get("data-symbol-ink").map(String::as_str),
-        Some("11"),
-        "{bound:?}"
-    );
-    assert_eq!(
-        props("bound").get("data-exact-ink").map(String::as_str),
-        Some("1b")
-    );
 }

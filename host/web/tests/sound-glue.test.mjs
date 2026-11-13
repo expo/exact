@@ -2,7 +2,7 @@
 // Firefox and WebKit: sound-glue.js over an OfflineAudioContext at 48 kHz,
 // rendered and read back by frame, its runner time mapped through an output
 // timestamp the test supplies; a voice's playback rate and pan (LLP 1125
-// D10); a sequence's retraction before a voice starts, and its timed haptics
+// D10), and a `set` that changes them while it plays (LLP 1096 D14); a sequence's retraction before a voice starts, and its timed haptics
 // (LLP 1125 D3); the held voice of a `{0, 0}` timestamp; the Audio Session
 // API; and the drop before a user activation. Every engine comes from
 // Playwright (`bunx playwright@1.64.1 install chromium-headless-shell firefox
@@ -193,6 +193,52 @@ for (const engine of engines) {
       expect(got.half[0]).toBeCloseTo(0.5 * Math.cos(0.75 * Math.PI / 2), 3);
       expect(got.half[1]).toBeCloseTo(0.5 * Math.sin(0.75 * Math.PI / 2), 3);
       expect(got.centre).toEqual([expect.closeTo(0.5, 3), expect.closeTo(0.5, 3)]);
+      expect(got.lines).toEqual([]);
+    } finally { await b.close(); server.close(); }
+  }, 60_000);
+
+  engineTest[engine](`${engine}: a set ramps a playing voice's gain, moves its rate and gives it a pan`, async () => {
+    const b = await browser(engine);
+    if (!b) throw new Error(`${engine} did not launch`);
+    const server = await serve();
+    try {
+      const p = await b.newPage();
+      await p.goto(server.url);
+      await p.waitForFunction(() => window.ready);
+      const got = await p.evaluate(async () => {
+        const last = data => { for (let i = data.length - 1; i >= 0; i--) if (Math.abs(data[i]) > 1e-4) return i; return -1; };
+        // From 100 ms, a constant 0.5; from 200 ms its gain falls to 0 over 100 ms.
+        const g = offline(1, { 'assets/a.wav': wav(48000, 0.5) });
+        g.out.ops([{ op: 'play', id: 1, sound: 0, at: 100, gain: 1 }]);
+        await decoded(g.out);
+        g.out.ops([{ op: 'set', id: 1, at: 200, gain: 0, ramp: 100 }]);
+        const gain = (await g.context.startRendering()).getChannelData(0);
+        // 4800 frames from 100 ms; at 150 ms, twice the rate: the other 2400 last 1200.
+        const r = offline(1, { 'assets/a.wav': wav(4800, 0.5) });
+        r.out.ops([{ op: 'play', id: 1, sound: 0, at: 100, gain: 1 }]);
+        await decoded(r.out);
+        r.out.ops([{ op: 'set', id: 1, at: 150, playbackRate: 2, ramp: 0 }]);
+        const rate = (await r.context.startRendering()).getChannelData(0);
+        // In stereo, unpanned, then hard left from 200 ms.
+        const s = offline(1, { 'assets/a.wav': wav(48000, 0.5) }, undefined, undefined, 2);
+        s.out.ops([{ op: 'play', id: 1, sound: 0, at: 100, gain: 1 }]);
+        await decoded(s.out);
+        s.out.ops([{ op: 'set', id: 1, at: 200, pan: -1, ramp: 0 }]);
+        const rendered = await s.context.startRendering(), left = rendered.getChannelData(0), right = rendered.getChannelData(1);
+        // A one-second file at rate 4 would have ended 250 ms in; slowed to 0.25 while it decodes, 300 ms in it is still due.
+        const d = offline(1, { 'assets/a.wav': wav(48000, 0.5) }, undefined, () => 1300);
+        d.out.ops([{ op: 'play', id: 1, sound: 0, at: 0, gain: 1, playbackRate: 4 }, { op: 'set', id: 1, at: 0, playbackRate: 0.25, ramp: 0 }]);
+        await decoded(d.out);
+        return { before: gain[9000], half: gain[12000], after: gain[15000], last: last(rate), panned: [left[15000], right[15000]], slowed: d.out.state().dropped, lines: [...g.lines, ...r.lines, ...s.lines, ...d.lines] };
+      });
+      expect(got.slowed).toBe(0);
+      expect(got.before).toBeCloseTo(0.5, 3);
+      expect(got.half).toBeCloseTo(0.25, 2);
+      expect(got.after).toBeCloseTo(0, 3);
+      // playbackRate is k-rate: its change lands on a 128-frame render quantum.
+      expect(Math.abs(got.last - 8399)).toBeLessThanOrEqual(132);
+      expect(got.panned[0]).toBeCloseTo(0.5, 3);
+      expect(got.panned[1]).toBeCloseTo(0, 3);
       expect(got.lines).toEqual([]);
     } finally { await b.close(); server.close(); }
   }, 60_000);

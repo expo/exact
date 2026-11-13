@@ -11,6 +11,31 @@ import XCTest
 final class NativeButtonsMacTests: XCTestCase {
     private var window: NSWindow!
 
+    func testButtonsFollowWindowAndSubtreeAppearanceWithoutABatch() throws {
+        var colored = face("Painted")
+        colored.rows.title["text_color"] = .array([.array([0, 0, 0, 255]), .array([255, 255, 255, 255])])
+        let p = presenter(box(1) + native(2) + native(3, x: 140)
+            + [["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]]],
+            faces: [2: face("Plain", macos: "borderless", style: "plain"), 3: colored])
+        let plain = try XCTUnwrap(p.controls.controls[2] as? NativeButtonMac)
+        let painted = try XCTUnwrap(p.controls.controls[3] as? NativeButtonMac)
+        for name in [NSAppearance.Name.darkAqua, .aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: name)
+            window.displayIfNeeded()
+            XCTAssertEqual(plain.effectiveAppearance.name, name)
+            XCTAssertEqual(painted.effectiveAppearance.name, name)
+            let expected: CGFloat = name == .darkAqua ? 1 : 0
+            XCTAssertEqual(painted.contentTintColor?.usingColorSpace(.sRGB)?.redComponent, expected)
+        }
+        let owner = try XCTUnwrap(p.views[2])
+        owner.applyStyle(owner.style.merging(["color_scheme": .string("light")]) { $1 })
+        XCTAssertEqual(plain.effectiveAppearance.name, .aqua)
+        window.appearance = NSAppearance(named: .aqua)
+        window.appearance = NSAppearance(named: .darkAqua)
+        XCTAssertEqual(plain.effectiveAppearance.name, .aqua)
+        XCTAssertEqual(painted.effectiveAppearance.name, .darkAqua)
+    }
+
     func testActivePropertiesUseAppKitFieldsAndRestoreTheCurrentBaseFace() throws {
         var current = face("Go")
         let p = presenter(box(1) + native(2) + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]], faces: [2: current])

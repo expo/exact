@@ -563,19 +563,11 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
                         out.push(name);
                         uses(children, out);
                     }
-                    Node::Element { children, .. } => uses(children, out),
-                    Node::When {
-                        then, otherwise, ..
-                    } => {
-                        uses(then, out);
-                        uses(otherwise, out);
+                    node => {
+                        for list in node.child_lists() {
+                            uses(list, out);
+                        }
                     }
-                    Node::Each { body, .. } => uses(body, out),
-                    Node::Match { some, none, .. } => {
-                        uses(&some.1, out);
-                        uses(none, out);
-                    }
-                    Node::Children { .. } => {}
                 }
             }
         }
@@ -610,18 +602,11 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
                     }));
                     literal(children, out);
                 }
-                Node::Element { .. } | Node::Children { .. } => {}
-                Node::Use { children, .. } => literal(children, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    literal(then, out);
-                    literal(otherwise, out);
-                }
-                Node::Each { body, .. } => literal(body, out),
-                Node::Match { some, none, .. } => {
-                    literal(&some.1, out);
-                    literal(none, out);
+                Node::Element { .. } => {}
+                node => {
+                    for list in node.child_lists() {
+                        literal(list, out);
+                    }
                 }
             }
         }
@@ -764,24 +749,15 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                     }
                     walk(children, names, errors);
                 }
-                Node::Use { children, .. } => walk(children, names, errors),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, names, errors);
-                    walk(otherwise, names, errors);
+                node => {
+                    for (list, binds) in node.scoped_child_lists() {
+                        if binds.is_empty() {
+                            walk(list, names, errors);
+                        } else {
+                            walk(list, &names.hiding(binds.iter()), errors);
+                        }
+                    }
                 }
-                Node::Each {
-                    var, index, body, ..
-                } => {
-                    let row = std::iter::once(var.as_str()).chain(index.as_deref());
-                    walk(body, &names.hiding(row), errors);
-                }
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, &names.hiding([some.0.as_str()]), errors);
-                    walk(none, names, errors);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

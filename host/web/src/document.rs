@@ -52,7 +52,7 @@ pub use markup::dataset;
 use markup::{markup_pieces, Json};
 pub use page::{
     build_locations, canonical_location, checkpoint, digest, read_checkpoint, route_at,
-    route_location, Site,
+    route_location, route_title, Site,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -75,6 +75,8 @@ pub struct Document {
     /// The active head's fields: the page's `<head>` (LLP 1048.003 D1). A
     /// head node has no element in the root.
     pub head: exact_runner::Head,
+    /// The selected route's header heading (LLP 1115.000 D4.1).
+    pub route_title: Option<String>,
     /// Every `@keyframes` rule an element's `animation` names, once each
     /// (LLP 1055 D7), for the head: a reader without JavaScript sees it play.
     pub keyframes: String,
@@ -274,6 +276,7 @@ pub fn project_tree<D: DataSource>(
         viewport_fit: first_prop(tree, tree.roots(), PropId::ViewportFit),
         interactive_widget: first_prop(tree, tree.roots(), PropId::InteractiveWidget),
         head: tree.head(),
+        route_title: page::route_title(tree, tree.roots()),
         keyframes,
         scroll_document,
         hero_image,
@@ -364,6 +367,7 @@ fn walk<D: DataSource>(
         viewport_fit: first_prop(&src, &roots, PropId::ViewportFit),
         interactive_widget: first_prop(&src, &roots, PropId::InteractiveWidget),
         head: runner.head(),
+        route_title: page::route_title(&src, &roots),
         keyframes,
         scroll_document,
         hero_image,

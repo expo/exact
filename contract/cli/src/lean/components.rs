@@ -42,6 +42,8 @@ fn emit_file(
         out: String::new(),
         checked: &checked,
         root: checked.expanded.root.clone(),
+        format_used: Default::default(),
+        records: Default::default(),
     };
     e.components(name)
 }
@@ -80,7 +82,8 @@ impl Emitter<'_> {
         let _ = writeln!(o, "  routes := {},", self.routes_list());
         let _ = writeln!(o, "  router := {},", self.router());
         let _ = writeln!(o, "  strings := {},", self.strings_list());
-        let _ = writeln!(o, "  locale := {}", self.locale());
+        let _ = writeln!(o, "  locale := {},", self.locale());
+        let _ = writeln!(o, "  format := {}", self.format());
         o.push_str("}\n");
         let head = format!(
             "def {name} : Contract.Components.CProgram := {{\n  shapes := {},\n",

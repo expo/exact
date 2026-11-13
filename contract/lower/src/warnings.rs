@@ -4,9 +4,8 @@
 //! them: a warning fails no build and no test, and names its repair as a
 //! refusal does.
 //!
-//! Each is read from the checked file's expanded root, as lowering reads it, and gives what
-//! it cannot see the benefit of the doubt, as `routes.rs`'s `check_scroll` does: an `if`,
-//! `for` or `match`, a use or a slot, a computed role or type.
+//! Each check names what it can establish from the expanded root, as lowering reads it.
+//! Unexpanded uses and slots, and computed roles and types, stay unknown.
 
 use crate::tags::AttrTarget;
 use crate::LowerError;
@@ -21,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod container;
 mod counts;
 mod fixed_beside;
+mod geometry;
+mod header_bar;
 mod launch;
 pub(crate) mod line_height;
 mod miswiring;
@@ -35,7 +36,11 @@ mod scroll_bound;
 mod sounds;
 mod states;
 mod svg;
+mod tabs;
+mod text_styles;
 mod title;
+mod transform;
+mod transform_drag;
 mod width;
 pub(crate) use width::horizontal_flex;
 
@@ -50,19 +55,7 @@ pub fn warnings(checked: &Checked<'_>) -> Vec<LowerError> {
     with_text_styles(checked, &TextStyles::new())
 }
 
-/// Effective text sizing and native control boundaries from lowering. A reused
-/// source site whose own style differs between instances stays unknown. The tag
-/// distinguishes a button from the title synthesized at the same source span.
-pub(crate) type TextStyles = std::collections::BTreeMap<(Span, u32, String), Option<TextStyle>>;
-
-#[derive(Clone, PartialEq)]
-pub(crate) struct TextStyle {
-    pub(crate) native: Option<bool>,
-    pub(crate) font: Option<Attr>,
-    pub(crate) layout: Vec<Attr>,
-    /// The lowered parent includes list cards and swipe scrollers absent from the source.
-    pub(crate) parent_horizontal_flex: Option<bool>,
-}
+pub(crate) use text_styles::{TextStyle, TextStyles};
 
 pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> Vec<LowerError> {
     let root = &checked.expanded.root;
@@ -111,7 +104,7 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
                 // A route that says it has no bar (LLP 1115.000 D5.2) draws its header as written.
                 let no_bar = literal(attrs, "navigationBar") == Some("none");
                 if route && !no_bar {
-                    route_header(children, &[], &mut out);
+                    header_bar::route_header(children, &[], &mut out);
                     nested_header::nested_header(children, &mut out);
                     fixed_beside::fixed_beside((tag, attrs), children, &mut out);
                 }
@@ -119,7 +112,8 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
                     drawn_back(attrs, children, name, &mut out);
                 }
                 if literal(attrs, "role") == Some("tablist") {
-                    single_tab(node, &mut out);
+                    tabs::single_tab(node, &mut out);
+                    tabs::search_tab(node, &mut out);
                 }
                 let back = if keyed && !in_root {
                     literal(attrs, "navigationBack").filter(|name| !name.is_empty())
@@ -138,9 +132,7 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
         };
         stack.extend(children.into_iter().rev().map(|n| (n, in_root, back)));
     }
-    for style in &checked.file.styles {
-        line_height::multiplier(&style.attrs, &mut out);
-    }
+    (checked.file.styles.iter()).for_each(|s| line_height::multiplier(&s.attrs, &mut out));
     out.extend(screens::screen_by_state(checked));
     // A `replace` the router refuses on a root route's screen, a `select` after a push.
     out.extend(root_replace::router(checked));
@@ -162,6 +154,9 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
     states::dead(&root.view, &mut out);
     performance_now(root, &checked.file.fns, &mut out);
     sounds::undeclared(checked, &mut out);
+    geometry::unnamed(checked, &mut out);
+    transform::owners(checked, &mut out);
+    transform_drag::check(&root.view, &checked.file.styles, &mut out);
     // @ref LLP 1027.005 D6 — an identifying argument of the launch's own.
     launch::launch_identity(root, &checked.file.fns, &mut out);
     width::width_padding(&root.view, &checked.file.styles, &mut out);
@@ -249,274 +244,11 @@ const BOXES: &[&str] = &[
     "main",
 ];
 
-/// What the iOS bar makes of one node in a route's header.
-enum Part {
-    /// An `if`, `for`, `match`, use or slot, or a computed role or type: the benefit of the doubt.
-    Doubt,
-    /// Not shown in the header on any host: `display="none"`, or a popover
-    /// or dialog, which shows over the page when it opens.
-    Hidden,
-    /// `text role="heading"`: the bar's title. An `aria-level` with no role
-    /// is not one (LLP 1115.000 D12.5), there or to the bar.
-    Heading,
-    /// Another `text`: the subtitle when it is the first after the heading.
-    Text,
-    /// `input type="search"`: the bar's search field.
-    Search,
-    /// `role="tablist"`: the bar's segmented control.
-    Tablist,
-    /// A button that presses, or opens a popover: a bar item.
-    Pressable,
-    /// `role="status"`: a readout, a bar item that nothing presses (LLP
-    /// 1075.003 §9.15), what it holds its face.
-    Status,
-    /// A plain box, walked into.
-    Box,
-    /// Anything else.
-    Other,
-}
-
-fn part(node: &Node) -> Part {
-    let Node::Element { tag, attrs, .. } = node else {
-        return Part::Doubt;
-    };
-    // A popover or dialog shows over the page when opened, not in the bar.
-    if literal(attrs, "display") == Some("none") || has(attrs, "popover") || tag == "dialog" {
-        return Part::Hidden;
-    }
-    if computed(attrs, "role") || computed(attrs, "display") {
-        return Part::Doubt;
-    }
-    let role = literal(attrs, "role");
-    if role == Some("tablist") {
-        return Part::Tablist;
-    }
-    // A link navigates, given the benefit as a pressed thing; a disabled button is a dimmed item.
-    let disabled = |a: &Attr| a.name == "disabled" && !matches!(a.value, Expr::Bool(false, _));
-    let item = attrs.iter().any(disabled)
-        || (has(attrs, "popovertarget") && literal(attrs, "popovertargetaction") != Some("hide"));
-    if has(attrs, "press") || (tag == "button" && item) || tag == "link" {
-        return Part::Pressable;
-    }
-    if role == Some("status") && tag != "header" {
-        return Part::Status;
-    }
-    match tag.as_str() {
-        "text" if role == Some("heading") => Part::Heading,
-        "text" => Part::Text,
-        "input" if computed(attrs, "type") => Part::Doubt,
-        "input" if literal(attrs, "type") == Some("search") => Part::Search,
-        t if BOXES.contains(&t) => Part::Box,
-        _ => Part::Other,
-    }
-}
-
 fn kids(node: &Node) -> &[Node] {
     match node {
         Node::Element { children, .. } => children,
         _ => &[],
     }
-}
-
-/// Whether the subtree holds something the bar places or the compiler
-/// cannot see through: then a box around it is walked, not dropped whole.
-fn holds_placed(node: &Node) -> bool {
-    kids(node).iter().any(|k| match part(k) {
-        Part::Doubt
-        | Part::Heading
-        | Part::Search
-        | Part::Tablist
-        | Part::Pressable
-        | Part::Status => true,
-        Part::Box => holds_placed(k),
-        Part::Hidden | Part::Text | Part::Other => false,
-    })
-}
-
-fn holds_heading(node: &Node) -> bool {
-    kids(node).iter().any(|k| match part(k) {
-        Part::Heading => true,
-        Part::Box | Part::Pressable | Part::Status => holds_heading(k),
-        _ => false,
-    })
-}
-
-/// A box with a literal fill: before the heading, the title's avatar.
-fn filled(node: &Node) -> bool {
-    let Node::Element { attrs, .. } = node else {
-        return false;
-    };
-    has(attrs, "background-color") || has(attrs, "background")
-}
-
-/// A passive box of texts and symbol images, one of each at least: a
-/// subtitle's line of glyphs (Signal's "🔕 Muted ⏱ 1w").
-fn glyph_line(node: &Node) -> bool {
-    let (mut symbol, mut text) = (false, false);
-    for k in kids(node) {
-        match (part(k), k) {
-            (Part::Text, _) => text = true,
-            (
-                Part::Other,
-                Node::Element {
-                    tag, positional, ..
-                },
-            ) if tag == "image" => match positional.first() {
-                // A computed source may be a symbol: the benefit.
-                Some(Expr::Str(s, _)) if !s.starts_with("symbol:") => return false,
-                Some(_) => symbol = true,
-                None => return false,
-            },
-            (Part::Hidden, _) => {}
-            _ => return false,
-        }
-    }
-    symbol && text && !filled(node)
-}
-
-/// What the walk of one header has seen.
-#[derive(Default)]
-struct Bar<'a> {
-    headings: usize,
-    /// The last heading counted: the bar's title when it is the one.
-    title: Option<&'a Node>,
-    /// An `if`, `for`, `match`, use or slot, or a computed role: the
-    /// headings counted may not be all.
-    doubt: bool,
-    /// The heading has been passed, in document order.
-    passed: bool,
-    subtitle: bool,
-    avatar: bool,
-    search: bool,
-    tablist: bool,
-    tap: bool,
-    unplaced: Vec<(Span, String)>,
-}
-
-/// A route's `header` that is not the bar, in `lower-header-no-bar`'s words (LLP 1115.000 D5.2).
-const NOT_THE_BAR: &str = "the header is drawn in the page as written, and the bar has no title: a pushed route's holds the system Back button alone, above the header, and a stack's first route has no bar.";
-
-/// The other repairs `lower-header-no-bar` names: a site's header, and the route's own chrome.
-const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\"none\"` on it; or, if this screen draws its own chrome, say `navigationBar=\"none\"` on the route's element (the one with `navigationKey`, not its line under `routes`)";
-
-/// `lower-header-unplaced`: a node in a route's first `header` that the
-/// iOS navigation bar does not place (LLP 1075.003 §9.10, LLP 1116 D6). The
-/// bar takes one heading as its title, the first text after it as the
-/// subtitle (a filled box before it as the avatar), one search field, one
-/// tablist, the buttons that press, open a popover or are disabled, and the
-/// readouts (`role="status"`, LLP 1075.003 §9.15); the rest of the header is hidden
-/// with it. With no heading or with two, the bar takes nothing and the
-/// header is shown as written: `lower-header-no-bar`'s (LLP 1116.003 D2.2).
-/// An `if` first among the route's children is read branch by branch: a branch's first node
-/// is the route's first child while it is taken, and `after` the route's nodes past that `if`.
-fn route_header<'a>(children: &'a [Node], after: &[&'a Node], out: &mut Vec<LowerError>) {
-    if let Some(Node::When {
-        then, otherwise, ..
-    }) = children.first()
-    {
-        let rest: Vec<&Node> = children[1..].iter().chain(after.iter().copied()).collect();
-        route_header(then, &rest, out);
-        route_header(otherwise, &rest, out);
-        return;
-    }
-    let Some(header @ Node::Element { tag, attrs, .. }) = children.first() else {
-        return;
-    };
-    if tag != "header" || nested_header::no_bar(attrs) {
-        return;
-    }
-    let mut bar = Bar::default();
-    walk(kids(header), &mut bar);
-    if bar.headings != 1 {
-        if !bar.doubt {
-            out.push(LowerError {
-                id: "lower-header-no-bar",
-                message: if bar.headings == 0 {
-                    format!("this route's `header` holds no heading, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
-                } else {
-                    format!("this route's `header` holds {} headings, so on iOS it is not the navigation bar: {NOT_THE_BAR} Keep one `text role=\"heading\"` and make the others plain `text` (the first text after the heading is the bar's subtitle), or move them below the `header`{OR_NO_BAR} (docs/recipes/navigation-stack.md)", bar.headings)
-                },
-                span: header.span(),
-            });
-        }
-        return;
-    }
-    if let Some(title) = bar.title {
-        let content: Vec<&Node> = children[1..].iter().chain(after.iter().copied()).collect();
-        title::title_twice(title, &content, out);
-    }
-    for (span, what) in bar.unplaced {
-        out.push(LowerError {
-            id: "lower-header-unplaced",
-            message: format!(
-                "{what} in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title, the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"● Live\" beside the title), give it `role=\"status\"` (docs/contract-for-agents.md, \"Tabs and stacks\")"
-            ),
-            span,
-        });
-    }
-}
-
-fn walk<'a>(nodes: &'a [Node], bar: &mut Bar<'a>) {
-    for node in nodes {
-        let span = node.span();
-        match part(node) {
-            Part::Doubt => bar.doubt = true,
-            Part::Hidden => {}
-            Part::Heading => {
-                bar.headings += 1;
-                bar.title = Some(node);
-                bar.passed = true;
-            }
-            Part::Search if !bar.search => bar.search = true,
-            Part::Tablist if !bar.tablist => bar.tablist = true,
-            Part::Search => bar
-                .unplaced
-                .push((span, "a second `input type=\"search\"`".into())),
-            Part::Tablist => bar
-                .unplaced
-                .push((span, "a second `role=\"tablist\"`".into())),
-            // A pressable box around the heading is the title, tapped.
-            Part::Pressable if !bar.tap && has_press(node) && holds_heading(node) => {
-                bar.tap = true;
-                walk(kids(node), bar);
-            }
-            Part::Pressable => {}
-            // A status around the heading is no readout: walked for it.
-            Part::Status if holds_heading(node) => walk(kids(node), bar),
-            Part::Status => {}
-            Part::Text if bar.passed && !bar.subtitle => bar.subtitle = true,
-            Part::Text => bar.unplaced.push((
-                span,
-                if bar.passed {
-                    "this text, after the subtitle,".into()
-                } else {
-                    "this text, before the heading,".into()
-                },
-            )),
-            Part::Box if bar.passed && !bar.subtitle && glyph_line(node) => bar.subtitle = true,
-            Part::Box if !bar.passed && !bar.avatar && filled(node) && !holds_heading(node) => {
-                bar.avatar = true;
-            }
-            Part::Box if holds_placed(node) => walk(kids(node), bar),
-            // A box with nothing in it lays the bar's items out (a spacer).
-            Part::Box if kids(node).is_empty() => {}
-            Part::Box => bar.unplaced.push((span, "this box".into())),
-            Part::Other => {
-                let what = match node {
-                    Node::Element { tag, .. } if tag == "button" => {
-                        "a `button` that presses nothing".into()
-                    }
-                    Node::Element { tag, .. } => format!("this `{tag}`"),
-                    _ => "this node".into(),
-                };
-                bar.unplaced.push((span, what));
-            }
-        }
-    }
-}
-
-fn has_press(node: &Node) -> bool {
-    matches!(node, Node::Element { attrs, .. } if has(attrs, "press"))
 }
 
 /// The `header`s that may be a route's first child: its first node, or the
@@ -608,43 +340,6 @@ fn drawn_back(route: &[Attr], children: &[Node], name: &str, out: &mut Vec<Lower
             Node::Use { children, .. } => stack.extend(children.iter().rev()),
             Node::Children { .. } => {}
         }
-    }
-}
-
-/// `lower-single-tab`: a root tab bar (a `role="tablist"` whose tabs name
-/// their panels with `aria-controls`) with fewer than two tabs (LLP 1116
-/// D6): a bar of one tab under a single screen, which builders copied from
-/// a tab skeleton (polls, chat-rooms).
-fn single_tab(tablist: &Node, out: &mut Vec<LowerError>) {
-    let (mut tabs, mut controls, mut doubt) = (0, false, false);
-    let mut stack: Vec<&Node> = kids(tablist).iter().collect();
-    while let Some(node) = stack.pop() {
-        match node {
-            Node::Element {
-                attrs, children, ..
-            } => {
-                if computed(attrs, "role") {
-                    doubt = true;
-                } else if literal(attrs, "role") == Some("tab") {
-                    tabs += 1;
-                    controls |= has(attrs, "aria-controls");
-                } else {
-                    stack.extend(children);
-                }
-            }
-            _ => doubt = true,
-        }
-    }
-    if controls && !doubt && tabs < 2 {
-        out.push(LowerError {
-            id: "lower-single-tab",
-            message: format!(
-                "this tab bar has {} tab{}: a tab bar is for moving between two or more sections, and one tab is a bar that does nothing. For a single screen, drop the `role=\"tablist\"` and the `tabpanel` around the routes, so the routes are the navigation root's children (one stack); add the other tabs if the app has them (docs/contract-for-agents.md, \"Tabs and stacks\")",
-                tabs,
-                if tabs == 1 { "" } else { "s" }
-            ),
-            span: tablist.span(),
-        });
     }
 }
 
@@ -1215,6 +910,18 @@ fn names(e: &Expr, word: &str) -> bool {
     }
 }
 
+/// The sites from `first` on stand on an accent fill: their white text is
+/// kept (@ref LLP 1116.020 D7). White on the accent is a filled button's
+/// label (Messages' bubble): the accent stays a fill in both schemes, and
+/// `check` holds the pair to 3:1.
+fn on_accent_fill(sites: &mut Vec<Site>, first: usize) {
+    let kept: Vec<Site> = sites
+        .drain(first..)
+        .filter(|s| s.name != "color" || !s.colours.iter().all(|c| white(c)))
+        .collect();
+    sites.extend(kept);
+}
+
 /// Whether a literal colour is white.
 fn white(c: &str) -> bool {
     let c = c.trim().to_ascii_lowercase().replace(' ', "");
@@ -1309,7 +1016,13 @@ fn one_scheme(
         }
     }
     for s in styles {
+        let first = sites.len();
         colour_sites(&s.attrs, &leaves, &[], &mut sites);
+        if width::last(&s.attrs.iter().collect::<Vec<_>>(), "background-color")
+            .is_some_and(|fill| names(&fill.value, "AccentColor"))
+        {
+            on_accent_fill(&mut sites, first);
+        }
     }
     // Each node with whether the nearest fill over it (its own included)
     // can be the accent.
@@ -1326,23 +1039,15 @@ fn one_scheme(
             Node::Element {
                 attrs, children, ..
             } => {
-                if let Some(fill) = attrs.iter().rev().find(|a| a.name == "background-color") {
+                // The fill its class gives it counts, as its own does.
+                let rows = width::rows(attrs, styles).unwrap_or_else(|| attrs.iter().collect());
+                if let Some(fill) = width::last(&rows, "background-color") {
                     accent = names(&fill.value, "AccentColor");
                 }
                 let first = sites.len();
                 colour_sites(attrs, &leaves, &locals, &mut sites);
-                // @ref LLP 1116.020 D7 — white text on an accent fill is a
-                // filled button's label (Messages' bubble): the accent stays
-                // a fill in both schemes, and `check` holds the pair to 3:1.
                 if accent {
-                    let mut i = first;
-                    while i < sites.len() {
-                        if sites[i].name == "color" && sites[i].colours.iter().all(|c| white(c)) {
-                            sites.remove(i);
-                        } else {
-                            i += 1;
-                        }
-                    }
+                    on_accent_fill(&mut sites, first);
                 }
                 (children.iter().collect(), locals)
             }

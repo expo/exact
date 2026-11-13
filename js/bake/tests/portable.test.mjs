@@ -1,9 +1,11 @@
-// The bake's syntax checks: package portability, code-from-string warnings and ambient calls.
+// The bake's syntax checks: package portability, code-from-string warnings, ambient calls and the packages app.ts imports.
 import { expect, test } from 'bun:test';
 import { parseSync } from 'rolldown/utils';
 import { packageRefusals } from '../src/__exact_portable.mjs';
-import { ambientRefusals } from '../src/typescript.mjs';
-import { resolve } from 'node:path';
+import { ambientRefusals, usedPackages } from '../src/typescript.mjs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const check = (code, lang) => {
   const warnings = [];
@@ -303,4 +305,24 @@ test('each guarded ambient API respects local bindings and keeps its diagnostic 
     expect(refused('const Date = {}; globalThis.Date.now();')[0]).toStartWith(`${file}:1:18: Date.now()`);
     expect(refused('new Date(0).getTime(); setTimeout(() => {}, 1);')).toEqual([]);
   }
+});
+
+// The packages app.ts imports are read from its syntax tree: a string, template, regular expression or comment that spells
+// an import neither adds a package nor hides one. The compiler reads the same cases by tokens (contract/cli/src/sources/data.rs).
+test('an import spelled in a string or a comment is none', () => {
+  const app = mkdtempSync(join(tmpdir(), 'exact-used-packages-'));
+  const used = (code) => { writeFileSync(join(app, 'app.ts'), code); return [...usedPackages(app).names].sort(); };
+  try {
+    expect(used('const note = "/*";\nimport { rows } from "@exact/ledger";\nconst end = "*/";\n')).toEqual(['@exact/ledger']);
+    expect(used('const hint = \'import { takePhoto } from "@exact/camera"\';\nconst u = "a//b"; import { x } from "@exact/real";\n')).toEqual(['@exact/real']);
+    expect(used('const t = `import "tpl" ${await import(\'inside\')} ${{ a: 1 }.a}`;\nimport y from \'after-template\';\n')).toEqual(['after-template', 'inside']);
+    expect(used('const r = /import "rx"|\'/g; const q = a / b / c;\nimport z from \'after-regex\';\n')).toEqual(['after-regex']);
+    expect(used('// a plain list, not the exact-camera view\n')).toEqual([]);
+    expect(used([
+      "import { a } from '@exact/notifications';", "import type { B } from '@exact/clipboard';", 'import { type C } from "zod/v4";',
+      "export type { D } from 'types-only';", 'const later = await import("lazy-pkg");', "// import { d } from 'commented';",
+      "/* import { e } from 'blocked'; */", "const url = 'https://example.com'; import x from 'after-url';",
+      "import type from 'named-type';", 'import { "a-b" as ab } from \'string-name\';', 'const meta = import.meta.url;',
+    ].join('\n'))).toEqual(['@exact/notifications', 'after-url', 'lazy-pkg', 'named-type', 'string-name', 'zod']);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });

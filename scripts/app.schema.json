@@ -14,6 +14,25 @@
       "additionalProperties": false,
       "properties": { "mode": { "enum": ["off", "core"] } }
     },
+    "preload": {
+      "type": "object",
+      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant; {{ writes a literal brace. Checked and parsed at bake, with present secrets filled in on the device.",
+      "maxProperties": 8,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["url"],
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "method": { "type": "string", "default": "GET" },
+          "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "body": { "type": "string" },
+          "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+          "when": { "enum": ["start", "foreground"], "default": "start" }
+        }
+      }
+    },
     "launch": {
       "type": "array",
       "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Its apple/launch/*.swift is linked into the executable. Its apple/service/*.swift becomes lib<name>_service.dylib, loaded after startup.",
@@ -253,7 +272,7 @@
     },
     "theme_color": { "type": "string" },
     "color_scheme_dark": {
-      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page and the iOS launch screen), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
+      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page, the iOS launch screen and the Android launch window), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
       "type": "object",
       "properties": {
         "background_color": {
@@ -273,7 +292,7 @@
     "background_color": {
       "type": "string",
       "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-      "description": "The first-frame background, the web page's and the iOS launch screen's: #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, the iOS launch screen is the platform's: systemBackground, or the grouped background where the first route scrolls a grouped list."
+      "description": "The first-frame background, the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12): #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, each is the platform's: on iOS systemBackground, or the grouped background where the first route scrolls a grouped list; on Android the theme's surface."
     },
     "lang": {
       "description": "The W3C manifest's language: a BCP 47 tag for the page's <html lang> and the web manifest. Absent is en.",
@@ -282,7 +301,7 @@
     },
     "link": {
       "type": "array",
-      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite"] },
+      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips"] },
       "uniqueItems": true,
       "description": "Capabilities a native production build links before any plan uses them (LLP 1047 D8; LLP 1047.001), so a later bundle may: an archive otherwise links what its plan uses (plus `auth_session` from `auth.session` grants and `sqlite` from `sqlite.open` grants) and nothing else, and a bundle that needs more is a new binary. Linking sqlite without sqlite.open only adds unused code: an update that adds the grant changes the compatibility identity and requires a new binary even when sqlite was linked. Development links every capability but `media_picker` and `auth_session`, which it links as production would (LLP 1047.001.000 F). Names are the runner's (`exact_runner::Capability::name`)."
     },
@@ -543,7 +562,7 @@
     },
     "intents": {
       "type": "object",
-      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, and a destroys tool's face names only the apple door (D10).",
+      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, a destroys tool's face names only the apple door (D10), and a face that reaches the web door needs a tool with a description and a name of at most 128 characters (WebMCP).",
       "additionalProperties": false,
       "properties": {
         "entities": {
@@ -572,6 +591,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "title": { "type": "string", "minLength": 1 },
+                    "description": { "type": "string", "minLength": 1, "description": "What the parameter means and what it takes, for a caller choosing a value: App Intents' parameter description, the input schema's description on the web." },
                     "entity": { "type": "string", "minLength": 1, "description": "A kind of intents.entities: the system offers that kind's entries, and passes the entry's id." },
                     "type": { "enum": ["integer"], "description": "A number parameter the system asks for as a whole number." }
                   }
@@ -1043,7 +1063,8 @@
                 "width": { "type": "number", "minimum": 1, "maximum": 16384 },
                 "height": { "type": "number", "minimum": 1, "maximum": 16384 },
                 "minWidth": { "type": "number", "minimum": 1, "maximum": 16384 },
-                "minHeight": { "type": "number", "minimum": 1, "maximum": 16384 }
+                "minHeight": { "type": "number", "minimum": 1, "maximum": 16384 },
+                "keepRunning": { "type": "boolean", "description": "Closing the window (its close button, Alt+F4, the taskbar's Close window) hides it, and the app keeps running, its session and timers alive; launching the app again (Start, its taskbar pin, a shortcut) or a bare `focus()` shows it as it was. The app's own `close()` still ends it, as does signing out. For an app with work the person expects to go on without the window, as a chat client's or a sync's. Until the notification-area icon is built (LLP 1133.025 §14), give the person a way back and a way out of their own: a global shortcut whose action calls `focus()`, and a button whose action calls `close()`. Absent or false: the app ends with its window." }
               },
               "additionalProperties": false
             }

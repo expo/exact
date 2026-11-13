@@ -14,6 +14,8 @@ struct ScrollDragTrack {
     static let window: TimeInterval = 0.1
     /// When each move came, and how far it moved the offset (points).
     private(set) var moves: [(at: TimeInterval, by: CGPoint)] = []
+    /// Where the offset was when the drag began.
+    var start = CGPoint.zero
 
     mutating func moved(at t: TimeInterval, by offset: CGPoint) {
         moves.append((t, offset))
@@ -43,12 +45,16 @@ extension ChainingScrollView {
         if !lift, taken, delta != .zero {
             if dragTrack == nil {
                 dragTrack = ScrollDragTrack()
+                dragTrack?.start = contentView.bounds.origin
                 if node.handlers.contains("scrolldragstart") { node.presenter?.scrollDrag(node.id, nil) }
             }
             dragTrack?.moved(at: event.timestamp, by: CGPoint(x: -delta.x, y: -delta.y))
         } else if lift, let track = dragTrack {
             dragTrack = nil
-            if node.handlers.contains("scrolldragend") { node.presenter?.scrollDrag(node.id, (track.velocity(at: event.timestamp), nil)) }
+            let velocity = track.velocity(at: event.timestamp)
+            if node.handlers.contains("scrolldragend") { node.presenter?.scrollDrag(node.id, (velocity, nil)) }
+            // A snapping scroller eases to its rest; the momentum after is dropped (`ScrollSnapMac.swift`).
+            _ = node.snapAtLift(velocity: velocity, start: track.start)
         }
     }
 }

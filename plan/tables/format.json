@@ -1,5 +1,5 @@
 {
-  "formatVersion": 5,
+  "formatVersion": 6,
   "_header": "Extra header fields after the four fixed integers (magic, version, format digest, kernel schema, compiler identity), in declaration order. `string` is length-prefixed UTF-8. `app_id` is the app identity, reverse-DNS (LLP 1023 D5): bake writes it from DataSource::app_id(); empty is unnamed (a fixture or a stand-in) and unnamed matches anything at boot. LLP 1038 D2: router names the root slot filled before initializers.",
   "header": [
     {
@@ -16,9 +16,19 @@
       "_comment": "@ref LLP 1060 D4: the root string slot holding the resolved locale every `t(...)` reads; set only when the app calls `t`. The runner writes it from set_place."
     },
     {
+      "name": "format",
+      "codec": "opt:slots",
+      "_comment": "@ref LLP 1054.000.003 D6 (amended 2026-11-12): the root string slot holding the locale the formatters format in, the resolved table's whole name, then, after a space, the hour cycle the viewer forces unless the name forces one (`de`, `de h23`, `de-u-ca-gregory`); every localized roster entry's call reads it as its last argument. Set exactly when the `locales` rows carry format data. The runner writes it with the locale slot."
+    },
+    {
       "name": "snapshot_entry",
       "codec": "string",
       "_comment": "LLP 1126 D2: empty for a running app, otherwise the snapshot entry kind; checked before decoding tables."
+    },
+    {
+      "name": "surface",
+      "codec": "string",
+      "_comment": "LLP 1101.003 D9: the medium the plan was compiled for, `gui` or `terminal`: the terminal profile writes `terminal`, every other compile `gui`, and empty (a plan no compiler wrote, a fixture) reads as `gui`. Checked at decode, before any table: `Plan::decode` refuses a `terminal` plan and `Plan::decode_terminal` any other."
     },
     {
       "name": "snapshot_refresh",
@@ -234,6 +244,11 @@
           "_comment": "@ref LLP 1156.005 D4: `resource ... transient`. The runner neither keeps this resource's answer in the device's store nor seeds a launch from one, and a boot forgets an entry an earlier build kept. It is still asked again at `data_ready` as any store reader is."
         },
         {
+          "name": "keep",
+          "codec": "bool",
+          "_comment": "Opt-in kept launch answer for an exactSurface reader. Only successful live publications are stored; other runner-owned facts cannot opt in."
+        },
+        {
           "name": "gate",
           "codec": "range:args",
           "_comment": "@ref LLP 1161.002 D1: empty for a resource asked whenever its arguments are ready; for `resource r = source(args) when cond as shape S`, one entry, `cond`, read as a derive is. While it is false the resource is idle: nothing is asked, a request in flight is let go (an upload's goes on), `pending` and `failed` are false, the value it showed stays and is not current. When it turns true the resource is asked, forced."
@@ -345,6 +360,62 @@
         },
         {
           "name": "substitute",
+          "codec": "str"
+        }
+      ]
+    },
+    {
+      "name": "fetch_parts",
+      "_comment": "LLP 1162.001 D1: a declared source's parameter names (`value` empty), in order, and its request headers (`name`, and the value as written, with `{param}` and `{secret:name}` unexpanded).",
+      "fields": [
+        {
+          "name": "name",
+          "codec": "str"
+        },
+        {
+          "name": "value",
+          "codec": "str"
+        }
+      ]
+    },
+    {
+      "name": "fetches",
+      "_comment": "LLP 1162.001: a source declared in Contract, which the runner answers itself with one HTTP request. `url` is an RFC 6570 level-1 template over `params`; `origin` is its literal origin, which is its grant (`net.fetch <origin>`, D3); `body` is empty, `json` or `graphql`, the last with its operation in `document`; `pointer` is an RFC 6901 JSON Pointer into the reply.",
+      "fields": [
+        {
+          "name": "source",
+          "codec": "idx:sources"
+        },
+        {
+          "name": "method",
+          "codec": "str"
+        },
+        {
+          "name": "url",
+          "codec": "str"
+        },
+        {
+          "name": "origin",
+          "codec": "str"
+        },
+        {
+          "name": "params",
+          "codec": "range:fetch_parts"
+        },
+        {
+          "name": "headers",
+          "codec": "range:fetch_parts"
+        },
+        {
+          "name": "body",
+          "codec": "str"
+        },
+        {
+          "name": "document",
+          "codec": "str"
+        },
+        {
+          "name": "pointer",
           "codec": "str"
         }
       ]
@@ -488,6 +559,7 @@
     {
       "name": "timers",
       "fields": [
+        { "name": "change", "codec": "bool" },
         { "name": "wait", "codec": "u8" },
         { "name": "max_ms", "codec": "u32" },
         { "name": "tolerance_ms", "codec": "u32" },
@@ -1011,7 +1083,7 @@
     },
     {
       "name": "locales",
-      "_comment": "@ref LLP 1060 D3: one strings table per locale (BCP 47 name). Row 0 is the base; the rest are in name order. rtl is the CLDR script direction, compiled once. Table names remain for data-only strings. Only the keys the app's `t` calls name.",
+      "_comment": "@ref LLP 1060 D3: one strings table per locale (BCP 47 name). Row 0 is the base; the rest are in name order. rtl is the CLDR script direction, compiled once. Table names remain for data-only strings. Only the keys the app's `t` calls name. @ref LLP 1054.000.003 D6 (amended 2026-11-12): format is the number and date data the formatters read for this table's locale (contract/lower/src/formats.rs has its fields), empty in every row when no table's locale formats otherwise than en-US.",
       "fields": [
         {
           "name": "name",
@@ -1020,6 +1092,10 @@
         {
           "name": "rtl",
           "codec": "bool"
+        },
+        {
+          "name": "format",
+          "codec": "str"
         },
         {
           "name": "texts",
@@ -1457,8 +1533,9 @@
     {
       "name": "formatTime",
       "params": ["number", "number", "\"short\""],
+      "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D1/D7: `h:mm AM` of (epochMs, utcOffset minutes east), as Intl.DateTimeFormat(\"en-US\", { timeZone: <the offset>, timeStyle: \"short\" }) prints it. Core: every app links it, as it linked formatClockTime. A parameter spelled as string literals (`\"a\" | \"b\"`) is a string the compiler requires written as one of them."
+      "_comment": "@ref LLP 1054.000.003 D1/D7: `h:mm AM` of (epochMs, utcOffset minutes east), as Intl.DateTimeFormat(\"en-US\", { timeZone: <the offset>, timeStyle: \"short\" }) prints it. Core: every app links it, as it linked formatClockTime. A parameter spelled as string literals (`\"a\" | \"b\"`) is a string the compiler requires written as one of them. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "length",
@@ -1647,15 +1724,17 @@
     {
       "name": "formatDate",
       "params": ["number", "number", "\"medium\" | \"month-year\" | \"iso\""],
+      "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D2/D7/D8: the calendar date of (epochMs, utcOffset), as Intl.DateTimeFormat(\"en-US\") prints it: `medium` is { dateStyle: \"medium\" }, `month-year` is { month: \"long\", year: \"numeric\" }. @ref LLP 1102 §3.4: `iso` is `YYYY-MM-DD`, the date at that wall time: `Date.prototype.toISOString`'s date part at a whole-minute offset (a fractional offset's wall time is not clipped to a millisecond again, as no style's is); outside years 1–9999 it prints `\"\"`, as every style does (D7). The linked capability `format`."
+      "_comment": "@ref LLP 1054.000.003 D2/D7/D8: the calendar date of (epochMs, utcOffset), as Intl.DateTimeFormat(\"en-US\") prints it: `medium` is { dateStyle: \"medium\" }, `month-year` is { month: \"long\", year: \"numeric\" }. @ref LLP 1102 §3.4: `iso` is `YYYY-MM-DD`, the date at that wall time: `Date.prototype.toISOString`'s date part at a whole-minute offset (a fractional offset's wall time is not clipped to a millisecond again, as no style's is); outside years 1–9999 it prints `\"\"`, as every style does (D7). The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "formatNumber",
       "params": ["number", "\"compact\" | \"decimal\" | \"currency\" | \"percent\"", "\"USD\" | \"EUR\" | \"GBP\" | \"JPY\" | \"CNY\" | \"INR\" | \"CAD\" | \"AUD\" | \"NZD\" | \"HKD\" | \"SGD\" | \"CHF\" | \"SEK\" | \"NOK\" | \"DKK\" | \"PLN\" | \"MXN\" | \"BRL\" | \"KRW\" | \"ZAR\" | \"TWD\" | \"ILS\" | \"PHP\" | \"VND\""],
       "optional": ["\"\""],
+      "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D3/D7/D8: `compact` is Intl.NumberFormat(\"en-US\", { notation: \"compact\", roundingMode: \"trunc\", signDisplay: \"negative\" }). @ref LLP 1116 D8: `decimal` is Intl.NumberFormat(\"en-US\") (grouped, at most three fraction digits), `currency` with an ISO 4217 code { style: \"currency\", currency } (`$1,481.47`, `-$5.00`, the code's own fraction digits), `percent` { style: \"percent\" } (`26%`): each rounds the value's shortest decimal digits half away from zero, as ICU does, and signs a negative zero. The code is written only with `currency`, and the compiler fills `\"\"` for a call that omits it. Every style prints `\"\"` for a non-finite value (D7). The linked capability `format`."
+      "_comment": "@ref LLP 1054.000.003 D3/D7/D8: `compact` is Intl.NumberFormat(\"en-US\", { notation: \"compact\", roundingMode: \"trunc\", signDisplay: \"negative\" }). @ref LLP 1116 D8: `decimal` is Intl.NumberFormat(\"en-US\") (grouped, at most three fraction digits), `currency` with an ISO 4217 code { style: \"currency\", currency } (`$1,481.47`, `-$5.00`, the code's own fraction digits), `percent` { style: \"percent\" } (`26%`): each rounds the value's shortest decimal digits half away from zero, as ICU does, and signs a negative zero. The code is written only with `currency`, and the compiler fills `\"\"` for a call that omits it. Every style prints `\"\"` for a non-finite value (D7). The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "frame",
@@ -1781,8 +1860,9 @@
     {
       "name": "formatDay",
       "params": ["number", "number", "number", "\"day\" | \"day-time\" | \"list\""],
+      "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1116.020 D8: a day's label for (thenMs, nowMs, utcOffset), en-US. The days are the offset's calendar days, as `formatDate`'s are (one fixed offset for both instants: a DST change between them is not applied). `day` is `Today`, `Yesterday` or `Tomorrow`, else `formatDate`'s `medium`; `day-time` adds ` at ` and `formatTime`'s `short` (`Today at 4:42 PM`, `Oct 11, 2026 at 4:42 PM`); `list` is Mail's and Notes' list label: `formatTime`'s `short` today, `Yesterday`, the weekday's name two to six days back, else the numeric short date of Intl.DateTimeFormat(\"en-US\", { dateStyle: \"short\" }) (`10/11/26`), a later day's included. `\"\"` when either instant is invalid as `formatDate` judges one (LLP 1054.000.003 D7). Pure: the app passes its own `now`. The linked capability `format`."
+      "_comment": "@ref LLP 1116.020 D8: a day's label for (thenMs, nowMs, utcOffset), en-US. The days are the offset's calendar days, as `formatDate`'s are (one fixed offset for both instants: a DST change between them is not applied). `day` is `Today`, `Yesterday` or `Tomorrow`, else `formatDate`'s `medium`; `day-time` adds ` at ` and `formatTime`'s `short` (`Today at 4:42 PM`, `Oct 11, 2026 at 4:42 PM`); `list` is Mail's and Notes' list label: `formatTime`'s `short` today, `Yesterday`, the weekday's name two to six days back, else the numeric short date of Intl.DateTimeFormat(\"en-US\", { dateStyle: \"short\" }) (`10/11/26`), a later day's included. `\"\"` when either instant is invalid as `formatDate` judges one (LLP 1054.000.003 D7). Pure: the app passes its own `now`. The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "sin",

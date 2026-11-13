@@ -260,6 +260,10 @@ pub struct Request {
     pub received: Option<Received>,
     /// The asynchronous fetch's final 2xx body destination (Exact patch 33).
     pub response_body: Option<crate::stdlib::fetch_async::ResponseBody>,
+    /// Made ahead of its caller's asking: the platform's client refuses it
+    /// where the person has asked for less data (URLSession's
+    /// `allowsConstrainedNetworkAccess`; Exact patch 37).
+    pub speculative: bool,
 }
 
 /// An upload's progress, XMLHttpRequest's `upload` events: the body's bytes
@@ -308,6 +312,7 @@ impl Request {
             sent: None,
             received: None,
             response_body: None,
+            speculative: false,
         }
     }
 

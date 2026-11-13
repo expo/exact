@@ -736,6 +736,27 @@ final class NativeContextsIOSTests: XCTestCase {
         XCTAssertEqual(sheet.midX, invoker.midX, accuracy: 2, "centred across it")
     }
 
+    /// `position-area: left` on the sheet: to its invoker's left, as CSS
+    /// places the left column and the Mac's popover takes `.minX`; UIKit's
+    /// arrow then points right, at the invoker.
+    func testALeftColumnSheetOpensToItsInvokersLeft() throws {
+        let (p, controller, scene) = chooser({ Self.providers })
+        defer { p.menus.reset(); window.isHidden = true }
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["position_area": "left"]],
+                           ["op": "children", "id": 2, "ids": [3, 4, 5]],
+                           ["op": "frame", "id": 1, "x": 300.0, "y": 150.0, "w": 90.0, "h": 40.0]]))
+        let source = try XCTUnwrap(p.views[1])
+        XCTAssertEqual(p.menus.activate(source), true)
+        let alert = try XCTUnwrap(controller.presentedViewController as? UIAlertController)
+        let presentation = try XCTUnwrap(alert.popoverPresentationController)
+        XCTAssertEqual(presentation.permittedArrowDirections, .right)
+        XCTAssertFalse(presentation.canOverlapSourceViewRect)
+        guard scene else { throw missing("scene", "a presentation completes only in a scene's window") }
+        settle(p) { !p.menus.inTransition }
+        let sheet = alert.view.convert(alert.view.bounds, to: nil), invoker = source.convert(source.bounds, to: nil)
+        XCTAssertLessThanOrEqual(sheet.maxX, invoker.minX + 1, "sheet \(sheet) left of invoker \(invoker)")
+    }
+
     /// With no `position-area`, a sheet points at its whole invoker with
     /// UIKit's arrow on the side UIKit picks and never covers it, as a
     /// UIAlertController presented from a control does by default. Without a

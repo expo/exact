@@ -2,8 +2,8 @@
 
 A `canvas surface=name(…)` that no data module draws is drawn by the app's GPU module: a crate
 `gpu/` beside app.json whose surfaces implement `exact_gpu::Surface` (wgpu), loaded after the first
-pixel (`apps/caltrain/gpu` is a whole one). For heavy shaders, read `gpu/README.md`
-"Performance" (loop bounding, `opaque`, pipeline cache).
+pixel (`apps/caltrain/gpu` is a whole one). See `gpu/README.md` for performance,
+color-space requests, grants and shader encoding.
 
 **It is Rust of the app's own, so the app writes its Cargo workspace** (LLP 1153 D1.4). Start from
 the generated one; don't write a root `Cargo.toml` by hand:

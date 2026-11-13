@@ -11,9 +11,10 @@
 
 use super::{Animation, AnimationError, Animations, Direction, FillMode, Keyframe, Keyframes};
 use crate::easing::Easing;
-use crate::parse::{easing, split_top_level, time, time_like, ParseError};
+use crate::parse::{easing, split_top_level, time, ParseError};
 use crate::property::{Property, Value};
 use crate::transition::TimingFunction;
+use crate::word;
 use exact_num::Shortest;
 use std::fmt::Write as _;
 
@@ -71,7 +72,7 @@ impl Animations {
 
     fn grammar(text: &str) -> Result<Animations, ParseError> {
         let text = text.trim();
-        if text.is_empty() || text == "none" {
+        if text.is_empty() || text.eq_ignore_ascii_case("none") {
             return Ok(Animations::NONE);
         }
         let mut out = Vec::new();
@@ -90,38 +91,30 @@ impl Animations {
                 return Err(ParseError::BadShape(format!("`{decl}` has more than eight parts: an animation is a name, a duration, an easing, a delay, an iteration count, a direction, a fill mode and a play state")));
             }
             let mut a = Animation::default();
-            let (mut times, mut eased, mut counted) = (0, false, false);
-            let (mut directed, mut filled, mut stated, mut named) = (false, false, false, false);
+            let (mut slots, mut named) = (Slots::default(), false);
             for part in parts {
-                if let Ok(t) = time(part) {
-                    match times {
-                        0 => a.duration = t,
-                        1 => a.delay = t,
-                        _ => return Err(ParseError::BadShape(format!("`{decl}` has a third time: an animation takes a duration, then a delay"))),
+                let delay = slots.times > 0;
+                match slots.take(part) {
+                    Some(Role::Time) if delay => a.delay = time(part)?,
+                    Some(Role::Time) => a.duration = time(part)?,
+                    Some(Role::Easing) => a.easing = easing_only(part)?,
+                    Some(Role::Count) => a.iterations = count(part).unwrap(),
+                    Some(Role::Direction) => a.direction = direction(part).unwrap(),
+                    Some(Role::Fill) => a.fill = fill(part).unwrap(),
+                    Some(Role::Play) => a.paused = play_state(part).unwrap(),
+                    Some(Role::Name) => {
+                        a.name = held_name(part);
+                        named = true;
                     }
-                    times += 1;
-                } else if time_like(part) {
-                    return Err(ParseError::BadTime(part.to_string()));
-                } else if !eased && easing_keyword(part).is_some() {
-                    a.easing = easing_keyword(part).unwrap()?;
-                    eased = true;
-                } else if !counted && count(part).is_some() {
-                    a.iterations = count(part).unwrap();
-                    counted = true;
-                } else if !directed && direction(part).is_some() {
-                    a.direction = direction(part).unwrap();
-                    directed = true;
-                } else if !filled && fill(part).is_some() {
-                    a.fill = fill(part).unwrap();
-                    filled = true;
-                } else if !stated && matches!(part, "running" | "paused") {
-                    a.paused = part == "paused";
-                    stated = true;
-                } else if !named && is_name(part) {
-                    a.name = part.trim_matches(|c| c == '"' || c == '\'').to_string();
-                    named = true;
-                } else {
-                    return Err(ParseError::BadShape(left_over(part, decl, &a.name)));
+                    None if time(part).is_ok() => {
+                        return Err(ParseError::BadShape(format!(
+                        "`{decl}` has a third time: an animation takes a duration, then a delay"
+                    )))
+                    }
+                    None if word::time_like(part) => {
+                        return Err(ParseError::BadTime(part.to_string()))
+                    }
+                    None => return Err(ParseError::BadShape(left_over(part, decl, &a.name))),
                 }
             }
             a.validate().map_err(ParseError::InvalidAnimation)?;
@@ -224,22 +217,14 @@ impl Animation {
             })
         };
         match name {
-            "animation-name" if is_name(value) => {
-                self.name = value.trim_matches(|c| c == '"' || c == '\'').to_string()
-            }
+            "animation-name" if is_name(value) => self.name = held_name(value),
             "animation-duration" => self.duration = time(value)?,
             "animation-delay" => self.delay = time(value)?,
             "animation-timing-function" => self.easing = easing_only(value)?,
             "animation-iteration-count" => self.iterations = count(value).ok_or_else(bad)?,
             "animation-direction" => self.direction = direction(value).ok_or_else(bad)?,
             "animation-fill-mode" => self.fill = fill(value).ok_or_else(bad)?,
-            "animation-play-state" => {
-                self.paused = match value {
-                    "paused" => true,
-                    "running" => false,
-                    _ => return Err(bad()),
-                }
-            }
+            "animation-play-state" => self.paused = play_state(value).ok_or_else(bad)?,
             _ => return Err(bad()),
         }
         self.validate().map_err(ParseError::InvalidAnimation)
@@ -308,16 +293,16 @@ impl Keyframes {
                 }
             }
             for selector in selectors.split(',').map(str::trim) {
-                let offset = match selector {
-                    "from" => 0.0,
-                    "to" => 1.0,
-                    s => s
+                let offset = match word::keyword(selector, &["from", "to"]) {
+                    Some("from") => 0.0,
+                    Some(_) => 1.0,
+                    None => selector
                         .strip_suffix('%')
                         .and_then(|n| exact_num::parse_f64(n.trim()).ok())
                         .filter(|n| (0.0..=100.0).contains(n))
                         .map(|n| n / 100.0)
                         .ok_or_else(|| {
-                            ParseError::BadShape(format!("`{s}` is not a keyframe selector: `from`, `to` or a percentage from 0% to 100%"))
+                            ParseError::BadShape(format!("`{selector}` is not a keyframe selector: `from`, `to` or a percentage from 0% to 100%"))
                         })?,
                 };
                 match frames
@@ -488,26 +473,111 @@ fn css_ident(name: &str) -> String {
     }
 }
 
-fn easing_keyword(part: &str) -> Option<Result<Easing, ParseError>> {
-    let known = matches!(
-        part,
-        "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end"
-    ) || [
-        "cubic-bezier(",
-        "steps(",
-        "linear(",
-        "spring(",
-        "-exact-spring(",
-    ]
-    .iter()
-    .any(|f| part.starts_with(f));
-    known.then(|| easing_only(part))
+/// What a word of an `animation` shorthand gives (CSS Animations 1 §4.10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// The duration, then the delay.
+    Time,
+    /// `animation-timing-function`.
+    Easing,
+    /// `animation-iteration-count`.
+    Count,
+    /// `animation-direction`.
+    Direction,
+    /// `animation-fill-mode`.
+    Fill,
+    /// `animation-play-state`.
+    Play,
+    /// `animation-name`: a keyframes name, kept as written.
+    Name,
+}
+
+/// The parts one animation of a shorthand has been given so far. A word
+/// gives the first part still free that it can be, in [`Role`]'s order, so a
+/// keyword whose part is given is the name (CSS Animations 1 §4.10). This
+/// grammar reads a shorthand with it, and so does the module-scope pass that
+/// renames a keyframes name where it is written (contract-syntax's
+/// `scope.rs`, LLP 1091 D5): the two cannot read a word differently.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+pub struct Slots {
+    times: u8,
+    eased: bool,
+    counted: bool,
+    directed: bool,
+    filled: bool,
+    stated: bool,
+    named: bool,
+}
+
+impl Slots {
+    /// The part `word` gives, now taken; `None` where the shorthand is
+    /// refused: a third time, a word written as a time that is none
+    /// (`1.2.3s`), or a word no free part takes.
+    pub fn take(&mut self, word: &str) -> Option<Role> {
+        let role = if word::time(word).is_some() {
+            Role::Time
+        } else if word::time_like(word) {
+            return None;
+        } else if !self.eased && is_easing(word) {
+            Role::Easing
+        } else if !self.counted && count(word).is_some() {
+            Role::Count
+        } else if !self.directed && direction(word).is_some() {
+            Role::Direction
+        } else if !self.filled && fill(word).is_some() {
+            Role::Fill
+        } else if !self.stated && play_state(word).is_some() {
+            Role::Play
+        } else if !self.named && is_name(word) {
+            Role::Name
+        } else {
+            return None;
+        };
+        self.fill(role).then_some(role)
+    }
+
+    /// Give `role`'s part, as a word of that kind would: false when it is
+    /// given already, or a time is given a third time.
+    pub fn fill(&mut self, role: Role) -> bool {
+        let free = |slot: &mut bool| !std::mem::replace(slot, true);
+        match role {
+            Role::Time => {
+                self.times = self.times.saturating_add(1);
+                self.times <= 2
+            }
+            Role::Easing => free(&mut self.eased),
+            Role::Count => free(&mut self.counted),
+            Role::Direction => free(&mut self.directed),
+            Role::Fill => free(&mut self.filled),
+            Role::Play => free(&mut self.stated),
+            Role::Name => free(&mut self.named),
+        }
+    }
+}
+
+/// Whether `part` is an easing where an animation's goes: an easing keyword
+/// or function in any case ([`word::is_easing`]), or `spring()`, which is
+/// refused there by name.
+pub fn is_easing(part: &str) -> bool {
+    word::is_easing(part)
+        || part
+            .get(..7)
+            .is_some_and(|f| f.eq_ignore_ascii_case("spring("))
+}
+
+/// A name as an animation holds it: without its quotes, and `none` in any
+/// case as `none`.
+fn held_name(part: &str) -> String {
+    if part.eq_ignore_ascii_case("none") {
+        return "none".into();
+    }
+    part.trim_matches(|c| c == '"' || c == '\'').to_string()
 }
 
 /// Why `part` fits no part of the animation `decl` still has free; `name`
 /// is the name it has, if any.
 fn left_over(part: &str, decl: &str, name: &str) -> String {
-    let again = if easing_keyword(part).is_some() {
+    let again = if is_easing(part) {
         "an easing"
     } else if count(part).is_some() {
         "an iteration count"
@@ -515,7 +585,7 @@ fn left_over(part: &str, decl: &str, name: &str) -> String {
         "a direction"
     } else if fill(part).is_some() {
         "a fill mode"
-    } else if matches!(part, "running" | "paused") {
+    } else if play_state(part).is_some() {
         "a play state"
     } else if is_name(part) {
         return format!(
@@ -543,30 +613,35 @@ fn easing_only(part: &str) -> Result<Easing, ParseError> {
 }
 
 fn count(part: &str) -> Option<f64> {
-    if part == "infinite" {
+    if part.eq_ignore_ascii_case("infinite") {
         return Some(f64::INFINITY);
     }
-    exact_num::parse_f64(part).ok().filter(|n| *n >= 0.0)
+    word::number(part).filter(|n| *n >= 0.0)
 }
 
 fn direction(part: &str) -> Option<Direction> {
-    Some(match part {
+    const DIRECTIONS: [&str; 4] = ["normal", "reverse", "alternate", "alternate-reverse"];
+    Some(match word::keyword(part, &DIRECTIONS)? {
         "normal" => Direction::Normal,
         "reverse" => Direction::Reverse,
         "alternate" => Direction::Alternate,
-        "alternate-reverse" => Direction::AlternateReverse,
-        _ => return None,
+        _ => Direction::AlternateReverse,
     })
 }
 
 fn fill(part: &str) -> Option<FillMode> {
-    Some(match part {
+    const FILLS: [&str; 4] = ["none", "forwards", "backwards", "both"];
+    Some(match word::keyword(part, &FILLS)? {
         "none" => FillMode::None,
         "forwards" => FillMode::Forwards,
         "backwards" => FillMode::Backwards,
-        "both" => FillMode::Both,
-        _ => return None,
+        _ => FillMode::Both,
     })
+}
+
+/// `running` or `paused`, in any case: whether it is paused.
+fn play_state(part: &str) -> Option<bool> {
+    word::keyword(part, &["running", "paused"]).map(|state| state == "paused")
 }
 
 /// A CSS `<custom-ident>` (or a quoted string): not a CSS-wide keyword nor
@@ -589,14 +664,22 @@ fn is_name(part: &str) -> bool {
         && part
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && !matches!(
+        && word::keyword(
             part,
-            "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "default"
+            &[
+                "initial",
+                "inherit",
+                "unset",
+                "revert",
+                "revert-layer",
+                "default",
+            ],
         )
+        .is_none()
 }
 
 fn length(value: &str) -> Option<f64> {
-    let n = value.strip_suffix("px").unwrap_or(value);
+    let n = word::strip_unit(value, "px").unwrap_or(value);
     exact_num::parse_f64(n.trim()).ok()
 }
 
@@ -640,7 +723,7 @@ fn keyframe_values(
             .collect(),
         // `none` is CSS's transparent, zero-length shadow, which a shadow
         // interpolates from and to.
-        Property::BoxShadow if value.trim() == "none" => vec![
+        Property::BoxShadow if value.trim().eq_ignore_ascii_case("none") => vec![
             (Property::BoxShadow, Value::ZERO, None),
             (Property::ShadowColor, Value::ZERO, None),
         ],
@@ -697,7 +780,7 @@ fn keyframe_value(property: Property, value: &str) -> Result<Value, ParseError> 
             Value::four(x, y, px, py)
         }
         Property::Rotate => {
-            let n = value.strip_suffix("deg").unwrap_or(value);
+            let n = word::strip_unit(value, "deg").unwrap_or(value);
             Value::scalar(exact_num::parse_f64(n.trim()).map_err(|_| bad())?)
         }
         Property::Scale | Property::Opacity => {
@@ -719,10 +802,10 @@ fn keyframe_value(property: Property, value: &str) -> Result<Value, ParseError> 
         p if p.is_color() => crate::color::parse(value).ok_or_else(bad)?,
         // CSS Fonts 4 §2.2: a number in [1, 1000] or an absolute keyword;
         // `bolder` and `lighter` are relative to a parent no keyframe has.
-        Property::FontWeight => Value::scalar(match value {
-            "normal" => 400.0,
-            "bold" => 700.0,
-            n => exact_num::parse_f64(n)
+        Property::FontWeight => Value::scalar(match word::keyword(value, &["normal", "bold"]) {
+            Some("normal") => 400.0,
+            Some(_) => 700.0,
+            None => exact_num::parse_f64(value)
                 .ok()
                 .filter(|n| (1.0..=1000.0).contains(n))
                 .ok_or_else(bad)?,
@@ -740,7 +823,7 @@ fn keyframe_value(property: Property, value: &str) -> Result<Value, ParseError> 
                 ("extra-expanded", 150.0),
                 ("ultra-expanded", 200.0),
             ];
-            let n = match keyword.iter().find(|(k, _)| *k == value) {
+            let n = match keyword.iter().find(|(k, _)| value.eq_ignore_ascii_case(k)) {
                 Some((_, n)) => *n,
                 None => value
                     .strip_suffix('%')
@@ -764,7 +847,7 @@ fn variation_axes(
     value: &str,
     malformed: impl Fn() -> ParseError,
 ) -> Result<Vec<(u32, f64)>, ParseError> {
-    if value == "normal" {
+    if value.eq_ignore_ascii_case("normal") {
         return Err(ParseError::BadValue("`normal` names no axes, and a keyframe's `font-variation-settings` names the axes it animates: `\"wght\" 400`".into()));
     }
     let axis = |item: &str| -> Option<(u32, f64)> {

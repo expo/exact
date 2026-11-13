@@ -338,7 +338,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     }
     /// ⌘A and ⌘C at a focused paragraph act on the reader's selection.
     private func paragraphCommand(_ event: NSEvent) -> Bool {
-        guard isParagraph, window?.firstResponder === self, event.modifierFlags.contains(.command) else { return false }
+        guard isParagraph, window?.firstResponder === self, NodeView.isCommandAlone(event) else { return false }
         switch NodeView.commandKey(event) {
         case "a": presenter?.selection.selectAll(in: window)
         case "c": presenter?.selection.copy()
@@ -346,11 +346,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         }
         return true
     }
-    /// Command-A with no other chord, ignoring Caps Lock / function noise.
+    /// Command-A with no other modifier.
     static func isCommandA(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown else { return false }
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        return mods == .command && commandKey(event) == "a"
+        event.type == .keyDown && isCommandAlone(event) && commandKey(event) == "a"
     }
     /// Select the field's whole value. A secure editor can ignore `selectAll:`.
     static func selectAll(in f: NSTextField) {
@@ -674,7 +672,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if let sv = scroll { presenter?.session?.frameHealth.trackScrolled(sv) }
         presenter?.stickies.scrolled(id)
         presenter?.collectionScrolled(id)
-        presenter?.transformGeometry.changed()
+        presenter?.transformGeometry.changed(); presenter?.tipsScrolled()
         presenter?.videoVisibility?.changed()
         // The list window and the text bands follow the scroll; they are not
         // part of it (`Presenter.scrolled`).
@@ -865,14 +863,14 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         style.values.contains { $0.isSchemeColor || $0.isSchemeGradient || $0.containsSystemColor }
     }
 
-    /// The appearance changed under this view. A repaint is not enough: the
-    /// text engine caches a paragraph spec and a laid-out paragraph, and a
-    /// `Run` carries a concrete colour, so ink from the previous appearance
-    /// would survive a redisplay. Inline text nodes are not in the native
-    /// hierarchy, so the paragraph that owns them is invalidated too, and
-    /// the colours assigned outside a draw are re-applied. @ref LLP 1034 D2
+    /// Cached text and colours assigned outside a draw must be resolved again.
+    /// Inline nodes have no native appearance callback; invalidate their owner too.
+    /// @ref LLP 1034 D2
     package override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        if let controls = presenter?.controls, let button = controls.controls[id] as? NativeButtonMac {
+            controls.configureNative(button, self, accent: channels("accent_color").map { TextEngine.color($0) })
+        }
         presenter?.tables.appearanceChanged(self); refreshGroupedSeparator(); presenter?.navigation.split.recolor(self)
         if let regions = presenter?.session?.regions, regions.owns(self) { regions.geometryChanged() }
         // An `svg`'s paints are resolved again; paint motion hears the appearance (LLP 1062 D4).
@@ -988,9 +986,15 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         // `scroll-behavior: smooth` (CSS) animates a prop write, never a
         // reader's own scroll. Under the agent's frozen clock it lands at once,
         // so `layout` reads the target.
+        // It holds the scroller's `scrollend`, and owns its offset, until it lands, as a reveal does.
         if style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes {
-            NSAnimationContext.runAnimationGroup({ _ in sv.contentView.animator().setBoundsOrigin(target) },
-                                                 completionHandler: { sv.reflectScrolledClipView(sv.contentView) })
+            let token = UUID(), end = scrollEnd ?? ScrollEnd()
+            scrollEnd = end; end.elementAnimation = token; end.hold()
+            NSAnimationContext.runAnimationGroup({ _ in sv.contentView.animator().setBoundsOrigin(target) }, completionHandler: { [weak self] in
+                sv.reflectScrolledClipView(sv.contentView)
+                guard end.elementAnimation == token else { return }
+                end.elementAnimation = nil; self?.endScroll()
+            })
         } else {
             sv.contentView.scroll(to: target)
             sv.reflectScrolledClipView(sv.contentView)
@@ -1021,9 +1025,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
                 if let editor = editingEditor { writeValue(v, into: editor) } else if f.stringValue != v { f.stringValue = v; toldText = nil; pendingValue = nil }
             }
             applyPlaceholder(f)
-            f.contentType = Autofill.contentType(props["autocomplete"], fallback: nil) // LLP 1102 §3.6
-            f.isEnabled = !disabled
-            f.isEditable = !disabled && props["editable"] != "false"
+            applyFieldProps(f)
             styleNativeField()
             updateNumberStepper() // the platform's stepping control for `type="number"` (LLP 1116.007 D4)
         }

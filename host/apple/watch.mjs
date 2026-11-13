@@ -1,3 +1,4 @@
+import { writePrivacyManifest } from './privacy.mjs';
 // @ref LLP 1126.001 WP17 — watch complications use the snapshot driver and their own store.
 import { resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -7,7 +8,8 @@ import { appleAssets, plistFile } from './assets.mjs';
 import { appleProduction, stripProductionExecutable } from './link.mjs';
 import { reportBuilt } from '../../scripts/help.mjs';
 import { copyStaticTreeIfPresent } from '../web/serve.mjs';
-import { platformWidgetEntries, prepareWidgetCore, sharedWidgetCore, packageWidgets } from './widgets.mjs';
+import { ensureWatchSimulatorSDK } from './sdk.mjs';
+import { platformWidgetEntries, prepareWidgetCore, sharedWidgetCore, placeCoreFramework, packageWidgets } from './widgets.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url))), pkg = resolve(root, 'host/apple');
 
@@ -25,13 +27,15 @@ export function watchSimulator(args) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id ?? '')) throw new Error('--watch-sim requires a UDID (names are not accepted)');
   return id;
 }
-export function packageWatch({ bin, bundle, parent, production, symbols, sign, ...widgets }) {
+export function packageWatch({ bin, bundle, parent, production, symbols, sign, privacyManifests = [], ...widgets }) {
   const executable = resolve(bundle, 'ExactWatch');
   copyFileSync(resolve(bin, 'ExactWatch'), executable);
   stripProductionExecutable(executable, { production, dsym: resolve(symbols, 'ExactWatch.app.dSYM') });
   if (widgets.entries.length) packageWidgets({ ...widgets, bundle, production, symbols, sign, platform: 'watchos', device: false });
   const core = resolve(bundle, 'Frameworks/ExactCore.framework');
   stripProductionExecutable(resolve(core, 'ExactCore'), { production, dsym: resolve(symbols, 'ExactCore.framework.dSYM') });
+  writePrivacyManifest(core, [resolve(core, 'ExactCore')], { apiManifests: privacyManifests });
+  writePrivacyManifest(bundle, [executable], { apiManifests: privacyManifests });
   sign(core);
   sign(bundle);
   sign(parent);
@@ -58,6 +62,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
       console.log(`host/apple: no watch entry and no Rust accessory entries; watch bundle omitted${args.includes('--run') ? '; --run skipped' : ''}`);
       return;
     }
+    if (process.platform === 'linux') ensureWatchSimulatorSDK();
     const profile = production ? 'release' : HOST_DEV;
     const directory = resolve(parent.namespace, 'watchos'), target = 'aarch64-apple-watchos-sim', triple = 'arm64-apple-watchos10.0-simulator';
     mkdirSync(directory, { recursive: true });
@@ -73,7 +78,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     const swiftEnv = { ...process.env, WATCHOS_DEPLOYMENT_TARGET: '10.0', EXACT_LIB_DIR: libDir, EXACT_LIB: crate.replaceAll('-', '_'), EXACT_WIDGET_GALLERY: '0', EXACT_UPDATE_TRUST: production ? 'production' : 'development' };
     delete swiftEnv.SDKROOT;
     const swiftc = runApple('xcrun', ['swiftc', '--version'], { read: true }).stdout;
-    const prepared = prepareWidgetCore({ app: watch, directory: resolve(directory, 'core'), swiftBuildRoot: swiftRoot, swiftArgs, triple, platform: 'watchos', device: false, swiftc });
+    const prepared = prepareWidgetCore({ directory: resolve(directory, 'core'), swiftBuildRoot: swiftRoot, swiftArgs, triple, platform: 'watchos', device: false, swiftc });
     const shared = sharedWidgetCore({ app: watch, prepared, libDir, crate, env: swiftEnv, runApple });
     const group = `group.${watch.id}`, entitlements = plistFile({ 'com.apple.security.application-groups': [group] });
     const entitlementPath = resolve(directory, 'watch-entitlements.plist');
@@ -81,7 +86,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     // Simulator entitlements are embedded in __TEXT by each link.
     const sign = (path, _embeddedEntitlements) => runApple('codesign', ['--force', '--sign', '-', path]);
     mkdirSync(resolve(bundle, 'Frameworks'), { recursive: true });
-    cpSync(shared.framework, resolve(bundle, 'Frameworks/ExactCore.framework'), { recursive: true });
+    placeCoreFramework(shared.framework, resolve(bundle, 'Frameworks/ExactCore.framework'), watch, 'watchos');
     mkdirSync(resolve(bundle, 'plans'), { recursive: true });
     for (const entry of entries) copyFileSync(resolve(output, `plans/${entry.kind}.plan`), resolve(bundle, `plans/${entry.kind}.plan`));
     if (live) copyFileSync(resolve(output, 'plans/watch.plan'), resolve(bundle, 'plans/watch.plan'));
@@ -101,7 +106,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     runApple('swift', [...executableArgs, '--product', 'ExactWatch'], options);
     const bin = runApple('swift', [...executableArgs, '--show-bin-path'], { ...options, read: true }).stdout.trim();
     packageWatch({ bin, bundle, parent: parent.bundle, app: watch, shared, directory, sdk, triple, entitlements, sign, runApple, production, entries,
-      symbols: resolve(`${parent.binary}.dSYMs`, 'Watch') });
+      privacyManifests: (baked.binary.privacyManifests ?? []).slice(0, 1), symbols: resolve(`${parent.binary}.dSYMs`, 'Watch') });
     writeFileSync(resolve(directory, 'receipt.json'), receipt(app, { platform: 'watchos-simulator', target, sdk, bundle, compatibilityId: baked.compat.id, build: baked }));
     console.log(`host/apple: ${bundle}; watch group ${group}; ${entries.map(e => `${e.kind} [${e.families.join(', ')}]`).join('; ')}`);
     if (args.includes('--no-install')) return;

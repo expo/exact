@@ -3,6 +3,9 @@
 // And the platform's Back (LLP 1115.000 D5.1): the window of an app with a
 // navigation stack leads its toolbar with a navigational back chevron, in
 // the toolbar the author declared or, with none, in one that holds only it.
+// Where the navigation root offers Forward too (the default), it is the
+// back/forward pair Finder and System Settings show, one segmented group
+// whose segments follow the history (⌘[ and ⌘] go the same ways).
 // It is there at a stack's root too, disabled, as Finder's and Safari's is:
 // a toolbar that came with each push and went with each pop made the title
 // bar 8 points taller and moved the content every time. A route that asks
@@ -73,6 +76,9 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         search.node === node && headers.contains { $0.search === node } && usable(node) && search.focus()
     }
     private var order: [NSToolbarItem.Identifier] = []
+    /// What a customizable bar has offered since it was made: an item not
+    /// among these joins the bar; one among these the person may have taken out.
+    private var offered: Set<NSToolbarItem.Identifier> = []
     private let authoredInk = ToolbarInkMac()
     /// Back (BackMac.swift): the way back from the pushed route, pressing
     /// what iOS's Back button presses. A standard item, so its size, glass
@@ -93,6 +99,39 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         item.target = self; item.action = #selector(performBack(_:))
         item.autovalidates = true
         return item
+    }
+    /// Back and Forward as one segmented group, momentary, as Finder's and
+    /// System Settings' are: where the navigation root offers Forward.
+    static let historyIdentifier = NSToolbarItem.Identifier("exact.navigation.history")
+    /// Each toolbar's own, as `backItem` is.
+    private(set) lazy var historyItem = makeHistoryItem()
+    private func makeHistoryItem() -> NSToolbarItemGroup {
+        let images = [("chevron.backward", "Back"), ("chevron.forward", "Forward")].compactMap {
+            NSImage(systemSymbolName: $0.0, accessibilityDescription: $0.1)
+        }
+        let group = NSToolbarItemGroup(itemIdentifier: Self.historyIdentifier, images: images, selectionMode: .momentary,
+                                       labels: ["Back", "Forward"], target: self, action: #selector(performHistory(_:)))
+        group.paletteLabel = "Back/Forward"
+        group.isNavigational = true
+        // The group asks `validateToolbarItem`, which sets each segment from
+        // the history: a segment that validated itself would be enabled
+        // whenever the group is.
+        for segment in group.subitems { segment.autovalidates = false }
+        return group
+    }
+    /// Whether the bar's Back is the back/forward group: the root offers
+    /// Forward (its `navigationHistory`, both when it says nothing).
+    private var showsHistory: Bool { presenter.navigation.offers(back: false) }
+    /// What stands for Back in the bar now: the group, or Back alone.
+    var backSlot: NSToolbarItem { order.contains(Self.historyIdentifier) ? historyItem : backItem }
+    /// Each segment as the history has it now; the group goes while either
+    /// does. `installing`: the bar is being put in the window, so it counts
+    /// as the window's.
+    @discardableResult private func syncHistory(installing: Bool = false) -> Bool {
+        let live = toolbar != nil && (installing || window?.toolbar === toolbar), navigation = presenter.navigation
+        let ways = [live && navigation.canGoBack, live && navigation.canGoForward]
+        for (segment, enabled) in zip(historyItem.subitems, ways) where segment.isEnabled != enabled { segment.isEnabled = enabled }
+        return ways.contains(true)
     }
     /// The toolbar is installed for the stack's Back: kept through routes
     /// that ask for no bar, until the stack or the toolbar goes.
@@ -238,7 +277,7 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         header = nil; decide(nil); beside = nil; decideBeside(nil)
         _ = segments.update(nil, enabled: false)
         search.release()
-        if hadToolbar { backItem = makeBackItem() }
+        if hadToolbar { backItem = makeBackItem(); historyItem = makeHistoryItem() }
         heldForBack = false
         // The app's items and delegate were for that toolbar; the next one's
         // hatch says its own.
@@ -308,7 +347,7 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
     }
     private var barSummary: [String: Any] {
         guard let toolbar else { return ["installed": false, "headerKept": headerKept ?? NSNull()] }
-        return ["installed": window?.toolbar === toolbar, "displayMode": toolbar.displayMode.rawValue,
+        return ["installed": window?.toolbar === toolbar, "displayMode": toolbar.displayMode.rawValue, "customizable": toolbar.allowsUserCustomization,
                 "style": window?.toolbarStyle.rawValue ?? NSNull(), "header": headerSummary ?? NSNull(), "headerKept": headerKept ?? NSNull(),
                 "items": toolbar.items.map(\.itemIdentifier.rawValue), "appItems": appItems.map(\.itemIdentifier.rawValue),
                 // AppKit's own validation of the app's items (their targets
@@ -433,10 +472,17 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         return NSRect(x: header.leading.contains { $0 === node } ? bounds.minX : bounds.maxX, y: bounds.minY, width: 0, height: 0)
     }
 
-    private typealias Declaration = (owner: NodeView, shown: [NodeView], buttons: [NodeView], heading: NodeView?)
+    private typealias Declaration = (owner: NodeView, shown: [NodeView], buttons: [NodeView], heading: NodeView?, customizable: Bool)
     /// The author's toolbar in this window, when the toolbar can show it: its
     /// node, its action buttons, its heading. A shape it cannot show is said
     /// once and keeps its authored rendering.
+    ///
+    /// @ref LLP 1115.002 §4, Customize Toolbar (expo/exact#280 item 8) — a
+    /// declared toolbar whose every action button has an `id` of its own is
+    /// customizable, as a SwiftUI toolbar is whose items have ids: the ids
+    /// are the items' identities, which AppKit keeps the person's
+    /// arrangement by across launches. Its buttons are then every action
+    /// button it holds, shown or not, so a hidden one keeps its place.
     private func declaration(in window: NSWindow) -> Declaration? {
         func refused(_ reason: String) -> Declaration? {
             if refusal != reason { presenter.session?.log("window toolbar: \(reason)"); refusal = reason }
@@ -457,7 +503,19 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
             return refused("expected direct action buttons and at most one heading; keeping authored rendering")
         }
         refusal = nil
-        return (next, declarations, buttons, headings.first)
+        let every = children(next).filter { $0.isButton && $0.handlers.contains("press") }
+        let ids = every.map { $0.props["id"] ?? "" }
+        if !ids.contains(""), Set(ids).count == ids.count {
+            return (next, declarations, every, headings.first, true)
+        }
+        return (next, declarations, buttons, headings.first, false)
+    }
+
+    /// The identity of a customizable toolbar (`declaration`): one per app for
+    /// each declared toolbar, so its windows share the person's arrangement.
+    private func customizableIdentifier(_ declared: Declaration?) -> NSToolbar.Identifier? {
+        guard let declared, declared.customizable else { return nil }
+        return "Exact.window.toolbar." + (declared.owner.props["id"] ?? "commands")
     }
 
     /// Whether the author declared a toolbar for this window, shown now:
@@ -500,8 +558,8 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
             return nil
         }
         let back = routes.root.props["navigationBack"].flatMap { $0.isEmpty ? nil : $0 }
-        // The bar's own Back stands for its stack's Back control, enabled or not.
-        switch WindowHeader.read(route: route, back: back, pushed: true, shown: visible) {
+        // The bar's own Back stands for its stack's Back control where the route is pushed (`splitPushed`).
+        switch WindowHeader.read(route: route, back: back, pushed: presenter.navigation.splitPushed(route), shown: visible) {
         case .none:
             decideBeside(nil)
             return nil
@@ -544,10 +602,15 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         // asks whether it goes now (`validateToolbarItem`), as it does a
         // menu: at a stack's root it does not, and the item is disabled.
         // A one-screen app's stack holds no toolbar until a push gives it
-        // somewhere to go back to (`backPossible`); then it stays.
+        // somewhere to go back to (`backPossible`) or, after Back, forward
+        // to (`forwardPossible`); then it stays.
         let navigation = presenter.navigation
-        let held = navigation.hasStack && (heldForBack || navigation.barRoute && navigation.backPossible)
-        let back = held && navigation.backInToolbar
+        let held = navigation.hasStack && (heldForBack || navigation.barRoute && (navigation.backPossible || navigation.forwardPossible))
+        // Under a cover the bar is the page's beneath it, and its Back slot
+        // stays: the cover's push leaves nothing ahead, which alone would
+        // take a group that Forward held.
+        let slotted = order.contains(Self.historyIdentifier) || order.contains(Self.backIdentifier)
+        let back = held && (navigation.backInToolbar || navigation.covered && slotted)
         // A window whose sidebar is the app's root tab bar (LLP 1115.002 D3)
         // has a toolbar for it: the sidebar's button, then the separator
         // that follows its divider, ahead of Back and the rest, which so
@@ -558,6 +621,9 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         guard declared != nil || header != nil || beside != nil || held || sidebar else { reset(); return }
         // A host that takes its toolbar back wins. Never overwrite it on a tick.
         guard window.toolbar == nil || window.toolbar === toolbar else { refuse("window owner installed another toolbar"); return }
+        // Whether a toolbar is customizable is said when it is made, with its identity.
+        let customizing = customizableIdentifier(declared)
+        if let toolbar, (customizing ?? "") != (toolbar.allowsUserCustomization ? toolbar.identifier : "") { reset() }
         if declared == nil, header == nil, beside == nil { items.removeAll(); symbols.removeAll() }
         owner = declared?.owner ?? header?.header; heading = declared?.heading
         self.header = header
@@ -579,10 +645,13 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
             // put the item in another's, found as two tests in one process;
             // and the toolbar the window had until the view moved to or
             // from a sidebar's pane, #393).
-            let value = NSToolbar(identifier: "Exact.window.commands." + UUID().uuidString)
+            // A customizable one is the same in every window of the app, as
+            // the person arranges it, and AppKit keeps that arrangement.
+            let value = NSToolbar(identifier: customizing ?? "Exact.window.commands." + UUID().uuidString)
             value.delegate = self
             value.displayMode = .iconOnly
-            value.allowsUserCustomization = false
+            value.allowsUserCustomization = customizing != nil
+            value.autosavesConfiguration = customizing != nil
             toolbar = value
         }
         guard let toolbar else { return }
@@ -613,7 +682,12 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
             let menu = declared == nil && presenter.menus.toolbarPopover(of: node) != nil
             if items[node.id]?.view is NSImageView { items.removeValue(forKey: node.id) }
             if let old = items[node.id], (old is NSMenuToolbarItem) != menu { items.removeValue(forKey: node.id); symbols.removeValue(forKey: node.id) }
-            let item = items[node.id] ?? (menu ? NSMenuToolbarItem(itemIdentifier: .init("exact.menu.\(node.id)")) : NSToolbarItem(itemIdentifier: .init("exact.command.\(node.id)")))
+            // In a customizable toolbar an item's identity is its button's `id`, which lasts across launches.
+            let identity = customizing != nil ? "exact.item.\(node.props["id"] ?? "")" : "exact.\(menu ? "menu" : "command").\(node.id)"
+            // A button mounted again under the same `id` takes the item the
+            // customized bar still holds: that item is the person's, by identity.
+            let kept = customizing == nil ? nil : toolbar.items.first { $0.itemIdentifier.rawValue == identity && ($0 is NSMenuToolbarItem) == menu }
+            let item = items[node.id] ?? kept ?? (menu ? NSMenuToolbarItem(itemIdentifier: .init(identity)) : NSToolbarItem(itemIdentifier: .init(identity)))
             items[node.id] = item
             item.tag = Int(node.id)
             if let item = item as? NSMenuToolbarItem {
@@ -654,9 +728,12 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
             // Text-bearing authored buttons remain labeled in icon-only mode.
             let title = painted != nil || BadgeFace(node) != nil ? "" : face.map { $0.title ?? "" } ?? text(node)
             if item.title != title { item.title = title }
-            let enabled = !node.disabled && !node.inert && window.attachedSheet == nil
+            // A customizable toolbar's button that is not shown keeps its place, hidden (disabled before macOS 15).
+            let shown = customizing == nil || visible(node)
+            let enabled = shown && !node.disabled && !node.inert && window.attachedSheet == nil
             authoredInk.button(item, node: node, face: face, painted: painted != nil, enabled: enabled, target: self, action: #selector(performInkButton(_:)))
             if item.isEnabled != enabled { item.isEnabled = enabled }
+            if #available(macOS 15, *), item.isHidden == shown { item.isHidden = !shown }
         }
         // A header's, in the order SwiftUI's own toolbar keeps (measured on
         // macOS 27): its leading buttons after Back; its tablist as the
@@ -675,27 +752,52 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
             ? identifiers(over?.leading ?? []) + (group.map { [$0.itemIdentifier, .flexibleSpace] } ?? []) + identifiers(over?.trailing ?? [])
                 + (columns ? [Self.listSeparatorIdentifier] : []) + identifiers(after?.buttons ?? [])
                 + (field.map { [.flexibleSpace, $0.itemIdentifier] } ?? [])
-            : declarations.compactMap { node -> NSToolbarItem.Identifier? in
+            : (customizing != nil ? declared.map { children($0.owner) } ?? [] : declarations).compactMap { node -> NSToolbarItem.Identifier? in
                 if node === heading { return .flexibleSpace }
                 return items[node.id]?.itemIdentifier
             }
-        order = (sidebarItems ? [.toggleSidebar, .sidebarTrackingSeparator] : []) + (back ? [Self.backIdentifier] : [])
+        order = (sidebarItems ? [.toggleSidebar, .sidebarTrackingSeparator] : [])
+            + (back ? [showsHistory ? Self.historyIdentifier : Self.backIdentifier] : [])
             + nextOrder + appItems.map(\.itemIdentifier)
-        // Keep both toolbar and command objects stable through route changes.
-        for index in stride(from: toolbar.items.count - 1, through: 0, by: -1) {
-            if !order.contains(toolbar.items[index].itemIdentifier) { toolbar.removeItem(at: index) }
+        if customizing != nil {
+            // The arrangement is the person's, which AppKit makes from the
+            // default order or their saved one as the bar is attached: an
+            // item the app no longer has leaves it, and one the app comes to
+            // have (Back after a first push, an app's own item) joins it after
+            // its nearest predecessor in the default order. One the person
+            // took out stays out while the app keeps offering it.
+            let allowed = Set(toolbarAllowedItemIdentifiers(toolbar))
+            for index in stride(from: toolbar.items.count - 1, through: 0, by: -1) where !allowed.contains(toolbar.items[index].itemIdentifier) {
+                toolbar.removeItem(at: index)
+            }
+            if installing {
+                offered = Set(order)
+            } else {
+                offered.formIntersection(allowed)
+                for (index, identifier) in order.enumerated() where !offered.contains(identifier) {
+                    let after = order[..<index].reversed().lazy.compactMap { id in toolbar.items.lastIndex { $0.itemIdentifier == id } }.first
+                    toolbar.insertItem(withItemIdentifier: identifier, at: after.map { $0 + 1 } ?? 0)
+                    offered.insert(identifier)
+                }
+            }
+        } else {
+            // Keep both toolbar and command objects stable through route changes.
+            for index in stride(from: toolbar.items.count - 1, through: 0, by: -1) {
+                if !order.contains(toolbar.items[index].itemIdentifier) { toolbar.removeItem(at: index) }
+            }
+            // Each place in turn: an item of that identifier further along
+            // moves here, never one already placed (a bar can hold two
+            // flexible spaces); what is left past the last place goes.
+            for (index, identifier) in order.enumerated() {
+                if index < toolbar.items.count && toolbar.items[index].itemIdentifier == identifier { continue }
+                if let old = toolbar.items.indices.dropFirst(index).first(where: { toolbar.items[$0].itemIdentifier == identifier }) { toolbar.removeItem(at: old) }
+                toolbar.insertItem(withItemIdentifier: identifier, at: index)
+            }
+            while toolbar.items.count > order.count { toolbar.removeItem(at: toolbar.items.count - 1) }
         }
-        // Each place in turn: an item of that identifier further along
-        // moves here, never one already placed (a bar can hold two
-        // flexible spaces); what is left past the last place goes.
-        for (index, identifier) in order.enumerated() {
-            if index < toolbar.items.count && toolbar.items[index].itemIdentifier == identifier { continue }
-            if let old = toolbar.items.indices.dropFirst(index).first(where: { toolbar.items[$0].itemIdentifier == identifier }) { toolbar.removeItem(at: old) }
-            toolbar.insertItem(withItemIdentifier: identifier, at: index)
-        }
-        while toolbar.items.count > order.count { toolbar.removeItem(at: toolbar.items.count - 1) }
         // Shown as it will answer, without waiting for AppKit's next validation.
         if back, backItem.isEnabled != navigation.canGoBack { backItem.isEnabled = navigation.canGoBack }
+        if back, showsHistory { historyItem.isEnabled = syncHistory(installing: true) }
         appliedSubtitle = header?.subtitle?.accessibleText ?? ""
         if window.subtitle != appliedSubtitle { window.subtitle = appliedSubtitle }
         appliedTitle = title(over: savedTitle)
@@ -728,10 +830,21 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         next.isHidden = true; next.setAccessibilityHidden(true); projected = true
     }
 
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { order }
+    /// A customizable toolbar also offers AppKit's spaces in its palette.
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbar.allowsUserCustomization ? order + [.space, .flexibleSpace] : order
+    }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { order }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        // The customization palette's picture of an item: a copy, since the bar keeps the item itself.
+        if !flag, toolbar.allowsUserCustomization, let item = items.values.first(where: { $0.itemIdentifier == identifier }) {
+            let copy = NSToolbarItem(itemIdentifier: identifier)
+            copy.label = item.label; copy.paletteLabel = item.paletteLabel; copy.image = item.image; copy.title = item.title
+            copy.isBordered = item.isBordered
+            return copy
+        }
         if identifier == Self.backIdentifier { return backItem }
+        if identifier == Self.historyIdentifier { return historyItem }
         // AppKit's own separator, told which divider it follows: the
         // standard one looks for it in the toolbar's window, and these items
         // are placed before the toolbar has one.
@@ -749,6 +862,7 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         syncAccessibility()
         if item === backItem { return toolbar != nil && window?.toolbar === toolbar && presenter.navigation.canGoBack }
+        if item === historyItem { return syncHistory() }
         // An item of a toolbar that went is no node's: its Back, which each
         // toolbar makes again, carries AppKit's own tag, and AppKit may still
         // ask of it once (the run loop of a test's next step did).
@@ -778,6 +892,16 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         guard validateToolbarItem(item) else { return }
         presenter.navigation.goBack()
     }
+    /// A segment of the back/forward group, pressed: Back or Forward, each
+    /// only while it goes, as ⌘[ and ⌘] do.
+    @objc private func performHistory(_ group: NSToolbarItemGroup) {
+        syncHistory()
+        switch group.selectedIndex {
+        case 0: presenter.navigation.goBack()
+        case 1: presenter.navigation.goForward()
+        default: break
+        }
+    }
     @objc private func performInkButton(_ button: NSButton) {
         guard let item = items[UInt32(button.tag)] else { return }
         if let item = item as? NSMenuToolbarItem {
@@ -796,6 +920,12 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         // The stack's Back control in a header the bar shows: the bar's own
         // Back stands for it, and is pressed as a person presses it.
         if headers.contains(where: { $0.backs.contains { $0 === node } }), projected || besideParts.contains(where: { $0.node === node }) {
+            if order.contains(Self.historyIdentifier) {
+                syncHistory()
+                guard historyItem.subitems.first?.isEnabled == true else { return false }
+                historyItem.selectedIndex = 0
+                return NSApp.sendAction(#selector(performHistory(_:)), to: self, from: historyItem)
+            }
             guard order.contains(Self.backIdentifier), validateToolbarItem(backItem), let action = backItem.action else { return false }
             return NSApp.sendAction(action, to: backItem.target, from: backItem)
         }
@@ -828,9 +958,15 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         var result: [String: Any] = ["view": node === owner ? "NSToolbar" : (titled ? "NSWindow.title" : subtitled ? "NSWindow.subtitle" : "NSToolbarItem"),
                                    "placement": "window", "title": window?.title ?? "", "subtitle": window?.subtitle ?? "",
                                    "geometry": "system-owned", "attached": window?.toolbar === toolbar]
-        if let item = items[node.id] ?? (headers.contains { $0.backs.contains { $0 === node } } && order.contains(Self.backIdentifier) ? backItem : nil) {
+        let standsForBack = headers.contains { $0.backs.contains { $0 === node } } && (order.contains(Self.backIdentifier) || order.contains(Self.historyIdentifier))
+        if let item = items[node.id] ?? (standsForBack ? backSlot : nil) {
             result["identifier"] = item.itemIdentifier.rawValue
-            result["enabled"] = item === backItem ? validateToolbarItem(item) : available(node)
+            if item === historyItem {
+                syncHistory()
+                result["view"] = "NSToolbarItemGroup"
+                result["segment"] = 0
+            }
+            result["enabled"] = item === backItem ? validateToolbarItem(item) : item === historyItem ? historyItem.subitems.first?.isEnabled == true : available(node)
             result["overflow"] = !(toolbar.visibleItems ?? []).contains(where: { $0 === item })
         }
         if let field = search.item, search.node === node {

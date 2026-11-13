@@ -523,19 +523,13 @@ impl Gradient {
                 })
             }
         };
-        let mut stops: Vec<(f32, exact_color::Wide)> = self
+        let stops: Vec<(f32, exact_color::Wide)> = self
             .stops
             .iter()
             .filter_map(|s| Some((s.at / 100.0, wide(s.color)?)))
             .collect();
-        if let Some(&(_, c)) = stops.first().filter(|s| s.0 > 0.0) {
-            stops.insert(0, (0.0, c));
-        }
-        if let Some(&(_, c)) = stops.last().filter(|s| s.0 < 1.0) {
-            stops.push((1.0, c));
-        }
         const STEPS: usize = 16;
-        let mut out = Vec::with_capacity(stops.len() * STEPS);
+        let mut out = Vec::with_capacity(stops.len() * STEPS + 2);
         // Each segment takes its ends as an interpolation does: a component
         // missing at one end is the other end's (CSS Color 4 §12.4). So a stop
         // with one is two colours, the end of the segment before it and the
@@ -567,6 +561,15 @@ impl Gradient {
                 let (v, a) = exact_color::mix(&c, &n, t, how);
                 out.push((at + (end - at) * t as f32, v, a));
             }
+        }
+        // Before the first stop and after the last, the line is that stop's
+        // colour (CSS Images 4 §3.5.2): its colour in the segment it ends,
+        // a missing component already the other end's.
+        if let Some(&first) = out.first().filter(|s| s.0 > 0.0) {
+            out.insert(0, (0.0, first.1, first.2));
+        }
+        if let Some(&last) = out.last().filter(|s| s.0 < 1.0) {
+            out.push((1.0, last.1, last.2));
         }
         Some(out)
     }
@@ -783,7 +786,7 @@ pub fn color_text(out: &mut String, color: ColorValue, mode: ColorText) {
         },
         ColorValue::Moving(..) => {
             let ([r, g, b], a) = color.moving_linear().unwrap_or_default();
-            let n = exact_color::number_text;
+            let n = exact_num::js;
             let _ = write!(out, "color(srgb-linear {} {} {}", n(r), n(g), n(b));
             if a < 1.0 {
                 let _ = write!(out, " / {}", n(a));
@@ -1076,8 +1079,10 @@ fn stops(args: &[&str], conic: bool) -> Result<Vec<Stop>, &'static str> {
             return Err("colour hints (a lone position between stops) are not implemented");
         }
         let color = words[..split].join(" ");
-        let color = ColorValue::parse_light_dark(&color)
-            .or_else(|| crate::style::wide::parse_written(&color))
+        // As written first: `parse_light_dark` would take a `light-dark()`
+        // of legacy colours as their bytes, losing a `none` or a hue.
+        let color = crate::style::wide::parse_written(&color)
+            .or_else(|| ColorValue::parse_light_dark(&color))
             .or_else(|| Color::parse(&color).map(ColorValue::Fixed))
             .ok_or("a stop's colour is a CSS colour (hex, `rgb()`, `hsl()`, `hwb()`, a named colour, `transparent`) or `light-dark(a, b)`")?;
         // LLP 1100 D3: nothing converts a profile's colour, so nothing mixes it.

@@ -329,6 +329,11 @@ fn encode_outcome(w: &mut Writer, outcome: &Outcome) {
             w.u32(m.coalesced);
             w.string(&m.protocol);
         }
+        // The runner parses a batch one message at a time: none crosses.
+        Outcome::Messages(_) => {
+            w.u8(3);
+            w.string("a source parses a stream's messages one at a time");
+        }
         Outcome::Closed {
             code,
             reason,
@@ -484,8 +489,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 "exactBodyTo cannot cross the Rust module seam".into(),
             )),
         ),
-        // A two-way socket crosses as a WebSocket alone (LLP 1016.003 D5).
-        Ok(Answer::Later(r)) if r.socket && (!r.stream || r.listen.is_some() || r.is_process()) => {
+        // A two-way socket crosses as a WebSocket alone (LLP 1016.003 D5),
+        // and a listener (LLP 1133.005) not at all, socket mark or none.
+        Ok(Answer::Later(r))
+            if r.listen.is_some() || (r.socket && (!r.stream || r.is_process())) =>
+        {
             encode_result(
                 w,
                 Err(DataError::Unavailable(
@@ -493,6 +501,13 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 )),
             )
         }
+        // Nor a byte stream: refused, never read as events instead.
+        Ok(Answer::Later(r)) if r.bytes => encode_result(
+            w,
+            Err(DataError::Unavailable(
+                "a byte stream cannot cross the Rust module seam yet".into(),
+            )),
+        ),
         Ok(Answer::Now(v)) => {
             w.u8(0);
             v.encode(w);
@@ -603,7 +618,7 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 // (an overrun is exact-js's; a Rust module's seam never makes one)
                 DataError::Unavailable(s)
                 | DataError::Interface(s)
-                | DataError::DeferredAtBake(s)
+                | DataError::DeferredAtBake { message: s, .. }
                 | DataError::Overrun(s)
                 | DataError::Failed(_, s, _) => (4, s),
             };

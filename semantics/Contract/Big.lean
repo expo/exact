@@ -229,17 +229,17 @@ inductive ExecR (env : Env) : Locals → List Stmt → Effects → Effects → P
 /-! ## The interpreter is sound -/
 
 theorem stdlib_map {env : Env} {vs v} : stdlib env "map" vs ≠ .ok v := by
-  unfold stdlib; split <;> simp_all
+  simp [stdlib, routing]
 theorem stdlib_filter {env : Env} {vs v} : stdlib env "filter" vs ≠ .ok v := by
-  unfold stdlib; split <;> simp_all
+  simp [stdlib, routing]
 theorem stdlib_pending {env : Env} {vs v} : stdlib env "pending" vs ≠ .ok v := by
-  unfold stdlib; split <;> simp_all
+  simp [stdlib, routing]
 theorem stdlib_failed {env : Env} {vs v} : stdlib env "failed" vs ≠ .ok v := by
-  unfold stdlib; split <;> simp_all
+  simp [stdlib, routing]
 theorem stdlib_failure {env : Env} {vs v} : stdlib env "failure" vs ≠ .ok v := by
-  unfold stdlib; split <;> simp_all
+  simp [stdlib, routing]
 theorem stdlib_current {env : Env} {vs v} : stdlib env "current" vs ≠ .ok v := by
-  unfold stdlib; split <;> simp_all
+  simp [stdlib, routing]
 
 theorem binop_and {a b v} : binop .and a b ≠ .ok v := by simp [binop]
 theorem binop_or {a b v} : binop .or a b ≠ .ok v := by simp [binop]

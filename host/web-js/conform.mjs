@@ -188,7 +188,7 @@ const boundReasons = lines => lines.flatMap(l => BOUND.exec(l)?.[0] ?? []).filte
 // The voice table's journal (LLP 1096 D5): every `sound …` and `sounds …` line, stamped, the same on every target, and
 // a sequence's `sequence …`, `haptic …` and `haptics …` lines (LLP 1125 D3); the JS target never refuses one of its
 // three commands (they are the runtime's own, not a host's).
-const SOUND = /^t=\S+ (?:sounds?|sequence|haptics?) .*$|^t=\S+ midi [^(].*$|refused: (?:playSound|playSounds|stopSounds) .*$/;
+const SOUND = /^t=\S+ (?:sounds?|sequence|haptics?) .*$|^t=\S+ midi [^(].*$|refused: (?:playSound|playSounds|stopSounds|setSounds) .*$/;
 const soundLines = lines => lines.flatMap(l => SOUND.exec(l)?.[0] ?? []);
 // A host's journal since its last read, read once for both filters: a read advances the cursor, so a second read
 // would see none of what the first consumed
@@ -827,7 +827,7 @@ const LINUX_APART = {
   'photo-editor': [null, 'its editor is a native module (LLP 1024), which the web and Apple hosts load and the Linux host does not'],
   'interaction-gallery': ['drag sheet-handle 0 -150 300', "the sheet's full stop is its bay's height (`frame`), under three rows of 12 px buttons whose text each host sets in its own sans: Chrome's system-ui, and on macOS the Linux host's Arial (text/fonts.rs, no fontconfig), a row 1 px shorter, so 521 against the page's 518"],
   'synthetic-iframes': ['tap show', 'the Linux host loads no iframe, whose load and message only a browser delivers'],
-  'synthetic-decorations': { slots: ['sizes'], why: "rangeFrame's sizes are each host's fonts' (wasm and JS compare them; Linux's are pinned in host/linux's range_frame_tests.rs)" },
+  'synthetic-decorations': { slots: ['sizes'], why: "rangeFrame's sizes are each host's fonts' (wasm and JS compare them; Linux's are pinned in host/painted's range_frame_tests.rs)" },
   'synthetic-user-select-all': ['tap path', "Linux has no text selection on a `text` (`user-select: all` is `auto` there, declared in LLP 1001), so `selectionchange` never fires and the path stays empty (docs/contract-grammar.md, text selection)", { slot: 'path', value: '' }],
   'synthetic-native-buttons': ['tap open-dialog', 'the Linux host does not present dialogs (LLP 1001, LLP 1021 D2): it refuses a `commandfor` press, so the opener keeps the focus'],
 };

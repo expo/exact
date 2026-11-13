@@ -290,7 +290,7 @@ final class ModalGround: NSView {
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
-        (presenter?.pageBackground ?? .windowBackgroundColor).setFill()
+        (presenter?.opaqueGround ?? .windowBackgroundColor).setFill()
         // A capture's dirty rectangle is the captured view's, not this one's.
         bounds.intersection(dirtyRect).fill()
     }

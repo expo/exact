@@ -153,6 +153,57 @@ pub(crate) struct PreparedLinkArchive {
     pub derivative_digest: Option<String>,
 }
 
+/// Keep the receipt's VM → ICU → platform-runtime order, swapping only the
+/// selected ICU data tier. Static archives remain bundled in Rust rlibs so
+/// an Apple staticlib also carries them to Xcode.
+pub(crate) fn native_link_lines(
+    target_os: &str,
+    target_vendor: &str,
+    archives: &[PreparedLinkArchive],
+    icu: Option<(&Path, &str)>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut search_paths = Vec::new();
+    for archive in archives {
+        let parent = archive
+            .linked
+            .parent()
+            .expect("native archive has a parent");
+        if !search_paths.contains(&parent) {
+            search_paths.push(parent);
+            lines.push(format!("rustc-link-search=native={}", parent.display()));
+        }
+    }
+    for archive in archives {
+        lines.push(format!("rustc-link-lib=static={}", archive.library));
+    }
+    if let Some((root, data)) = icu {
+        if !search_paths.contains(&root) {
+            lines.push(format!("rustc-link-search=native={}", root.display()));
+        }
+        for library in ["icui18n", "icuuc", data] {
+            lines.push(format!("rustc-link-lib=static={library}"));
+        }
+    }
+    if !archives.is_empty() {
+        let libraries: &[&str] = if target_vendor == "apple" {
+            &["c++", "framework=CoreFoundation", "framework=Foundation"]
+        } else if target_os == "android" {
+            &["c++_static", "c++abi", "log", "dl", "m"]
+        } else if target_os == "windows" {
+            &["icuuc", "icuin", "dbghelp", "version", "psapi", "winmm"]
+        } else {
+            &["static=tinfo", "stdc++", "dl", "pthread", "m"]
+        };
+        lines.extend(
+            libraries
+                .iter()
+                .map(|library| format!("rustc-link-lib={library}")),
+        );
+    }
+    lines
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) struct ValidatedHostBundle {
@@ -503,16 +554,29 @@ fn install_layout(root: PathBuf, target: &str, origin: InstallOrigin) -> Install
     } else {
         ("libhermesvm_a.a", "libhermesvmlean_a.a")
     };
-    let linux_icu = target.ends_with("-unknown-linux-gnu");
+    let bundled_icu = target.ends_with("-unknown-linux-gnu") || target == "aarch64-linux-android";
+    let intl_data = target.ends_with("-unknown-linux-gnu")
+        || (target == "aarch64-linux-android"
+            && read_regular_file(&root.join("hermes-input-receipt.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .is_some_and(|document| {
+                    receipt_schema::validate(&document, Some(target)).is_ok()
+                        && document["build"]["flags"].as_array().is_some_and(|flags| {
+                            flags
+                                .iter()
+                                .any(|flag| flag.as_str() == Some("-DHERMES_ENABLE_INTL=true"))
+                        })
+                }));
     InstallLayout {
-        icu_i18n_archive: linux_icu.then(|| lib_root.join("libicui18n.a")),
-        icu_uc_archive: linux_icu.then(|| lib_root.join("libicuuc.a")),
-        icu_data_archive: linux_icu.then(|| lib_root.join("libicudata.a")),
-        icu_en_data_archive: linux_icu.then(|| lib_root.join("libicudata-en.a")),
-        icu_full_data_archive: linux_icu.then(|| lib_root.join("libicudata-full.a")),
-        icu_trimmed_filter: linux_icu
+        icu_i18n_archive: bundled_icu.then(|| lib_root.join("libicui18n.a")),
+        icu_uc_archive: bundled_icu.then(|| lib_root.join("libicuuc.a")),
+        icu_data_archive: bundled_icu.then(|| lib_root.join("libicudata.a")),
+        icu_en_data_archive: intl_data.then(|| lib_root.join("libicudata-en.a")),
+        icu_full_data_archive: intl_data.then(|| lib_root.join("libicudata-full.a")),
+        icu_trimmed_filter: intl_data
             .then(|| root.join("share").join("icu").join("filters-root-en.json")),
-        icu_en_filter: linux_icu
+        icu_en_filter: intl_data
             .then(|| root.join("share").join("icu").join("filters-en-intl.json")),
         root,
         include_dir,
@@ -660,7 +724,71 @@ pub(crate) fn validate_target_bundle(
         false,
         &engine_digest,
         &host.bytecode_version,
-    )
+    )?;
+    validate_bundle_files(&layout)
+}
+
+// Publication admits the whole bundle, including files this build will not link.
+// Intl selection must not decide which receipt claims are checked here.
+fn validate_bundle_files(layout: &InstallLayout) -> Result<(), String> {
+    let path = layout.root.join("hermes-input-receipt.json");
+    let bytes = read_regular_file(&path)?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+    let receipt = receipt_schema::validate(
+        &document,
+        Some(receipt_schema::bundle_target_for_rust_target(
+            &layout.target,
+        )),
+    )?;
+    let verify = |relative: &str, expected: &str| -> Result<(), String> {
+        let file = safe_relative_path(&layout.root, Path::new(relative))?;
+        let actual = digest_file(&file)?;
+        if actual != expected {
+            return Err(format!(
+                "{} records {} digest {}, but the bundled file has {}",
+                path.display(),
+                relative,
+                expected,
+                actual
+            ));
+        }
+        Ok(())
+    };
+    for name in ["archives", "headers"] {
+        for entry in document[name].as_array().expect("validated manifest") {
+            verify(
+                entry["path"].as_str().expect("validated path"),
+                entry["digest"].as_str().expect("validated digest"),
+            )?;
+        }
+    }
+    if let Some(binary) = document["compiler"]["binary"].as_str() {
+        verify(binary, &receipt.compiler_digest)?;
+    }
+    if let Some(icu) = &receipt.icu {
+        verify(&icu.trimmed_filter_path, &icu.trimmed_filter_digest)?;
+        verify(&icu.en_filter_path, &icu.en_filter_digest)?;
+    }
+    if layout.target == "aarch64-linux-android" {
+        for name in [
+            "libjsi.a",
+            "libboost_context.a",
+            "libicui18n.a",
+            "libicuuc.a",
+            "libicudata.a",
+        ] {
+            let relative = relative_install_path(&layout.root, &layout.lib_root.join(name))?;
+            if !receipt.archive_digests().contains_key(&relative) {
+                return Err(format!(
+                    "{} does not bind required Android archive {}",
+                    path.display(),
+                    relative
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn acquire_validated_host_bundle(
@@ -761,16 +889,17 @@ fn validate_receipt(
 ) -> Result<(), String> {
     let receipt_path = layout.root.join("hermes-input-receipt.json");
     let Some(receipt) = read_receipt_claims(layout)? else {
-        if layout.target.ends_with("-unknown-linux-gnu") {
+        if layout.target.ends_with("-unknown-linux-gnu") || layout.target == "aarch64-linux-android"
+        {
             return Err(format!(
-                "Linux Hermes install {} has no canonical receipt binding its ICU code and base/English-Intl/full data archives",
+                "Hermes install {} has no canonical receipt binding its ICU code and base/English-Intl/full data archives",
                 layout.root.display()
             ));
         }
         return Ok(());
     };
-    if layout.target.ends_with("-unknown-linux-gnu") {
-        validate_linux_icu_receipt(layout, &receipt, &receipt_path)?;
+    if layout.icu_en_data_archive.is_some() {
+        validate_bundled_icu_receipt(layout, &receipt, &receipt_path)?;
     }
     let receipt_archive = safe_relative_path(&layout.root, Path::new(&receipt.engine_binary))?;
     let selected_archive = fs::canonicalize(&layout.vm_archive).map_err(|error| {
@@ -870,20 +999,18 @@ fn validate_receipt(
     Ok(())
 }
 
-fn validate_linux_icu_receipt(
+fn validate_bundled_icu_receipt(
     layout: &InstallLayout,
     receipt: &ReceiptClaims,
     receipt_path: &Path,
 ) -> Result<(), String> {
-    let icu = receipt.icu.as_ref().ok_or_else(|| {
-        format!(
-            "{} has no pinned Linux ICU metadata",
-            receipt_path.display()
-        )
-    })?;
+    let icu = receipt
+        .icu
+        .as_ref()
+        .ok_or_else(|| format!("{} has no pinned ICU metadata", receipt_path.display()))?;
     let manifest = receipt.archive_digests.as_ref().ok_or_else(|| {
         format!(
-            "{} has no archive manifest for Linux ICU",
+            "{} has no archive manifest for bundled ICU",
             receipt_path.display()
         )
     })?;
@@ -915,7 +1042,7 @@ fn validate_linux_icu_receipt(
         ),
     ];
     for (label, selected, claimed) in required {
-        let selected = selected.ok_or_else(|| format!("Linux layout has no {label}"))?;
+        let selected = selected.ok_or_else(|| format!("bundled ICU layout has no {label}"))?;
         let claimed =
             claimed.ok_or_else(|| format!("{} has no {label}", receipt_path.display()))?;
         let relative = relative_install_path(&layout.root, selected)?;
@@ -959,7 +1086,7 @@ fn validate_linux_icu_receipt(
             &icu.en_filter_digest,
         ),
     ] {
-        let selected = selected.ok_or_else(|| format!("Linux layout has no {label}"))?;
+        let selected = selected.ok_or_else(|| format!("bundled ICU layout has no {label}"))?;
         let relative = relative_install_path(&layout.root, selected)?;
         if &relative != claimed_path {
             return Err(format!(
@@ -1005,8 +1132,7 @@ fn read_receipt_claims(layout: &InstallLayout) -> Result<Option<ReceiptClaims>, 
         }
         return Ok(None);
     }
-    let bytes = fs::read(&receipt_path)
-        .map_err(|error| format!("cannot read {}: {error}", receipt_path.display()))?;
+    let bytes = read_regular_file(&receipt_path)?;
     let document: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("cannot parse {}: {error}", receipt_path.display()))?;
     if document.get("schema").and_then(serde_json::Value::as_str) == Some(receipt_schema::SCHEMA) {
@@ -1206,9 +1332,43 @@ fn normalize_archive_path(raw: &[u8], kind: ArchiveEntryKind) -> Result<String, 
     Ok(normalized.join("/"))
 }
 
+fn open_regular_file(path: &Path) -> Result<File, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A replacement between inspection and open must not block on a FIFO.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    if !file
+        .metadata()
+        .map_err(|error| format!("cannot inspect opened {}: {error}", path.display()))?
+        .is_file()
+    {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    Ok(file)
+}
+
+fn read_regular_file(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    open_regular_file(path)?
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    Ok(bytes)
+}
+
 pub(crate) fn digest_file(path: &Path) -> Result<String, String> {
-    let mut file =
-        File::open(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let mut file = open_regular_file(path)?;
     let mut digest = Sha256::new();
     io::copy(&mut file, &mut DigestWriter(&mut digest))
         .map_err(|error| format!("cannot hash {}: {error}", path.display()))?;
@@ -2472,6 +2632,8 @@ mod internal_tests {
             fs::create_dir_all(root.join(directory)).expect("fixture directory");
         }
         let files = [
+            ("lib/libboost_context.a", b"boost".as_slice()),
+            ("lib/libjsi.a", b"jsi".as_slice()),
             ("lib/libhermesvm_a.a", b"engine".as_slice()),
             ("lib/libicudata-full.a", b"full data".as_slice()),
             ("lib/libicudata-en.a", b"English data".as_slice()),
@@ -2526,12 +2688,14 @@ mod internal_tests {
                 "variant": "release"
             },
             "archives": [
+                { "path": "lib/libboost_context.a", "digest": digest("lib/libboost_context.a") },
                 { "path": "lib/libhermesvm_a.a", "digest": digest("lib/libhermesvm_a.a") },
                 { "path": "lib/libicudata-en.a", "digest": digest("lib/libicudata-en.a") },
                 { "path": "lib/libicudata-full.a", "digest": digest("lib/libicudata-full.a") },
                 { "path": "lib/libicudata.a", "digest": digest("lib/libicudata.a") },
                 { "path": "lib/libicui18n.a", "digest": digest("lib/libicui18n.a") },
-                { "path": "lib/libicuuc.a", "digest": digest("lib/libicuuc.a") }
+                { "path": "lib/libicuuc.a", "digest": digest("lib/libicuuc.a") },
+                { "path": "lib/libjsi.a", "digest": digest("lib/libjsi.a") }
             ],
             "headers": [
                 { "path": "include/sentinel.h", "digest": digest("include/sentinel.h") }
@@ -2624,6 +2788,286 @@ mod internal_tests {
             .expect("remove English-Intl data");
         let error = validate_layout(&layout, false).expect_err("English tier is required");
         assert!(error.contains("English-Intl ICU data archive"), "{error}");
+    }
+
+    #[test]
+    fn android_link_order_matches_receipt_for_each_vm_and_data_tier() {
+        // Link directives from the published v5 Android receipt.
+        let receipt = serde_json::json!({"linkDirectives": [
+            "rustc-link-search=native=lib",
+            "rustc-link-lib=static=hermesvm_a",
+            "rustc-link-lib=static=jsi",
+            "rustc-link-lib=static=boost_context",
+            "rustc-link-lib=static=icui18n",
+            "rustc-link-lib=static=icuuc",
+            "rustc-link-lib=static=icudata",
+            "rustc-link-lib=c++_static",
+            "rustc-link-lib=c++abi",
+            "rustc-link-lib=log",
+            "rustc-link-lib=dl",
+            "rustc-link-lib=m",
+        ]});
+        for vm in ["hermesvm_a", "hermesvmlean_a"] {
+            let archives: Vec<_> = [vm, "jsi", "boost_context"]
+                .into_iter()
+                .map(|library| {
+                    let path = Path::new("lib").join(format!("lib{library}.a"));
+                    PreparedLinkArchive {
+                        library: library.into(),
+                        source: path.clone(),
+                        linked: path,
+                        source_digest: None,
+                        derivative_digest: None,
+                    }
+                })
+                .collect();
+            for data in ["icudata", "icudata-en", "icudata-full"] {
+                let expected: Vec<_> = receipt["linkDirectives"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| {
+                        line.as_str()
+                            .unwrap()
+                            .replace("static=hermesvm_a", &format!("static={vm}"))
+                            .replace("static=icudata", &format!("static={data}"))
+                    })
+                    .collect();
+                assert_eq!(
+                    native_link_lines(
+                        "android",
+                        "unknown",
+                        &archives,
+                        Some((Path::new("lib"), data))
+                    ),
+                    expected
+                );
+            }
+        }
+        assert_eq!(
+            native_link_lines(
+                "android",
+                "unknown",
+                &[],
+                Some((Path::new("lib"), "icudata-en"))
+            ),
+            [
+                "rustc-link-search=native=lib",
+                "rustc-link-lib=static=icui18n",
+                "rustc-link-lib=static=icuuc",
+                "rustc-link-lib=static=icudata-en"
+            ]
+        );
+        assert!(native_link_lines("android", "unknown", &[], None).is_empty());
+    }
+
+    #[test]
+    fn android_receipt_selects_intl_and_authenticates_english_data() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path();
+        let (_, engine_digest) = write_linux_v3_fixture(root);
+        let path = root.join("hermes-input-receipt.json");
+        let mut receipt: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        receipt["target"] = "aarch64-linux-android".into();
+        receipt["build"]["flags"] =
+            serde_json::json!(["-DANDROID_PLATFORM=android-29", "-DHERMES_ENABLE_INTL=true"]);
+        let save = |value: &serde_json::Value| {
+            fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap()
+        };
+        save(&receipt);
+        let layout = install_layout(
+            root.to_path_buf(),
+            "aarch64-linux-android",
+            InstallOrigin::Override,
+        );
+        validate_layout(&layout, false).expect("complete Android ICU layout");
+        let check = || {
+            validate_receipt(
+                &layout,
+                &root.join("bin/hermesc"),
+                true,
+                &engine_digest,
+                "99",
+            )
+        };
+        check().expect("Android authenticates the same ICU tiers as Linux");
+        fs::write(root.join("lib/libicudata-en.a"), b"tampered English data").unwrap();
+        assert!(check()
+            .unwrap_err()
+            .contains("English-Intl ICU data archive digest"));
+        fs::remove_file(root.join("lib/libicudata-en.a")).unwrap();
+        assert!(validate_layout(&layout, false)
+            .unwrap_err()
+            .contains("English-Intl ICU data archive"));
+        fs::write(root.join("lib/libicudata-en.a"), b"English data").unwrap();
+        receipt["build"]["flags"][0] = "-DANDROID_PLATFORM=android-30".into();
+        save(&receipt);
+        let api30_layout = install_layout(
+            root.to_path_buf(),
+            "aarch64-linux-android",
+            InstallOrigin::Override,
+        );
+        assert_eq!(api30_layout.icu_en_data_archive, layout.icu_en_data_archive);
+        validate_layout(&api30_layout, false).expect("API 30 layout");
+        validate_receipt(
+            &api30_layout,
+            &root.join("bin/hermesc"),
+            true,
+            &engine_digest,
+            "99",
+        )
+        .expect("Intl is independent of the minimum API");
+        receipt["build"]["flags"][0] = "-DANDROID_PLATFORM=android-29".into();
+        receipt["build"]["flags"][1] = "-DHERMES_ENABLE_INTL=false".into();
+        save(&receipt);
+        let layout = install_layout(
+            root.to_path_buf(),
+            "aarch64-linux-android",
+            InstallOrigin::Override,
+        );
+        assert!(layout.icu_en_data_archive.is_none());
+        validate_receipt(
+            &layout,
+            &root.join("bin/hermesc"),
+            true,
+            &engine_digest,
+            "99",
+        )
+        .expect("receipt with ICU data and Intl disabled");
+        validate_bundle_files(&layout).expect("complete bundle with Intl disabled");
+        fs::remove_file(root.join("lib/libicudata-en.a")).unwrap();
+        validate_layout(&layout, false).expect("disabled Intl links only base data");
+        assert!(validate_bundle_files(&layout)
+            .unwrap_err()
+            .contains("libicudata-en.a"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_special_files_are_rejected_without_blocking() {
+        use std::os::unix::{fs::symlink, net::UnixListener};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        for relative in ["include/sentinel.h", "hermes-input-receipt.json"] {
+            for kind in ["fifo", "directory", "socket", "symlink"] {
+                let temporary = tempfile::tempdir().unwrap();
+                let root = temporary.path().to_path_buf();
+                write_linux_v3_fixture(&root);
+                let receipt_path = root.join("hermes-input-receipt.json");
+                let mut receipt: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+                receipt["target"] = "aarch64-linux-android".into();
+                fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+                let host = ValidatedHostBundle {
+                    root: root.clone(),
+                    hermesc: root.join("bin/hermesc"),
+                    bytecode_version: "99".into(),
+                };
+                validate_target_bundle(root.clone(), "aarch64-linux-android", &host, false)
+                    .expect("regular candidate");
+                let path = root.join(relative);
+                fs::rename(&path, root.join("original")).unwrap();
+                let _socket = match kind {
+                    "fifo" => {
+                        assert!(std::process::Command::new("mkfifo")
+                            .arg(&path)
+                            .status()
+                            .unwrap()
+                            .success());
+                        None
+                    }
+                    "directory" => {
+                        fs::create_dir(&path).unwrap();
+                        None
+                    }
+                    "socket" => Some(UnixListener::bind(&path).unwrap()),
+                    "symlink" => {
+                        symlink(root.join("original"), &path).unwrap();
+                        None
+                    }
+                    _ => unreachable!(),
+                };
+                let (send, receive) = mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    let result =
+                        validate_target_bundle(root, "aarch64-linux-android", &host, false);
+                    let _ = send.send(result);
+                });
+                // Bound a blocked open; a FIFO deliberately has no writer.
+                let result = receive
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap_or_else(|_| {
+                        panic!("candidate validation blocked on {kind} {relative}")
+                    });
+                worker.join().unwrap();
+                assert!(result.is_err(), "accepted {kind} {relative}");
+            }
+        }
+    }
+
+    #[test]
+    fn android_published_bundle_needs_no_intl_data() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let (_, engine_digest) = write_linux_v3_fixture(root);
+        let path = root.join("hermes-input-receipt.json");
+        let mut receipt: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        receipt["target"] = "aarch64-linux-android".into();
+        receipt["build"]["flags"] = serde_json::json!([
+            "-DANDROID_PLATFORM=android-30",
+            "-DHERMES_ENABLE_INTL=false"
+        ]);
+        receipt.as_object_mut().unwrap().remove("icu");
+        for name in ["lib/libicudata-en.a", "lib/libicudata-full.a"] {
+            fs::remove_file(root.join(name)).unwrap();
+            receipt["archives"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|entry| entry["path"] != name);
+        }
+        fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        let layout = install_layout(
+            root.to_path_buf(),
+            "aarch64-linux-android",
+            InstallOrigin::Override,
+        );
+        validate_layout(&layout, false).unwrap();
+        validate_receipt(
+            &layout,
+            &root.join("bin/hermesc"),
+            true,
+            &engine_digest,
+            "99",
+        )
+        .unwrap();
+        assert!(layout.icu_en_data_archive.is_none());
+        assert!(layout.icu_data_archive.is_some());
+        validate_bundle_files(&layout).expect("complete published bundle");
+        for name in ["icudata", "icui18n", "icuuc", "jsi", "boost_context"] {
+            let mut incomplete = receipt.clone();
+            let archive = format!("lib/lib{name}.a");
+            incomplete["archives"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|entry| entry["path"] != archive);
+            fs::write(&path, serde_json::to_vec(&incomplete).unwrap()).unwrap();
+            let error = validate_bundle_files(&layout).expect_err("every link input must be bound");
+            assert!(error.contains(&archive), "{error}");
+        }
+        receipt["build"]["flags"][1] = "-DHERMES_ENABLE_INTL=true".into();
+        fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert!(validate_receipt(
+            &layout,
+            &root.join("bin/hermesc"),
+            true,
+            &engine_digest,
+            "99"
+        )
+        .unwrap_err()
+        .contains("English ICU data"));
     }
 
     #[test]

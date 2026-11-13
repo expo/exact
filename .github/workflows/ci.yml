@@ -59,21 +59,31 @@ jobs:
       - name: Cargo dependencies
         # caps's wasm check lists and checks the web crates offline, so the registry
         # must already hold every crate, and nothing before this step fetches them.
+        id: deps
         run: cargo fetch --locked
 
+      # Each check runs once the setup above succeeded, whether or not a check before
+      # it failed, so one run reports every failing check (rules/RULES.md bans
+      # fail-fast), and the job fails if any did. A step's default condition,
+      # `success()`, would skip it after any failure.
       - name: fmt
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: cargo fmt --all -- --check
 
       - name: caps
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: bun scripts/caps.mjs
 
       - name: boot
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: bun scripts/boot.mjs
 
       - name: workspace check
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: cargo check --workspace --all-targets --keep-going
 
       - name: clippy
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: cargo clippy --all-targets --keep-going -- -D warnings
 
   macos:

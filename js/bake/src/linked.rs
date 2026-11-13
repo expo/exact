@@ -24,6 +24,21 @@ impl From<ExactLinkedBytecode> for ::exact_js::Bytecode {
 }
 "#;
 
+/// The app's identity and grants from the compat.json the link added
+/// (`exact_apple::baked::identity`): `APP` and `GRANTS` read as `&str`
+/// (`Deref`, `Display`) and convert `Into<String>` as the constants did.
+pub(crate) const LINKED_IDENTITY: &str = r#"#[allow(dead_code)]
+pub const APP: ::exact_apple::baked::Linked = ::exact_apple::baked::Linked::App;
+#[allow(dead_code)]
+pub const GRANTS: ::exact_apple::baked::Linked = ::exact_apple::baked::Linked::Grants;
+"#;
+
+/// The module's Canvas 2D roster from the same compat.json; it is
+/// `AsRef<[(&str, usize)]>`, as `with_canvas_surfaces` takes it.
+pub(crate) const LINKED_SURFACES: &str = r#"#[allow(dead_code)]
+pub const CANVAS_SURFACES: ::exact_apple::baked::LinkedSurfaces = ::exact_apple::baked::LinkedSurfaces;
+"#;
+
 /// The entry's plan and compatibility document, embedded from OUT_DIR.
 pub(crate) const EMBEDDED: &str = r#"#[allow(dead_code)]
 fn exact_plan() -> &'static [u8] {

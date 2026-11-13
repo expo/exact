@@ -82,3 +82,67 @@ test('bound springs animate paint and type on ordinary and pressed rows', async 
     rmSync(dir, { recursive: true, force: true });
   }
 }, 120000);
+
+test('authored per-axis velocity reaches the web spring without changing its endpoint', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/spring-velocity-'));
+  let server, browser;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Spring velocity', app: { id: 'test.spring-velocity', name: 'Spring velocity' } }));
+    writeFileSync(resolve(dir, 'app.contract'), `component App
+  state target = 0
+  state velocity = "800 -600"
+  state spring = false
+  action release
+    spring = true
+    target = 100
+  action velocityOnly
+    velocity = "999 999"
+  view
+    column
+      button "Release" press=release testId="release"
+      button "Velocity only" press=velocityOnly testId="velocity-only"
+      box testId="forward" width=100 height=100 translate=\`\${target}px \${target}px\` -exact-translate-velocity=velocity transition="translate -exact-spring(260, 24, 1)"
+      box testId="reverse" width=100 height=100 translate=\`\${target}px \${target}px\` -exact-translate-velocity="-800 600" transition="translate -exact-spring(260, 24, 1)"
+      box testId="zero" width=100 height=100 translate=\`\${target}px \${target}px\` -exact-translate-velocity="0 0" transition="translate -exact-spring(260, 24, 1)"
+      box testId="same-endpoint" width=100 height=100 translate="0px 0px" -exact-translate-velocity="800 -600" transition=(spring ? "translate -exact-spring(260, 24, 1)" : "none")
+`);
+    const out = resolve(dir, 'dist');
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', dir, '--out', out, '--render', 'none'], { cwd: root, encoding: 'utf8' });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: request => new Response(Bun.file(resolve(out, new URL(request.url).pathname.slice(1) || 'index.html'))) });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await page.waitForFunction(() => typeof globalThis.exact?.settleAt === 'function');
+    const shown = await page.evaluate(async () => {
+      const boxes = ['forward', 'reverse', 'zero', 'same-endpoint'].map(id => document.querySelector(`[data-testid="${id}"]`));
+      document.querySelector('[data-testid="release"]').click();
+      await Promise.resolve();
+      const animations = boxes.map(el => el.getAnimations().find(a => a.effect.getKeyframes().some(k => k.translate)));
+      for (const a of animations) { a.pause(); a.currentTime = 1; }
+      const starts = boxes.map(el => getComputedStyle(el).translate.split(' ').map(parseFloat));
+      document.querySelector('[data-testid="velocity-only"]').click();
+      await Promise.resolve();
+      const same = boxes[0].getAnimations().includes(animations[0]);
+      animations.forEach(a => a.finish());
+      return { starts, same, ends: boxes.map(el => { const [x, y = 0] = getComputedStyle(el).translate.split(' ').map(parseFloat); return [x, y]; }) };
+    });
+    expect(shown.starts[0][0]).toBeGreaterThan(0);
+    expect(shown.starts[0][1]).toBeLessThan(0);
+    expect(shown.starts[1][0]).toBeLessThan(0);
+    expect(shown.starts[1][1]).toBeGreaterThan(0);
+    expect(shown.starts[2][0]).toBeGreaterThan(0);
+    expect(shown.starts[2][0]).toBeCloseTo(shown.starts[2][1]);
+    expect(shown.starts[3][0]).toBeGreaterThan(0);
+    expect(shown.starts[3][1]).toBeLessThan(0);
+    expect(shown.same).toBe(true);
+    expect(shown.ends).toEqual([[100, 100], [100, 100], [100, 100], [0, 0]]);
+  } finally {
+    await browser?.close();
+    server?.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);

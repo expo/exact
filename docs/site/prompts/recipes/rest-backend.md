@@ -1,5 +1,5 @@
 ```prompt Add my own REST server
-Give the Exact app in this folder its own REST server, written in Bun. Use https://github.com/expo/exact/blob/main/docs/recipes/rest-backend.md as the source for each step. The exact2 checkout has the same page at docs/recipes/rest-backend.md.
+Give the Exact app in this folder its own REST server, written in Bun. Use https://github.com/expo/exact/blob/main/docs/recipes/rest-backend.md as the source for each step. The Exact checkout has the same page at docs/recipes/rest-backend.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. Ask me whether to start from the REST starter or to connect a server I already have. For the starter, run `bun exact.mjs pattern rest`: it writes the Contract app and the Bun server together. If it refuses a file I edited, tell me; do not add `--force` without asking.

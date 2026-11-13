@@ -335,6 +335,16 @@ pub struct Env {
     /// own ([`crate::Kernel::set_root_font_size`]), which the next commit
     /// writes here; [`crate::Kernel::set_env`] keeps it.
     pub root_font_size: f32,
+    /// What `var(--exact-safe-area-inset-<edge>)` reads (LLP 1123 D9), top
+    /// right bottom left: the session root's, the insets of the area the
+    /// document covers, set apart from `env()` by a host whose document
+    /// covers its view while `env()` is 0 (iOS under `viewport-fit=auto`
+    /// with a native primary container, D1);
+    /// [`crate::Kernel::set_root_local_insets`]. `None`: the safe-area
+    /// insets. Inside a content owner the owner's own stand in its place
+    /// where a node's lengths are resolved ([`crate::Kernel::set_local_insets`]);
+    /// [`crate::Kernel::set_env`] keeps it.
+    pub local: Option<[f32; 4]>,
 }
 
 impl Default for Env {
@@ -365,7 +375,15 @@ impl Env {
             regions: None,
             titlebar_area: None,
             root_font_size: crate::style::relative::MEDIUM,
+            local: None,
         }
+    }
+
+    /// `var(--exact-safe-area-inset-<edge>)`'s value (LLP 1123 D9): the
+    /// local inset this environment carries, else the safe-area inset.
+    pub fn local_inset(&self, edge: Edge) -> f32 {
+        self.local
+            .map_or_else(|| self.inset(edge), |l| l[edge as usize])
     }
 
     /// The inset at an edge.
@@ -391,6 +409,7 @@ impl Env {
             .as_ref()
             .is_none_or(crate::ButtonFonts::is_valid)
             && Edge::ALL.iter().all(|e| self.inset(*e).is_finite())
+            && self.local.is_none_or(|l| l.iter().all(|v| v.is_finite()))
             && self
                 .regions
                 .is_none_or(|r| r.iter().flatten().all(|v| v.is_finite()))
@@ -672,6 +691,10 @@ pub const ENV_NAMES: [(&str, &str); 8] = [
     ),
     (TitleBarVar::PREFIX, "css Window Controls Overlay"),
 ];
+
+/// The custom property a local inset is read through, before its edge:
+/// `var(--exact-safe-area-inset-<edge>)` (LLP 1123 D9).
+pub const LOCAL_PREFIX: &str = "--exact-safe-area-inset-";
 
 pub(super) fn term(inner: &str) -> Result<Dimension, EnvRefusal> {
     let inner = inner.trim();

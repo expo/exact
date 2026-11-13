@@ -630,7 +630,7 @@ class Inner {
   drawText(code, text, x, y, maxWidth) {
     x = Number(x); y = Number(y);
     if (!finite(x, y) || !this.paints()) return;
-    if (maxWidth !== undefined) { maxWidth = Number(maxWidth); if (Number.isNaN(maxWidth) || maxWidth <= 0) return; }
+    if (maxWidth !== undefined) { maxWidth = Number(maxWidth); if (!Number.isFinite(maxWidth) || maxWidth <= 0) return; }
     text = prepareText(text);
     const raw = this.measureRaw(text);
     const squeeze = maxWidth !== undefined && maxWidth < raw[0];
@@ -890,24 +890,24 @@ export class Recorder {
     g.moveTo(start[0], start[1]); g.segments(segs); this.closePath(); g.moveTo(x, y);
   }
   // Painting
-  _paintPath(path, code, rule, clip) {
+  _paintPath(path, code, rule) {
     const g = this._;
-    if (!clip && !g.paints()) return;
+    if (!g.paints()) return;
     const m = g.state.transform;
     for (const s of path[PATH].segs) { const t = transformSeg(s, m); g.op(PATH_OPS[t[0]], t.slice(1)); }
     g.op(code, rule === undefined ? [] : [rule === "evenodd" ? 1 : 0]);
   }
   fill(a = "nonzero", b = "nonzero") {
-    if (a instanceof Path2D) return this._paintPath(a, OP.FillPath, b, false);
+    if (a instanceof Path2D) return this._paintPath(a, OP.FillPath, b);
     const g = this._; if (g.paints()) g.op(OP.Fill, [a === "evenodd" ? 1 : 0]);
   }
   stroke(path) {
-    if (path instanceof Path2D) return this._paintPath(path, OP.StrokePath, undefined, false);
+    if (path instanceof Path2D) return this._paintPath(path, OP.StrokePath, undefined);
     const g = this._; if (g.paints()) g.op(OP.Stroke, []);
   }
   clip(a = "nonzero", b = "nonzero") {
-    if (a instanceof Path2D) return this._paintPath(a, OP.ClipPath, b, true);
-    this._.op(OP.Clip, [a === "evenodd" ? 1 : 0]);
+    if (a instanceof Path2D) return this._paintPath(a, OP.ClipPath, b);
+    const g = this._; if (g.paints()) g.op(OP.Clip, [a === "evenodd" ? 1 : 0]);
   }
   fillRect(x, y, w, h) { const g = this._; if (finite(x, y, w, h) && g.paints()) g.op(OP.FillRect, [x, y, w, h]); }
   strokeRect(x, y, w, h) { const g = this._; if (finite(x, y, w, h) && g.paints()) g.op(OP.StrokeRect, [x, y, w, h]); }
@@ -1017,7 +1017,7 @@ export class Recorder {
   set textAlign(v) { const k = ALIGN.indexOf(v); if (k >= 0) this._.state.text.align = k; }
   get textBaseline() { return BASELINE[this._.state.text.baseline]; }
   set textBaseline(v) { const k = BASELINE.indexOf(v); if (k >= 0) this._.state.text.baseline = k; }
-  get direction() { return this._.rtl() ? "rtl" : "ltr"; }
+  get direction() { return DIRECTION[this._.state.text.direction]; }
   set direction(v) { const k = DIRECTION.indexOf(v); if (k >= 0) this._.state.text.direction = k; }
   get fontKerning() { return KERNING[this._.state.text.kerning]; }
   set fontKerning(v) { const k = KERNING.indexOf(v); if (k >= 0) this._.state.text.kerning = k; }

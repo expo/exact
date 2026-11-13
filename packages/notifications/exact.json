@@ -22,7 +22,17 @@
       "tag": "string",
       "data": "option<string>",
       "title": "string",
-      "body": "option<string>"
+      "body": "option<string>",
+      "action": "option<string>",
+      "reply": "option<string>"
+    },
+    "NotificationAction": {
+      "action": "string",
+      "title": "string",
+      "foreground": "bool",
+      "destructive": "bool",
+      "authenticationRequired": "bool",
+      "placeholder": "option<string>"
     }
   },
   "names": [
@@ -39,7 +49,12 @@
         "silent": "option<bool>",
         "data": "option<string>",
         "showTrigger": "option<number>",
-        "navigate": "option<string>"
+        "navigate": "option<string>",
+        "actions": {
+          "type": "option<NotificationAction[]>",
+          "literal": true,
+          "declares": "action"
+        }
       },
       "answers": null,
       "substitute": {
@@ -63,10 +78,13 @@
                 "tag": "tag",
                 "data": "data",
                 "title": "title",
-                "body": "body"
+                "body": "body",
+                "action": "action",
+                "reply": "reply"
               }
             ],
-            "navigate": "navigate"
+            "navigate": "navigate",
+            "actions": "actions"
           }
         }
       }

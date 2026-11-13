@@ -84,7 +84,7 @@ public final class USBModule: ExactPackage {
                 "deviceClass": number(s, "bDeviceClass") ?? 0, "deviceSubclass": number(s, "bDeviceSubClass") ?? 0, "deviceProtocol": number(s, "bDeviceProtocol") ?? 0,
                 "deviceVersionMajor": bcd >> 8, "deviceVersionMinor": (bcd >> 4) & 0xF, "deviceVersionSubminor": bcd & 0xF,
                 "manufacturerName": string(s, "USB Vendor Name") ?? "", "productName": string(s, "USB Product Name") ?? "",
-                "serialNumber": string(s, "USB Serial Number") ?? NSNull(), "configuration": number(s, "bConfigurationValue") ?? NSNull(), "configurations": configurations(s),
+                "serialNumber": string(s, "USB Serial Number") ?? NSNull(), "configuration": Self.configuration(s), "configurations": configurations(s),
                 "connected": true, "granted": true,
             ]
             out.append(Found(id: id, record: record, service: s))
@@ -113,6 +113,13 @@ public final class USBModule: ExactPackage {
         }
         let list = interfaces.keys.sorted().map { ["interfaceNumber": $0, "alternates": interfaces[$0]!] as [String: Any] }
         return list.isEmpty ? [] : [["configurationValue": value, "configurationName": NSNull(), "interfaces": list]]
+    }
+
+    /// The device's active configuration, or null while it is unconfigured. A device publishes it as
+    /// `kUSBCurrentConfiguration` (its interfaces, not the device, publish `bConfigurationValue`).
+    private static func configuration(_ s: io_service_t) -> Any {
+        let value = IORegistryEntryCreateCFProperty(s, kUSBHostDevicePropertyCurrentConfiguration as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? Int
+        return value.flatMap { $0 > 0 ? $0 : nil } ?? NSNull()
     }
 
     /// A remembered device not plugged in: its id, every other field empty, `connected` false.
@@ -177,8 +184,9 @@ public final class USBModule: ExactPackage {
             context.changed("usb.getDevices")
             return ["connection": handle, "device": f.record]
         case "usbConnection":
-            guard let c = connections[args["connection"] as? String ?? ""] else { return ["open": false, "connected": false, "claimed": []] }
-            return ["open": c.open, "connected": all.contains { $0.id == c.device }, "claimed": Array(c.claimed).sorted()]
+            guard let c = connections[args["connection"] as? String ?? ""] else { return ["open": false, "connected": false, "configuration": NSNull(), "claimed": []] }
+            let device = all.first { $0.id == c.device }
+            return ["open": c.open, "connected": device != nil, "configuration": device?.record["configuration"] ?? NSNull(), "claimed": Array(c.claimed).sorted()]
         case "forget":
             let id = args["device"] as? String ?? ""
             remembered.removeAll { $0 == id }

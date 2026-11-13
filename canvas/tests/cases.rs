@@ -465,6 +465,32 @@ fn the_shared_cases_hold_for_the_rust_recorder() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// The two cases whose effect is ink Chrome does not show: the shared run
+/// checks only that both recorders agree, so the records are read here.
+#[test]
+fn an_infinite_max_width_and_a_singular_clip_record_nothing() {
+    use exact_canvas::list::Op;
+    let lists = rust_lists(include_str!("cases.txt"));
+    let ops = |name: &str| -> Vec<Op> {
+        let (_, l) = lists.iter().find(|(n, _)| n == name).unwrap();
+        l.iter()
+            .flat_map(|l| list::records(l).unwrap())
+            .map(|r| r.op)
+            .collect()
+    };
+    let text = ops("fillText and strokeText draw nothing with an infinite maxWidth");
+    let drawn = text
+        .iter()
+        .filter(|op| matches!(op, Op::FillText | Op::StrokeText));
+    assert_eq!(drawn.count(), 1, "{text:?}");
+    let clip = ops("clip under a singular matrix is ignored, as Chrome ignores it");
+    assert!(
+        !clip.iter().any(|op| matches!(op, Op::Clip | Op::ClipPath)),
+        "{clip:?}"
+    );
+    assert!(clip.contains(&Op::FillRect), "{clip:?}");
+}
+
 #[test]
 fn arc_to_near_collinear_turns_record_a_line_to_the_corner() {
     use exact_canvas::{list::Op, Path2d};

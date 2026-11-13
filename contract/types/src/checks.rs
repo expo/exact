@@ -4,7 +4,7 @@ use super::{
     arms, disagree, err, infer, ComponentTypes, Ref, Scope, Shapes, Sink, Ty, TypeError, Types,
 };
 use contract_syntax::{
-    Attr, Component, Expr, File, Node, Owner, Span, TemplatePart, TypeExpr, UnOp, HOST_COMMANDS,
+    Attr, Component, Expr, File, Node, Owner, Span, TypeExpr, UnOp, HOST_COMMANDS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -106,54 +106,10 @@ pub(super) fn check_function_cycles(file: &File) -> Result<(), TypeError> {
 
 /// Function calls in expression order, excluding calls outside the authored graph.
 fn calls_in(e: &Expr, indices: &BTreeMap<&str, usize>, out: &mut Vec<usize>) {
-    match e {
-        Expr::Call(n, args, _) => {
-            if let Some(&index) = indices.get(n.as_str()) {
-                out.push(index);
-            }
-            for a in args {
-                calls_in(a, indices, out);
-            }
-        }
-        Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _) => calls_in(x, indices, out),
-        Expr::Binary(_, a, b, _) => {
-            calls_in(a, indices, out);
-            calls_in(b, indices, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            calls_in(a, indices, out);
-            calls_in(b, indices, out);
-            calls_in(c, indices, out);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            calls_in(subject, indices, out);
-            calls_in(some, indices, out);
-            calls_in(none, indices, out);
-        }
-        Expr::Let { value, body, .. } => {
-            calls_in(value, indices, out);
-            calls_in(body, indices, out);
-        }
-        Expr::Arrow { body, .. } => calls_in(body, indices, out),
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    calls_in(x, indices, out);
-                }
-            }
-        }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {}
-        Expr::List(items, _) => items.iter().for_each(|x| calls_in(x, indices, out)),
-    }
+    out.extend(e.walk().filter_map(|e| match e {
+        Expr::Call(n, _, _) => indices.get(n.as_str()).copied(),
+        _ => None,
+    }));
 }
 
 pub(super) use super::enums::accepts_expr;
@@ -475,7 +431,7 @@ pub(super) fn infer_owned_state_initializers(
             if let Some(e) = super::component::initializer_scope(c, i, &scope, &types.shapes) {
                 return Err(e);
             }
-            ct.slots[i] = infer(&state.expr, &scope, &types.shapes)?;
+            ct.slots[i] = super::component::state_type(state, &scope, &types.shapes)?;
         }
         base.push_name_at(
             1,
@@ -880,7 +836,7 @@ pub(super) fn check_command(
                 "`{name}` is an action of `{owner}`, not in `{component}`'s scope; pass it as an `action` prop or `provide` it"
             ),
             None if matches!(name, "showNotification" | "closeNotification" | "setAppBadge" | "clearAppBadge") => format!(
-                "`{name}` is `@exact/notifications`' (LLP 1133.004): `exact add notifications`, then `use {name} from \"@exact/notifications\"` (`closeNotification` takes `tag=`)"
+                "`{name}` is `@exact/notifications`' (LLP 1133.004): `bun exact.mjs add notifications`, then `use {name} from \"@exact/notifications\"` (`closeNotification` takes `tag=`)"
             ),
             _ => format!(
                 "`{name}` is not a host command; the hosts answer {}",
@@ -926,6 +882,13 @@ pub(super) fn check_command(
         return err(
             "type-window-opacity",
             "`setWindowOpacity(opacity)` takes the window's opacity as a number from 0 (unseen) to 1 (opaque)",
+            span,
+        );
+    }
+    if name == "hideWindow" && !args.is_empty() {
+        return err(
+            "type-hide-window",
+            "`hideWindow()` takes no arguments: the session's window is put away and the app keeps running, as when the person closes it under `keepRunning`; bare `focus()` shows it again",
             span,
         );
     }
@@ -1045,7 +1008,10 @@ pub(super) fn check_command(
         }
         return Ok(());
     }
-    if matches!(name, "playSound" | "playSounds" | "stopSounds" | "haptic") {
+    if matches!(
+        name,
+        "playSound" | "playSounds" | "stopSounds" | "setSounds" | "haptic"
+    ) {
         return sounds::args(name, args, scope, shapes, span);
     }
     if matches!(name, "requestMIDIAccess" | "sendMIDI") {

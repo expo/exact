@@ -29,7 +29,7 @@ impl<D: DataSource> Host<D> {
     /// for one view (it is gone) leaves the others set and is the batch's
     /// error.
     pub fn set_covers(&mut self, covers: &[(ViewId, Option<HostCover>)]) -> String {
-        self.set_claims(covers, &[], &[], &[], &[], &[])
+        self.set_claims(covers, &[], &[], &[], &[], &[], &[])
     }
 
     /// What UIKit covers of list `view`'s port at its start and end
@@ -58,12 +58,15 @@ impl<D: DataSource> Host<D> {
     /// layout: each root's frame comes back in its block's space, with the
     /// block's used size.
     pub fn set_blocks(&mut self, blocks: &[(ViewId, Option<HostBlock>)]) -> String {
-        self.set_claims(&[], blocks, &[], &[], &[], &[])
+        self.set_claims(&[], blocks, &[], &[], &[], &[], &[])
     }
 
     /// Covers, containing blocks and the blocks' placements under one
     /// layout, and the canvases' work after it: a canvas in a box given
-    /// back is laid out and drawn in this batch.
+    /// back is laid out and drawn in this batch. And content owners' local
+    /// insets (`None` for the session root's; LLP 1123 D9), which change
+    /// only the lengths that read them.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_claims(
         &mut self,
         covers: &[(ViewId, Option<HostCover>)],
@@ -72,17 +75,30 @@ impl<D: DataSource> Host<D> {
         margins: &[(ViewId, Option<GroupedMargins>)],
         list_margins: &[(ViewId, Option<[f32; 2]>)],
         restyles: &[(ViewId, Restyle)],
+        locals: &[(Option<ViewId>, Option<[f32; 4]>)],
     ) -> String {
         self.presence.unauthored = true;
-        let needs_layout = !(covers.is_empty()
-            && blocks.is_empty()
-            && margins.is_empty()
-            && list_margins.is_empty());
+        let mut local_layout = false;
+        let mut error = None;
+        for &(view, insets) in locals {
+            let set = match view {
+                Some(view) => self.runner.kernel_mut().set_local_insets(view, insets),
+                None => self.runner.kernel_mut().set_root_local_insets(insets),
+            };
+            match set {
+                Ok(owed) => local_layout |= owed,
+                Err(e) => drop(error.get_or_insert(format!("local insets: {e:?}"))),
+            }
+        }
+        let needs_layout = local_layout
+            || !(covers.is_empty()
+                && blocks.is_empty()
+                && margins.is_empty()
+                && list_margins.is_empty());
         if needs_layout {
             self.height_targets_dirty = true;
         }
         let mut batch = crate::batch::Batch::new();
-        let mut error = None;
         // A placeholder's or a resized box's style changes as a commit does,
         // so the presenter hears its rows; it is laid out with the claims
         // below, once.

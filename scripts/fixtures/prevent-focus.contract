@@ -14,7 +14,7 @@ component App
   action noted(e: PointerEvent)
     heard = `${heard} down-hear`
   view
-    column padding=20 gap=8 width="100%"
+    column padding=20 gap=8 width="100%" box-sizing="border-box"
       input testId="a" value="alpha" width=240 height=28 focus=focused("a") change=changedA
       input testId="b" value="beta" width=240 height=28 pointerdown=keep focus=focused("b")
       box testId="box" tabindex=0 width=120 height=32 pointerdown=keep press=hit("box") focus=focused("box")

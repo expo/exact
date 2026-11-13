@@ -1,6 +1,6 @@
 /* exact.h — the Apple host's C ABI, v10 (LLP 1008 §4; LLP 1031 D2).
  *
- * Every call takes a runtime handle: exact_create() hands one out (a u32,
+ * Session calls take a runtime handle: exact_create() hands one out (a u32,
  * never 0, never reused) and exact_destroy() frees everything attributable
  * to it — the runner, its executor, its buffers, its journal. More than one
  * runtime may live in a process; each is called on one thread (the
@@ -37,6 +37,26 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Process-wide, asynchronous and safe on main (LLP 1162.000 D4).
+ * begin: top of main, with ActivePrewarm. launched: delegate initializer.
+ * opened: didFinishLaunching once a person is known to have opened the app.
+ * Repeated or reordered calls never send a definition twice. */
+void exact_preloads_begin(uint32_t prewarm);
+void exact_preloads_launched(void);
+void exact_preloads_opened(void);
+/* Absolute seconds on CACurrentMediaTime's mach_absolute_time clock, zero if
+ * unobserved. committed marks the Rust batch; sequence identifies its last
+ * runner commit. Read from any thread; these calls never wait for launch I/O. */
+typedef struct ExactPreloadMark {
+    double handed, completed, committed;
+    uint64_t sequence;
+} ExactPreloadMark;
+uint32_t exact_preloads_count(void);
+ExactPreloadMark exact_preloads_mark(uint32_t index);
+/* Full UTF-8 byte count, copying min(capacity, count) bytes without a NUL.
+ * A null buffer reads only the size. An invalid index returns zero. */
+size_t exact_preloads_name(uint32_t index, uint8_t *out, size_t capacity);
 
 /* A runtime handle (LLP 1031 D2). 0 is never a runtime. */
 typedef uint32_t ExactRuntime;
@@ -612,6 +632,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  *      true|false for repeat, and optionally newline, true|false for isComposing;
  * 46 = focusin, 47 = focusout (#283): UTF-8 `<target byte length>:<target id>`
  *      then `0` (no relatedTarget) or `1<related id>`;
+ * 64 = host look states (UTF-8 bits: 1 hover, 2 focus-visible); presentation only.
  * any other kind is refused with an error batch.
  * Format lists are space-separated command tokens. Link keeps the remaining bytes.
  * A change's text, key's name, or guest message is the payload in the input
@@ -646,8 +667,13 @@ void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects
 /* Versioned LE collection feedback in exact_in; returns the ordinary batch. */
 uint32_t exact_collection_feedback(ExactRuntime rt, size_t len, double now_ms);
 /* Read a local row-root snap without mounting views; NaN when absent.
- * distance is the nearest mounted target's distance, infinity when absent. */
-double exact_collection_snap(ExactRuntime rt, uint32_t view, double proposed, double port, double maximum, double distance);
+ * Positions are the snapport start along the list axis, in its border box;
+ * minimum and maximum bound them. distance is the nearest mounted target's distance, infinity when absent. */
+double exact_collection_snap(ExactRuntime rt, uint32_t view, double proposed, double port, double minimum, double maximum, double distance);
+/* The first position past release toward rest an unmounted row root with
+ * scroll-snap-stop: always holds a snap at, in exact_collection_snap's
+ * coordinates; NaN when none within 256 rows of the release. */
+double exact_collection_snap_stop(ExactRuntime rt, uint32_t view, double release, double rest, double port, double minimum, double maximum);
 /* The agent's tap <list> into <key> (LLP 1070.000): "key\nblock\ninline" in
    exact_in; returns the ordinary batch. */
 uint32_t exact_into_view(ExactRuntime rt, uint32_t view, size_t len);
@@ -695,6 +721,9 @@ uint32_t exact_reorder_group_end(ExactRuntime rt, uint64_t token, uint32_t drop,
 uint32_t exact_reorder_group_finish(ExactRuntime rt, uint64_t token, double now_ms);
 uint32_t exact_hold_begin(ExactRuntime rt, uint32_t view, uint32_t property, double now_ms);
 uint32_t exact_has_hold(ExactRuntime rt, uint64_t token);
+/* A scroller marked `scrollTimeline` (the page, for page 1) now stands at
+ * left, top CSS px: the scroll and view timelines it drives, presented. */
+uint32_t exact_timeline_scrolled(ExactRuntime rt, uint32_t page, uint32_t view, double left, double top);
 uint32_t exact_hold_update(ExactRuntime rt, uint64_t token, double x, double y, double now_ms);
 /* cancel: 0 releases at vx, vy; 1 cancels; 2 releases at the velocity the
  * engine measured over the hold's values (LLP 1057.001 §3). */
@@ -733,6 +762,12 @@ uint32_t exact_pan_sample(ExactRuntime rt, uint32_t first, double x, double y, d
 /* The velocity along axis (0 x, 1 y) at t seconds, px/s: 0 with fewer than two
  * samples in the window, for a non-finite t, another axis, or a dead runtime. */
 double exact_pan_velocity(ExactRuntime rt, uint32_t axis, double t);
+/* The same tracker over samples the host holds, for a contact outside any
+ * runtime (the frame-health card): count samples, 3 * count values at samples,
+ * each t, x, y, oldest first. Of those finite and in time order it keeps the
+ * newest 16. Writes the velocity at now, units per second, to out[0] (x) and
+ * out[1] (y); 0 as above. No runtime. */
+void exact_velocity(const double *samples, size_t count, double now, double *out);
 /* The runner's clock: timers. Nonzero until_request stops after a timer that
  * sends, the clock at its due time (an agent's jump; the wall clock passes 0). */
 /* Timer waits: mode 0 declares support, 1 admits, 2 runs frame tasks. */
@@ -764,6 +799,8 @@ typedef double (*ExactWallFn)(void);
 uint32_t exact_set_live_clock(ExactRuntime rt, ExactWallFn wall);
 /* Input: name alone clears; name NUL JSON publishes a current record. */
 uint32_t exact_surface_record(ExactRuntime rt, size_t len);
+uint32_t exact_canvas_performance_requested(ExactRuntime rt, size_t len);
+uint32_t exact_canvas_performance_record(ExactRuntime rt, size_t len);
 /* @ref LLP 1027.000.000: the date — Unix ms at clock zero, minutes east of UTC. */
 uint32_t exact_set_time(ExactRuntime rt, double epoch_at_zero, double utc_offset);
 /* The date the next boot or candidate settles under, told before it; the
@@ -906,13 +943,15 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
 /* What changed of the view at once, from the input buffer's first len bytes,
  * little-endian 32-bit words: a mask of what is given (1 the window's size,
  * 2 the safe-area insets, 4 the layout regions, 8 the viewport, 16 the
- * segments' rects), the window's width and height (nonpositive clears it),
- * the insets top, right, bottom, left, the viewport's width and height, the
- * regions' count (20 or 0) and their insets, then, with 16, the rects' count
- * and each rect's x y w h, on the grid exact_segments set: exact_screen,
- * exact_insets, exact_regions, exact_resize and a keyboard's segment extents
- * in one batch under one layout. Rects off the grid, or not finite, are
- * refused and change nothing. */
+ * segments' rects, 32 the keyboard), the window's width and height
+ * (nonpositive clears it), the insets top, right, bottom, left, the
+ * viewport's width and height, the regions' count (20 or 0) and their insets,
+ * then, with 16, the rects' count and each rect's x y w h, on the grid
+ * exact_segments set, then, with 32, the software keyboard's overlap with the
+ * viewport (exactViewport().keyboardHeight): exact_screen, exact_insets,
+ * exact_regions, exact_resize and a keyboard's segment extents in one batch
+ * under one layout. Rects off the grid, or not finite, are refused and change
+ * nothing. */
 uint32_t exact_view(ExactRuntime rt, size_t len);
 /* @ref LLP 1078 D4: the device's posture (0 continuous, 1 folded) and the
  * viewport segments a fold makes — cols × rows rects, row-major, each

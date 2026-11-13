@@ -8,6 +8,62 @@ const under = (root, file) => {
   return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith('..' + sep));
 };
 
+/** The nearest package's top-level tests; app directories keep their own input rules. */
+export function packageTests(dir) {
+  while (!existsSync(resolve(dir, 'app.json')) && !existsSync(resolve(dir, 'package.json')) && dirname(dir) !== dir) dir = dirname(dir);
+  return !existsSync(resolve(dir, 'app.json')) && existsSync(resolve(dir, 'package.json')) ? resolve(dir, 'test') : null;
+}
+
+/** A directory watch omits package tests; a separately named input is still read. */
+export function directoryInputNames(dir) {
+  const tests = packageTests(dir);
+  return readdirSync(dir).sort().filter(name => {
+    if (resolve(dir, name) !== tests) return true;
+    return !statSync(tests).isDirectory();
+  });
+}
+
+const inputIdentity = info => [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs];
+
+/** File identity detects replacement at an old mtime; directory identity would include ignored test edits. */
+export function directoryInputSnapshot(path) {
+  try {
+    const entries = readdirSync(path).sort().map(name => {
+      try {
+        const info = statSync(resolve(path, name)), directory = info.isDirectory();
+        return {name, directory, ...(!directory ? {identity:inputIdentity(info)} : {})};
+      } catch (error) { return {name, directory:false, error:error.code}; }
+    });
+    return {path, entries};
+  } catch (error) {
+    if (!['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error;
+    let identity = null; try { identity = inputIdentity(statSync(path)); } catch { /* unavailable */ }
+    return {path, entries:null, error:error.code, identity};
+  }
+}
+
+/** Entry types filter removed tests; file identities and unreadable states preserve production changes. */
+export function packageDirectories(paths) {
+  const directories = new Map(), ancestors = new Set();
+  const visit = (path, tests) => {
+    let info, real;
+    try { info = statSync(path); } catch { return; }
+    // realpath fails on a directory without search permission; its snapshot then has no entries to descend into.
+    try { real = realpathSync(path); } catch { real = path; }
+    if (!info.isDirectory() || ancestors.has(real) || directories.has(path)) return;
+    const snapshot = directoryInputSnapshot(path);
+    directories.set(path, snapshot);
+    ancestors.add(real);
+    for (const {name, directory} of snapshot.entries ?? []) {
+      const child = resolve(path, name);
+      if (directory && !/^(target|node_modules|\..*)$/.test(name) && child !== tests) visit(child, tests);
+    }
+    ancestors.delete(real);
+  };
+  for (const path of paths) { const tests = packageTests(path); if (tests) visit(resolve(path), tests); }
+  return [...directories.values()];
+}
+
 function outputPath(path) {
   try { return realpathSync(path); }
   catch (error) {
@@ -18,21 +74,27 @@ function outputPath(path) {
 
 // Cargo follows directory links. Track their contents without reading outputs
 // through an alias or opening special files the baker may never use.
-function watchedDigest(paths, outputs, { inventory = false } = {}) {
+// With no pre-bake snapshot, `since` rejects inputs whose change time cannot precede the bake.
+export function watchedDigest(paths, outputs, { inventory = false, since = Infinity } = {}) {
   const hash = createHash('sha256');
   const excluded = outputs.map(outputPath), ancestors = new Set();
+  let stable = true;
+  const changed = info => { if (info.ctimeMs >= since) stable = false; };
   const row = (...values) => hash.update(JSON.stringify(values) + '\n');
   const visit = (path, top = false, atRoot = false) => {
-    let info;
+    let info, link;
     try {
       info = lstatSync(path);
       if (info.isSymbolicLink()) {
+        link = info;
         row(path, 'link', readlinkSync(path));
         info = statSync(path);
       }
       if (inventory && atRoot && basename(path).startsWith('.') && info.isDirectory()) return;
       const real = realpathSync(path);
       if (excluded.some(root => under(root, real))) { if (!inventory) row(path, 'output'); return; }
+      changed(info);
+      if (link) changed(link);
       if (info.isDirectory()) {
         if (ancestors.has(real)) { row(path, 'cycle'); return; }
         const names = readdirSync(path).sort();
@@ -53,9 +115,23 @@ function watchedDigest(paths, outputs, { inventory = false } = {}) {
       } else if (info.isFile()) row(path, 'file', createHash('sha256').update(readFileSync(path)).digest('hex'));
       else row(path, info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo'
         : info.isBlockDevice() ? 'block-device' : info.isCharacterDevice() ? 'character-device' : 'other');
+      if (since !== Infinity) {
+        changed(lstatSync(path));
+        if (link) changed(statSync(path));
+      }
     } catch (error) {
+      if (info) changed(info);
+      if (link) changed(link);
       if (error.code === 'ELOOP') row(path, 'cycle');
-      else if (error.code === 'ENOENT' || error.code === 'ENOTDIR') row(path, 'missing');
+      else if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+        row(path, 'missing');
+        // A missing watch has no change time; its nearest existing parent records entry removal.
+        if (since !== Infinity) {
+          let parent = path;
+          do { parent = dirname(parent); } while (!existsSync(parent) && dirname(parent) !== parent);
+          changed(statSync(parent));
+        }
+      }
       // Directory watches include unused files. The baker decides which must be readable.
       else if (error.code === 'EACCES' || error.code === 'EPERM')
         row(path, 'unreadable', info?.mode, info?.size, info?.mtimeMs, info?.ctimeMs);
@@ -63,7 +139,7 @@ function watchedDigest(paths, outputs, { inventory = false } = {}) {
     }
   };
   for (const path of paths) visit(path, true);
-  return hash.digest('hex');
+  return stable ? hash.digest('hex') : null;
 }
 
 function sourceInventory(app, outputs) {
@@ -120,10 +196,34 @@ export function inputHashes(app, env) {
     },
   };
 }
+
+/** Products consumed by a later build step, captured before that step reads them. */
+export function inputProducts(paths, root) {
+  const products = [...new Set(paths)].filter(existsSync).map(path => {
+    const bytes = readFileSync(path);
+    return {path, bytes:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex'), input:true};
+  });
+  const directories = new Map();
+  for (const {path} of products) for (let dir = dirname(path); dir !== root && under(root, dir); dir = dirname(dir)) {
+    if (!directories.has(dir)) directories.set(dir, directoryInputSnapshot(dir));
+  }
+  return {products, watchedDirectories:[...directories.values()]};
+}
+
+/** A bake's file watches, including optional inputs tracked by the builder rather than Cargo's recursive scan. */
+export function cargoInputPaths(stdout, base) {
+  return [...new Set(stdout.split('\n').flatMap(line => {
+    const path = /^cargo::?(?:rerun-if-changed|metadata=exact-optional-input)=(.*)$/.exec(line)?.[1];
+    return path === undefined ? [] : [resolve(base, path)];
+  }))].sort();
+}
+
 /** Supply Cargo with a content revision for the selected bake, then retain
  * its actual watches after success. File watches still serve direct Cargo. */
 export function cargoBakeInputs(pkg, target, profile, env, app = null) {
-  if (!pkg.targets.some(t => t.kind.includes('custom-build')) || env.EXACT_BAKED) return () => {};
+  if (!pkg.targets.some(t => t.kind.includes('custom-build'))) return () => {};
+  env.EXACT_BAKE_PACKAGE_DIR = realpathSync(dirname(pkg.manifest_path));
+  if (env.EXACT_BAKED) return () => {};
   const key = createHash('sha256').update(JSON.stringify([pkg.manifest_path, target, profile])).digest('hex');
   const file = resolve(env.CARGO_TARGET_DIR, 'bake-inputs', key + '.json');
   let previous;
@@ -142,10 +242,7 @@ export function cargoBakeInputs(pkg, target, profile, env, app = null) {
     const script = messages.find(m => m.reason === 'build-script-executed' && m.package_id === pkg.id);
     if (!script) return;
     const stdout = [resolve(script.out_dir, '../output'), resolve(script.out_dir, '../run/stdout')].find(existsSync);
-    const paths = [...new Set(readFileSync(stdout, 'utf8').split('\n').flatMap(line => {
-      const path = /^cargo::?rerun-if-changed=(.*)$/.exec(line)?.[1];
-      return path === undefined ? [] : [resolve(dirname(pkg.manifest_path), path)];
-    }))].sort();
+    const paths = cargoInputPaths(readFileSync(stdout, 'utf8'), dirname(pkg.manifest_path));
     const outDirs = [...new Set(messages.filter(m => m.reason === 'build-script-executed').map(m => m.out_dir))].sort();
     const record = {version:2, paths, outputs:outDirs, digest:watchedDigest(paths, [...outputs, ...outDirs]),
       inventory:app ? sourceInventory(app, [...outputs, ...outDirs]).sha256 : null, revision};
@@ -224,7 +321,8 @@ export function unitDepInfo(message, workspace, metadata) {
   // Cargo copies libraries and executables out of deps, and aliases build scripts
   // in their build directory. Match the copied bytes; refuse ambiguous evidence.
   const custom = message.target.kind?.includes('custom-build');
-  for (const file of message.filenames.filter(path => /\.(rlib|a)$/.test(path) || path === message.executable || custom)) {
+  // A cdylib (a game's GPU crate: libX.dylib, libX.so) is copied the same way.
+  for (const file of message.filenames.filter(path => /\.(rlib|a|dylib|so)$/.test(path) || path === message.executable || custom)) {
     const directory = custom ? dirname(intermediate(file)) : resolve(dirname(intermediate(file)), 'deps');
     if (!existsSync(directory)) continue;
     const executable = custom || file === message.executable;

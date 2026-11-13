@@ -576,7 +576,7 @@ fn a_driven_key_is_the_chord_it_names() {
     let drive = |keys: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
             .arg(&path)
-            .args(["--size", "120x4"])
+            .args(["--size", "120x4", "--drive"])
             .args(keys.iter().flat_map(|k| ["key", k]))
             .arg("print")
             .output()

@@ -123,8 +123,10 @@ extension ControlHost {
                 "options": menu?.options.map(\.label) ?? []]
     }
 }
-/// The pop-up itself receives focus and native editing keys, even with
-/// macOS Keyboard navigation off; its wrapper is never a second stop.
+/// The pop-up itself receives focus and native editing keys; its wrapper is
+/// never a second stop. With macOS Keyboard navigation off it is no Tab stop,
+/// as an `NSPopUpButton` is none (LLP 1115.000 D7.2), unless the author's
+/// `tabindex` makes it one.
 final class SelectField: NSPopUpButton {
     override class var cellClass: AnyClass? { get { PopupCellMac.self } set {} }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
@@ -133,7 +135,7 @@ final class SelectField: NSPopUpButton {
     }
     weak var owner: NodeView?
     override var acceptsFirstResponder: Bool { owner?.acceptsNativeValueFocus(self) == true }
-    override var canBecomeKeyView: Bool { acceptsFirstResponder && owner?.tabbable == true }
+    override var canBecomeKeyView: Bool { acceptsFirstResponder && owner?.tabStop == true }
     override func becomeFirstResponder() -> Bool {
         guard acceptsFirstResponder, super.becomeFirstResponder() else { return false }
         owner?.focusEntered()

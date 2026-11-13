@@ -39,6 +39,28 @@ final class CommandLayoutMacTests: XCTestCase {
         XCTAssertTrue(paragraph.performKeyEquivalent(with: key("c", ignoring: "c", code: 34, in: window)))
     }
 
+    /// Select All and Copy are ⌘A and ⌘C alone, as the Edit menu has them; a
+    /// second modifier leaves the chord to a menu item that owns it.
+    func testAParagraphTakesCommandAAndCWithNoOtherModifier() {
+        let presenter = Presenter()
+        let paragraph = NodeView(id: 1, kind: "text", presenter: presenter)
+        paragraph.frame = NSRect(x: 0, y: 0, width: 300, height: 20)
+        paragraph.props = ["text": "Alpha beta"]
+        presenter.viewport.frame = NSRect(x: 0, y: 0, width: 300, height: 40)
+        presenter.root.addSubview(paragraph); presenter.views[1] = paragraph
+        let window = window(presenter.viewport)
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(paragraph))
+        for letter in ["a", "c"] {
+            let code: UInt16 = letter == "a" ? 0 : 8
+            for extra: NSEvent.ModifierFlags in [.shift, .option, .control] {
+                let event = key(letter, ignoring: letter, code: code, [.command, extra], in: window)
+                XCTAssertFalse(paragraph.performKeyEquivalent(with: event), "\(letter) with \(extra.rawValue)")
+            }
+            XCTAssertTrue(paragraph.performKeyEquivalent(with: key(letter, ignoring: letter, code: code, [.command, .capsLock], in: window)))
+        }
+    }
+
     func testATextAreaFormatsAndUndoesOnTheCommandLayoutsKeys() {
         ExactMarkdown.install()
         let presenter = Presenter()

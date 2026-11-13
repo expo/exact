@@ -327,7 +327,10 @@ fn async_activation_is_provisional_and_a_context_change_supersedes_its_full_requ
     r.data.ready = true;
     r.data.later = true;
     r.data_ready().unwrap();
-    let first = r.take_requests().remove(0).ticket;
+    let first = r.take_requests().remove(0);
+    // The launch's own ask, not a refresh (LLP 1162.000 D1).
+    assert!(!first.forced);
+    let first = first.ticket;
     shows(&r, "kept");
     assert!(
         !state(&r).kept_seed,
@@ -624,7 +627,7 @@ fn a_ready_source_gets_no_kept_seed_even_when_its_first_answer_is_slow() {
 }
 
 #[test]
-fn runner_owned_facts_never_admit_or_persist_kept_answers() {
+fn runner_owned_facts_forget_stale_kept_answers_and_never_persist_live_values() {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let number = b.primitive(TypeKind::Number);
     let time = b.record("Time", &[("epochAtZero", number)]);
@@ -646,8 +649,76 @@ fn runner_owned_facts_never_admit_or_persist_kept_answers() {
         r.resource("answer"),
         Some(&Value::record(vec![Value::Number(1000.)]))
     );
-    assert_eq!(answer_writes(&r), 0);
+    let writes: Vec<_> = r
+        .store
+        .writes()
+        .iter()
+        .filter(|w| w.name == kept::kept_name("answer"))
+        .collect();
+    assert_eq!(writes.len(), 1, "only the stale entry's removal");
+    assert!(writes[0].value.is_none());
+    assert!(r.store.kept(&kept::kept_name("answer")).is_none());
     assert!(r.data.asks.is_empty());
+}
+
+#[test]
+fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
+    for source in exact_plan::RUNNER_OWNED_SOURCES {
+        let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        let number = b.primitive(TypeKind::Number);
+        let record = b.record("Record", &[("value", number)]);
+        let name = b.str("world");
+        let mut arg = Asm::new();
+        arg.str(name);
+        let arg = b.code(arg);
+        let row = b.resource("answer", source, &[arg], record, None);
+        b.set_resource_reader(row, true);
+        b.surface("world", &[]);
+        b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+        let mut plan = b.finish().unwrap();
+        let snapshot = entry(
+            &[Value::str("world")],
+            &Value::record(vec![Value::Number(9.)]),
+        );
+        for keep in [false, true] {
+            plan.resources[0].keep = keep;
+            let allowed = keep && *source == crate::surface_record::SOURCE;
+            assert_eq!(
+                kept::kept_surface(&plan, 0),
+                allowed,
+                "{source}, keep={keep}"
+            );
+            assert_eq!(
+                kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+                allowed,
+                "{source}, keep={keep}"
+            );
+            let decoded = Plan::decode(&plan.encode()).unwrap();
+            assert_eq!(
+                kept::kept_surface(&decoded, 0),
+                allowed,
+                "{source}, keep={keep}"
+            );
+        }
+        plan.resources[0].transient = true;
+        assert!(!kept::kept_surface(&plan, 0), "{source}");
+        assert!(
+            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            "{source}"
+        );
+        let decoded = Plan::decode(&plan.encode()).unwrap();
+        assert!(!kept::kept_surface(&decoded, 0), "{source}");
+        plan.resources[0].transient = false;
+        plan.surfaces = Default::default();
+        assert!(
+            !kept::kept_surface(&plan, 0),
+            "a kept reader needs a declared surface: {source}"
+        );
+        assert!(
+            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            "{source}"
+        );
+    }
 }
 
 #[test]
@@ -669,6 +740,39 @@ fn a_cold_boot_forgets_kept_answers_no_declared_reader_seeds() {
         .collect();
     assert_eq!(removed, [gone.as_str()]);
     assert_eq!(answer_writes(&r), 0);
+}
+
+/// What a host leaves out of its snapshot (past `Store::KEPT_TOTAL_BYTES`)
+/// it names after the boot, and what the boot would have forgotten is.
+#[test]
+fn a_cold_boot_forgets_the_kept_entries_the_host_did_not_read() {
+    let removed = |r: &Runner<Source>| -> Vec<String> {
+        (r.store.writes().iter())
+            .filter(|w| w.value.is_none())
+            .map(|w| w.name.clone())
+            .collect()
+    };
+    let (answer, gone) = (kept::kept_name("answer"), kept::kept_name("gone"));
+    let mut r = seeded();
+    r.forget_unread_kept(&[answer.clone(), gone.clone()]);
+    shows(&r, "kept");
+    assert_eq!(removed(&r), [gone], "a read entry stays");
+    let mut transient = plan(2, false);
+    transient.resources[0].transient = true;
+    let mut r = boot(transient, Source::default(), Vec::new());
+    r.forget_unread_kept(std::slice::from_ref(&answer));
+    assert_eq!(
+        removed(&r),
+        std::slice::from_ref(&answer),
+        "a transient reader's"
+    );
+    let source = Source {
+        private: Some("health-read"),
+        ..Source::default()
+    };
+    let mut r = boot(plan(2, false), source, Vec::new());
+    r.forget_unread_kept(std::slice::from_ref(&answer));
+    assert_eq!(removed(&r), [answer], "an app that keeps no answers");
 }
 
 #[test]
@@ -716,6 +820,7 @@ fn the_runner_answers_exactly_the_plan_s_own_sources() {
         crate::viewport::SOURCE,
         crate::page::SOURCE,
         crate::surface_record::SOURCE,
+        crate::canvas_performance::SOURCE,
         crate::time::SOURCE,
         crate::transport::SOURCE,
         crate::midi::SOURCE,

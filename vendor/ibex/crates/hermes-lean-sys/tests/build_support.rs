@@ -281,12 +281,14 @@ fn symlinked_and_non_regular_simulator_members_are_refused() {
     fs::create_dir_all(&lib).expect("library directory");
     let regular = make_thin_archive(&lib, "real", "tiny_answer", 42, "arm64");
     let symlink_path = lib.join("libsymlink.a");
-    symlink(&regular, &symlink_path).expect("archive symlink");
+    fs::copy(&regular, &symlink_path).expect("regular archive");
     let symlink_archive = LinkArchive {
         library: "symlink".to_owned(),
         source: symlink_path,
     };
     let symlink_install = test_install(&root, std::slice::from_ref(&symlink_archive), true);
+    fs::remove_file(&symlink_archive.source).unwrap();
+    symlink(&regular, &symlink_archive.source).expect("archive symlink");
     let error = prepare_apple_simulator_link_archives_with_lipo(
         &symlink_install,
         "aarch64-apple-ios-sim",

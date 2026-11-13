@@ -1,7 +1,7 @@
 //! Mouse notches use Windows preferences; precision deltas already name pixels.
-use exact_linux::presenter::Scroller;
+use exact_painted::presenter::Scroller;
 #[cfg(windows)]
-use exact_linux::Presenter;
+use exact_painted::Presenter;
 #[cfg(windows)]
 use exact_runner::DataSource;
 #[cfg(windows)]
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn rtl_field_page_notches_use_the_receiver_at_each_physical_edge() {
-        use exact_linux::{presenter::PainterChoice, Presenter};
+        use exact_painted::{presenter::PainterChoice, Presenter};
 
         let source = format!(
             r#"component App

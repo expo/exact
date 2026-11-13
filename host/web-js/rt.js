@@ -4,7 +4,7 @@ export { px, lt, presenceUse } from './presence-bindings.js';
 // Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan binds one (LLP 1047.002 D1)
 let Probes = null; export function usePresenceBindings(b) { Probes = b; } const presentArm = (view, ...a) => Probes ? Probes.arm(view, ...a) : view; export const presentRows = (row, ...a) => Probes ? Probes.rows(row, ...a) : row;
 import { inOrder, rowKey } from './rows.js';
-import { resourceInspection } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
+import { resourceInspection, retainedAnswer } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
 export { liveTime } from "./live-time.js";
 import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
@@ -12,7 +12,8 @@ import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } 
 let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
 import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { heldAsks, heldReplies, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
-let Media = null; export function useMedia(m) { Media = m; } let Nav = null; export function useNavigation(n) { Nav = n; } // media.js only where a plan has a `video` or `audio`; navigation.js's `navigation` (the history, the stacks, the app bar) only where a plan has routes or a back control, handed over by the router (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
+let Media = null; export function useMedia(m) { Media = m; } let Traversal = null, Nav = null; export function useTraversal(f, nav = null) { Traversal = f; Nav = nav; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` and the page's navigation.js (the link a deferred tree update keeps) only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links them (LLP 1047.002 D1)
+let Links = null; export function useLinks(l) { Links = l; } // links.js only where a plan binds a link's `href`, `rel` or `target` (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
 // Semantics kept from the runner (LLP 1005 §6):
 // - an action's writes land together at its commit (the VM collects `StoreSlot`s), then one
@@ -204,14 +205,15 @@ export function commit(f, what = "commit", finished) {
     if (!(e instanceof Refusal)) console.error(e);
     Restoring = true; try { settle(); } catch {} finally { Restoring = false; }
   }
-  const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes];
+  const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes], changed = Sched?.changed(queued);
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view transition defers too (review C3).
   if (KeyEvent || Propagating) for (const c of cmds.filter(c => c[0] === "preventDefault" || c[0] === "stopPropagation")) { cmds.splice(cmds.indexOf(c), 1); command(...c); }
   Writes = Finishes = null; unpark();
   // What the commit would have sent and did not is refused, whatever stopped its tree update (a hook that threw, a
   // poisoned tree, a tail a view transition never ran): an answer's batches that wait for it too (ts-stream.js).
   let sent = 0; const unrun = why => { for (const go of out.splice(sent)) go.refused?.(why); };
-  const tail = Object.assign(() => { try { return update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
+  const link = Nav?.holdLink();
+  const tail = Object.assign(() => { try { return link ? Nav.withLink(link, update) : update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
   const update = () => { // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
     for (const f of Before) f();
     Pres?.before({ ops: Probes?.gains() ?? [] }, Views); // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
@@ -219,13 +221,14 @@ export function commit(f, what = "commit", finished) {
     for (const f of finishes) f(ok);
     settled(true); if (!ok) return Sched?.scan(false), false;
     clock.epoch++; Store.persist();
+    for (const r of Resources) retainedAnswer(r, say);
     while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(inflight, say); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit (LLP 1016.001 D3).
     for (const m of landed) if (m.then) { m.due = armedAt(); if (!clock.agent) drive(); }
-    Sched?.scan(true); // a free queue's waiting send is due (LLP 1092 D3)
+    Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
     return true;
   };
-  return Sh && ok && !Nav?.traversing ? Sh.commit(tail, Queue, inflight, After) : tail(); // a history traversal lands at once (navigation.js `traversing`)
+  return Sh && ok && !Traversal?.() ? Sh.commit(tail, Queue, inflight, After) : tail(); // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
 }
 /** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while reads are
  * owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of that leaves nothing owed. */
@@ -241,7 +244,7 @@ const Scrolls = new Map(), Selects = new Set();
 /** What a commit does once its tree is in place: authored scrolls, then the
  * loaded pieces' publications (also after a list's report, list.js). */
 export function settled(inCommit) { drain(); markDocument(); Paint?.flush(); Present?.(); for (const f of After) f(); if (!inCommit && !Booting) autofocus(); } // a list's own mounts (list.js); a commit's scan follows its commands
-let Restoring = false, Booting = false; // `Restoring`: a refused commit's settle over what it put back, which asks nothing. The boot's own offsets are no reader's scroll (the web host hears none: its input opens after them): `scroll` skips one
+let Restoring = false, Booting = false; export const booting = () => Booting; // `Restoring`: a refused commit's settle over what it put back, which asks nothing. The boot's own offsets are no reader's scroll (the web host hears none: its input opens after them): `scroll` skips one
 function drain() {
   for (const [e, o] of Scrolls) for (const name in o) {
     const at = o[name];
@@ -280,7 +283,7 @@ export const Hosts = {
   observe: n => say(`observe ${n}`), observeAttributes: () => {}, observeError: m => say(`observeError ${m}`) }; // journal lines only; marks.js replaces these when the app has launch modules
 export function useCommands(table) { for (const name in table) Hosts[name] = table[name](say, () => agentMode()); } // commands.js's, each by name as the compiled plan imported it for an action that names it (emit.rs, LLP 1047.002 D1): a factory over the journal and whether the agent drives the page; one no action names is never linked
 let KeyEvent = null, Propagating = null; Hosts.preventDefault = () => { KeyEvent?.preventDefault(); if (KeyEvent?.type === "beforeunload") KeyEvent.returnValue = ""; if (!KeyEvent && Propagating?.type === "pointerdown") Propagating.preventDefault(); /* a pointerdown handler's: the browser keeps the focus, places no caret, starts no selection; the click still fires (LLP 1005 §3) */ }; Hosts.stopPropagation = () => { const e = KeyEvent ?? Propagating; if (e) e.$stopped = true; }; // Propagating: the pointer's down or up a handler is running for, which only its `stopPropagation()` reaches (its default is the browser's); // the key, focus, wheel, beforeunload or clipboard event whose handler is running (`on`): commands run before its commit returns; a stopped key reaches no ancestor's `key` handler, its default still does (files diary F8); a prevented beforeunload is the browser's "Leave site?" (Safari reads `returnValue`)
-export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
+export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
 function command(name, args, origin) {
   const f = Hosts[name];
   say(`command ${name}`);
@@ -318,32 +321,32 @@ export function frames(action, name) {
 }
 /** Move the clock to `to`, firing each due timer and armed `then` at its own time, in order; a seek fires frame
  * tasks' virtual frames too, the wall clock's (`wall`) none. `stop()`, asked after each, ends it there (the agent's:
- * one that sent a request): true. A refusal, or 4096 commits (TIMER_FIRE_LIMIT), stops it at that time, and a
+ * one that sent a request): true. A change receipt boundary also yields true; resume toward the same `to`. A refusal or 4096 commits stops there; a
  * non-finite `to` (NonFiniteClock) leaves the clock where it was: its journal line, as the runner's error. Under the
- * agent the journal gets the runner's line for an advance that fired. `timers` false fires none: the armed `then`s
- * alone, at `to` = now, as an agent's input ends (Runner::land_then; trivia F3). */
+ * agent the journal gets the runner's line for an advance that fired. `timers` false runs only armed `then`s
+ * and change actions, at `to` = now, as an agent's input ends (Runner::land_then; trivia F3). */
 export function advance(to, wall, stop, timers = true) {
   if (!Number.isFinite(to)) return say(`refused advance: NonFiniteClock (${to})`), journal.at(-1);
   if (Poisoned) return say("refused advance: Poisoned"), journal.at(-1); to = Link.timerWait?.cutoff(to, wall) ?? to; let fired = 0, stopped = false;
   for (;;) {
-    let next = null, then = null, head = null; const execution = t => Link.timerWait?.execution(t, wall) ?? t.due, priority = t => t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0;
+    let next = null, then = null, head = null; const execution = t => t.change ? Math.max(t.due, clock.now) : Link.timerWait?.execution(t, wall) ?? t.due, priority = t => t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0;
     // Run authored tasks before hatch and data callbacks due at the same time
-    if (timers && !clock.stopped) for (const t of clock.timers) if (execution(t) <= to && !(wall && t.frame) && (!next || execution(t) < execution(next) || execution(t) === execution(next) && (priority(t) < priority(next) || priority(t) === priority(next) && t.due < next.due))) next = t;
+    if (!clock.stopped) for (const t of clock.timers) if ((timers || t.change) && (!t.change || t.ready) && execution(t) <= to && !(wall && t.frame) && (!next || execution(t) < execution(next) || execution(t) === execution(next) && (priority(t) < priority(next) || priority(t) === priority(next) && t.due < next.due))) next = t;
     // An answer's `then` goes before a timer due at the same time: the answer landed first; a queue's `next` between them (LLP 1092 D3).
     for (const m of Mutations) if (m.due <= to && (!then || m.due < then.due) && (!next || m.due <= execution(next))) then = m;
     for (const m of Mutations) if (m.next <= to && (!head || m.next < head.next) && (!next || m.next <= execution(next)) && (!then || m.next < then.due)) head = m;
     if (head) then = null;
-    if (!next && !then && !head) break;
+    if (!next && !then && !head) break; if (next?.change && !then && !head && fired) return true;
     if (fired === 4096) return say("refused advance: 4096 commits in one advance (TIMER_FIRE_LIMIT)"), journal.at(-1);
     // On the wall clock (the timers RFC, D2, D3) a repeat that missed beats fires once, its firing consumed first; each callback observes the clock as it runs and as it ends, and what it arms takes its place; a repeat's next beat is the first of its phase after the end, unless its callback dropped it, or re-armed it (a gate's step) from there.
     const at = head ? head.next : then ? then.due : next.due, repeat = (wall || next?.wait) && !head && !then && !next.once && !next.frame && !next.hatch, gen = next?.gen;
     if (head) clock.now = Math.max(clock.now, head.next);
     else if (then) { clock.now = Math.max(clock.now, then.due); then.due = Infinity; }
     else { clock.now = wall ? Math.max(clock.now, execution(next)) : execution(next); if (next.once) clock.timers.splice(clock.timers.indexOf(next), 1); else if (!next.hatch) next.due = next.frame ? vf(next.base, ++next.k) : repeat ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now)) : next.due + next.ms; }
-    if (!head && !then && !next.hatch && !next.data) { const counts = clock.timerFirings ??= Array(7).fill(0); counts[next.frame ? 6 : wall && next.wait ? 5 : next.wait ?? 0]++; } const due = next?.due, sample = () => { if (wall) clock.now = Math.max(clock.now, performance.now() - start); }; sample(); Instant = wall ? (next?.wait ? clock.now : at) : null; const ok = fire(head ? () => Sched.next(head) : then ? () => commit(then.then, `${then.name} then`) : next.action); Instant = null; sample();
+    if (!head && !then && !next.hatch && !next.data) { const counts = clock.timerFirings ??= Array(7).fill(0); counts[next.frame ? 6 : wall && next.wait ? 5 : next.wait ?? 0]++; } const due = next?.due, sample = () => { if (wall) clock.now = Math.max(clock.now, performance.now() - start); }; sample(); Instant = wall ? (next?.wait || next?.change ? clock.now : at) : null; const ok = fire(head ? () => Sched.next(head) : then ? () => commit(then.then, `${then.name} then`) : next.action); Instant = null; sample();
     if (repeat && clock.timers.includes(next)) next.due = next.gen === gen && next.due === due ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now)) : clock.now + next.ms; if (ok !== true) return journal.at(-1);
     if (head || then || !next.hatch && !next.data) { fired++; } // Hatch and data callbacks have their own limits
-    if (stop?.()) { stopped = true; break; }
+    if (!head && !then && next.change) return true; if (stop?.()) { stopped = true; break; }
   }
   if (!stopped) clock.now = Math.max(clock.now, to);
   for (const f of Clocked) f();
@@ -356,7 +359,7 @@ let driving = 0, start = 0, painting = 0;
 export function drive() {
   clearTimeout(driving); if (clock.agent || Poisoned) return;
   let next = Infinity;
-  for (const t of [...(clock.stopped ? [] : clock.timers), ...Mutations]) if (!t.frame) next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0)); // no timer while a wake runs unseen (wakes.js)
+  for (const t of [...(clock.stopped ? [] : clock.timers), ...Mutations]) if (!t.frame && (!t.change || t.ready)) next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0)); // no timer while a wake runs unseen (wakes.js)
   for (const m of Mutations) if (m.next < next) next = m.next;
   if (!isFinite(next)) return;
   const token = Link.timerWait?.generation(); driving = setTimeout(() => { if (clock.agent || token !== Link.timerWait?.generation()) return; advance(performance.now() - start, true); Link.timerWait?.check(); drive(); }, Math.min(2147483647, Math.max(0, next - (performance.now() - start))));
@@ -418,7 +421,7 @@ function ask(source, args, name, mutation, forced) {
   checkArguments(name, args);
   if (mutation) mutation.requests++;
   if (["startActivity", "updateActivity", "endActivity"].includes(source)) throw new Refusal(`${source} is not linked into this artifact`);
-  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name)) : data.answer(source, args, Store, name, !!mutation, forced); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
+  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name, forced)) : data.answer(source, args, Store, name, !!mutation, forced); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
   return a && a.then ? (a.then(undefined, e => globalThis.exact?.generationGone?.(e)), { promise: a, call: a.call }) : a; // (a reaped build's lazy chunk fails here: the page loads again, generation-reload.js)
 }
 /** The reply to ticket `t` while its target `held()` it: a commit in which `f` takes the source's answer (a TypeScript
@@ -433,19 +436,18 @@ function reply(t, name, source, held, f, next, gone) {
       let p;
       try { if (o.error !== undefined) throw new Failed(o.error, o.code, o.reason); p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store); }
       catch (e) { throw e instanceof Failed ? e : new Failed(String(e?.message ?? e), failureCode(e), failureReason(e)); }
-      f(p, o); Out.push(...(o.effects ?? [])); // a socket frame's replies from its mapper, sent once this commit stands (LLP 1016.000 D7)
+      Out.push(...(p.effects ?? [])); f(p, o); Out.push(...(o.effects ?? [])); // a socket frame's replies from its mapper (a Rust parse's, a TypeScript stream's), sent once this commit stands (LLP 1016.000 D7)
     }, `${o.more ? "message" : "reply"} ${name}; wall ${t.elapsed} ms`) !== false || !held()) return;
     const failed = `request ${t.id} (${name}) failed and is no longer pending: ${next}: ${Refused?.message ?? Refused}`; say(failed); if (DEVELOPMENT_STORE) console.error(`exact: ${failed}`); // why, on the line a test failure quotes (sb4 farm wave 6, E3: a mutation's refused reply named nowhere); a development page's console too (LLP 1142 D4)
     gone(Refused.message, Refused.code, Refused.reason); recommit(() => { if (t.r) again(t); }, "a failed request");
   };
 }
 const revalidated = (name, same) => `${name} answered: ${same ? "equal to its build-time answer" : "replaces its build-time answer"}`; // runner lines.rs
-/** A resource: its value, the arguments it settled with, one ticket in flight. A bake's answer is a first frame: `baked` asks at launch, as a native runner at `data_ready` (LLP 1048.003 D6; feed F24); a document's `kept` was asked for its page, and is asked again when its stream was open (LLP 1048.000 D6). */
-export function res(name, source, args, initial, initialArgs, type, ph, carried = false, member = false) { // `carried`: settled, not a bake to ask again — a dev reload's (checkpoint.js), an `else` row's (emit.rs)
+/** A resource: its value, the arguments it settled with, one ticket in flight. A bake's answer is a first frame: `baked` asks at launch, as a native runner at `data_ready` (LLP 1048.003 D6; feed F24); a document's `kept` was asked for its page, and is asked again when the page lists it as `open`, or when it read the store and the device's store holds the app's own entries; one that read the store is a store reader's (LLP 1048.000 D6). */
+export function res(name, source, args, initial, initialArgs, type, ph, carried = false, kept = keptAnswer(name, source, type)) { // `carried`: settled, not a bake to ask again — a dev reload's (checkpoint.js), an `else` row's (emit.rs); `kept`: the page's answer it starts from, a list element's as each.js finds it
   const ver = sig(0), pend = sig(false), fail = sig(null), cur = sig(false); // `cur`: `current(x)` (LLP 1161.001), its own signal: an answer equal to the placeholder changes no value
-  const kept = !member && checkpoint().kept?.get(name); // a list's checkpoint holds its aggregate; each member asks again
   if (kept) [initialArgs, initial] = kept;
-  const r = { name, source, type, member, value: initial, settled: initialArgs, pending: pend, baked: kept ? READER.has(source) || checkpoint().revalidate || checkpoint().open.has(name) || checkpoint().pending.has(name) : !carried && initialArgs !== undefined, ticket: null, forced: false, rev: false, store: false, origin: 0, marks: [], context: args.context ?? 0 }; // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
+  const r = { name, source, type, value: initial, settled: initialArgs, pending: pend, baked: kept ? READER.has(source) || checkpoint().revalidate || kept[2] || kept[3] && Store.map.size > 0 : !carried && initialArgs !== undefined, ticket: null, forced: false, rev: false, store: !!kept?.[3], origin: 0, marks: [], context: args.context ?? 0 }; // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
   Inspections.track(r, !kept && !carried, () => pend.n.v);
   const flag = (s, v, undo) => { if (!eq(s.n.v, v)) { undo?.push([s.n, s.n.v]); write(s.n, v); } }, release = () => { if (r.ticket) { say(`forget ticket ${r.ticket.id} (${name})`); r.ticket = null; } flag(pend, false); }, fails = (args, error, code, reason) => { r.failed = args; r.error = error; r.code = code; r.reason = reason; flag(fail, failure()); release(); say(`resource ${name} failed: ${error}`); Inspections.fail(r); return r.value; }, failure = () => r.failed ? [r.failed, r.code ?? "error", r.error ?? "it failed", r.reason ?? ""] : null; // `fail` holds the message too: a `failure(x)` reader is asked again when only it changes
   const hold = () => {
@@ -480,8 +482,8 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
   const m = memo(() => { const shown = Ov.shown(r, (() => {
     ver(); if (args.gate && !args.gate()) return asleep(); if (r.asleep) { r.asleep = false; r.forced = true; } // `when` (LLP 1161.002): closed, nothing is asked; waking asks again, forced
     const a = r.asked = args(); if (Restoring) return flag(fail, failure()), r.value; // `asked`: the overlay's arguments while a placeholder stands; a refused commit put `failed` back, and `fail` follows it there too
-    const forced = r.forced, rev = r.rev, reconciling = r.reconciling, mk = finiteArguments(a) ? data.uploads.at(r, a) : null; // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
-    r.forced = r.rev = r.reconciling = false;
+    const forced = r.forced, waited = r.launch, rev = r.rev, reconciling = r.reconciling, mk = finiteArguments(a) ? data.uploads.at(r, a) : null; // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
+    r.forced = r.rev = r.reconciling = false; if (forced) r.launch = undefined; // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile
     // A failure keeps the value for its arguments, including NaN; `refresh` or new ones ask again (settlement.rs), but not an upload's. `fail` follows.
     if (r.failed && (forced && !mk?.failed || !unchangedArguments(a, r.failed))) { r.failed = null; r.error = r.code = r.reason = undefined; }
     flag(fail, failure());
@@ -501,15 +503,16 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
       if (r.ticket && equal(a, r.ticket.args)) return r.value;
     }
     let ans; Inspections.begin(r);
-    try { ans = ask(source, a, name, false, forced); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
+    const refresh = forced && waited !== true; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1; `Runner::launch` in the runner)
+    try { ans = ask(source, a, name, false, refresh); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
-      if (data.threwRead?.()) r.store = true;
+      if (data.threwRead?.()) r.store = true; for (const t of data.threwWatches?.() ?? []) (r.watches ??= new Set()).add(t); // a failed ask watched what it read, the shown answer's topics kept
       if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
       if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
       if (globalThis.__exactRender) hold();
       return fails(a, String(e?.message ?? e), failureCode(e), failureReason(e)); // its newest ask failed: an older one in flight is let go
     }
-    if (ans && ans.store) r.store = true;
+    if (ans && ans.store) r.store = true; r.watches = ans?.watches; // a fresh answer's topics replace the last's (LLP 1016.002 D2), a later turn's joining them
     if (ans && "v" in ans) {
       if (baked) say(revalidated(name, eq(ans.v, r.value)));
       try { take(ans.v, a, Ov.tick()); }
@@ -525,7 +528,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     }
     if (ans && (ans.req || ans.promise || ans.stream)) {
       hold();
-      const t = { id: ++Ticket, name, owner: r, args: a, forced, req: ans.req && { ...ans.req, forced }, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
+      const t = { id: ++Ticket, name, owner: r, args: a, forced: refresh, req: ans.req && { ...ans.req, forced: refresh }, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
       if (r.ticket) say(`forget ticket ${r.ticket.id} (${name})`);
       r.ticket = t; flag(pend, true); send(t, land(t));
       return r.value;
@@ -533,17 +536,18 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at data_ready (review B3); another compiled
     // value stands, stale, forced then (LLP 1027 D4). That ask's refusal fails it, not the commit; a commit refused otherwise is followed by one failing it.
     const shown = baked && eq(a, r.settled);
+    r.launch = !forced && waited !== false;
     if (!shown) { hold(); flag(pend, true); }
     if (!r.waiting) { r.waiting = true; data.ready(() => { r.waiting = false; r.forced = r.reconciling = true; r.baked ||= shown; recommit(() => { r.ov = null; W(ver, ver.n.v + 1); W(pend, false); }, `data ready ${name}`); }); }
     return r.value;
   })(), r.settled ?? r.asked, r.origin); flag(cur, !r.placeholder && !r.slept && r.settled !== undefined && r.asked !== undefined && equal(id(r.settled), id(r.asked))); return shown; }, type);
   Object.assign(r, {
-    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept],
-    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
-    force: undo => { r.forced = true; flag(ver, ver.n.v + 1, undo); },
+    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept, r.watches, r.launch],
+    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; r.watches = x[22]; r.launch = x[23]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
+    force: undo => { r.forced = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
     touch: undo => flag(ver, ver.n.v + 1, undo), // its writes changed: what it shows is laid over again
-    reconcile: undo => { r.forced = r.reconciling = true; flag(ver, ver.n.v + 1, undo); },
-    revise: undo => { r.rev = true; flag(ver, ver.n.v + 1, undo); }, giveUp: why => { r.baked = r.forced = r.reconciling = false; fails(r.asked ?? [], why, "error"); }, // owed by a refused commit (`commit`)
+    reconcile: undo => { r.forced = r.reconciling = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
+    revise: undo => { r.rev = true; flag(ver, ver.n.v + 1, undo); }, giveUp: why => { r.baked = r.forced = r.reconciling = r.launch = false; fails(r.asked ?? [], why, "error"); }, // owed by a refused commit (`commit`)
   });
   onEnd(() => { r.gone = true; }); // its region ended: an open stream closes (`Open`)
   Resources.push(r);
@@ -620,7 +624,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (Adopt) { const e = adopt(p, tag, cls, attrs); if (tag === "video" || tag === "audio") Media.media(e, attrs); if (tag === "iframe") frame(e, attrs?.["data-app-src"]); if (tag === "button") oneActivation(e); return e; }
   const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag), owner = listOwner(p); e.$exactTree = true; e.authoredInert = attrs?.inert !== undefined;
   if (cls !== 0) e.setAttribute("class", "c" + cls); // `bits`, below: the paint facts the compiler wrote, kept as paint.js `facts` reads them rather than read back from the attribute names; a bound fact's `P` clears them (LLP 1071.001 A6)
-  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
+  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if (tag === "a") Links?.made(e, attrs); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
   if (text !== 0) e.textContent = text;
   if (tag === "iframe") frame(e, attrs?.["data-app-src"]);
   if (tag === "button") oneActivation(e);
@@ -656,7 +660,7 @@ function adopt(p, tag, cls, attrs) {
   if (e.hasAttribute("data-view")) e.removeAttribute("data-view");
   if (attrs?.["data-exact-own-isolation"] === undefined && !e.hasAttribute("data-exact-own-isolation") && !e.hasAttribute("data-exact-policy") && e.style.isolation) e.style.removeProperty("isolation");
   if (cls !== 0 && e.getAttribute("class") !== "c" + cls) e.setAttribute("class", "c" + cls);
-  if (attrs) { for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
+  if (attrs) { const rendered = Links && tag === "a" ? e.getAttribute("rel") : null; for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if (tag === "a") Links?.made(e, attrs, rendered); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
   Paint?.list(e); return e;
 }
 function mark(p) { const c = document.createComment(""); p.insertBefore(c, at(p)); return c; }
@@ -706,13 +710,13 @@ export function P(e, name, f) {
     if (PropHooks[name]?.(e, v)) return; if (NOT_DOM.test(name)) return void (e["$" + name] = v);
     if (e.$media && Media.mediaProp(e, name, v)) return; // media.js: `paused`, `volume`, `currentTime` … are the glue's; an `app:/` source its own
     if (name === "text") { e.$unset = v == null; if (!e.childElementCount && e.textContent !== (v ?? "")) e.textContent = v ?? ""; } // `$unset`: no text, as the runner's cleared row, not an empty one (difftest's drive.mjs)
-    else if (name === "value") { if (e.localName === "select") { Selects.add(e); e.$value = v ?? ""; e.$set = true; } writeValue(e, v ?? ""); e.exactDecorations?.sync(); }
+    else if (name === "value") { if (e.localName === "select") { Selects.add(e); e.$value = v ?? ""; e.$set = true; } if (v == null && e.localName === "option") e.removeAttribute("value"); else writeValue(e, v ?? ""); e.exactDecorations?.sync(); } // a cleared option's value is its label again
     else if (name === "scrollTop" || name === "scrollLeft") { if (v != null) (Scrolls.get(e) ?? Scrolls.set(e, {}).get(e))[name] = Number(v); }
     else if (BOOL.test(name)) { if (name === "inert") e.authoredInert = v === "true"; e.toggleAttribute(name, v === "true"); if (name === "disabled" && v === "true" && document.activeElement === e && e.matches(":disabled")) e.blur(); /* HTML focus fixup, now, for a control only (glue.js) */ if (name === "checked") e.checked = e.$checked = v === "true"; if (name === "muted") e.muted = v === "true"; if (name === "autofocus") { if (v === "true") e.removeAttribute("data-autofocus"); else e.setAttribute("data-autofocus", "false"); } }
     else if (v == null) { if (e.hasAttribute(name) || suppressedInvocation(e, name)) { e.removeAttribute(name); if (name.startsWith("data-exact-")) Paint?.facts(e); } }
     else if (e.getAttribute(name) !== v) { e.setAttribute(name, v); if (name.startsWith("data-exact-")) Paint?.facts(e); }
     if (name === "role") syncListItemRoles(e); else if (name === "popover" && e.parentElement?.hasAttribute("data-exact-list-item")) listItem(e);
-    if (e.localName === "a" && (name === "target" || name === "href" && (!e.hasAttribute("target") || e.rel === "external noopener"))) { const out = name === "href" && v != null && /^\s*(https?:)?\/\//i.test(v), t = name === "target" ? v : out ? "_blank" : null; if (t) e.setAttribute("target", t); else e.removeAttribute("target"); if (t === "_blank") e.rel = out ? "external noopener" : "noopener"; else e.removeAttribute("rel"); } // a link to an absolute URL leaves the app in a new browsing context unless its `target` is authored (element.rs `leaves_app`, `props_of`; chat F11)
+    if (e.localName === "a" && (name === "rel" || name === "target" || name === "href")) Links?.prop(e, name, v);
     if (name === "sandbox" && e.localName === "iframe" && !e.exactAppFrame) { const source = e.$src ?? e.getAttribute("src"); if (source != null) { const s = navigable(source, e) ? source : "about:blank"; if (sandboxChanged || e.getAttribute("src") !== s) e.setAttribute("src", s); } } // a new sandbox takes effect on navigation, even to the same source; a literal source stays in src, a refused `data:` source in $src
     if ((name === 'src' || name === 'sandbox') && e.localName === 'iframe') commitGuestOrigin(e);
   });
@@ -746,12 +750,12 @@ export function gs(e, name, values) {
     if (queued) queued.values = v; else pending.push({ id, name, values: v, generation: 0 });
     if (!Gpu && typeof requestAnimationFrame === "function" && !globalThis.__exactRender) {
       x.views = Views; x.generation = 0; x.devAssets = null; x.root = document.getElementById("exact-root"); x.assetURL = v => rel("src", v); // a release's asset path, as the wasm glue's `localAssetURL` (LLP 1098 D6)
-      // A surface's published record (LLP 1009 D6), as the glue hands it to
-      // the wasm host: `name` or `name\0json`, to `exactSurface` readers
-      // (facts.js); dropped where no resource reads one.
+      // The GPU glue's name NUL JSON wire reaches the reserved readers in facts.js.
       let written = "";
       x.writeIn ??= t => { written = t; return 0; };
       (x.wasm ??= {}).exact_surface_record ??= () => { const at = written.indexOf("\0"); x.surfaceRecord?.(at < 0 ? written : written.slice(0, at), at < 0 ? null : written.slice(at + 1)); return 0; };
+      x.wasm.exact_canvas_performance_requested ??= () => x.canvasPerformanceRequested?.(written) ? 1 : 0;
+      x.wasm.exact_canvas_performance_record ??= () => { const at = written.indexOf("\0"); x.canvasPerformanceRecord?.(at < 0 ? written : written.slice(0, at), at < 0 ? null : written.slice(at + 1)); return 0; };
       x.send ??= () => {};
       // A surface's `message` to its canvas's `message=` handler (gpu-glue.js `messages`), as the wasm glue's `message` dispatches it.
       x.message ??= (el, text) => el?.dispatchEvent(new CustomEvent("exact-native", { detail: { kind: "message", value: text } }));
@@ -823,10 +827,10 @@ export function css(e, prop, unit, v, rendered) {
   // The value this binding last wrote: the same again writes nothing (a write restyles and repaints the node, for every dynamic row a list update touched).
   const last = e.$css ??= {}, t = cssText(prop, unit, v);
   if (last[prop] === t) return;
-  last[prop] = t;
-  // An adopted node's inline style is the renderer's: a value it already
-  // shows is not written again (a write restyles and repaints the node).
-  // (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
+  last[prop] = t; // The `animation` shorthand resets the longhands a timeline's consumer writes again after it (LLP 1057.003 D5).
+  if (prop === "animation") for (const p of ["animation-timeline", "animation-range", "animation-play-state"]) delete last[p];
+  // An adopted node's inline style is the renderer's: a value it already shows is not written again (a write
+  // restyles and repaints the node). (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
   if (rendered) {
     const now = e.style.getPropertyValue(prop);
     if (t == null ? !now : same(now) === (normal(prop, t) || "unset")) return;
@@ -961,7 +965,7 @@ export const onSelectionChange = (e, kind, f, l) => { return sourceField(e) ? l(
 let Pres = null, Presence = null, Present = null, Leave = null, Sh = null; // Sh: shared.js, loaded with presence-glue.js, runs the commits that hand on a shared element's name in a view transition (LLP 1013.000 D7)
 /** The after-paint pieces on their way (the agent waits for them before an
  * operation, as glue.js's `agentSettled` waits for `pieces.pending()`). */
-export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), OnHooks.loading].filter(Boolean)).then(() => {}, () => {});
+export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), decorationPiece(), OnHooks.loading].filter(Boolean)).then(() => {}, () => {});
 const EXIT = "--exact-exit-animation"; export const exitOf = n => (n.$exit ?? n.style.getPropertyValue(EXIT)).trim(); // an element's exit: a bound one's value from the commit's start (presence-bindings.js `px`), else its style's
 /** A virtualized list's row wrapper `el` leaves with the exit its row's `root` declares (list.js): whether it stays,
  * leaving, for presence-glue.js to remove. */
@@ -1006,7 +1010,7 @@ function motion(f) {
   Motion.then(() => Mo && f(Mo));
 }
 /** A node the motion engine follows (the kernel's motion seam): `f` gives
- * its `translate`, `scale`, `rotate`, `opacity` and `transition` as the
+ * its `translate`, `scale`, `rotate`, `opacity`, `transition` and release velocity as the
  * plan binds them, told the engine at every commit that changes them. */
 export function mo(e, f) {
   const id = viewId(e);
@@ -1087,7 +1091,7 @@ function geoRead(op, id) {
 export const x_frame = id => geoRead(0, id), x_measure = id => geoRead(1, id);
 export const x_rangeFrame = (id, start, end) => { const out = new Float64Array(4), bits = Geo ? Geo.range(liveById(id), start, end, out) : 0;
   return bits & 1 ? [...out, !!(bits & 2), false] : [0, 0, 0, 0, false, true]; };
-export { decorationRecord, atomFacesRecord } from './shape.js'; import { startDecoration } from './editor.js';
+export { decorationRecord, atomFacesRecord } from './shape.js'; import { startDecoration, decorationPiece } from './editor.js';
 export const decorate = e => startDecoration(e, {own:Owner, onEnd, inflight, say});
 /** `elementFromPoint(x,y)` (LLP 1094 D10): nearest front-most untransformed id at a viewport point; none before loading. `elementsFromPoint` returns every one. */
 export const x_elementFromPoint = (x, y) => { const root = document.getElementById("exact-root"), n = Geo?.point(x, y)?.closest('[id]:not([id=""])'); return n && n !== root && root.contains(n) && n.id || null; };
@@ -1135,14 +1139,14 @@ export const pressFeedback = () => input(); if (DEVELOPMENT_STORE) globalThis.__
 /** The web host's input piece (input-glue.js), after first paint: pans. */
 let Input = null, Inputs = null;
 function input() {
-  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
+  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return Inputs;
   inflight.n++;
   // Its link handler asks the wasm's route table; this runtime routes its own.
   const x = globalThis.exact ??= {}; (x.wasm ??= {}).exact_route_match ??= () => 0;
   const to = (id, p, k) => Views.get(id)?.[k]?.(...p.split(",").map(Number));
-  Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
+  return Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
     Input = m.createInputHandlers({ root: document.getElementById("exact-root"), views: Views, retiredViews: new WeakSet(), ready: () => true,
-      inertAncestor, agentMode: clock.agent, dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
+      inertAncestor, agentMode: clock.agent, pick: el => x.files?.activate(el), dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
       velocity: { sample: (...a) => Mo?.pan.sample(...a), velocity: (...a) => Mo?.pan.velocity(...a) }, log: say }); Input.arrive(); // the stack as it stands, for the focus to follow (LLP 1115.000 D4.2)
   }).catch(err => say(`input: ${err.message}`)).finally(() => inflight.n--);
 }
@@ -1372,7 +1376,7 @@ export function mount(f) {
   });
   // Under the agent, and in a render, the clock is the driver's: no timer runs by itself.
   clock.agent = agentMode(); if (!clock.agent && typeof window !== "undefined") reloadOnGone(window); // (a build kept no more: the page again, once)
-  Store.load();
+  Store.load(); if (Store.map.size && checkpoint().kept) { for (const r of Resources) { if (r.store) { r.baked = true; } } } // Ask again each page answer that read the store when the device's store holds the app's own entries, which the render never had (LLP 1048.000 D6); `res` does so for one made later. A dev reload's carried answers have no page checkpoint, so this rule does not apply to them, as in the runner's carried boot.
   let built = false;
   Adopt = !!(checkpoint().kept && root.firstElementChild);
   // Elapsed time continues from where a render's clock stopped.
@@ -1409,23 +1413,23 @@ export function mount(f) {
   for (const [e, v, c] of shown) if (e.isConnected) { if (e.type === "checkbox" || e.type === "radio") e.checked = c; else if (e.type !== "file") e.value = v; }
   for (const t of early) if (t.target.isConnected) t.type === "click" ? t.target.click() : t.target.dispatchEvent(new Event(t.type, { bubbles: true }));
 }
-/** The page's checkpoint (LLP 1048.000 D6): the answers its document used,
- * by resource name, so a resource admits the rendered value while its
- * arguments match, the open streams among them, and the time the render
- * stopped at. */
+/** The page's checkpoint (LLP 1048.000 D6): the time the render stopped at, and by resource name the `source` and `answers`
+ * its document used, each `[args, value, open, reads]`: one, or a list's elements', where a new element looks first at `next`. */
 let Checkpoint = null, READER = new Set(["exactViewport", "exactPage"]); // a document's answer from the reader's own device was the render's: `res` asks it again, as a bake's (LLP 1048.007 D2)
 export function checkpoint() {
   if (Checkpoint) return Checkpoint;
   Checkpoint = { kept: null };
   const el = typeof document !== "undefined" && document.querySelector('script[type="application/vnd.exact.checkpoint"]');
   if (!el) return Checkpoint;
-  const cp = JSON.parse(el.textContent); Checkpoint.revalidate = !!cp.revalidate; Checkpoint.open = new Set(cp.open); Checkpoint.pending = new Set(cp.pending); // a pending answer is asked again, as an open stream is (LLP 1048.000 D6)
-  Checkpoint.kept = new Map(cp.answers.map(([name, , args, value]) => [name, [value_(args), value_(value)]]));
+  const cp = JSON.parse(el.textContent), open = new Set(cp.open), readers = new Set(cp.readers); Checkpoint.revalidate = !!cp.revalidate; Checkpoint.kept = new Map();
+  cp.answers.forEach(([name, source, args, value], k) => { if (!Checkpoint.kept.has(name)) { Checkpoint.kept.set(name, { source, answers: [], next: 0 }); } Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k)]); });
   // A drive starts at zero even when its document was rendered on a wall clock.
   const driven = AGENT_ADMITTED && typeof location !== "undefined" && new URLSearchParams(location.search).has("agent") && !globalThis.__exactRender;
   Checkpoint.time = clock.now = driven ? 0 : cp.time || 0;
   return Checkpoint;
 }
+/** A declared resource's page answer when it names `source` and fits `type` (a list's element's: each.js `keptMember`). */
+function keptAnswer(name, source, type) { const kept = checkpoint().kept?.get(name), answer = kept?.source === source ? kept.answers[0] : undefined; return answer && (!type || conforms(answer[1], type)) ? answer : undefined; }
 /** A checkpoint value (`push_value`, host/web/src/page.rs) as a runtime value: lists and records are arrays, unit and `none` null, `some(v)` v. */
 const value_ = v => v === null || typeof v !== "object" ? v : Array.isArray(v) ? v.map(value_) : "r" in v ? v.r.map(value_) : "s" in v ? value_(v.s) : "n" in v ? Number(v.n) : null;
 // ---------------------------------------------------------------- the roster (runner/src/stdlib.rs)

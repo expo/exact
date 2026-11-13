@@ -1,6 +1,6 @@
 //! Compile and bake `app.contract` into `OUT_DIR/app.plan` at build time, with
 //! the compatibility id, the hatches' install and the plan's uses beside it,
-//! for `exact_linux::canvas_jni!` and the APK's build.
+//! for `exact_painted::canvas_jni!` and the APK's build.
 
 use contract::DataSource;
 

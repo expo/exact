@@ -1,38 +1,12 @@
 import { beforeAll, test, expect } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { renderedPages, warmRustRenderer } from './rendered-pages.mjs';
 
-// A `--render rust` build is made once here, outside every test's own time: cold, build.mjs compiling Caltrain's
-// data module and its renderer (caltrain-render) outlasted a test's 60 or 180 s, and more so behind another build's
-// cargo lock. The warm-up is a build as the tests make one, so it builds exactly what they will reuse.
-beforeAll(() => renderedPages('routes nav\n  home "/" render=build\n\ncomponent Warm\n  view\n    text "warm"\n', () => {}, {}, {}, 'rust'), 1_800_000);
-
-async function renderedPages(source, check, files = {}, manifest = {}, renderer = 'js') {
-  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/head-render-test-'));
-  try {
-    if (renderer === 'js') writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Head Render Test', app: { id: 'test.heads', name: 'Head Render Test' }, host: { web: {} }, ...manifest }));
-    writeFileSync(resolve(dir, 'app.contract'), source);
-    for (const [name, text] of Object.entries(files)) {
-      mkdirSync(dirname(resolve(dir, name)), { recursive: true });
-      writeFileSync(resolve(dir, name), text);
-    }
-    const app = renderer === 'rust' ? ['caltrain', '--contract', resolve(dir, 'app.contract')] : ['head-render-test'];
-    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', ...app, '--out', resolve(dir, 'dist'), '--render', renderer], {
-      cwd: root, env: { ...process.env, ...(renderer === 'js' ? { EXACT_APP_DIR: dir } : {}) }, stdout: 'pipe', stderr: 'pipe',
-    });
-    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
-    const html = path => readFileSync(resolve(dir, 'dist', path, 'index.html'), 'utf8');
-    await check(path => {
-      const page = html(path);
-      return [/<title>([^<]*)<\/title>/.exec(page)?.[1], /<meta name="description" content="([^"]*)">/.exec(page)?.[1]];
-    }, html, resolve(dir, 'dist'));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-}
+beforeAll(warmRustRenderer, 1_800_000);
 
 test('bare text styles keep their fills and inherited rows through server adoption', async () => {
   const source = 'routes nav\n  home "/" render=build\n\n' + readFileSync(new URL('./conformance/bare-text-style.contract', import.meta.url), 'utf8');
@@ -368,7 +342,7 @@ globalThis.__render = () => {
     C.prototype.renderCount = (C.prototype.renderCount ?? 0) + 1;
     return C.renderCount + ':' + C.prototype.renderCount;
   });
-  return { root: '', title: [language, zone, explicit, inherited.timeZone, inherited.hour, typeof Intl.DateTimeFormat.supportedLocalesOf].join('/'), description: caught.join(',') + '/' + counts.join(','), time: 0, answers: '[]', pending: [], open: [], failed: [], refused: [] };
+  return { root: '', title: [language, zone, explicit, inherited.timeZone, inherited.hour, typeof Intl.DateTimeFormat.supportedLocalesOf].join('/'), description: caught.join(',') + '/' + counts.join(','), time: 0, answers: '[]', pending: [], open: [], readers: [], failed: [], refused: [] };
 };`);
     const bundle = await Bun.build({ entrypoints: [entry], target: 'browser', format: 'iife' });
     expect(bundle.success).toBe(true);
@@ -595,17 +569,16 @@ test('JavaScript-rendered pages exclude a covered route’s deeper head', async 
 
 component Heads
   view
-    column
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back"
       head title="Root" description="Root description"
-      main navigationKey=\`\${top(nav).id}\` navigationBack="back"
-        for e in stack(nav) key=e.id
-          column navigationKey=\`\${e.id}\`
-            if e.name == "home"
-              column
-                head title="Home" description="Home description"
-            if e.name == "detail"
-              head title="Detail" description="Detail description"
-            text e.name
+      for e in stack(nav) key=e.id
+        column navigationKey=\`\${e.id}\`
+          if e.name == "home"
+            column
+              head title="Home" description="Home description"
+          if e.name == "detail"
+            head title="Detail" description="Detail description"
+          text e.name
 `, page => {
     expect(page('')).toEqual(['Home', 'Home description']);
     expect(page('detail')).toEqual(['Detail', 'Detail description']);
@@ -659,48 +632,53 @@ test('JavaScript-rendered pages exclude the other retained tabs’ heads', async
 test('JavaScript-rendered pages mark the bar, whose symbols are the bar\'s size before the page adopts and after', async () => {
   await renderedPages(`routes nav
   home "/" render=build
+    menu "/menu" render=build
 
 component Bars
   state added = 0
   action add
     added = added + 1
   view
-    column
-      main navigationKey=\`\${top(nav).id}\` navigationBack="back"
-        for e in stack(nav) key=e.id
-          column navigationKey=\`\${e.id}\`
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back"
+      for e in stack(nav) key=e.id
+        column navigationKey=\`\${e.id}\`
+          if e.name == "home"
             header display="flex" align-items="center"
               text "Inbox" role="heading" aria-level=1
               button press=add testId="add" aria-label="Add"
                 image "symbol:add" font-size=13
-      main navigationKey="menu" navigationBack="back"
-        column navigationKey="menu"
-          header display="flex" align-items="center"
-            button popovertarget="menu-items"
-              text "Menu" role="heading" aria-level=1
-            button press=add testId="menu-add" aria-label="Add"
-              image "symbol:add" font-size=13
-          column popover="auto" id="menu-items"
-            text "Item"
+          if e.name == "menu"
+            header display="flex" align-items="center"
+              button popovertarget="menu-items"
+                text "Menu" role="heading" aria-level=1
+              button press=add testId="menu-add" aria-label="Add"
+                image "symbol:add" font-size=13
+            column popover="auto" id="menu-items"
+              text "Item"
 `, async (_page, _html, dist) => {
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
-      const path = new URL(req.url).pathname;
-      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
+      const path = new URL(req.url).pathname.slice(1);
+      return new Response(Bun.file(resolve(dist, path === '' || path.endsWith('/') || !path.includes('.') ? resolve(dist, path, 'index.html') : path)));
     } });
     let suite, browser;
     try {
-      // Each header's mark, and its Add symbol's width to within 0.06 px of the bar's size or of the written one.
-      const measure = `[...document.querySelectorAll('[navigationkey] > header')].map(h => {
+      // The shown header's mark, and its Add symbol's width to within 0.06 px of the bar's size or of the written one:
+      // a header titled by a heading is the bar; one titled by a button is not.
+      const measure = `[...document.querySelectorAll('[navigationkey] > header')].filter(h => h.checkVisibility({ visibilityProperty: true })).map(h => {
         const width = h.querySelector('[data-testid$="add"] img').getBoundingClientRect().width;
         return [h.hasAttribute('data-exact-bar'), Math.abs(width - 16 * 22 / 17 * 1.2) <= 0.06 ? 'bar' : Math.abs(width - 13 * 1.5) <= 0.06 ? 'written' : width];
       })`;
       suite = await suiteBrowser('chromium', { timeout: 10000 });
-      const page = await suite.newPage({ javaScriptEnabled: false });
-      await page.goto(server.url.href);
-      expect(await page.evaluate(measure)).toEqual([[true, 'bar'], [false, 'written']]);
-      browser = await open({ host: 'web', url: server.url.href });
-      expect(await browser.carrier.evaluate(`globalThis.exact.journal.some(l => l.endsWith('adopted the document'))`)).toBe(true);
-      expect(await browser.carrier.evaluate(measure)).toEqual([[true, 'bar'], [false, 'written']]);
+      for (const [path, expected] of [['', [[true, 'bar']]], ['menu', [[false, 'written']]]]) {
+        const page = await suite.newPage({ javaScriptEnabled: false });
+        await page.goto(server.url.href + path);
+        expect(await page.evaluate(measure), path + ' before adoption').toEqual(expected);
+        await page.close();
+        browser = await open({ host: 'web', url: server.url.href + path });
+        expect(await browser.carrier.evaluate(`globalThis.exact.journal.some(l => l.endsWith('adopted the document'))`)).toBe(true);
+        expect(await browser.carrier.evaluate(measure), path + ' after adoption').toEqual(expected);
+        await browser.close(); browser = undefined;
+      }
     } finally {
       await browser?.close(); await suite?.close(); server.stop(true);
     }
@@ -1357,99 +1335,3 @@ component App
     expect(await at({})).toEqual(['narrow', true]);
   });
 }, 60000);
-
-test('Rust-rendered canvases follow a bound parent justify-items after adoption, a nested one its own parent', async () => {
-  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/canvas-document-agent-test-'));
-  let browser, server;
-  try {
-    const source = resolve(dir, 'app.contract'), dist = resolve(dir, 'dist');
-    writeFileSync(source, `routes nav
-  home "/" render=build
-
-component CanvasDocument
-  state items = "normal"
-  action toggle
-    items = items == "normal" ? "center" : "normal"
-  view
-    column
-      button "Toggle" testId="toggle" press=toggle width=100 height=24
-      box justify-items=items width=240 height=40
-        canvas testId="bound" height=40
-      box justify-items="center" width=240 height=60
-        canvas testId="outer" height=50 justify-items="normal"
-          canvas testId="inner" height=20
-`);
-    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'caltrain', '--contract', source, '--out', dist, '--render', 'rust'], {
-      cwd: root, env: process.env, stdout: 'pipe', stderr: 'pipe',
-    });
-    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
-    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
-      const path = new URL(req.url).pathname;
-      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
-    } });
-    browser = await open({ host: 'web', url: server.url.href });
-    expect(await browser.carrier.evaluate(`globalThis.exact.journal.some(l => l.endsWith('adopted the document'))`)).toBe(true);
-    const frames = () => browser.carrier.evaluate(`['bound','outer','inner'].map(id => {
-      const e = document.querySelector('[data-testid="'+id+'"]'), r = e.getBoundingClientRect(), p = e.parentElement.getBoundingClientRect();
-      return { x: r.x - p.x, width: r.width };
-    })`);
-    // The server render's inline justify-self: start goes at adoption, so the bound value applies;
-    // the outer canvas is centred by its box although it sets its own child's alignment.
-    expect(await frames()).toEqual([{ x: 0, width: 80 }, { x: 70, width: 100 }, { x: 0, width: 40 }]);
-    await browser.tap('toggle');
-    expect(await frames()).toEqual([{ x: 80, width: 80 }, { x: 70, width: 100 }, { x: 0, width: 40 }]);
-    await browser.tap('toggle');
-    expect(await frames()).toEqual([{ x: 0, width: 80 }, { x: 70, width: 100 }, { x: 0, width: 40 }]);
-  } finally {
-    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
-  }
-}, 180000);
-
-// The same CSS also supplies the independently measured kernel cases.
-test('calculated grid tracks survive web build, adoption, resize and a bound write', async () => {
-  const cards = 'repeat(auto-fill, minmax(min(100%, 200px), 1fr))';
-  const source = `routes nav
-  home "/" render=build
-component App
-  state columns = "${cards}"
-  state wide = false
-  action resize
-    wide = not wide
-  action change
-    columns = "calc(5e-1 * 100% - 10px) calc(5e-1 * 100% - 10px)"
-  view
-    view
-      button "Resize" press=resize testId="resize"
-      button "Change" press=change testId="change"
-      view display="grid" width=(wide ? 650 : 150) grid-template-columns=columns testId="cards"
-        view min-height=30
-        view min-height=30
-        view min-height=30
-      view display="grid" width=100 height=200 grid-template-rows="clamp(20px, 25%, 80px) max(10px, 20%)" testId="rows"
-        view
-        view
-`;
-  await renderedPages(source, async (_, html, dist) => {
-    expect(html('')).toContain(cards);
-    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
-      const path = new URL(req.url).pathname;
-      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
-    } });
-    let browser;
-    try {
-      browser = await open({ host: 'web', url: server.url.href });
-      const widths = () => browser.carrier.evaluate(`Array.from(document.querySelector('[data-testid="cards"]').children, e => e.getBoundingClientRect().width)`);
-      expect(await widths()).toEqual([150, 150, 150]);
-      expect(await browser.carrier.evaluate(`getComputedStyle(document.querySelector('[data-testid="rows"]')).gridTemplateRows`)).toBe('50px 40px');
-      await browser.tap('resize');
-      expect(await widths()).toEqual([216.65625, 216.671875, 216.671875]);
-      await browser.tap('change');
-      expect(await widths()).toEqual([315, 315, 315]);
-      await browser.tap('resize');
-      expect(await widths()).toEqual([65, 65, 65]);
-      expect(await browser.carrier.evaluate(`globalThis.exact.journal.filter(l => l.includes('unset grid-template'))`)).toEqual([]);
-    } finally { await browser?.close(); server.stop(true); }
-  });
-}, 180000);

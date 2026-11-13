@@ -712,7 +712,9 @@ data_source! {
     /// The app identity, reverse-DNS (LLP 1023 D5) — the one declaration:
     /// bake writes it into the plan header, and boot refuses a plan whose
     /// header names a different app. Empty is unnamed — a fixture or a
-    /// stand-in — and unnamed matches anything.
+    /// stand-in — and unnamed matches anything. An app's generated entry
+    /// gives an unnamed source its manifest's `app.id`
+    /// (`exact_logic::Swappable::named`), which names its storage.
     fn app_id(&self) -> &str {
         ""
     }
@@ -796,6 +798,11 @@ data_source! {
     /// and on a device grants nothing.
     fn grants(&self) -> &str {
         ""
+    }
+
+    /// Checked process-start definitions, without activating this source (LLP 1162.000 D2).
+    fn preloads(&self) -> &[crate::request::Preload] {
+        &[]
     }
 
     /// Identity of replaceable logic, if any. A changed identity invalidates
@@ -980,8 +987,12 @@ pub enum DataError {
     UnknownSource(String),
     BadArguments(String),
     Unavailable(String),
-    /// Build-time storage cannot answer; use the resource placeholder until activation.
-    DeferredAtBake(String),
+    /// A build-time call cannot answer; use the resource placeholder until activation.
+    DeferredAtBake {
+        message: String,
+        /// An invalid option needs a build warning; ordinary deferral does not.
+        warning: bool,
+    },
     /// The seam to a loaded Rust module could not carry the call (an
     /// answer over its bound, a trap): the source is there but cannot
     /// answer now. A resource asked this fails; it does not refuse the
@@ -1008,7 +1019,9 @@ impl std::fmt::Display for DataError {
             Self::UnknownSource(name) => write!(f, "unknown source: {name}"),
             Self::BadArguments(reason)
             | Self::Unavailable(reason)
-            | Self::DeferredAtBake(reason)
+            | Self::DeferredAtBake {
+                message: reason, ..
+            }
             | Self::Interface(reason)
             | Self::Overrun(reason)
             | Self::Failed(_, reason, _) => f.write_str(reason),

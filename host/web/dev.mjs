@@ -3,25 +3,25 @@
 // LAN clients can read plans, errors and generations (LLP 1023 D8); the agent
 // carrier and installer stay loopback-only. Games serve HTTP during the first build.
 import { buildingServer } from '../../game/dev.mjs';
-import { acceptModuleReply, failedPhase, phased } from './dev-phase.mjs';
+import { acceptModuleReply, failedPhase, phased, phasedAsync } from './dev-phase.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 let tuning = null;
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { canonicalBytes, classifyArtifacts, cohortReceipt } from '../../scripts/deploy.mjs';
+import { canonicalBytes, classifyArtifacts, cohortReceipt, sealEnvelope } from '../../scripts/deploy.mjs';
 import { filesystem } from '../../scripts/filesystem.mjs';
 import { allowHostArgs, developmentGate, installBrowserOrigins, LOCAL_IOS_INSTALL_ENDPOINT } from '../../scripts/install-page.mjs';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, unwatchFile, watch, watchFile, writeSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { rustPackage, rustOutput, rustInputs, rustCards } from '../../scripts/rust.mjs';
 import { gpuModules, shaderWatchRoots, rustPolicy, rebuildPolicy } from '../../scripts/app.mjs';
-import { webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
+import { HOST_DEV, webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
 import { developmentLinks } from '../apple/build.mjs';
 import { acceptsHTML, webRequestURL } from '../../scripts/origin.mjs';
 import { guardFlags } from '../../scripts/help.mjs';
 import { webPortRange } from '../../scripts/agent-launch.mjs';
 import { localInstaller } from './local-install.mjs';
-import { startupBuilds } from './dev-startup.mjs';
+import { runBuildTree, startupBuilds, stopBuildTree } from './dev-startup.mjs';
 import { designPath, frameOnlyByTool, tamberServer } from '../../scripts/tamber-server.mjs';
 import { pluginOnLoopback, remoteArgs } from '../../scripts/tamber-remote.mjs'; import { openRemoteCanvas } from '../../scripts/tamber-canvas.mjs';
 import { designDigest, patchDesign } from '../../scripts/tamber-patch.mjs';
@@ -92,6 +92,7 @@ let rebuildOn = rebuildPolicy(app.manifest);
 let manualTypescript = null, rustChild = null, rustActive = false, rustRun = 0, rustHeartbeat = null, rustDirty = false, rustSaved = 0, rustSourceWatch = null, rustOutputWatch = null;
 let rustInputFiles = new Set();
 let changed = new Set(), timer=null, building=false, buildPending=false, rustPending=false, builds=0;
+let hostBuildChild = null, stopping = false, shutdown = null;
 // A failed wasm build: its files ride with the next build, and the files its
 // diagnostics named are watched (the receipt names only a built wasm's inputs).
 let lastFailed = new Set(), failedInputs = new Set();
@@ -472,7 +473,7 @@ function captureGeneration(reuseCurrentAssets = false, tableUpdate = null) {
       if (fromProducer(asset.name)) continue;
       const body = tableUpdate?.get(asset.name) ?? current.files.get(asset.name);
       files.set(asset.name, body);
-      assets.push({ name: asset.name, sha256: tableUpdate?.has(asset.name) ? createHash('sha256').update(body).digest('hex') : asset.sha256, bytes: body.length });
+      assets.push({ name: asset.name, url: `./${asset.name}`, sha256: tableUpdate?.has(asset.name) ? createHash('sha256').update(body).digest('hex') : asset.sha256, bytes: body.length });
     }
   } else {
     const captured = new Map([...captureAssets(dist)].filter(([name]) => !fromProducer(name)));
@@ -498,10 +499,9 @@ function captureGeneration(reuseCurrentAssets = false, tableUpdate = null) {
   envelope.plan.url = prefix + 'app.plan';
   if (rust) envelope.rust = Object.fromEntries(Object.entries(rust).map(([kind, variant]) => [kind, { ...variant, receipt:{...variant.receipt,url:prefix+variant.receipt.url},module:{...variant.module,url:prefix+variant.module.url} }]));
   if (module) envelope.module = Object.fromEntries(Object.entries(module).map(([key, card]) => [key, { ...card, url: prefix + MODULE_FILES[key] }]));
-  for (const asset of envelope.assets) asset.url = prefix + asset.name.split('/').map(encodeURIComponent).join('/');
-  const envelopeBytes = Buffer.from(JSON.stringify(envelope) + '\n');
-  if (envelopeBytes.length > 64 * 1024) throw new Error('generation envelope exceeds 64 KiB');
-  files.set('exact.json', envelopeBytes);
+  const sealed = sealEnvelope(envelope, prefix + 'assets.json');
+  if (sealed.index) files.set('assets.json', sealed.index);
+  files.set('exact.json', sealed.bytes);
   if (tableUpdate) {
     // Table edits retain immutable bytes in this session; no filesystem helper is launched.
     tableGenerations.set(prefix, files);
@@ -524,9 +524,10 @@ const contractBytes = () => { try { return createHash('sha256').update(readFileS
 const contractInputsStamp = () => createHash('sha256').update([...readinessContracts].sort().map(path => { try { return path + ':' + readFileSync(path); } catch { return path + ':missing'; } }).join('\0')).digest('hex');
 function contractReady(compiled = compiledContract) { contractStamp = compiled; contractTreeStamp = contractInputsStamp(); early?.phase('contract', compiled === contractBytes() ? 'ready' : 'build'); }
 function startCompiler() {
+  if (stopping) return;
   early?.phase('contract','build');
   if (portableRust) startRustCompiler();
-  if (typescript) { startModuleCompiler(); return; }
+  if (typescript) { void startModuleCompiler().catch(error => { console.error(error); process.exitCode = 1; void stop(); }); return; }
   if (portableRust) return;
   const metadata = spawnSync('cargo', ['metadata',...cargoReproducibilityFlags(app),'--no-deps','--format-version','1'], {cwd:app.workspace,env:buildEnv,encoding:'utf8'});
   if (metadata.status !== 0) throw new Error(`cargo metadata failed: ${metadata.stderr || metadata.error || metadata.status}`);
@@ -700,12 +701,13 @@ function contractGraph() {
     return { files, dirs, shallow: [...shallow.values()], sources };
   } catch { return { files: new Set(), dirs: new Set(), shallow: [], sources: new Set() }; }
 }
-function startModuleCompiler() {
-  const built = phased('the module producer (exact-js-bake --release; the first run takes a few minutes)', 'cargo', ['build', '-q', '--release', '-p', 'exact-js-bake'], { cwd: root, env: toolingEnv });
+async function startModuleCompiler() {
+  const built = await phasedAsync(`the module producer (exact-js-bake --profile ${HOST_DEV}; the first run takes a few minutes)`, 'cargo', ['build', '-q', '--profile', HOST_DEV, '-p', 'exact-js-bake'], { cwd: root, env: toolingEnv }, child => { dev = child; });
+  if (stopping || dev !== built.child) return;
   if (built.status !== 0) throw new Error('the module producer did not build');
   const scratch = resolve(app.target, 'module-dev');
   mkdirSync(scratch, { recursive: true });
-  const child = dev = spawn(resolve(app.target, 'release/exact-js-bake'), [app.dir, '--serve'], {
+  const child = dev = spawn(resolve(app.target, HOST_DEV, 'exact-js-bake'), [app.dir, '--serve'], {
     cwd: root, env: toolingEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
   console.log(`compiler pid ${child.pid}`);
@@ -873,17 +875,18 @@ function readRustGeneration() {
 }
 function produceRust() { rustPending = true; drainBuilds(); }
 function drainBuilds() {
-  if (building || rustActive) return;
+  if (stopping || building || rustActive) return;
   if (buildPending || changed.size) {
     buildPending = false;
     // A GPU-only save after a failed app build still rebuilds the wasm.
     const files = [...new Set([...lastFailed, ...changed])]; lastFailed = new Set(); changed = new Set();
     if (app.manifest.game) {
       building = true; early?.phase('check', 'build');
-      const check = hostBuildChild = spawn(process.execPath, [resolve(root, 'game/app/shells.mjs'), app.dir, '--check'], {cwd:root, env:buildEnv, stdio:['ignore','pipe','pipe']});
+      const check = hostBuildChild = spawn(process.execPath, [resolve(root, 'game/app/shells.mjs'), app.dir, '--check'], {cwd:root, env:buildEnv, stdio:['ignore','pipe','pipe'], detached:true});
       let output = '';
       for (const stream of [check.stdout, check.stderr]) stream.on('data', bytes => { output += bytes; process.stdout.write(bytes); });
       check.on('exit', code => {
+        if (stopping) return;
         building = false; hostBuildChild = null; early?.phase('check', code === 0 ? 'ready' : 'failed');
         if (code === 0) { if (gpuOnly(files)) void produceGpu(files); else rebuildNow(files); }
         else {
@@ -974,6 +977,17 @@ const killCompiler = () => {
   unasked();
   if (moduleStage) { rmSync(moduleStage, { recursive: true, force: true }); moduleStage = null; }
 };
+const stop = () => shutdown ??= (async () => {
+  stopping = true; clearTimeout(timer);
+  const exits = [dev, rustChild, gpuBuildChild, hostBuildChild].map(stopBuildTree);
+  tuning?.close(); killCompiler();
+  // The design server lets go of its lock before this exits.
+  exits.push(tamber?.close(), doors?.close());
+  const install = installer.child;
+  if (install && install.exitCode === null && install.signalCode === null) { exits.push(new Promise(ok => install.once('exit', ok))); install.kill('SIGTERM'); }
+  await Promise.all(exits); process.exit(process.exitCode ?? 0);
+})();
+startup.handoff(stop);
 startCompiler();
 if (early) {
   const watcher = watchModuleSources(app.dir, name => skipped.test(name) || (!name.endsWith('.contract') && /\.[^/]+$/.test(name)), () => {
@@ -981,17 +995,6 @@ if (early) {
   });
   process.once('exit', () => watcher.close());
 }
-const stop = async () => {
-  const children = [dev, rustChild, gpuBuildChild, installer.child, hostBuildChild].filter(Boolean);
-  const exits = children.map(child => new Promise(ok => child.exitCode !== null || child.signalCode !== null ? ok() : child.once('exit', ok)));
-  tuning?.close(); killCompiler();
-  // The design server lets go of its lock before this exits.
-  exits.push(tamber?.close(), doors?.close());
-  installer.child?.kill('SIGTERM');
-  // A rebuild in flight would otherwise swap dist under the next dev server.
-  hostBuildChild?.kill('SIGTERM');
-  await Promise.all(exits); process.exit(process.exitCode ?? 0);
-};
 
 // Asset edits carry state. A shader interface change rebuilds the host and
 // wasm because Rust binds the layout (LLP 1030 D8, D10; 1030.000 stage 1).
@@ -1224,17 +1227,17 @@ process.stdin.on('data', input => {
   }
 });
 console.log(`rebuild: Rust ${rebuildOn.rust}, TypeScript ${rebuildOn.typescript}; r + Enter builds Rust, t + Enter builds TypeScript, f + Enter starts a fresh page`);
-let hostBuildChild = null;
 function rebuild() { buildPending = true; drainBuilds(); }
 function rebuildNow(files) {
   building = true; early?.phase('host', 'build');
   const t = Date.now();
   console.log(`rust: ${files.length} file${files.length === 1 ? '' : 's'} changed (${files.slice(0, 3).join(', ')}${files.length > 3 ? ', …' : ''}) — rebuilding the ${producersOnly ? "bake" : "wasm"}`);
-  const b = hostBuildChild = spawn(process.execPath, [resolve(root, 'host/web/build.mjs'), app.crate('web'), hostBuild], { cwd: root, env:buildEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  const b = hostBuildChild = spawn(process.execPath, [resolve(root, 'host/web/build.mjs'), app.crate('web'), hostBuild], { cwd: root, env:buildEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let out = '';
   b.stdout.on('data', (d) => { out += d; });
   b.stderr.on('data', (d) => { out += d; process.stderr.write(d); });
   b.on('exit', async (code) => {
+    if (stopping) return;
     building = false; hostBuildChild = null;
     const ms = Date.now() - t;
     if (code === 0) {
@@ -1277,7 +1280,10 @@ async function produceGpu(files) {
   building = true; early?.phase('gpu', 'build');
   try {
     const results = [];
-    for (const artifact of gpuArtifacts().filter(({ stem }) => files.some(path => gpuArtifactInputs.get(stem)?.has(path)))) results.push(await produceGpuArtifact(files, artifact));
+    for (const artifact of gpuArtifacts().filter(({ stem }) => files.some(path => gpuArtifactInputs.get(stem)?.has(path)))) {
+      if (stopping) break;
+      results.push(await produceGpuArtifact(files, artifact));
+    }
     early?.phase('gpu', results.every(Boolean) ? 'ready' : 'failed');
   } finally {
     building = false;
@@ -1290,14 +1296,9 @@ async function produceGpuArtifact(files, { stem, kind, module }) {
   if (profile === 'web') console.log('gpu: add [profile.gpu-dev] inheriting dev, opt-level=1, no LTO, and optimized dependencies for fast module rebuilds');
   mkdirSync(gpuSideRoot, { recursive: true });
   const stage = mkdtempSync(resolve(gpuSideRoot, 'build-'));
-  const run = (command, args) => new Promise((ok, fail) => {
-    const child = gpuBuildChild = spawn(command, args, { cwd: app.workspace, env: {...buildEnv, CARGO_TARGET_DIR:app.target}, stdio:['ignore','pipe','pipe'], detached:true });
-    let output = '';
-    child.stdout.on('data', data => { output += data; });
-    child.stderr.on('data', data => { output += data; process.stderr.write(data); });
-    child.on('error', fail);
-    child.on('exit', code => { gpuBuildChild = null; code === 0 ? ok() : fail(new Error(output.trim())); });
-  });
+  const run = (command, args) => runBuildTree(command, args,
+    { cwd: app.workspace, env: { ...buildEnv, CARGO_TARGET_DIR: app.target } },
+    child => { gpuBuildChild = child; }, () => stopping);
   try {
     console.log(`gpu: ${files.length} source file(s) changed; building ${app.crate(kind)} (${profile})`);
     await run('cargo', ['build',...cargoReproducibilityFlags(app),'-p',app.crate(kind),'--target','wasm32-unknown-unknown','--profile',profile]);
@@ -1307,6 +1308,7 @@ async function produceGpuArtifact(files, { stem, kind, module }) {
     if (tuning && stem === 'gpu' && (await (await import('../../game/app/tables.mjs')).tableValidator(stage, true)).names.length) {
       changed.add(source); buildPending = true; early?.phase('host', 'build'); rmSync(stage, {recursive:true,force:true}); return true;
     }
+    if (stopping) throw new Error('build cancelled');
     gpuVersion++; gpuVersions.set(gpuVersion, { stem, directory: stage }); gpuSides.set(stem, gpuVersion);
     // Query versions pin JS and wasm together. A lagging fetch gets 404 rather
     // than silently pairing exports from one build with another build's wasm.
@@ -1490,5 +1492,5 @@ const banner = () => {
   console.log(`  (dev loop on ${source.replace(root + '/', '')} and the wasm's crates; ${lan ? 'LAN bind — any peer on this network can read the app, its compile errors and dev generations; macOS may ask to allow bun' : 'loopback only — --lan to serve a phone on this network'}; ctrl-c to stop)`);
 };
 if (early) banner(); else await new Promise(ok => server.listen(port, host, () => { banner(); ok(); }));
-startup.handoff(stop); doors = servedAs == null && tamber ? await openRemoteCanvas(tamber, remoteAsked, `http://127.0.0.1:${port}`).catch(async (e) => { console.error(`cannot listen: ${e.message}`); server.close(); server.closeAllConnections?.(); process.exitCode = 1; await stop(); }) : null;
+doors = servedAs == null && tamber ? await openRemoteCanvas(tamber, remoteAsked, `http://127.0.0.1:${port}`).catch(async (e) => { console.error(`cannot listen: ${e.message}`); server.close(); server.closeAllConnections?.(); process.exitCode = 1; await stop(); }) : null;
 watchLauncher(stop); listening = true; for (const line of readyLines.splice(0)) console.log(line); // once it answers and its doors are open

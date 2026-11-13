@@ -37,9 +37,11 @@ mod disabled_look;
 mod edits;
 mod error;
 pub mod expr;
+mod fetches;
 mod fields;
 mod font_axes;
 mod fonts;
+pub mod formats;
 mod frames;
 mod grouped;
 mod handlers;
@@ -86,6 +88,7 @@ mod tables;
 pub mod tags;
 mod theme;
 mod timers;
+mod tips;
 mod tools;
 mod type_tokens;
 mod values;
@@ -263,6 +266,10 @@ pub(crate) struct Lowerer<'a> {
     errors: Vec<LowerError>,
     /// The locale slot, once a `t` call made it (LLP 1060 D4).
     locale: Option<exact_plan::SlotsId>,
+    /// The format locale's slot, once the first localized formatter's call
+    /// decided it: `Some(None)` when no table formats otherwise than `en`
+    /// (LLP 1054.000.003 D6).
+    format: Option<Option<exact_plan::SlotsId>>,
     /// Every key a `t` call names, the only ones baked.
     texts_used: std::collections::BTreeSet<String>,
     /// The surface the plan is for: a terminal entry's block link is not tinted.
@@ -457,6 +464,7 @@ fn lower_with_sites(
         fixed: BTreeMap::new(),
         errors: Vec::new(),
         locale: None,
+        format: None,
         texts_used: Default::default(),
         profile,
         control_parts: Vec::new(),
@@ -469,11 +477,17 @@ fn lower_with_sites(
     // place.
     match lower_body(&mut l, checked, asset_root) {
         Ok(()) => {
-            let plan = l.b.finish().map_err(|e| LowerError {
+            let mut plan = l.b.finish().map_err(|e| LowerError {
                 id: "lower-invalid-plan",
                 message: format!("{e:?}"),
                 span: root.span,
             })?;
+            // LLP 1101.003 D9: the plan says which medium it was written for.
+            plan.surface = match profile {
+                Profile::Terminal => "terminal",
+                Profile::Web => "gui",
+            }
+            .into();
             Ok((plan, l.sites))
         }
         Err(fatal) => {
@@ -1334,9 +1348,12 @@ impl<'a> Lowerer<'a> {
                     glass = width;
                     &glass
                 // @ref LLP 1116.007 D3.1 — a symbol by another spelling is its role.
-                } else if let Some(role) = (prop == exact_kernel::PropId::ImageSource)
-                    .then(|| symbols::roles(&a.value))
-                    .flatten()
+                } else if let Some(role) = matches!(
+                    prop,
+                    exact_kernel::PropId::ImageSource | exact_kernel::PropId::TipImage
+                )
+                .then(|| symbols::roles(&a.value))
+                .flatten()
                 {
                     glass = role;
                     &glass

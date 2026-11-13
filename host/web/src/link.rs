@@ -171,16 +171,18 @@ impl Linked {
     pub fn uses(&self) -> Uses {
         // A grouped list is its authored nodes on the web, and the browser
         // does its own I/O and plays CSS's transitions (LLP 1047.001 D2); its
-        // numerals roll in the runtime's text (LLP 1077 D15), and its date
-        // and time controls are its own pickers (LLP 1115.001.000 D2):
-        // nothing to link for any of them.
+        // numerals roll in the runtime's text (LLP 1077 D15), its date
+        // and time controls are its own pickers (LLP 1115.001.000 D2), and
+        // it shows no tips (LLP 1035.006.000 D4): nothing to link for any
+        // of them.
         let mut uses = Uses::NONE
             .with(Capability::GroupedLists)
             .with(Capability::Io)
             .with(Capability::Transitions)
             .with(Capability::Numerals)
             .with(Capability::Dates)
-            .with(Capability::Sqlite);
+            .with(Capability::Sqlite)
+            .with(Capability::Tips);
         if self.markup.is_some() {
             uses = uses.with(Capability::Markdown);
         }

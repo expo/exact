@@ -37,7 +37,7 @@ pub(crate) fn check_watch_sources(
         .iter()
         .map(|row| plan.str(row.name))
         .filter(|name| !exact_plan::runner_owned_source(name))
-        .filter(|name| plan.module_named(name).is_none())
+        .filter(|name| plan.module_named(name).is_none() && plan.fetch_named(name).is_none())
         .filter(|name| !rust.is_some_and(|sources| sources.iter().any(|s| s == name)))
         .map(|name| format!("watch-typescript: watch entry `{}` reaches TypeScript source `{name}` in app.ts; use a Rust source until LLP 1126.001 §5 Q3's watch Hermes gate passes", watch.source))
         .collect();

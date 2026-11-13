@@ -193,17 +193,26 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // declaring element whose nearest scope of the name, itself included, is
   // that scope; none or several are an inactive timeline (null), but `all`
   // declares only the names below it. No timeline in scope is undefined.
+  // @ref LLP 1057.003 D5 — a scroll or view timeline (css.rs's
+  // `--exact-scroll-timeline`, `--exact-view-timeline`, before a drag's on
+  // one element) is the browser's own, as is `scroll()` or `view()`: 'css'.
   const scopes=(el,name)=>{const s=el.style.getPropertyValue('--exact-timeline-scope').trim();return s==='all'?2:s.split(/\s*,\s*/).includes(name)?1:0;};
+  const declarations=`${timelineSources},[style*="--exact-scroll-timeline"],[style*="--exact-view-timeline"]`;
+  const declared=(el,name)=>['--exact-scroll-timeline','--exact-view-timeline'].some(p=>el.style.getPropertyValue(p).trim()===name)?'css':timelineName(el)[0]===name?el:undefined;
   const timelineSource=(consumer,name)=>{
+    if(!name.startsWith('--'))return 'css';
     for(let el=consumer;el?.style;el=el.parentElement) {
-      if(timelineName(el)[0]===name)return el;
+      const own=declared(el,name);
+      if(own)return own;
       const scope=scopes(el,name);
       if(!scope)continue;
-      const found=[...el.querySelectorAll(timelineSources)].filter(s=>{if(timelineName(s)[0]!==name)return false;while(!scopes(s,name))s=s.parentElement;return s===el;});
-      if(found.length===1)return found[0];
+      const found=[...el.querySelectorAll(declarations)].filter(s=>{if(!declared(s,name))return false;while(!scopes(s,name))s=s.parentElement;return s===el;});
+      if(found.length===1)return declared(found[0],name);
       if(found.length||scope===1)return null;
     }
   };
+  // Whether the browser runs scroll and view timelines itself.
+  const cssTimelines=typeof CSS!=='undefined'&&typeof CSS.supports==='function'&&CSS.supports('animation-timeline','scroll()');
   const inactive=new WeakMap();
   let timelineFrame=0;
   const kickTimelines=()=>{if(!timelineFrame&&typeof requestAnimationFrame==='function'&&typeof document!=='undefined'&&document.querySelector(timelineSources))
@@ -246,21 +255,37 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     let moving=false;
     for(const el of document.querySelectorAll('[style*="--exact-animation-timeline"]')) {
       const name=el.style.getPropertyValue('--exact-animation-timeline').trim();
-      const range=el.style.getPropertyValue('--exact-animation-range').trim().split(/\s+/).map(parseFloat);
-      if(range.length!==2||range[1]===range[0])continue;
       // No timeline in scope: the animations keep the time they have (0 if
       // new), as Chrome's and the engine's do.
       const source=timelineSource(el,name);
       if(source===undefined)continue;
+      const parked=inactive.get(el)??[],live=el.getAnimations().filter(a=>a.animationName!==undefined);
+      // A scroll or view timeline the browser runs: a name is handed to it
+      // as CSS's own row (css.rs writes `scroll()` and `view()` so), its
+      // animations played again if this glue held them or an inactive
+      // timeline parked them. A browser without one would play it on the
+      // clock: it is out of effect there, as an inactive timeline's, so the
+      // node's own values show.
+      const handed=el.style.getPropertyValue('animation-timeline').trim();
+      if(source==='css'&&cssTimelines) {
+        if(name.startsWith('--')&&handed!==name){el.style.setProperty('animation-timeline',name);el.style.setProperty('animation-play-state','running');
+          for(const a of live)if(a.playState==='paused')a.play();}
+        if(parked.length){inactive.delete(el);const names=getComputedStyle(el).animationName.split(/,\s*/);
+          for(const a of parked)if(names.includes(a.animationName)&&!live.some(b=>b.animationName===a.animationName))a.play();}
+        continue;
+      }
+      // A name the browser ran that now finds a drag, or nothing: this glue's again.
+      if(handed&&name.startsWith('--')){el.style.removeProperty('animation-timeline');el.style.setProperty('animation-play-state','paused');}
+      if(!source||source==='css'){for(const a of live)a.cancel();inactive.set(el,[...parked,...live]);continue;}
+      const range=el.style.getPropertyValue('--exact-animation-range').trim().split(/\s+/).map(parseFloat);
+      if(range.length!==2||range[1]===range[0])continue;
       // Unclamped, and over the delay and active interval together, as a CSS
       // scroll timeline maps them; an endless animation holds its start
       // (motion's `seek_timeline`).
       const resolved=sources.get(source),p=(resolved?.value-range[0])/(range[1]-range[0]);
-      // An inactive timeline: not in effect, whatever the fill (Chrome's
-      // unresolved time). Cancelled, and revived when the name resolves
-      // again, unless its CSS has since dropped or replaced it.
-      const parked=inactive.get(el)??[],live=el.getAnimations().filter(a=>a.animationName!==undefined);
-      if(!source){for(const a of live)a.cancel();inactive.set(el,[...parked,...live]);continue;}
+      // An inactive timeline (above): not in effect, whatever the fill
+      // (Chrome's unresolved time). Cancelled, and revived when the name
+      // resolves again, unless its CSS has since dropped or replaced it.
       inactive.delete(el);
       const names=parked.length?getComputedStyle(el).animationName.split(/,\s*/):[];
       const basis=[...live,...parked.filter(a=>names.includes(a.animationName)&&!live.some(b=>b.animationName===a.animationName))];

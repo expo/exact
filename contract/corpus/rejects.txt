@@ -1625,6 +1625,22 @@ component A
     button "go" press=go
 ---
 == type-play-sound
+# `setSounds` with nothing to set.
+component A
+  action go
+    setSounds(group="drag")
+  view
+    button "go" press=go
+---
+== type-play-sound
+# A literal ramp below 0.
+component A
+  action go
+    setSounds(gain=0.5, ramp=-5)
+  view
+    button "go" press=go
+---
+== type-play-sound
 # `stopSounds` takes only `group=`.
 component A
   action go

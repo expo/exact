@@ -149,6 +149,25 @@ fn the_timing_function_applies_per_keyframe_interval() {
     close(at(&a, 1.5, Property::Opacity), 0.5);
 }
 
+/// Two blocks at 100%, as Chrome samples them: the last holds after the end,
+/// and a block naming the animation's own timing function is one keyframe
+/// with a block naming none, the later value winning.
+#[test]
+fn repeated_keyframes_at_one_offset_end_on_the_last() {
+    let k = |easing: &str| {
+        format!(
+            "from{{opacity:0}}to{{opacity:0.2;animation-timing-function:{easing}}}to{{opacity:0.9}}"
+        )
+    };
+    let apart = anim("a 1s linear forwards", &k("ease-in"));
+    close(at(&apart, 0.5, Property::Opacity), 0.1);
+    close(at(&apart, 1.0, Property::Opacity), 0.9);
+    close(at(&apart, 2.0, Property::Opacity), 0.9);
+    let merged = anim("a 1s linear forwards", &k("linear"));
+    close(at(&merged, 0.5, Property::Opacity), 0.45);
+    close(at(&merged, 1.0, Property::Opacity), 0.9);
+}
+
 #[test]
 fn zero_duration_jumps_to_the_end_with_forwards_fill() {
     let k = "from{opacity:0}to{opacity:1}";
@@ -354,4 +373,111 @@ fn a_count_refusal_names_its_own_limit() {
     .unwrap_err()
     .to_string();
     assert!(message.contains("names more than 8 axes"), "{message}");
+}
+
+/// #49: every word but the name reads in any ASCII case, as CSS's do; the
+/// name, a `<custom-ident>`, keeps its case (CSS Animations 1 §3, §4.10).
+#[test]
+fn the_shorthand_and_longhands_read_in_any_ascii_case() {
+    for (text, lower) in [
+        (
+            "Spin 1S EASE-IN 200MS INFINITE Alternate-Reverse BOTH Paused",
+            "Spin 1s ease-in 200ms infinite alternate-reverse both paused",
+        ),
+        (
+            "Spin 1s Cubic-Bezier(0, 0, 1, 1)",
+            "Spin 1s cubic-bezier(0, 0, 1, 1)",
+        ),
+        ("Spin 1s STEPS(3, Jump-None)", "Spin 1s steps(3, jump-none)"),
+        (
+            "Spin 1s Reverse Forwards Running",
+            "Spin 1s reverse forwards running",
+        ),
+        ("NONE", "none"),
+    ] {
+        let parsed = Animations::parse(text);
+        assert!(parsed.is_ok(), "{text}: {parsed:?}");
+        assert_eq!(parsed, Animations::parse(lower), "{text}");
+    }
+    // A keyword in another case is the keyword, not the name: `1s EASE`
+    // names nothing, as `1s ease` does, and `spin 1s LINEAR` is `spin`'s.
+    assert_eq!(Animations::parse("1s EASE").unwrap(), Animations::NONE);
+    let spin = Animations::parse("spin 1s LINEAR").unwrap();
+    assert_eq!(
+        (spin.0[0].name.as_str(), &spin.0[0].easing),
+        ("spin", &Easing::Linear)
+    );
+    // A keyword whose part is given is the name, as written.
+    let named = Animations::parse("ease EASE 1s").unwrap();
+    assert_eq!(named.0[0].name, "EASE");
+    // `none` is none in any case; a CSS-wide keyword is no name in any case.
+    assert_eq!(
+        Animations::parse("forwards NONE 1s").unwrap(),
+        Animations::NONE
+    );
+    for text in ["INHERIT 1s", "Initial 1s", "DEFAULT 1s"] {
+        assert!(Animations::parse(text).is_err(), "{text}");
+    }
+    // Rust reads `inf` as a number; CSS does not, so it is a name.
+    assert_eq!(Animations::parse("1s INF").unwrap().0[0].name, "INF");
+    // The longhands, likewise.
+    let mut a = Animation::default();
+    for (name, value) in [
+        ("animation-name", "Spin"),
+        ("animation-duration", "2S"),
+        ("animation-delay", "100MS"),
+        ("animation-timing-function", "Ease-Out"),
+        ("animation-iteration-count", "INFINITE"),
+        ("animation-direction", "ALTERNATE"),
+        ("animation-fill-mode", "Backwards"),
+        ("animation-play-state", "PAUSED"),
+    ] {
+        a.set_longhand(name, value)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+    assert_eq!(
+        Animations(vec![a]).css(),
+        "2s ease-out 0.1s infinite alternate backwards paused Spin"
+    );
+    let mut none = Animation::default();
+    none.set_longhand("animation-name", "NONE").unwrap();
+    assert_eq!(none.name, "none");
+    // A keyframes selector, too.
+    assert_eq!(
+        Keyframes::parse("FROM{opacity:0}To{opacity:1}").unwrap(),
+        Keyframes::parse("from{opacity:0}to{opacity:1}").unwrap()
+    );
+    // And a keyframe value's units and keywords.
+    assert_eq!(
+        Keyframes::parse("from{translate:10PX 50%;rotate:45DEG;r:2Px;font-weight:BOLD;font-stretch:Condensed;box-shadow:NONE}to{font-weight:Normal;box-shadow:0px 2PX 4Px Red}").unwrap(),
+        Keyframes::parse("from{translate:10px 50%;rotate:45deg;r:2px;font-weight:bold;font-stretch:condensed;box-shadow:none}to{font-weight:normal;box-shadow:0px 2px 4px red}").unwrap()
+    );
+    assert!(Keyframes::parse("from{font-variation-settings:NORMAL}")
+        .unwrap_err()
+        .to_string()
+        .contains("names no axes"));
+}
+
+/// The shorthand's grammar and the module-scope pass read a word through
+/// one [`Slots`]: the first free part it can be, and the name last.
+#[test]
+fn slots_give_each_word_the_first_free_part_it_can_be() {
+    let mut slots = Slots::default();
+    let roles: Vec<_> = ["EASE", "Ease", "2", "3S", "1s", "4s"]
+        .into_iter()
+        .map(|w| slots.take(w))
+        .collect();
+    assert_eq!(
+        roles,
+        [
+            Some(Role::Easing),
+            Some(Role::Name),
+            Some(Role::Count),
+            Some(Role::Time),
+            Some(Role::Time),
+            None
+        ]
+    );
+    assert_eq!(Slots::default().take("1.2.3s"), None);
+    assert!(is_easing("Spring(1, 2, 3)") && is_easing("Steps(") && !is_easing("spin"));
 }

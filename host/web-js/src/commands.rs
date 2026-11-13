@@ -95,6 +95,28 @@ pub(super) fn locale_slot(plan: &Plan, body: &mut String, slot: impl std::fmt::D
     }
 }
 
+/// The format slot `s_<format>`, for a plan whose tables carry format data
+/// (LLP 1054.000.003 D6): format-locale.js takes each table's record and
+/// makes the slot from the locale slot `s_<locale>`, before any initializer,
+/// which may format.
+pub(super) fn format_slot(plan: &Plan, body: &mut String, locale: u32) {
+    use std::fmt::Write as _;
+    let Some(format) = plan.format else {
+        return;
+    };
+    let records: Vec<String> = plan
+        .locales
+        .iter()
+        .map(|row| serde_json::to_string(&[plan.str(row.name), plan.str(row.format)]).unwrap())
+        .collect();
+    let _ = write!(
+        body,
+        "$formats([{}]);const s_{}=$formatSlot(s_{locale});",
+        records.join(","),
+        format.0
+    );
+}
+
 /// The surfaces the app's GPU modules draw, as the build read them from
 /// their compiled registries (`EXACT_JS_GPU_SURFACES`, comma-separated;
 /// host/web-js/build.mjs).

@@ -18,6 +18,13 @@ import Foundation
 #if os(iOS)
 import ObjectiveC
 import UIKit
+private typealias PushApp = UIApplication
+private typealias PushAppDelegate = UIApplicationDelegate
+#elseif os(macOS)
+import AppKit
+import ObjectiveC
+private typealias PushApp = NSApplication
+private typealias PushAppDelegate = NSApplicationDelegate
 #endif
 
 enum PushRegistration {
@@ -40,7 +47,7 @@ enum PushRegistration {
             let run = { box["reply"] = read }
             if Thread.isMainThread { run() } else { DispatchQueue.main.sync(execute: run) }
         }
-        #if os(iOS)
+        #if os(iOS) || os(macOS)
         NotificationCenter.default.addObserver(forName: Notification.Name("exact.push.install"), object: nil, queue: nil) { _ in
             let install = { answerOnTheAppDelegate() }
             if Thread.isMainThread { install() } else { DispatchQueue.main.sync(execute: install) }
@@ -48,24 +55,25 @@ enum PushRegistration {
         #endif
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(macOS)
+    // The same two selectors on UIKit's and AppKit's application delegates.
     static let selectors = [NSSelectorFromString("application:didRegisterForRemoteNotificationsWithDeviceToken:"),
                             NSSelectorFromString("application:didFailToRegisterForRemoteNotificationsWithError:")]
-    private static var keptDelegate: UIApplicationDelegate?
+    private static var keptDelegate: PushAppDelegate?
     private static var installed = false
 
     /// The app's delegate given the two answering methods (App Store Connect
     /// warns of an app that answers a registration without `aps-environment`,
-    /// so only an app that registers has them). UIKit reads which methods its
-    /// delegate has when the delegate is set, so it is set again, and kept:
-    /// UIKit releases a delegate it is told to forget.
+    /// so only an app that registers has them). UIKit and AppKit read which
+    /// methods their delegate has when the delegate is set, so it is set
+    /// again, and kept: neither holds a delegate it is told to forget.
     static func answerOnTheAppDelegate() {
-        guard !installed, let delegate = UIApplication.shared.delegate else { return }
+        guard !installed, let delegate = PushApp.shared.delegate else { return }
         installed = true
         guard install(on: delegate) else { return }
         keptDelegate = delegate
-        UIApplication.shared.delegate = nil
-        UIApplication.shared.delegate = delegate
+        PushApp.shared.delegate = nil
+        PushApp.shared.delegate = delegate
     }
 
     /// Adds to `object`'s class each answering method it does not answer

@@ -71,9 +71,10 @@ export const answer = (name: string, args: string[]): any => name === 'label' ? 
       const reply = await render(path, expected === 503 ? 500 : 10000);
       expect([reply.status, reply.settled], path).toEqual([expected, expected !== 503]);
       expect(reply.html).toContain('data-activate="eager"');
-      // A page at its deadline has every answer asked again; a settled one, only its open stream
+      // A page at its deadline has every answer asked again; a settled one, only its open stream, `live`'s answer, the
+      // first (`open` holds 0)
       expect(reply.html.includes('"revalidate":true'), path).toBe(expected === 503);
-      expect(reply.html).toContain(expected === 503 ? '"pending":["live"]' : '"pending":[],"open":["live"]');
+      expect(reply.html).toContain(expected === 503 ? '"pending":["live"]' : '"pending":[],"open":[0]');
       pages.set(path, reply);
     }
     site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -96,6 +97,187 @@ export const answer = (name: string, args: string[]): any => name === 'label' ? 
     // The label the page was rendered with stands: the browser asked it nothing while it subscribed again
     expect(await page.evaluate(() => document.querySelector('main')?.textContent)).toContain('Label');
     expect(labels).toBe(rendered);
+  } finally {
+    await browser?.close(); site?.stop(true); peer.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);
+
+test('a page holds each list element\'s answer, and the browser takes them and subscribes again to its open stream alone', async () => {
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/list-document-test-'));
+  const asked = [], kept = [], encoder = new TextEncoder(), connections = [], waiting = new Map();
+  let keptWaiting;
+  // Wait until `count()` reaches `n`; the counter's owner resolves `wait`, and 30 s is the limit
+  const reached = (count, n, wait, what) => {
+    const bound = setTimeout(() => wait.reject(new Error(`${what}: ${count()}, not ${n}`)), 30000);
+    if (count() >= n) { wait.resolve(); }
+    return wait.promise.finally(() => clearTimeout(bound));
+  };
+  const connected = n => { const wait = Promise.withResolvers(); waiting.set(n, wait); return reached(() => connections.length, n, wait, 'stream connections'); };
+  const keptCalls = n => { keptWaiting = { n, wait: Promise.withResolvers() }; return reached(() => kept.length, n, keptWaiting.wait, 'kept calls'); };
+  const peer = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, fetch(request) {
+    const u = new URL(request.url).pathname.slice(1);
+    if (u.startsWith('kept/')) {
+      kept.push(decodeURIComponent(u.slice(5)));
+      if (keptWaiting && kept.length >= keptWaiting.n) { keptWaiting.wait.resolve(); }
+      return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } });
+    }
+    asked.push(u);
+    if (u !== 's') { return Response.json(`got-${u}`, { headers: { 'access-control-allow-origin': '*' } }); }
+    const body = new ReadableStream({ start(controller) {
+      connections.push(controller);
+      waiting.get(connections.length)?.resolve();
+      controller.enqueue(encoder.encode('data: first\n\n'));
+    } });
+    return new Response(body, { headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' } });
+  } });
+  let browser, site;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'List Document', app: { id: 'test.list-document', name: 'List Document' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=request
+
+shape Done
+  ok: bool
+
+component App
+  state urls: string[] = ["a", "s", "b"]
+  resource first = echo("z") as shape string
+  resource heard = echo(u) for u in urls as shape string
+  resource last = echo("y") as shape string
+  mutation signed as shape Done
+  action drop
+    urls = urls.filter(u => u != "a")
+  action add
+    urls = urls.concat(["a"])
+  action sign
+    send signed = sign()
+  view
+    main
+      text heard.join(",") testId="heard"
+      text \`\${first} \${last}\`
+      button press=drop testId="drop"
+        text "Drop"
+      button press=add testId="add"
+        text "Add"
+      button press=sign testId="sign"
+        text "Sign in"
+`);
+    // `b`'s answer reads the store, and `sign` writes it
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = ${JSON.stringify(`net.fetch ${peer.url.origin}\nsecret.keep token`)};
+type Store = { get(name: string): string | null; set(name: string, value: string): void };
+export function answer(name: string, [u]: string[], store: Store): any {
+  if (name === 'sign') {
+    store.set('token', 'ada');
+    return { ok: true };
+  }
+  if (u === 'b') {
+    store.get('token');
+  }
+  return u === 's'
+    ? fetch('${peer.url.origin}/s', { exactStream: (event: any) => event.data } as RequestInit)
+    : fetch('${peer.url.origin}/' + u).then(response => response.json());
+}
+// The answers the page was rendered with, each told to the peer
+export const kept = (source: string, [u]: string[], value: string): void => { fetch('${peer.url.origin}/kept/' + encodeURIComponent(source + ' ' + u + ' ' + value)); };
+`);
+    const dist = resolve(dir, 'dist');
+    const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'list-document-test', '--out', dist, '--render', 'js'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
+    expect(status, stdout + stderr).toBe(0);
+    const { renderer } = await import('./render.mjs');
+    const render = renderer(dist); render.ahead = false;
+    const reply = await render('/', 10000);
+    expect([reply.status, reply.settled]).toEqual([200, true]);
+    // Each element's answer under the list's name, in the plan's order, with `s`'s stream open and `b`'s answer a
+    // store reader's
+    const written = /<script type="application\/vnd\.exact\.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1];
+    const checkpoint = JSON.parse(written);
+    expect(checkpoint.answers.map(([name, , args, value]) => [name, args, value])).toEqual([
+      ['first', ['z'], 'got-z'], ['heard', ['a'], 'got-a'], ['heard', ['s'], 'first'], ['heard', ['b'], 'got-b'], ['last', ['y'], 'got-y'],
+    ]);
+    const named = indices => (indices ?? []).map(k => checkpoint.answers[k][2][0]);
+    expect([checkpoint.pending, named(checkpoint.open), named(checkpoint.readers)]).toEqual([[], ['s'], ['b']]);
+    expect(reply.html).toContain('data-activate="eager"');
+    // The page with its elements' answers in the other order, and the page with the answers of `first` and `a` replaced
+    // by ones that no longer fit and `last`'s by another source's
+    const page = answers => {
+      const moved = { ...checkpoint, answers };
+      for (const field of ['open', 'readers']) { moved[field] = checkpoint[field].map(k => answers.indexOf(checkpoint.answers[k])); }
+      return reply.html.replace(written, JSON.stringify(moved));
+    };
+    const [first, a, s, b, last] = checkpoint.answers;
+    const pages = {
+      rendered: reply.html,
+      moved: page([first, b, s, a, last]),
+      misfit: page([['first', 'echo', ['z'], 7], ['heard', 'echo', ['a'], 7], s, b, ['last', 'other', ['y'], 'got-y']]),
+    };
+    let served = 'rendered';
+    site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/') { return new Response(pages[served], { headers: { 'content-type': 'text/html' } }); }
+      const asset = Bun.file(resolve(dist, path.slice(1)));
+      return await asset.exists() ? new Response(asset) : new Response(null, { status: 404 });
+    } });
+    browser = await suiteBrowser();
+    // Open the page served now, and wait until the stream is subscribed again and its next message shows
+    const visit = async () => {
+      const page = await browser.newPage();
+      // What the list shows, from before the runtime starts
+      await page.addInitScript(() => {
+        globalThis.__shown = [];
+        new MutationObserver(() => {
+          const text = document.querySelector('[data-testid="heard"]')?.textContent;
+          if (text !== undefined && text !== globalThis.__shown.at(-1)) { globalThis.__shown.push(text); }
+        }).observe(document, { subtree: true, childList: true, characterData: true });
+      });
+      asked.length = kept.length = 0;
+      const subscribed = connected(connections.length + 1);
+      await page.goto(site.url.href);
+      await subscribed;
+      connections.at(-1).enqueue(encoder.encode('data: second\n\n'));
+      await page.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'got-a,second,got-b');
+      return page;
+    };
+    const rendered = await visit();
+    expect(await rendered.evaluate(() => globalThis.__shown)).toEqual(['got-a,first,got-b', 'got-a,second,got-b']);
+    expect(asked).toEqual(['s']);
+    // An element that joins after the boot asks, though the page answered it
+    await rendered.click('[data-testid="drop"]');
+    await rendered.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'second,got-b');
+    await rendered.click('[data-testid="add"]');
+    await rendered.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'second,got-b,got-a');
+    expect(asked).toEqual(['s', 'a']);
+    // The module was given each answer the page used, once
+    await keptCalls(checkpoint.answers.length);
+    expect(kept.toSorted()).toEqual(['echo a got-a', 'echo b got-b', 'echo s first', 'echo y got-y', 'echo z got-z']);
+    served = 'moved';
+    const moved = await visit();
+    expect(await moved.evaluate(() => globalThis.__shown)).toEqual(['got-a,first,got-b', 'got-a,second,got-b']);
+    expect(asked).toEqual(['s']);
+    // An answer that no longer fits or names another source is asked, a declared resource's and an element's, as the
+    // runner asks them
+    served = 'misfit';
+    const fitting = await visit();
+    expect(await fitting.evaluate(() => globalThis.__shown)).toContain(',first,got-b');
+    await fitting.waitForFunction(() => document.querySelector('main')?.textContent.includes('got-z got-y'));
+    expect(asked.toSorted()).toEqual(['a', 's', 'y', 'z']);
+    // A store write asks again the element whose page answer read the store
+    await fitting.click('[data-testid="sign"]');
+    await fitting.waitForFunction(count => performance.getEntriesByType('resource').filter(e => e.name.endsWith('/b')).length === count, 1);
+    expect(asked.toSorted()).toEqual(['a', 'b', 's', 'y', 'z']);
+    // The rendered page, opened again on that device, whose store now holds the app's own entries, asks at boot the
+    // element whose page answer read the store, besides the open stream
+    served = 'rendered';
+    await fitting.waitForFunction(() => Object.keys(localStorage).some(key => key.startsWith('exact.secret.')));
+    asked.length = 0;
+    const subscribed = connected(connections.length + 1);
+    await fitting.goto(site.url.href);
+    await subscribed;
+    await fitting.waitForFunction(() => performance.getEntriesByType('resource').some(e => e.name.endsWith('/b')));
+    expect(asked.toSorted()).toEqual(['b', 's']);
   } finally {
     await browser?.close(); site?.stop(true); peer.stop(true);
     rmSync(dir, { recursive: true, force: true });
@@ -147,17 +329,228 @@ export const answer = (name: string, [value]: number[]): any => {
   } finally { peer.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 30000);
 
+// The status cases' view. An app has one navigation root, its view's root, and a root that holds
+// tabs keeps its routes in its panels, so each row builds an app of its own cases' branches only:
+// `root` names the root a branch needs and `key` what it selects.
+const STATUS_BRANCHES = [
+  { names: ['plain', 'discardedPlain'], body: `
+head title="Plain"` },
+  { names: ['storeStatus', 'discardedStatus', 'discardedHeldStatus', 'discardedLooseStatus', 'discardedDetachedStatus', 'discardedClient', 'discardedTimerStatus', 'discardedLateTimerStatus', 'backgroundSync', 'backgroundHeldSync', 'backgroundAnswer', 'backgroundHeldAnswer', 'backgroundClient'], body: `
+if stored
+  head title="Missing" status=404
+else
+  head title="Checking"
+if top(nav).name == "discardedClient" or top(nav).name == "backgroundClient"
+  button press=flip testId="recovery-press"
+    text "Change"` },
+  // The tabs inside the first route are no panels of the root.
+  { names: ['conditionalInactive'], root: 'stack', key: '"first"', body: `
+view navigationKey="first"
+  head title="First"
+  row role="tablist"
+    button role="tab" aria-controls="unrelated-panel"
+      text "Unrelated"
+  view role="tabpanel" id="unrelated-panel"
+    text "Unrelated page"
+if page.ready
+  view navigationKey="second"
+    head title="Missing" status=404` },
+  { names: ['inactiveData'], root: 'stack', key: 'selected', body: `
+view navigationKey="first"
+  head title="First"
+view navigationKey="second" id=(page.ready ? "changed" : "initial")
+  if page.ready
+    view role="group"
+      head title="Missing" status=404` },
+  { names: ['conditionalInactiveTab'], root: 'tabs', key: '"first"', body: `
+if false
+  row role="tablist"
+    button role="tab" aria-controls="fixed-second-panel"
+      text "Unreachable"
+if true
+  row role="tablist"
+    if true
+      button role="tab" aria-controls="fixed-first-panel"
+        text "First"
+      button role="tab" aria-controls="fixed-second-panel"
+        text "Second"
+view role="tabpanel" id="fixed-first-panel"
+  view navigationKey="first"
+    head title="First"
+if page.ready
+  view role="tabpanel" id="fixed-second-panel"
+    view navigationKey="second"
+      head title="Missing" status=404` },
+  { names: ['idShadow', 'idConditional', 'idRows'], root: 'tabs', key: '"first"', body: `
+row role="tablist"
+  button role="tab" aria-controls="id-status-panel"
+    text "Status"
+  button role="tab" aria-controls="id-plain-panel"
+    text "Plain"
+if top(nav).name == "idShadow"
+  view id=(page.ready ? "id-status-panel" : "unused")
+if top(nav).name == "idRows"
+  view
+    for code in page.rows key=code
+      view id="id-status-panel"
+view role="tabpanel" id="id-status-panel"
+  view navigationKey="second"
+    head title="Missing" status=404
+    if top(nav).name == "idConditional" and page.ready
+      view id="id-plain-panel"
+view role="tabpanel" id="id-plain-panel"
+  view navigationKey="first"
+    head title="First"` },
+  { names: ['repeatedPanel'], root: 'tabs', key: '"first"', body: `
+row role="tablist"
+  button role="tab" aria-controls="repeated-first-panel"
+    text "First"
+  button role="tab" aria-controls="repeated-second-panel"
+    text "Second"
+view role="tabpanel" id="repeated-first-panel"
+  view navigationKey="first"
+    head title="First"
+for code in page.rows key=code
+  view role="tabpanel" id="repeated-second-panel"
+    view navigationKey="second"
+      head title="Missing" status=404` },
+  { names: ['client'], body: `
+if pressed
+  head title="Client missing" status=404
+else
+  head title="Client"
+button press=flip testId="flip"
+  text "Change head"` },
+  { names: ['inactive', 'selection'], root: 'stack', key: '(top(nav).name == "selection" ? page.key : "first")', body: `
+view navigationKey="first"
+  head title="First"
+  text "First"
+view navigationKey="second"
+  head title="Missing" status=404
+  text "Missing"` },
+  { names: ['gone'], body: `
+if page.ready
+  head title="Gone" status=410` },
+  { names: ['unavailable', 'cachedUnavailable'], body: `
+if page.ready
+  head title="Unavailable" status=503` },
+  { names: ['static'], body: `
+head title="Static" status=410` },
+  { names: ['childSelection'], root: 'stack', key: '"second"', body: `
+view navigationKey=page.key
+  head title="Missing" status=404
+view navigationKey=(page.ready ? "first" : "second")
+  head title="First"` },
+  { names: ['tabSelection', 'panelRole', 'panelId', 'tabControls'], root: 'tabs', key: '(top(nav).name == "tabSelection" ? "second" : "first")', body: `
+row role="tablist"
+  button role="tab" aria-controls=(top(nav).name == "tabControls" and page.ready ? "unused" : "status-panel")
+    text "Status"
+  button role="tab" aria-controls="plain-panel"
+    text "Plain"
+view role=(top(nav).name == "panelRole" and page.ready ? "group" : "tabpanel") id=(top(nav).name == "panelId" and page.ready ? "unused" : "status-panel")
+  view navigationKey=(top(nav).name == "tabSelection" ? page.key : "second")
+    head title="Missing" status=404
+view role="tabpanel" id="plain-panel"
+  view navigationKey=(top(nav).name == "tabSelection" and not page.ready ? "second" : "first")
+    head title="First"` },
+  { names: ['siblingSelection', 'siblingRemoval'], root: 'stack', key: '"first"', body: `
+if top(nav).name == "siblingSelection"
+  view navigationKey=(page.ready ? "third" : "first")
+    text "Plain"
+else if not page.ready
+  view navigationKey="first"
+    text "Plain"
+view navigationKey="second"
+  head title="Missing" status=404` },
+  { names: ['conditionalTab', 'conditionalMatch', 'conditionalRows', 'conditionalNaming'], root: 'tabs', key: '"first"', body: `
+view role="tabpanel" id="future-panel"
+  if top(nav).name == "conditionalNaming"
+    if page.ready
+      row role="tablist"
+        button role="tab" aria-controls="future-panel"
+          text "Future"
+    view navigationKey="second"
+      head title="Missing" status=404
+  else if top(nav).name == "conditionalTab"
+    if page.ready
+      view navigationKey="first"
+        head title="Missing" status=404
+  else if top(nav).name == "conditionalMatch"
+    match (page.ready ? some(page.label) : none)
+      case some(label)
+        view navigationKey="first"
+          head title=label status=404
+      case none
+        text "Waiting"
+  else
+    for code in page.rows key=code
+      view navigationKey="first"
+        head title="Missing" status=404
+view role="tabpanel" id="current-panel"
+  view navigationKey="first"
+    head title="First"
+row role="tablist"
+  button role="tab" aria-controls="future-panel"
+    text "Future"
+  button role="tab" aria-controls="current-panel"
+    text "Current"` },
+  { names: ['matched'], body: `
+match (page.ready ? some(page.label) : none)
+  case some(label)
+    head title=label status=404
+  case none
+    text "Waiting"` },
+  { names: ['rows'], body: `
+for code in page.rows key=code
+  view
+    head title="Row" status=410
+    text "Row"` },
+  { names: ['virtual'], body: `
+list virtualized=true height=200
+  for code in page.rows key=code
+    view height=24
+      head title="Virtual row" status=410
+      text "Virtual row"` },
+];
+
+/** The view of an app serving `names`: under a root that is the navigation root when a branch has routes, the one
+ * branch every name takes, or else an `if` arm per branch and the default. A root's selection is fixed at compile time
+ * only by a literal key and routes no arm hides, so a lone branch keeps both. */
+function statusView(names) {
+  const branches = STATUS_BRANCHES.filter(b => b.names.some(n => names.includes(n)));
+  const rooted = branches.filter(b => b.root);
+  if (new Set(rooted.map(b => b.root)).size > 1) throw new Error(`one root cannot hold both a stack and tabs: ${names.join(', ')}`);
+  const named = b => b.names.map(n => `top(nav).name == "${n}"`).join(' or ');
+  const key = rooted.length === 1 ? rooted[0].key : rooted.reduceRight((rest, b) => `(${named(b)} ? ${b.key} : ${rest})`, '"none"');
+  const indent = (text, by) => text.split('\n').filter(Boolean).map(line => ' '.repeat(by) + line).join('\n');
+  const lone = branches.length === 1 && names.every(n => branches[0].names.includes(n));
+  const body = lone ? indent(branches[0].body, 6) : [
+    ...branches.map((b, i) => `      ${i ? 'else if' : 'if'} ${named(b)}\n${indent(b.body, 8)}`),
+    `      ${branches.length ? 'else' : 'if true'}\n        if page.ready\n          head title="Result" status=404`,
+  ].join('\n');
+  return `    main${rooted.length ? ` navigationBack="" navigationKey=${key}` : ''}
+${body}
+      text page.label testId="loaded"
+`;
+}
+
 test.each([
   ['navigation waits for a page that can declare its status', [
-    ['plain', '/', 200, false], ['inactive', '/inactive', 200, false],
+    ['plain', '/', 200, false],
     ['missing', '/missing', 404, true], ['gone', '/gone', 410, true], ['unavailable', '/unavailable', 503, true],
     ['static', '/static', 410, true], ['matched', '/matched', 404, true], ['rows', '/rows', 410, true],
-    ['virtual', '/virtual', 410, true], ['selection', '/selection', 404, true],
-    ['childSelection', '/child-selection', 404, true], ['tabSelection', '/tab-selection', 404, true],
-    ['panelRole', '/panel-role', 404, true], ['panelId', '/panel-id', 404, true], ['tabControls', '/tab-controls', 404, true],
-    ['siblingSelection', '/sibling-selection', 404, true], ['siblingRemoval', '/sibling-removal', 404, true],
+    ['virtual', '/virtual', 410, true],
     ['cachedUnavailable', '/cached-unavailable', 503, true], ['cachedUnavailable', '/cached-unavailable', 503, true],
     ['cachedOk', '/cached-ok', 200, true], ['client', '/client', 200, false],
+  ]],
+  ['navigation waits for a route that can declare its status', [
+    ['inactive', '/inactive', 200, false], ['selection', '/selection', 404, true],
+    ['childSelection', '/child-selection', 404, true],
+    ['siblingSelection', '/sibling-selection', 404, true], ['siblingRemoval', '/sibling-removal', 404, true],
+  ]],
+  ['navigation waits for a tab that can declare its status', [
+    ['tabSelection', '/tab-selection', 404, true],
+    ['panelRole', '/panel-role', 404, true], ['panelId', '/panel-id', 404, true], ['tabControls', '/tab-controls', 404, true],
   ]],
   ['navigation waits for store-driven status revalidation', [['storeStatus', '/store-status', 404, true]]],
   ['navigation waits for a discarded request that can change status', [['discardedStatus', '/discarded-status', 404, true]]],
@@ -192,7 +585,6 @@ test.each([
   ['navigation tracks id candidates across ownership boundaries', [
     ['idShadow', '/id-shadow', 404, true], ['idConditional', '/id-conditional', 404, true], ['idRows', '/id-rows', 404, true],
   ]],
-  ['navigation tracks an id shadow inside an inactive nested route', [['idInactiveRows', '/id-inactive-rows', 404, true]]],
   ['navigation waits for a route mounted in an inactive tab', [
     ['conditionalTab', '/conditional-tab', 404, true],
     ['conditionalMatch', '/conditional-match', 404, true],
@@ -201,9 +593,7 @@ test.each([
   ]],
   ['navigation sends its head before an unselectable conditional status', [['conditionalInactive', '/conditional-inactive', 200, false]]],
   ['navigation sends its head before an unselectable conditional tab', [['conditionalInactiveTab', '/conditional-inactive-tab', 200, false]]],
-  ['navigation ignores data confined to an inactive route', [
-    ['inactiveData', '/inactive-data', 200, false], ['inactiveSelector', '/inactive-selector', 200, false],
-  ]],
+  ['navigation ignores data confined to an inactive route', [['inactiveData', '/inactive-data', 200, false]]],
   ['navigation waits for an unnamed copy of a repeated panel', [['repeatedPanel', '/repeated-panel', 404, true]]],
 ])('%s', async (_name, cases) => {
   if (webCompiler().cmd === 'cargo') { throw new Error('build the compiler first: cargo build -p exact-web-js'); }
@@ -259,7 +649,6 @@ routes nav
   idShadow "/id-shadow" render=request activate=never
   idConditional "/id-conditional" render=request activate=never
   idRows "/id-rows" render=request activate=never
-  idInactiveRows "/id-inactive-rows" render=request activate=never
   conditionalInactiveTab "/conditional-inactive-tab" render=request activate=never
   repeatedPanel "/repeated-panel" render=request activate=never
   selection "/selection" render=request activate=never
@@ -272,7 +661,6 @@ routes nav
   conditionalRows "/conditional-rows" render=request activate=never
   conditionalNaming "/conditional-naming" render=request activate=never
   inactiveData "/inactive-data" render=request activate=never
-  inactiveSelector "/inactive-selector" render=request activate=never
   panelRole "/panel-role" render=request activate=never
   panelId "/panel-id" render=request activate=never
   tabControls "/tab-controls" render=request activate=never
@@ -291,226 +679,7 @@ component App
   action flip
     pressed = not pressed
   view
-    main
-      if top(nav).name == "plain" or top(nav).name == "discardedPlain"
-        head title="Plain"
-      else if top(nav).name == "storeStatus" or top(nav).name == "discardedStatus" or top(nav).name == "discardedHeldStatus" or top(nav).name == "discardedLooseStatus" or top(nav).name == "discardedDetachedStatus" or top(nav).name == "discardedClient" or top(nav).name == "discardedTimerStatus" or top(nav).name == "discardedLateTimerStatus" or top(nav).name == "backgroundSync" or top(nav).name == "backgroundHeldSync" or top(nav).name == "backgroundAnswer" or top(nav).name == "backgroundHeldAnswer" or top(nav).name == "backgroundClient"
-        if stored
-          head title="Missing" status=404
-        else
-          head title="Checking"
-        if top(nav).name == "discardedClient" or top(nav).name == "backgroundClient"
-          button press=flip testId="recovery-press"
-            text "Change"
-      else if top(nav).name == "conditionalInactive"
-        view navigationBack="" navigationKey="first"
-          view navigationKey="first"
-            head title="First"
-            view navigationBack="" navigationKey="nested"
-              row role="tablist"
-                button role="tab" aria-controls="unrelated-nested-panel"
-                  text "Nested"
-              view role="tabpanel" id="unrelated-nested-panel"
-                view navigationKey="nested"
-                  text "Nested page"
-          if page.ready
-            view navigationKey="second"
-              head title="Missing" status=404
-      else if top(nav).name == "inactiveSelector"
-        view navigationBack="" navigationKey=selected
-          view navigationKey="first"
-            head title="First"
-          view navigationKey="second"
-            view navigationBack="" navigationKey=page.key
-              view navigationKey="first"
-                head title="Nested first"
-              view navigationKey="second"
-                head title="Missing" status=404
-      else if top(nav).name == "inactiveData"
-        view navigationBack="" navigationKey=selected
-          view navigationKey="first"
-            head title="First"
-          view navigationKey="second" id=(page.ready ? "changed" : "initial")
-            if page.ready
-              view role="group"
-                view navigationBack="" navigationKey="nested"
-                  view navigationKey="nested"
-                    head title="Missing" status=404
-      else if top(nav).name == "conditionalInactiveTab"
-        view navigationBack="" navigationKey="sibling"
-          view id="fixed-first-panel"
-        view navigationBack="" navigationKey="first"
-          view navigationBack="" navigationKey="unrelated"
-            row role="tablist"
-              button role="tab" aria-controls="fixed-second-panel"
-                text "Unrelated tabs"
-          if false
-            row role="tablist"
-              button role="tab" aria-controls="fixed-second-panel"
-                text "Unreachable"
-          if true
-            row role="tablist"
-              if true
-                button role="tab" aria-controls="fixed-first-panel"
-                  text "First"
-                button role="tab" aria-controls="fixed-second-panel"
-                  text "Second"
-          view role="tabpanel" id="fixed-first-panel"
-            view navigationKey="first"
-              head title="First"
-          if page.ready
-            view role="tabpanel" id="fixed-second-panel"
-              view navigationKey="second"
-                head title="Missing" status=404
-      else if top(nav).name == "idShadow" or top(nav).name == "idConditional" or top(nav).name == "idRows" or top(nav).name == "idInactiveRows"
-        view navigationBack="" navigationKey="first"
-          row role="tablist"
-            button role="tab" aria-controls="id-status-panel"
-              text "Status"
-            button role="tab" aria-controls="id-plain-panel"
-              text "Plain"
-          if top(nav).name == "idShadow"
-            view id=(page.ready ? "id-status-panel" : "unused")
-          if top(nav).name == "idRows"
-            view navigationBack="" navigationKey="nested"
-              for code in page.rows key=code
-                view id="id-status-panel"
-          if top(nav).name == "idInactiveRows"
-            view navigationBack="" navigationKey="nested"
-              view navigationKey="nested"
-                text "Selected"
-              view navigationKey="covered"
-                for code in page.rows key=code
-                  view id="id-status-panel"
-          view role="tabpanel" id="id-status-panel"
-            view navigationKey="second"
-              head title="Missing" status=404
-              if top(nav).name == "idConditional" and page.ready
-                view id="id-plain-panel"
-          view role="tabpanel" id="id-plain-panel"
-            view navigationKey="first"
-              head title="First"
-      else if top(nav).name == "repeatedPanel"
-        view navigationBack="" navigationKey="first"
-          row role="tablist"
-            button role="tab" aria-controls="repeated-first-panel"
-              text "First"
-            button role="tab" aria-controls="repeated-second-panel"
-              text "Second"
-          view role="tabpanel" id="repeated-first-panel"
-            view navigationKey="first"
-              head title="First"
-          for code in page.rows key=code
-            view role="tabpanel" id="repeated-second-panel"
-              view navigationKey="second"
-                head title="Missing" status=404
-      else if top(nav).name == "client"
-        if pressed
-          head title="Client missing" status=404
-        else
-          head title="Client"
-        button press=flip testId="flip"
-          text "Change head"
-      else if top(nav).name == "inactive" or top(nav).name == "selection"
-        view navigationBack="" navigationKey=(top(nav).name == "selection" ? page.key : "first")
-          view navigationKey="first"
-            head title="First"
-            text "First"
-          view navigationKey="second"
-            head title="Missing" status=404
-            text "Missing"
-      else if top(nav).name == "gone"
-        if page.ready
-          head title="Gone" status=410
-      else if top(nav).name == "unavailable" or top(nav).name == "cachedUnavailable"
-        if page.ready
-          head title="Unavailable" status=503
-      else if top(nav).name == "static"
-        head title="Static" status=410
-      else if top(nav).name == "childSelection"
-        view navigationBack="" navigationKey="second"
-          view navigationKey=page.key
-            head title="Missing" status=404
-          view navigationKey=(page.ready ? "first" : "second")
-            head title="First"
-      else if top(nav).name == "tabSelection" or top(nav).name == "panelRole" or top(nav).name == "panelId" or top(nav).name == "tabControls"
-        view navigationBack="" navigationKey=(top(nav).name == "tabSelection" ? "second" : "first")
-          row role="tablist"
-            button role="tab" aria-controls=(top(nav).name == "tabControls" and page.ready ? "unused" : "status-panel")
-              text "Status"
-            button role="tab" aria-controls="plain-panel"
-              text "Plain"
-          view role=(top(nav).name == "panelRole" and page.ready ? "group" : "tabpanel") id=(top(nav).name == "panelId" and page.ready ? "unused" : "status-panel")
-            view navigationKey=(top(nav).name == "tabSelection" ? page.key : "second")
-              head title="Missing" status=404
-          view role="tabpanel" id="plain-panel"
-            view navigationKey=(top(nav).name == "tabSelection" and not page.ready ? "second" : "first")
-              head title="First"
-      else if top(nav).name == "siblingSelection" or top(nav).name == "siblingRemoval"
-        view navigationBack="" navigationKey="first"
-          if top(nav).name == "siblingSelection"
-            view navigationKey=(page.ready ? "third" : "first")
-              text "Plain"
-          else if not page.ready
-            view navigationKey="first"
-              text "Plain"
-          view navigationKey="second"
-            head title="Missing" status=404
-      else if top(nav).name == "conditionalTab" or top(nav).name == "conditionalMatch" or top(nav).name == "conditionalRows" or top(nav).name == "conditionalNaming"
-        view navigationBack="" navigationKey="first"
-          view role="tabpanel" id="future-panel"
-            if top(nav).name == "conditionalNaming"
-              if page.ready
-                row role="tablist"
-                  button role="tab" aria-controls="future-panel"
-                    text "Future"
-              view navigationKey="second"
-                head title="Missing" status=404
-            else if top(nav).name == "conditionalTab"
-              if page.ready
-                view navigationKey="first"
-                  head title="Missing" status=404
-            else if top(nav).name == "conditionalMatch"
-              match (page.ready ? some(page.label) : none)
-                case some(label)
-                  view navigationKey="first"
-                    head title=label status=404
-                case none
-                  text "Waiting"
-            else
-              for code in page.rows key=code
-                view navigationKey="first"
-                  head title="Missing" status=404
-          view role="tabpanel" id="current-panel"
-            view navigationKey="first"
-              head title="First"
-          row role="tablist"
-            button role="tab" aria-controls="future-panel"
-              text "Future"
-            button role="tab" aria-controls="current-panel"
-              text "Current"
-      else if top(nav).name == "matched"
-        match (page.ready ? some(page.label) : none)
-          case some(label)
-            head title=label status=404
-          case none
-            text "Waiting"
-      else if top(nav).name == "rows"
-        for code in page.rows key=code
-          view
-            head title="Row" status=410
-            text "Row"
-      else if top(nav).name == "virtual"
-        list virtualized=true height=200
-          for code in page.rows key=code
-            view height=24
-              head title="Virtual row" status=410
-              text "Virtual row"
-      else
-        if page.ready
-          head title="Result" status=404
-      text page.label testId="loaded"
-`);
+${statusView(cases.map(([name]) => name))}`);
     writeFileSync(resolve(dir, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
 export const appId = 'test.status-document';
 export const grants = ${JSON.stringify('net.fetch ' + api.url.origin + '\nsecret.keep status\nsecret.keep mode')};
@@ -625,61 +794,6 @@ export const answer: Answer = (source, args, store) => {
     rmSync(dir, { recursive: true, force: true });
   }
 }, 120_000);
-
-test('a second navigation root keeps its split list live while its detail supplies the head', async () => {
-  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/head-agent-test-'));
-  let browser, server;
-  try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Head Agent Test', app: { id: 'test.heads', name: 'Head Agent Test' }, host: { web: {} } }));
-    // The earlier covered copy must lose testId lookup to the visible split list's control.
-    const source = readFileSync(new URL('./conformance/heads-split.contract', import.meta.url), 'utf8').replace('      main navigationKey=', `      main navigationKey="1002" navigationBack="unused" height=24
-        column navigationKey="1001"
-          button press=toggle testId="list-commit"
-            text "Covered control"
-        column navigationKey="1002"
-          text "Another navigation root"
-      main navigationKey=`);
-    writeFileSync(resolve(dir, 'app.contract'), source);
-    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'head-agent-test', '--out', resolve(dir, 'dist'), '--render', 'none'], {
-      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
-    });
-    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
-    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
-      const path = new URL(req.url).pathname;
-      const file = Bun.file(resolve(dir, 'dist', path === '/' ? 'index.html' : path.slice(1)));
-      // (the agent asks a page's /exact.json, a dev envelope this build doesn't write)
-      return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
-    } });
-    browser = await open({ host: 'web', url: server.url.href, size: [1000, 900] });
-    expect(await browser.carrier.evaluate('document.querySelectorAll("[navigationBack]").length')).toBe(2);
-    await browser.tap('open-detail');
-    await browser.tap('commit');
-    let commits = 1;
-    for (const width of [1000, 420, 1000]) {
-      await browser.resize(width, 900);
-      await browser.clock('settle');
-      const wide = width >= 900, copies = (await browser.tree()).nodes.filter(n => n.props.testId === 'list-commit');
-      expect(copies).toHaveLength(2);
-      // A covered route is hidden too (LLP 1153 D8), and so is the split's list where the detail covers it.
-      const [covered, list] = copies, observed = await browser.op({ op: 'check' });
-      expect({ covered: [!!covered.inactive, !!covered.hidden], list: [!!list.inactive, !!list.hidden], checked: observed.items.some(item => item.id === list.id && item.control === 'button') })
-        .toEqual({ covered: [true, true], list: [!wide, !wide], checked: wide });
-      if (wide) {
-        expect((await browser.tree('list-commit', { shallow: true })).nodes[0].id).toBe(list.id);
-        await browser.tap('list-commit');
-        commits++;
-      }
-      const state = await browser.state();
-      expect(state.slots).toMatchObject({ commits, named: true });
-      expect(state.head).toMatchObject({ title: 'Ada', description: 'Directory description', canonical: '/directory' });
-      expect(await browser.carrier.evaluate('document.title')).toBe('Ada');
-    }
-  } finally {
-    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
-  }
-}, 30000);
 
 test('a JavaScript-rendered direct detail selects its retained href at boot', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');

@@ -1,7 +1,7 @@
 {
   "about": [
     "Journal events, and the OTLP bodies Observe's web, Apple and Linux services must send for them.",
-    "wire.test.mjs runs the web and Apple services, host/linux/tests/observe the Linux one.",
+    "wire.test.mjs runs the web and Apple services, host/painted/tests/observe the Linux one.",
     "Walls are in seconds. The web journal uses milliseconds, so its runner multiplies them by 1000.",
     "Bodies are compared as parsed JSON: object key order is ignored, expo.custom_params is parsed, and metrics are sorted by name, then time.",
     "Only these resource attributes are compared: the ones below and platforms.<name>.resource. The rest (os.version, device.*, browser.language) describe the machine.",

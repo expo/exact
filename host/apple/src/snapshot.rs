@@ -211,10 +211,15 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
                             request.timeout_ms =
                                 Some(request.timeout_ms.map_or(ms, |own| own.min(ms)));
                         }
+                        let class = if work.is_none() && request.is_plain_http() {
+                            exact_runner::RequestClass::Read
+                        } else {
+                            exact_runner::RequestClass::Ordered
+                        };
                         executor
                             .run(
                                 exact_runner::RequestOut {
-                                    class: exact_runner::RequestClass::Ordered,
+                                    class,
                                     ticket: 1,
                                     target: "widget refresh".into(),
                                     request,

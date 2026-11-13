@@ -478,6 +478,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// where the bar takes an accent as its tint.
     var tabTint: [[Double]]?
     let tabProxy = TabDelegateProxy()
+    /// Each tab's `UITab`, in tab order, when Exact's container is built
+    /// from them (TabsIOS.swift); empty for one built from `viewControllers`.
+    var builtTabs: [AnyObject] = []
+    /// What Exact added to its owner's `additionalSafeAreaInsets` for the
+    /// boxes beside the routes, and that owner (`clearBesideRoutes`).
+    var besideInsets = UIEdgeInsets.zero
+    weak var besideOwner: UIViewController?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
     /// whether its press navigated.
@@ -495,8 +502,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var stacks: [ObjectIdentifier: NavigationStack] = [:]
     var stackCount = 0
     var covers: [UInt32: HostCover] = [:]
-    /// The covers the kernel was last told (`deliverCovers`).
-    var delivered: [UInt32: HostCover] = [:]
+    /// The covers the kernel was last told (`deliverCovers`), each route's local insets (LLP 1123 D9), and
+    /// the clearance its scrollers' insets hold (D3, ClearanceIOS.swift).
+    var delivered: [UInt32: HostCover] = [:], localInsets = LocalInsetsReport(), clearance: [ObjectIdentifier: ClearanceInset] = [:]
     /// Whether this boot's first batch looked for the tablist the boot
     /// covered (`adoptBootCover`); every boot covers its own.
     private(set) var bootCoverSeen = false
@@ -826,6 +834,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // dismissal, so its editor can accept the batch's focus handoff.
         let primary: UIViewController? = primaryPlain ?? primaryNavigation
         let owners = [primary].compactMap { $0 } + presentedNavigations
+        var held = false
         for index in 0...common where index < owners.count {
             let stack = Array(wanted[parts[index]])
             // Show the router's tab's route when it is a plain tab (PlainTabIOS)
@@ -834,10 +843,16 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 owners[index].view.layoutIfNeeded()
                 continue
             }
-            prepareRoutes(stack, in: nav)
+            let waits = prepareRoutes(stack, in: nav)
             // Compare and write only the routes: under More, UIKit's list stays before them (`stackFront`)
             let routes = nav.stackRoutes
             if !routes.elementsEqual(stack, by: ===) {
+                // UIKit lays an arriving route out as it is given the stack: a header
+                // lifted in this batch must have left the layout by then (`coverLifted`).
+                if waits {
+                    held = true
+                    continue
+                }
                 // @ref LLP 1038 D6 — a tab change swaps immediately. A replacement within one stack
                 // whose new top was not on it (a finished screen giving way to its result) arrives
                 // as UIKit's own push, rather than cutting.
@@ -858,7 +873,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             recordOwned(nav)
             ApplyProfile.time("nav.layout") { nav.view.layoutIfNeeded() }
         }
-        unanimated = false
+        if held {
+            syncAfterBatch()
+        } else {
+            unanimated = false
+        }
         if mounted.count > common {
             pendingSync = true
             presenter.modals.closeTop()
@@ -1003,6 +1022,18 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if pendingPress !== press { pendingPress?.pending = false; pendingPress?.settle() }
         press.pending = true
         pendingPress = press
+    }
+
+    /// Sync again once the batch being applied and the covers it lifted have
+    /// been applied. The runtime's answer to the covers syncs first when it
+    /// moves anything, and this sync is then owed nothing.
+    private func syncAfterBatch() {
+        pendingSync = true
+        presenter.afterBatch { [weak self] in
+            guard let self, pendingSync, !syncing else { return }
+            pendingSync = false
+            sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        }
     }
 
     func modalDidDismiss() {
@@ -1422,8 +1453,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for c in controllers.values { end(c) }
         retireTabs()
         if let primaryNavigation { retireStack(primaryNavigation) }
-        if !covers.isEmpty || !delivered.isEmpty {
-            covers = [:]
+        if !covers.isEmpty || !delivered.isEmpty || !localInsets.wanted.isEmpty {
+            covers = [:]; localInsets.wanted = [:]
             presenter.afterBatch { [weak self] in self?.deliverCovers() }
         }
         primaryNavigation?.delegate = nil

@@ -20,7 +20,6 @@
 //! apps showed their empty state so. Read the same way: a part wrapped in a
 //! component of the author's own is the benefit of the doubt.
 
-use super::miswiring::arms;
 use crate::LowerError;
 use contract_syntax::{Expr, Node};
 use contract_types::Checked;
@@ -64,7 +63,7 @@ pub(super) fn round_button_label(checked: &Checked<'_>) -> Vec<LowerError> {
                     }
                 }
             }
-            for arm in arms(node).into_iter().rev() {
+            for arm in node.child_lists().into_iter().rev() {
                 stack.extend(arm.iter().rev());
             }
         }
@@ -99,7 +98,7 @@ pub(super) fn empty_state_in_list(checked: &Checked<'_>) -> Vec<LowerError> {
                 }
             }
             let in_list = in_list || matches!(node, Node::Element { tag, .. } if tag == "list");
-            for arm in arms(node).into_iter().rev() {
+            for arm in node.child_lists().into_iter().rev() {
                 stack.extend(arm.iter().rev().map(|n| (n, in_list)));
             }
         }
@@ -171,7 +170,7 @@ pub(super) fn summary_card_in_list(checked: &Checked<'_>) -> Vec<LowerError> {
                 }
                 _ => at,
             };
-            for arm in arms(node).into_iter().rev() {
+            for arm in node.child_lists().into_iter().rev() {
                 stack.extend(arm.iter().rev().map(|n| (n, at)));
             }
         }

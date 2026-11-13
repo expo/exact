@@ -168,9 +168,9 @@ impl<D: DataSource> Runner<D> {
             // A head made before the source could answer waits for it, as
             // an unqueued send does (`unsent`); `data_ready` scans again.
             let ready = self.data.ready()
-                || self.queues.waiting[m]
-                    .front()
-                    .is_some_and(|w| exact_plan::runner_owned_source(&w.source));
+                || self.queues.waiting[m].front().is_some_and(|w| {
+                    exact_plan::runner_owned_source(&w.source) || self.source_ready(&w.source)
+                });
             if self.queues.waits(m) && self.idle(m) && ready {
                 self.queues.next_due[m] = self.armed_at();
             }
@@ -442,6 +442,9 @@ impl<D: DataSource> Runner<D> {
         } else if self.plan.module_named(source).is_some() {
             // A native module's send (LLP 1133.002 D13): the runner's substitute.
             self.module_send(target, source, args)
+        } else if self.plan.fetch_named(source).is_some() {
+            // A source declared in Contract (LLP 1162.001 D6).
+            self.fetch_answer(source, args)
         } else {
             let answer = self.answer_mutation(target, source, args);
             let answer = self.single_answer(target, answer);

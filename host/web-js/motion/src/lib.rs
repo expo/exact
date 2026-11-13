@@ -14,7 +14,7 @@ use exact_motion::{
     Change, Engine, EngineError, HoldEnd, HoldToken, Property, SpringDescriptor, TransformHold,
     Transitions, Value, VelocityTracker,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The compositor properties the seam feeds, in the page's order.
 pub const TARGETS: [Property; 4] = [
@@ -33,6 +33,7 @@ pub struct Motion {
     pan: Option<(u32, VelocityTracker)>,
     /// Transform pairs by their translate serial.
     pairs: BTreeMap<u64, TransformHold>,
+    enabled_translate: BTreeSet<u64>,
 }
 
 impl Default for Motion {
@@ -53,6 +54,7 @@ impl Motion {
             playing: BTreeMap::new(),
             pan: None,
             pairs: BTreeMap::new(),
+            enabled_translate: BTreeSet::new(),
         }
     }
 
@@ -64,19 +66,33 @@ impl Motion {
     /// no transition, as an invalid CSS declaration is.
     pub fn transitions(&mut self, node: u64, text: &str) -> bool {
         let parsed = Transitions::parse(text);
+        let was = self.engine.has_spring_transition(node, Property::Translate);
         let ok = parsed.is_ok();
-        self.engine
+        let applied = self
+            .engine
             .set_transitions(node, parsed.unwrap_or_default())
-            .is_ok()
-            && ok
+            .is_ok();
+        if !was && self.engine.has_spring_transition(node, Property::Translate) {
+            self.enabled_translate.insert(node);
+        } else {
+            self.enabled_translate.remove(&node);
+        }
+        applied && ok
     }
 
     /// A node's targets after a commit, at `now`: translate x and y, its x
     /// and y percentages of the box, scale, rotate (degrees), opacity. The
     /// first observation of a node is taken as it is (nothing transitions),
     /// as the kernel's `adopt` does.
-    pub fn observe(&mut self, node: u64, values: [f64; 7], now: f64) -> Result<(), EngineError> {
+    pub fn observe(
+        &mut self,
+        node: u64,
+        values: [f64; 7],
+        velocity: Option<Value>,
+        now: f64,
+    ) -> Result<(), EngineError> {
         self.seek(now)?;
+        let enabled = self.enabled_translate.remove(&node);
         let [x, y, px, py, scale, rotate, opacity] = values;
         let targets = [
             Value::four(x, y, px, py),
@@ -89,7 +105,13 @@ impl Motion {
                 node,
                 property,
                 value,
-                velocity: None,
+                velocity: if property == Property::Translate
+                    && (enabled || self.engine.target(node, property) != Some(value))
+                {
+                    velocity
+                } else {
+                    None
+                },
             })?;
         }
         Ok(())
@@ -117,6 +139,7 @@ impl Motion {
     /// A node left the tree: forgotten, with its springs.
     pub fn remove(&mut self, node: u64) {
         self.engine.remove(node);
+        self.enabled_translate.remove(&node);
         self.playing.retain(|(n, _), _| *n != node);
         self.holds.retain(|_, token| token.node() != node);
     }

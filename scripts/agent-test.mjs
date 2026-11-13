@@ -14,7 +14,7 @@ import { perfDelta } from './agent-inspect.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { onThisMachine, serverUrl } from './verify.mjs';
-import { backendOrigin, backendOriginSelection, staticFacts } from '../js/bake/src/typescript.mjs';
+import { backendOrigin, backendOriginSelection, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, inlineSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
 import { createRequire } from 'node:module';
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
@@ -153,17 +153,25 @@ export function targetsIn(nodes, limit = 12) {
  * sessions are the Mac's and the iPhone's. */
 export const testScope = (host) => ({ mac: 'macos', host: 'macos', 'host-ios': 'ios' })[host] ?? host;
 
-/** Where a native host keeps a drive's scratch stores (host/apple and host/linux `configure_storage`), or
+/** What an authored `pick` that found no picker held says to do first. A tap on the file input holds one on the
+ * web, and on Linux only when the input has an id; macOS and iOS hold one for `showPicker(id)` alone. */
+export const pickHint = (host) => host === 'web'
+  ? '; first tap the visible file input or a button whose action calls showPicker("<input id>")'
+  : '; first tap a button whose action calls showPicker("<input id>"); the file input needs id as well as testId';
+
+/** Where a native host keeps a drive's scratch stores (host/apple and host/painted `configure_storage`), or
  * null where the driver cannot reach them: an iOS simulator's are in its app container and go with the app. */
 export function storeBase(appId, host, env = process.env, home = homedir()) {
   if (host === 'macos' || host === 'mac') return resolve(home, 'Library/Caches/exact', appId, 'agent');
   if (host === 'linux') return resolve(env.XDG_CACHE_HOME?.startsWith('/') ? env.XDG_CACHE_HOME : resolve(home, '.cache'), 'exact', appId, 'agent');
   return null;
 }
-/** The origins a web build's data module may fetch: its `net.fetch` grants, as host/web-js/build.mjs writes them
- * into the page's admission data (none for a wasm build). */
+/** The origins a web build's sources may fetch: its data module's `net.fetch` grants, as host/web-js/build.mjs
+ * writes them into the page's admission data, and its declared sources' (LLP 1162.001 D3), which the module carries
+ * (none for a wasm build). */
 export function fetchOrigins(dist) {
-  let text = ''; try { text = readFileSync(resolve(dist, '.gen/admission-data.js'), 'utf8'); } catch { return []; }
+  const read = f => { try { return readFileSync(resolve(dist, '.gen', f), 'utf8'); } catch { return ''; } };
+  const text = read('admission-data.js') + read('app.js');
   return [...new Set([...text.matchAll(/"net\.fetch (https?:\/\/[^/"\s]+)[/"]/g)].map((m) => m[1]))];
 }
 /** The loopback ones: a backend on this machine the tests talk to. */
@@ -884,7 +892,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           // A held picker, by the node its answer arrives at or its capability (files F11); paths are the test file's.
           case 'pick': {
             try { delivered(st.paths.length ? await s.type(`@${st.target}`, st.paths.map((p) => resolve(dirname(resolve(file)), p)).join('\n') + '\n') : await s.tap(`@${st.target}`, { choice: 'cancel' })); }
-            catch (error) { if (error.message.includes('held: none')) error.message += '; first tap a button whose action calls showPicker("<input id>"); the file input needs id as well as testId'; throw error; }
+            catch (error) { if (error.message.includes('held: none')) error.message += pickHint(host); throw error; }
             input = st.line; break;
           }
           // The held sign-in, completed against the app's own server (LLP 1146 D4): its authorization URL is
@@ -1104,13 +1112,17 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
  * build selected (LLP 1142 D13), else app.ts's literal `const origin`, else the origins its `net.fetch` grants name as the
  * build evaluates them, a setting's value (`import.meta.env.API_BASE_URL`, LLP 1153 D4) in place of its read. */
 export function nativeFetchOrigins(dir, env = process.env) {
-  let code; try { code = readFileSync(resolve(dir, 'app.ts'), 'utf8'); } catch { return []; }
-  const origin = backendOrigin(dir, env) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(code)?.[1];
+  // A source declared in app.contract names its origin in its `url` line (LLP 1162.001 D3).
+  let contract = ''; try { contract = readFileSync(resolve(dir, 'app.contract'), 'utf8'); } catch { /* none */ }
+  const declared = [...contract.matchAll(/^\s+url\s+"(https?:\/\/[^/?#{"\s]+)/gm)].map(m => m[1]);
+  let code; try { code = readFileSync(resolve(dir, 'app.ts'), 'utf8'); } catch { return [...new Set(declared)]; }
+  const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
+  const origin = backendOrigin(dir, env) ?? literalBackendOrigin(code, parse);
   if (origin) return [origin];
   let grants = '';
-  try { const parse = createRequire(import.meta.url)('rolldown/utils').parseSync; grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse).grants ?? ''; }
+  try { grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse).grants ?? ''; }
   catch { return []; } // the bake refuses it, and says why when it builds
-  return [...new Set(grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean))];
+  return [...new Set([...declared, ...grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean)])];
 }
 /** Resolve the built grant alias and diagnose a fault that cannot meet a granted URL. */
 export function resolveFaultPrefix(prefix, origins, say=console.warn) {

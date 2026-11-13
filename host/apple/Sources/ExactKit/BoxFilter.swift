@@ -8,7 +8,12 @@
 // The picture is drawn again when a batch touches the box or anything in
 // it, when its size, scale or appearance changes, and after an image or
 // text raster under it publishes pixels; after any other batch it only
-// follows the box. An animation under a filtered box is sampled instead of
+// follows the box. A box whose layer tree reads as it did at its last
+// drawing (`RenderInputs`) is not drawn again: the picture follows it, and
+// the chain runs over the last drawing if the chain changed. So the box's
+// own motion, opacity and `filter` draw nothing of its subtree, while any
+// change in the subtree, an op's or not, is drawn wherever a batch touching
+// the box asks. An animation under a filtered box is sampled instead of
 // lowered (`svg_lower::eligibility`, and `svg_lower::resample` when the
 // filter comes after the animation).
 //
@@ -54,6 +59,12 @@ final class BoxFilter {
     /// for it to finish. Each drawing is numbered; one numbered `cleared`
     /// or below is not shown.
     private struct Job { let source: CGImage, program: [Float], rect: CGRect, scale: CGSize, generation: Int }
+    /// The last drawing, the chain run over it, and its layer tree's inputs
+    /// as drawn (nil: unknowable, so it is drawn again whenever asked).
+    private struct Kept { let job: Job; let inputs: RenderInputs? }
+    private var kept: Kept?
+    /// The last unfiltered drawing of the box, for tests.
+    var lastDrawing: CGImage? { kept?.job.source }
     private var running = false
     private var waiting: Job?
     private var generation = 0, cleared = 0
@@ -113,8 +124,9 @@ final class BoxFilter {
     }
 
     /// Stand where the box stands and, when `fresh` (what the box shows
-    /// changed) or its size, scale or appearance did, draw its picture
-    /// again, `scale` pixels per point. `clip`: the box's `clip-path` as a
+    /// may have changed: drawn again unless its layer tree reads as it did)
+    /// or its size, scale or appearance changed, draw its picture again,
+    /// `scale` pixels per point. `clip`: the box's `clip-path` as a
     /// mask for the picture. `node`: the box's node, a new one in a reused
     /// view. `shown`: whether the box is on screen, where its first picture
     /// is waited for. `landed`: new filtered pixels or a layer effect showed.
@@ -169,14 +181,24 @@ final class BoxFilter {
         if picture.mask !== clip { picture.mask = clip }
         let now = Drawn(node: node, size: b.size, scale: scale, dark: dark)
         guard fresh || drawn != now else { return }
+        let region = CGRect(x: b.minX + CGFloat(program[0]), y: b.minY + CGFloat(program[1]),
+                            width: b.width + CGFloat(program[2]), height: b.height + CGFloat(program[3]))
+        let extent = SvgIsland.extent(region, k: scale, seen: nil, limit: SvgIsland.budget / 24)
+        // The tree reads as drawn, over the same region: the drawing stands.
+        if drawn == now, let kept, let (rect, _, _, _) = extent, rect == kept.job.rect, let was = kept.inputs, RenderInputs(box) == was {
+            guard program != kept.job.program else { return }
+            generation += 1
+            let job = Job(source: kept.job.source, program: program, rect: rect, scale: kept.job.scale, generation: generation)
+            self.kept = Kept(job: job, inputs: was)
+            run(job, landed: landed)
+            return
+        }
         // Another node's picture (a reused view) is not this one's to show
         // while this one's is drawn.
         let first = drawn?.node != node
         if first { clear() }
         drawn = now
-        let region = CGRect(x: b.minX + CGFloat(program[0]), y: b.minY + CGFloat(program[1]),
-                            width: b.width + CGFloat(program[2]), height: b.height + CGFloat(program[3]))
-        guard let (rect, w, h, _) = SvgIsland.extent(region, k: scale, seen: nil, limit: SvgIsland.budget / 24),
+        guard let (rect, w, h, _) = extent,
               let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
@@ -201,6 +223,7 @@ final class BoxFilter {
         generation += 1
         let job = Job(source: source, program: program, rect: rect,
                       scale: CGSize(width: CGFloat(w) / rect.width, height: CGFloat(h) / rect.height), generation: generation)
+        kept = Kept(job: job, inputs: RenderInputs(box))
         if first && shown {
             show(Self.run(job), in: rect)
         } else {
@@ -245,6 +268,7 @@ final class BoxFilter {
     /// No picture, and none on its way.
     private func clear() {
         content.contents = nil
+        kept = nil
         cleared = generation
         waiting = nil
     }

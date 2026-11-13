@@ -1078,3 +1078,76 @@ fn canvas_only_live_ticks_keep_drawing_without_firing_timers() {
         );
     }
 }
+
+/// A row with a native range inserted over a sibling under a layout
+/// transition (#134): the range is laid out at the look's default height,
+/// then the host measures its control and lays out again.
+const MEASURED: &str = r##"component A
+  state on = false
+  action go
+    on = not on
+  view
+    column
+      button press=go testId="go"
+        text "Go"
+      column testId="box" overflow="hidden" -exact-layout-transition="220ms linear"
+        if on
+          column testId="row"
+            input type="range" testId="slider" value=0.3 min=0 max=1 step=0.01 width="100%"
+        column testId="below" height=40 -exact-layout-transition="220ms linear"
+"##;
+
+/// `view`'s last `frame` y and `layout` offset y in a batch.
+fn placed(batch: &str, view: u32) -> (Option<f64>, Option<f64>) {
+    let v: serde_json::Value = serde_json::from_str(batch).unwrap();
+    let ops = v["ops"].as_array().unwrap();
+    let last = |pick: &dyn Fn(&serde_json::Value) -> bool| {
+        ops.iter()
+            .rev()
+            .find(|op| op["id"] == view && pick(op))
+            .map(|op| op["y"].as_f64().unwrap())
+    };
+    (
+        last(&|op| op["op"] == "frame"),
+        last(&|op| op["op"] == "present" && op["property"] == "layout"),
+    )
+}
+
+#[test]
+fn a_box_moving_when_a_control_is_measured_stays_where_it_shows() {
+    let plan = contract::compile(MEASURED).unwrap().encode();
+    let (mut host, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        844.0,
+    )
+    .unwrap();
+    host.start_on_frame(true, 0.0);
+    let (go, below) = (id(&host, "go"), id(&host, "below"));
+    let on = host.dispatch_at(go, Event::Press, 100.0);
+    let (Some(laid), Some(offset)) = placed(&on, below) else {
+        panic!("the commit moves the sibling and holds it at its old place: {on}")
+    };
+    assert!(laid > 0.0, "{on}");
+    assert_eq!(laid + offset, 0.0, "shown where it was: {on}");
+    // The host measures its slider taller than the default it was laid out at.
+    let slider = id(&host, "slider");
+    let measured = host.set_intrinsics(&[(slider, Some((390.0, laid as f32 + 18.0)))]);
+    let (Some(moved), Some(offset)) = placed(&measured, below) else {
+        panic!("the new frame and the offset come in one batch: {measured}")
+    };
+    assert_eq!(moved, laid + 18.0, "{measured}");
+    assert_eq!(moved + offset, 0.0, "still shown where it was: {measured}");
+    // The display's next frame starts it from there and it ends at the measured box.
+    host.tick_at(116.0, 124.0);
+    host.tick_at(400.0, 408.0);
+    let k = host.runner.kernel();
+    let key = k.find_by_test_id("below")[0];
+    let shown = host
+        .engine
+        .value(exact_kernel::motion::motion_node(key), Property::Layout)
+        .unwrap();
+    assert_eq!(shown.y, moved, "it ends at the measured box");
+}

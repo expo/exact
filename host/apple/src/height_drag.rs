@@ -195,9 +195,34 @@ impl<D: DataSource> Host<D> {
         {
             return self.hold_refusal("invalid height release coordinates");
         }
+        if !now_ms.is_finite() {
+            return self.hold_refusal("height drag: NonFinite");
+        }
+        if now_ms / 1000. < self.engine.now() {
+            return self.hold_refusal("height drag: ClockWentBackwards");
+        }
+        let view = self
+            .runner
+            .kernel()
+            .node_by_key(drag.handle)
+            .expect("live handle")
+            .id;
+        let (mut batch, early_error, _) = self.commit_input_timers(now_ms);
+        if self.live_height_drag(serial).is_none() {
+            let (receipts, error, _) = self.deliver_after(
+                view,
+                Event::HeightRelease {
+                    height,
+                    velocity: velocity.unwrap_or(0.),
+                },
+                Vec::new(),
+                early_error,
+                false,
+            );
+            return self.commit_into(&receipts, error, batch);
+        }
         // Do not dispatch after a rejected clock/sample or failed layout.
         // Compose the final sample and action in one native batch.
-        let mut batch = Batch::new();
         if let Err(error) =
             self.engine
                 .update_hold(drag.token, now_ms / 1000., Value::scalar(height))
@@ -206,7 +231,7 @@ impl<D: DataSource> Host<D> {
         }
         self.now_ms = now_ms;
         if let Err(error) = self.height_layout_if_needed(&mut batch) {
-            return self.finish(batch, Some(error));
+            return self.finish(batch, early_error.or(Some(error)));
         }
         // Action receives actual constrained CSS height, not a min/max-clipped input.
         let Some(height) = self.height_catch(drag.target).map(|v| v.x) else {
@@ -220,28 +245,17 @@ impl<D: DataSource> Host<D> {
                 .hold_velocity(drag.token, now_ms / 1000.)
                 .map_or(0., |v| v.x)
         });
-        let Some(view) = self
-            .runner
-            .kernel()
-            .node_by_key(drag.handle)
-            .map(|node| node.id)
-        else {
-            return self.finish(batch, None);
-        };
         if let Some(active) = self.height_drag.as_mut() {
             active.released = true;
         }
         // Keep the pre-action frame operations: the commit mirror has already
         // observed them, so they cannot be reconstructed from the action batch.
-        let (early, early_error) = self.advance_for_input(now_ms);
-        let still = early.is_empty()
-            || self.runner.kernel().height_drag_target(drag.handle) == Some(drag.target);
         let (receipts, error, _) = self.deliver_after(
             view,
             Event::HeightRelease { height, velocity },
-            early,
+            Vec::new(),
             early_error,
-            still,
+            true,
         );
         self.commit_into(&receipts, error, batch)
     }

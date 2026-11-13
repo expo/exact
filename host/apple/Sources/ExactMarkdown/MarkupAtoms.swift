@@ -3,7 +3,7 @@
 // picture is the pill (`image(for:…)`, sized by `attachmentBounds`, no
 // attachment view: AppKit keeps every view provider while the text view
 // lives, §5.1), and the rest as word joiners; the reader draws an atom's
-// piece as its label on an inline box's background. The pill looks like the
+// piece as its icon and label on an inline box's background. The pill looks like the
 // platform's token: NSTokenField's on macOS, UISearchTextField's on iOS (D4),
 // unless its face or its kind gives a colour, the face's first (D4). It lays
 // out its icon and then its label in its line's direction, or in the one its
@@ -172,12 +172,7 @@ final class AtomAttachment: NSTextAttachment {
     private func icon(_ size: CGFloat) -> (image: AtomImage, tinted: Bool)? {
         guard !atom.icon.isEmpty else { return nil }
         if atom.icon.hasPrefix("symbol:sf/") {
-            let name = String(atom.icon.dropFirst("symbol:sf/".count))
-            #if os(macOS)
-            return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: size, weight: .regular)).map { ($0, true) }
-            #else
-            return UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size)).map { ($0, true) }
-            #endif
+            return AtomIcons.symbol(atom.icon, size: size).map { ($0, true) }
         }
         // Symbol roles name their glyph through the image node, which a face has none of.
         guard !atom.icon.hasPrefix("symbol:") else { return nil }

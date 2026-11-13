@@ -54,6 +54,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         var settings = JSONObject()
         var capabilities = JSONObject()
         val consumers = LinkedHashMap<TrackConsumer, String>()
+        val observers = LinkedHashSet<TrackConsumer>()
         var leased = false
         var waiting: String? = null
         var platformMute: String? = null
@@ -69,7 +70,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     /** Under the agent, each track for `state.extensions` (LLP 1133.008 §9, Disclosure). */
     private fun disclose() = context.state(JSONObject().put("videoTracks", JSONArray(tracks.values.map { t ->
-        shape(t).put("consumers", JSONArray(t.consumers.values.sorted())).put("lease", t.leased).put("waiting", t.waiting ?: JSONObject.NULL)
+        shape(t).put("consumers", JSONArray(t.consumers.values.sorted())).put("observers", t.observers.size).put("lease", t.leased).put("waiting", t.waiting ?: JSONObject.NULL)
     })))
     private fun error(code: String) = JSONObject().put("error", code)
 
@@ -225,7 +226,28 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         }
     }
 
-    private fun each(t: Track, f: (TrackConsumer) -> Unit) = t.consumers.keys.toList().forEach(f)
+    override fun observe(id: String, observer: TrackConsumer): () -> Unit {
+        val t = tracks[id] ?: throw TrackError("NotFoundError")
+        if (t.readyState == "ended") { observer.ended(); return {} }
+        t.observers += observer
+        say("${t.id}: an observer joins, taking no lease")
+        if (t.leased) {
+            observer.liveVideo(if (context.agent) null else CameraCapture)
+            if (t.muted) observer.muted(t.muteReason ?: "idle")
+        } else observer.muted(t.muteReason ?: "idle")
+        disclose()
+        return {
+            if (t.observers.remove(observer)) {
+                say("${t.id}: an observer leaves")
+                disclose()
+            }
+        }
+    }
+
+    private fun each(t: Track, f: (TrackConsumer) -> Unit) {
+        t.consumers.keys.toList().forEach(f)
+        t.observers.toList().forEach(f)
+    }
 
     private fun mute(t: Track, reason: String) {
         if (t.muted && t.muteReason == reason) return
@@ -285,6 +307,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         say("${t.id}: ended ($why)")
         each(t) { it.ended() }
         t.consumers.clear()
+        t.observers.clear()
         announce()
     }
 
@@ -405,10 +428,11 @@ internal object CameraCapture : VideoSource {
     }
 
     /** The whole set bound in one call on main (CameraX binds use cases together). */
-    private fun bind() {
-        val provider = ready ?: return
+    private fun bind(): Boolean {
+        val provider = ready ?: return false
         provider.unbindAll()
-        camera = runCatching { provider.bindToLifecycle(owner, selector(selected), *useCases.toTypedArray()) }.getOrNull()
+        val result = runCatching { provider.bindToLifecycle(owner, selector(selected), *useCases.toTypedArray()) }
+        camera = result.getOrNull()
         camera?.cameraInfo?.cameraState?.observe(owner) { state ->
             val reason = when (state.error?.code) {
                 null -> null
@@ -417,9 +441,20 @@ internal object CameraCapture : VideoSource {
             }
             for ((t, tracks) in holders) tracks.interrupted(t, reason)
         }
+        return result.isSuccess
     }
 
     override fun add(useCase: Any) { if (useCases.add(useCase as UseCase)) bind() }
+
+    override fun attach(useCase: Any): Boolean {
+        if (!useCases.add(useCase as UseCase)) return true
+        if (bind()) return true
+        useCases.remove(useCase)
+        // A rejected combination has already unbound the preview. Restore the set that worked.
+        bind()
+        return false
+    }
+
     override fun remove(useCase: Any) { if (useCases.remove(useCase as UseCase)) bind() }
 
     @Suppress("UNCHECKED_CAST")

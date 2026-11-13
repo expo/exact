@@ -70,6 +70,7 @@ enum ResetGate {
         "pan(_:dx:dy:now:)": "a pan on the old tree",
         "panRelease(_:vx:vy:now:)": "a pan released as its view goes",
         "scrolled(_:left:top:)": "an old scroller's offset as its view goes",
+        "timelineScrolled(_:left:top:)": "an old scroller's timelines as its view goes; the new tree's layout places its own",
         "canvasDrawAsync(done:)": "a draw of the old tree's canvases; the new tree's draw on mount",
         "intrinsics(_:)": "the old views' sizes; the new tree's views measure and report their own",
         "focus(_:now:)": "focus a teardown gives back (a dismissed sheet's) lands on the old tree",
@@ -87,6 +88,7 @@ enum ResetGate {
         "fieldSelect(_:_:_:now:)": "a field's selection from the old tree",
         "press(_:held:at:now:)": "a press on a view going away",
         "hover(_:over:now:)": "a pointer leaving views going away",
+        "lookMotion(_:states:now:)": "hover or focus state of an old view; the new views report their own states",
         "key(_:_:up:capture:now:)": "a key down on the old tree",
         "scroll(_:metrics:now:)": "an old scroller's offset",
         // #1144's timer calls: each recovers by itself, so a replay would fire it twice.
@@ -117,6 +119,7 @@ enum ResetGate {
         "groupFinish(_:now:)": "a grouped reorder finishing as its list goes",
         "media(_:event:payload:now:)": "an old media view's event as it goes",
         "load(_:now:)": "an old image's or frame's load",
+        "atomIconReady(geometryChanged:)": "an old atom icon's load; the new tree's text loads and measures its own",
         "frameNavigation(_:event:record:now:)": "an old web frame's navigation",
         "message(_:_:now:)": "an old web frame's message",
         "dialogClose(_:now:)": "an old dialog closing as its view goes",
@@ -126,7 +129,8 @@ enum ResetGate {
         "hostForward(_:now:)": "a forward gesture belongs to the old navigation, whose forward history is not carried",
         "buildTabs(_:now:)": "the old tree's tab panels; the new tree's are built when More shows them",
         "beforeunload(_:now:)": "the old page's unload as it goes",
-        "surfaceRecord(_:_:)": "an old canvas publisher released as the teardown ends it: the new runner starts with no surface records (none is carried), and the new tree's publishers record their own",
+        "surfaceRecord(_:_:)": "an old canvas publisher released during teardown: its release must not clear a kept launch answer, and the new publishers record their own",
+        "canvasPerformanceRecord(_:_:)": "an old canvas publisher's performance sample or release; the new publishers report their own metrics",
         "regionComplete(_:)": "an old generation's region artifact: `RegionController` drops one from another generation before it is told, and the new tree asks its own",
         "fulfillSurface(_:kind:body:now:)": "an old-tree surface completing as its view goes: `completeSurface` drops a completion from another generation before it is told",
         // Told again before the reset returns (Session `presentCommitted`, `applyTogether`): moot.
@@ -137,6 +141,7 @@ enum ResetGate {
         "segments(_:)": "the posture and viewport segments: the view's `rebooted` tells them again",
         "listMargins(_:)": "UIKit's cell margins: the presenter's reset clears what was told (`RowCells.reset`), and the new rows report their own",
         "groupedMargins(_:)": "UIKit's grouped-card margins: the new tree's grouped lists measure and report their own",
+        "localInsets(_:)": "content owners' local insets (LLP 1123 D9): the navigation's reset clears what was told, and each route and block reports its own as the new tree lays out",
         "resizeBox(_:width:height:)": "a resize grip's drag on the old tree: a restart takes the size back to the plan's, as a reload does the browser's",
         // Never reached while held: their entry points wait for the replay first.
         "dataReady()": "never held: `activateData` holds first and is replayed (.activation), which asks it",

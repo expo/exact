@@ -69,7 +69,7 @@ pub(crate) enum Refusal {
     /// R4: a property a glue writes inline itself, or reads inline (the
     /// runtime's own `scroll-behavior` included), and a live time's widths.
     GlueWritten,
-    /// R5: a side path in `style_row` (a mark, `$ink`, `Sx`/`Sm`/`Sr`, a
+    /// R5: a side path in `style_row` (a mark, `Sx`/`Sm`/`Sr`, a
     /// press or fit hook, an SVG attribute, a painting binding); a
     /// development build's per-binding counter is not one (the key counts).
     SidePath,
@@ -330,7 +330,7 @@ impl Em<'_> {
                     .strip_prefix('"')
                     .and_then(|r| r.split('"').next())
                     .ok_or(Refusal::SidePath)?;
-                if names(rest, e) || st.contains(".$ink") {
+                if names(rest, e) {
                     return Err(Refusal::SidePath);
                 }
                 refuse_prop(prop, tinted)?;

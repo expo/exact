@@ -81,13 +81,17 @@ impl Cursor<'_> {
                             let mut code =
                                 u32::from_str_radix(hex, 16).map_err(|e| e.to_string())?;
                             self.at += 4;
-                            if (0xD800..0xDC00).contains(&code)
-                                && self.s[self.at..].starts_with(b"\\u")
-                            {
-                                let low = std::str::from_utf8(&self.s[self.at + 2..self.at + 6])
-                                    .map_err(|e| e.to_string())?;
-                                let low =
-                                    u32::from_str_radix(low, 16).map_err(|e| e.to_string())?;
+                            // A high surrogate pairs only with a low one; any other
+                            // escape after it is read on its own (RFC 8259 §7).
+                            let low = (0xD800..0xDC00)
+                                .contains(&code)
+                                .then(|| self.s[self.at..].strip_prefix(b"\\u"))
+                                .flatten()
+                                .and_then(|r| r.get(..4))
+                                .and_then(|h| std::str::from_utf8(h).ok())
+                                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                                .filter(|low| (0xDC00..0xE000).contains(low));
+                            if let Some(low) = low {
                                 code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
                                 self.at += 6;
                             }
@@ -225,5 +229,21 @@ mod tests {
             ["n"]
         );
         assert_eq!(base64_decode("YWI").unwrap(), b"ab");
+    }
+
+    #[test]
+    fn a_lone_high_surrogate_is_not_paired_with_the_escape_after_it() {
+        let error = |s: &str| {
+            reply(&format!(
+                r#"{{"lists":[],"frame":false,"error":"{s}","notes":[]}}"#
+            ))
+            .unwrap()
+            .error
+            .unwrap()
+        };
+        assert_eq!(error(r"😀"), "\u{1f600}");
+        assert_eq!(error(r"\ud83d\ud83d"), "\u{fffd}\u{fffd}");
+        assert_eq!(error(r"\ud83d\u0001 tail"), "\u{fffd}\u{1} tail");
+        assert_eq!(error(r"\ud83dA"), "\u{fffd}A");
     }
 }

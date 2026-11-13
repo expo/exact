@@ -65,7 +65,8 @@ in the UI, and no app JavaScript runs before the first pixel.
 > repository, `exact2`, is a rebuild of an earlier one ("exact1"), whose design
 > documents are research, never authority.
 
-The design record is a separate, private repository of numbered documents (LLPs), so this
+The design record is a separate, private repository of numbered documents (LLPs),
+`expo/exact-llp`, which those with access clone into `llp/` (git ignores it). This
 README and the guides cite it by number (`LLP 1115 D7`). The guides under [`docs/`](docs)
 are the public documentation.
 
@@ -214,8 +215,8 @@ flowchart LR
 
 ## Quick start
 
-These steps were run on macOS on Apple Silicon. Linux works for the web loop and the
-Linux host.
+These steps were run on macOS on Apple Silicon. Linux also runs the web loop, the
+Linux host, and the iOS cross compiler. On Windows, use WSL 2 with Ubuntu 24.04 for iOS builds.
 
 ### 1. Install the tools
 
@@ -225,7 +226,38 @@ Linux host.
   not needed.
 - **Google Chrome.** The agent drives the web through headless Chrome. Set `CHROME` to
   use another Chromium.
-- **Xcode 27.1 or later**, for the macOS and iOS hosts (`exact setup --check` checks it).
+- **Xcode 27.1 or later**, for Apple builds on macOS (`exact setup --check` checks it). For iOS builds on Linux/WSL, install
+  [Swift 6.4.2](https://www.swift.org/install/linux/),
+  [xtool 1.24.0](https://github.com/xtool-org/xtool/releases/tag/1.24.0),
+  [LLVM 23](https://apt.llvm.org/), and
+  [apple-codesign 0.29.0](https://github.com/indygreg/apple-platform-rs/releases/tag/apple-codesign%2F0.29.0).
+  Download Xcode 27.1 from [Apple](https://developer.apple.com/download/all/?q=Xcode%2027.1),
+  then run `APPIMAGE_EXTRACT_AND_RUN=1 xtool sdk install --slim /path/to/Xcode_27.1.xip` on Linux. This extracts the SDK;
+  it does not run Xcode. The environment variable lets xtool's AppImage run without FUSE.
+  In WSL 2, keep the checkout and SDK in Ubuntu's Linux filesystem. Put LLVM's `bin` directory on `PATH` and set
+  `EXACT_APPLE_LLVM_BIN` to that directory (on Ubuntu, `/usr/lib/llvm-23/bin`).
+  Swift and `rcodesign` must also be on `PATH`; IPA archives also need `zip`.
+  For a signed device archive, set `EXACT_IDENTITY` to an absolute PKCS#12 file path,
+  `EXACT_APPLE_SIGN_PASSWORD_FILE` to its password file, and `EXACT_PROFILE` to the
+  app’s provisioning profile. Set `EXACT_PROFILE_DIR` to a directory containing
+  companion extension profiles. Profile decoding needs `openssl`.
+  On macOS, `EXACT_IDENTITY` continues to name a Keychain identity.
+  `EXACT_APPLE_SDK` can select a Darwin
+  SDK bundle outside xtool's default `~/.swiftpm/swift-sdks/darwin.artifactbundle`.
+  Watch simulator companions require `xtool sdk install /path/to/Xcode_27.1.xip`
+  without `--slim`, so Exact can install the retained watch SDK on the first watch build.
+  Icon Composer projects retain their live SVG layers on iOS 26 and newer; Linux
+  uses the manifest’s PNG `icons` entry as artwork for older iOS versions. The
+  portable compiler supports the checked-in projects’ default SVG group and
+  opaque sRGB background; other Composer settings are refused explicitly.
+  For the SVG filter kernels and Canvas 2D GPU module on x86-64 Linux/WSL,
+  install Wine 9 or newer and download [Metal Developer Tools for Windows](https://developer.apple.com/metal/tools/).
+  Extract the installer with `7z x -o/path/to/metal-tools Metal_Developer_Tools6.2Windows.exe`,
+  then set `EXACT_APPLE_METAL_TOOLS=/path/to/metal-tools` (the directory containing `bin/metal.exe`).
+  The qualified compiler is Metal 32023.850 from the 6.2 Windows installer.
+  `EXACT_APPLE_WINE` can select Wine's executable; otherwise Exact uses Ubuntu's
+  `/usr/lib/wine/wine64` when present, then `wine` on PATH. Wine runs only at build
+  time. Its prefix defaults to `~/.cache/exact/windows-metal`; `WINEPREFIX` overrides it.
 - **Hermes**, only for TypeScript apps on native hosts. Exact consumes Ibex's
   pinned, attested `260318099.0.4` release bundle; ordinary Cargo builds are
   offline and never download or compile an engine. Install it once for each
@@ -249,13 +281,30 @@ Use `~/.bun-1.4.2/bin/bun` for the commands below if it is not on your PATH.
 `bun scripts/exact.mjs setup` installs the declared stable and web nightly Rust
 toolchains, their components/targets (the nightly's clippy lints a game's web bake),
 matching wasm-bindgen, pinned Binaryen and Bun dependencies, installs the pinned
-Hermes host bundle and the iOS/tvOS bundles this Mac builds, and fetches the crates
+Hermes host bundle and the iOS/tvOS bundles this machine builds, and fetches the crates
 of exact2's lock and the game SDK's (`game/app/shells.lock`), since every bake
 resolves offline. It keeps Binaryen in `~/.cache/exact/binaryen`; builds find it
 automatically. `setup --check` invokes Ibex's installer in its offline check mode for
 that same target set. The resolver authenticates the canonical receipts, archives,
 compiler and host/target HBC pairing without installing anything; its exit status and
 diagnostic are the check's result.
+
+With the Linux cross SDK installed, `setup` also installs the iOS Rust targets.
+Build a simulator bundle with `bun host/apple/build.mjs --ios --no-install hello-apple`.
+In an app made with `exact new`, `bun exact.mjs ios` builds without installing on Linux/WSL;
+`ios --prebuild` runs the same build in the background.
+Linux defaults to an ARM64 simulator target; `EXACT_IOS_SIM_ARCH=x86_64` selects an
+Intel simulator. Execution needs an iOS simulator on macOS or an iPhone; compilation,
+asset catalog generation, App Intents metadata and ad-hoc signing run on Linux.
+
+Production builds with custom native views also validate the compiled factory roster.
+Linux can import a simulator qualification with `EXACT_NATIVE_ROSTERS=/path/to/qualification.json`.
+It contains `{ "version": 1, "probes": [{ "probeSha256": "…", "roster": "<JSON object>" }] }`.
+The build writes `native-probes.json` beside its link products to identify the probe to
+execute on an iOS simulator. Qualifications match the probe's SHA-256; changing its
+compiled bytes requires a new simulator run. Without a matching qualification, a
+production build refuses rather than accepting an absent factory or omitting its
+first-frame declaration. Development builds retain the existing manifest fallback.
 
 ### 2. Run Caltrain in the browser
 
@@ -315,20 +364,22 @@ bun scripts/exact.mjs new ../hello          # or run `bun link` once, then `exac
 cd ../hello
 bun exact.mjs contract types app.contract -o app.contract.d.ts   # first run builds the compiler
 bun exact.mjs web                           # the dev loop, at http://127.0.0.1:8765/
-bun exact.mjs test web tests/*.test.contract # the app's *.test.contract, or the files named
+bun exact.mjs test web                      # the app's *.test.contract, or the files named
 bun exact.mjs mac --run                     # this Mac
 bun exact.mjs ios --run                     # an iOS Simulator
 ```
 
 `exact new` creates a standalone app: `app.contract` (the view), `app.ts` (its data),
-`app.json` (the manifest: name, bundle id, hosts, deploy policy), and small `web/` and
-`apple/` host crates. Its `AGENTS.md` (and `CLAUDE.md`) points a coding agent at
+`app.json` (the manifest: name, bundle id, hosts, deploy policy) and `app.test.contract`
+(its test). Its `AGENTS.md` (and `CLAUDE.md`) points a coding agent at
 [`docs/start-here.md`](docs/start-here.md), the one guide it must read, and at `bun
 exact.mjs help` for the commands, including `bun exact.mjs contract …` for the compiler
 and `contract vocab` for the card of what an app writes (`--all`: every tag and property Contract accepts). Before any of
 it, run `bun scripts/exact.mjs setup` once; `setup --check` names everything this machine
-is missing without changing it. It has its own Cargo workspace, which uses your exact2 checkout
-by path. To drive it from exact2, point `EXACT_APP_DIR` at it:
+is missing without changing it. The app holds no crate: a native verb (`mac`, `ios`,
+`linux`, `android`, `windows`) builds in a Cargo workspace it generates under
+`.exact/shells/`, which uses your exact2 checkout by path. To drive it from exact2,
+point `EXACT_APP_DIR` at it:
 
 ```sh
 EXACT_APP_DIR=../hello bun host/web/build.mjs hello-web
@@ -368,9 +419,8 @@ files, or run arbitrary code. That's what data sources are for. Here is a comple
 app: a Contract file, a TypeScript file, and a test. This exact app was built for web,
 macOS, and the iOS Simulator, and its test passed on all three.
 
-To try it in an app created with `exact new`, replace `app.contract` and
-`app.test.contract` with the examples below. In `app.ts`, keep the generated
-`export const appId = …` line and replace the rest with the TypeScript below.
+To try it in an app created with `exact new`, replace `app.contract`, `app.ts` and
+`app.test.contract` with the examples below.
 
 ```contract
 // app.contract: the view, its state, and what each action changes. It names no colour,
@@ -411,7 +461,7 @@ component Todos
             text "Add"
       section
         for t in todos key=t.id
-          row testId=`todo-${t.id}`
+          row delete=remove(t.id) testId=`todo-${t.id}`
             input type="checkbox" checked=t.done change=toggle(t.id) aria-label=t.title testId=`toggle-${t.id}`
             text t.title flex=1
             button press=remove(t.id) destructive=true testId=`remove-${t.id}`
@@ -673,9 +723,12 @@ else here was admitted because a real app needed it.
   types, and share.
 - **Camera.** [`@exact/camera`](packages/camera/exact.json) shows a live viewfinder
   (`exact-camera srcObject=`) and takes still photos (`takePhoto`) on the web, iOS,
-  macOS, and Android, behind the `device.camera` grant (LLP 1133.008). It does not
-  record video from the camera or hand its frames to code, and it has no Windows,
-  Linux, tvOS, or watchOS implementation.
+  macOS, and Android, behind the `device.camera` grant (LLP 1133.008).
+  `takePhotoWithCameraApp` takes one in the system camera UI instead: Android's camera
+  app, iOS's camera picker, and on the web a file input with `capture`. It needs no grant
+  on Android; iOS shows the `device.camera` line's purpose. It does not record video
+  from the camera or hand its frames to code, and it has no Windows, Linux, tvOS, or
+  watchOS implementation.
 - **Data.** TypeScript or Rust sources, optionally on a worker. Grant-checked `fetch` and
   streams, files and SQLite (native and in the browser), Keychain secrets, and OAuth
   sign-in. A router keeps a stack per tab (LLP 1038).
@@ -718,9 +771,11 @@ else here was admitted because a real app needed it.
   remain the publisher's work.
 - **No JSX or React tier.** Nothing runs JavaScript above the data seam. The door stays
   open, but no one is building it.
-- **Code updates in production.** Signed delivery covers plans and assets. Signed
-  delivery of TypeScript or Rust modules isn't implemented, and app-store rules limit
-  it anyway.
+- **Code updates in production.** Signed delivery covers plans, assets and one
+  module pair: Apple accepts TypeScript or an enabled Rust module, Linux a Rust
+  module only, and Windows has no update store. The installed binary's runtime,
+  app identity, grants and Rust policy still bind. Delivering TypeScript and Rust
+  modules together is not implemented.
 - **Linux editing.** The web and Apple hosts edit; Linux reads. Linux also has no
   word segmenter, so flowed Thai, Lao, Khmer, and Myanmar text breaks only at spaces.
 - **Out on purpose for v1.** A gesture arena, general layout animation, grid or
@@ -786,6 +841,8 @@ install page, and the stress harnesses. They're in
 
 The workspace is MIT-licensed (`Cargo.toml`).
 
-Exact’s Snapback4 adapter uses published **0.4.33** with the matching immutable
-Rust source revision `3653cae823145170df3e720f5e321bd1b5b4d79d`.
-See [the adapter guide](snapback4/README.md) for wiring and device rebuilds.
+The Snapback client (`snapback4/`) is not in this repository, and Exact works without it:
+in a checkout without it, `exact new --snapback` and `bun exact.mjs snapback` refuse,
+naming the missing client. A checkout that has it there uses published **0.4.33** with
+the matching immutable Rust source revision `3653cae823145170df3e720f5e321bd1b5b4d79d`,
+and [its guide](snapback4/README.md) covers wiring and device rebuilds.

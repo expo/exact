@@ -205,7 +205,7 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         origin: None,
         activate: "next-launch".into(),
         target: String::new(),
-        embedded: Value::Null,
+        embedded: json!({"version":"2.3.4","buildNumber":"56"}),
         reach: Value::Null,
         painter: None,
         game: false,
@@ -220,6 +220,8 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         &Default::default(),
     )
     .unwrap();
+    assert_eq!(compat.embedded["version"], "2.3.4");
+    assert_eq!(compat.embedded["buildNumber"], "56");
     let result = crate::bun()
         .args([
             "--eval",
@@ -547,8 +549,9 @@ fn rust_fixture(plan: &[u8]) -> (PathBuf, Value, Value) {
     // its directory exclusively, including cleanup after staging.
     std::fs::create_dir(&root).unwrap();
     std::fs::create_dir(root.join("input")).unwrap();
-    let inputs =
-        json!({"app":"com.exact.caltrain","grantCeiling":"","rustGrants":"","rustMode":"wasm"});
+    // The inputs a Rust cohort's compatibility gives (`compat.rs`).
+    let inputs = json!({"app":"com.exact.caltrain","grantCeiling":"","rustGrants":"",
+        "rustMode":"wasm","rustAbi":crate::compat::RUST_ABI});
     let module = b"\0asm\x01\0\0\0";
     let receipt = json!({"version":1,"kind":"rust","abi":crate::compat::RUST_ABI,"appId":inputs["app"],"grants":"",
             "target":"wasm32-unknown-unknown","executor":"wasm",
@@ -583,7 +586,7 @@ fn supplemental_rust_is_real_paired_bytes_with_executor_requirements() {
     }
     let graph = artifact_graph(&plan, &inputs, &cards, false, "aarch64-apple-ios").unwrap();
     for row in graph["artifacts"].as_array().unwrap() {
-        assert_eq!(row["requires"]["rustAbi"], 8);
+        assert_eq!(row["requires"]["rustAbi"], inputs["rustAbi"]);
         assert_eq!(row["requires"]["rustMode"], "wasm");
         assert_eq!(row["requires"]["rustTarget"], "wasm32-unknown-unknown");
     }
@@ -756,13 +759,19 @@ fn signed_release_requires_the_complete_real_supplemental_roster() {
     )
     .unwrap();
     for card in &cards {
-        receipt["envelope"]["assets"]
+        receipt["assets"]["assets"]
             .as_array_mut()
             .unwrap()
             .push(json!({
                 "name":card["name"],"sha256":card["sha256"],"bytes":card["bytes"],
-                "url":format!("../../blobs/{}",card["sha256"].as_str().unwrap())}));
+                "url":format!("./{}",card["sha256"].as_str().unwrap())}));
     }
+    // The head names the grown index by its canonical bytes.
+    let index = exact_update::canonical_bytes(&receipt["assets"].to_string()).unwrap();
+    receipt["envelope"]["assets"] = json!({
+        "url": format!("../../blobs/{}", exact_update::sha256_hex(&index)),
+        "sha256": exact_update::sha256_hex(&index), "bytes": index.len(),
+        "count": receipt["assets"]["assets"].as_array().unwrap().len()});
     // A fresh process-local test key: no publisher's private key is stored.
     let canonical = exact_update::canonical_bytes(&receipt["envelope"].to_string()).unwrap();
     let output = crate::bun().args(["-e", r#"
@@ -878,11 +887,14 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
 
 fn signed_fixture() -> (Compat, Value, Vec<u8>) {
     let raw = include_bytes!("../../../update/tests/it/fixtures/publisher/exact.json");
-    let head = Envelope::parse(raw).unwrap();
+    let index = include_bytes!("../../../update/tests/it/fixtures/publisher/assets.json");
+    let mut head = Envelope::parse(raw).unwrap();
+    head.read_index(index).unwrap();
     let plan = include_bytes!("../../../update/tests/it/fixtures/publisher/app.plan").to_vec();
     let key = include_str!("../../../update/tests/it/fixtures/publisher/caltrain-2026.pub").trim();
     let mut assets = head
-        .assets
+        .assets()
+        .unwrap()
         .iter()
         .map(|a| json!({"name":a.name,"sha256":a.sha256,"bytes":a.bytes}))
         .collect::<Vec<_>>();
@@ -901,7 +913,8 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
     };
     (
         compat,
-        json!({"envelope":serde_json::from_slice::<Value>(raw).unwrap()}),
+        json!({"envelope":serde_json::from_slice::<Value>(raw).unwrap(),
+            "assets":serde_json::from_slice::<Value>(index).unwrap()}),
         plan,
     )
 }
@@ -909,8 +922,12 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
 #[test]
 fn a_production_sequence_is_bound_to_a_signed_matching_complete_bundle() {
     let (mut compat, receipt, plan) = signed_fixture();
+    compat.embedded["version"] = json!("2.3.4");
+    compat.embedded["buildNumber"] = json!("56");
     apply_release(&mut compat, &serde_json::to_vec(&receipt).unwrap(), &plan).unwrap();
     assert_eq!(compat.embedded["seq"], 1);
+    assert_eq!(compat.embedded["version"], "2.3.4");
+    assert_eq!(compat.embedded["buildNumber"], "56");
     assert_eq!(compat.embedded["genesis"], false);
     assert_eq!(compat.embedded["entryDigest"].as_str().unwrap().len(), 64);
     let baked = Baked::from_compat(&compat.to_json(), &plan).unwrap();
@@ -934,6 +951,14 @@ fn a_production_sequence_is_bound_to_a_signed_matching_complete_bundle() {
     let (mut wrong, mut forged, _) = signed_fixture();
     forged["envelope"]["stream"]["seq"] = json!(41);
     assert!(apply_release(&mut wrong, &serde_json::to_vec(&forged).unwrap(), &plan).is_err());
+    // An index that is not the bytes the signed head names is refused.
+    let (mut wrong, mut forged, _) = signed_fixture();
+    forged["assets"]["assets"][0]["bytes"] = json!(1);
+    assert!(
+        apply_release(&mut wrong, &serde_json::to_vec(&forged).unwrap(), &plan)
+            .unwrap_err()
+            .contains("asset index")
+    );
     let (mut wrong, _, _) = signed_fixture();
     wrong.channel = "another".into();
     assert!(apply_release(&mut wrong, &serde_json::to_vec(&receipt).unwrap(), &plan).is_err());

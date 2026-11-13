@@ -612,6 +612,21 @@ fn a_missing_component_is_the_other_ends_along_the_whole_segment() {
         .iter()
         .filter(|s| s.0 < 0.5)
         .all(|s| s.1 == [1.0, 0.0, 0.0]));
+    // An inset end stop extends the colour it has in the segment it ends,
+    // not its `none` as 0: each of these is solid red (CSS Images 4 §3.5.2).
+    // Chrome 157 draws the first fading from black over 0–25%, which is not
+    // the first stop's colour.
+    for css in [
+        "linear-gradient(in srgb, color(srgb none 0 0) 25%, red 100%)",
+        "linear-gradient(in srgb, red 0%, color(srgb none 0 0) 75%)",
+        "linear-gradient(in srgb, color(srgb none 0 0) 25%, red 75%)",
+    ] {
+        let r = ramp(css);
+        assert_eq!((r[0].0, r[r.len() - 1].0), (0.0, 1.0), "{css}");
+        for (at, c, a) in r {
+            assert_eq!((c, a), ([1.0, 0.0, 0.0], 1.0), "{css} at {at}");
+        }
+    }
     // Missing from both ends: 0, not what a conversion made of it.
     for (_, c, _) in
         ramp("linear-gradient(in display-p3, color(srgb none 1 0), color(display-p3 none 0 1))")
@@ -642,6 +657,15 @@ fn legacy_stops_interpolate_as_written() {
     );
     let ramp = none.interpolated(false).unwrap();
     assert_eq!(ramp[0].1, [1.0, 0.0, 0.0]);
+    // So are a `light-dark()`'s halves, in either appearance: solid red, as
+    // Chrome 157 draws it, not a fade from black.
+    let pair = parse("linear-gradient(in srgb, light-dark(rgb(none 0 0), rgb(none 0 0)), red)");
+    assert!(pair.css().contains("rgb(none 0 0)"), "{}", pair.css());
+    for dark in [false, true] {
+        for (at, c, _) in pair.interpolated(dark).unwrap() {
+            assert_eq!(c, [1.0, 0.0, 0.0], "dark {dark} at {at}");
+        }
+    }
     // Its bytes are all a hex or a whole rgb() says: unsampled, as before.
     assert_eq!(
         parse("linear-gradient(rgb(255 0 0), #00f)").interpolation(false),

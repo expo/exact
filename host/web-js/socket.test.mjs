@@ -57,6 +57,7 @@ test('JS target socket mutations, mapper replies and answers echo ordered frames
   mutation sent as shape string queue
   mutation second as shape string
   mutation watched as shape string
+  mutation held as shape string
   action write(mode: string)
     send sent = write(mode)
   action rollback
@@ -70,6 +71,8 @@ test('JS target socket mutations, mapper replies and answers echo ordered frames
     send sent = write("second")
   action watch
     send watched = watched()
+  action hold
+    send held = write("hold-fetch")
   action askFor(what: string)
     q = what
   action rollbackAsync
@@ -150,12 +153,16 @@ test('JS target socket mutations, mapper replies and answers echo ordered frames
         text "leak"
       button press=write("leaked") testId="leaked"
         text "leaked"
+      button press=write("send-await-fetch") testId="send-await-fetch"
+        text "send, await, fetch"
+      button press=hold testId="hold"
+        text "send, wait, fetch"
       button press=rollbackAsync testId="rollback-async"
         text "rollback a promise"
 `);
   writeFileSync(resolve(dir, 'app.ts'), `export const appId = 'test.socket';
 export const grants = ${JSON.stringify(`net.websocket ${url}\nnet.fetch http://127.0.0.1:${peer.port}`)};
-const sockets = new Map(), controllers = new Map(), waiters = new Map(); let previous: any, answers: any, leaked = '';
+const sockets = new Map(), controllers = new Map(), waiters = new Map(); let previous: any, answers: any, leaked = '', holds = 0;
 export function answer(name: string, args: any): any {
   if (name === 'answers') return fetch(${JSON.stringify(`${url}/answers`)}, { exactStream(event: any, socket?: any) {
     if (event.type === 'open') { answers = socket; return 'open'; }
@@ -254,7 +261,15 @@ export function answer(name: string, args: any): any {
   if (mode === 'awaited') return (async () => { await Promise.resolve(); t.send('awaited'); return 'awaited:' + t.bufferedAmount; })();
   if (mode === 'leak') { (async () => { await Promise.resolve(); try { t.send('leak'); leaked = 'sent'; } catch (e: any) { leaked = e.name + ': ' + e.message; } })(); return 'leak'; }
   if (mode === 'leaked') return leaked;
-  if (mode === 'release') { waiters.get('held')?.('x'); return 'released'; }
+  // An answer in flight fetches in a later turn though its source sent, and sends again after.
+  if (mode === 'send-await-fetch') { t.send('before'); return (async () => { await Promise.resolve(); const r = await fetch(counter); t.send('after ' + r.status); return 'fetched ' + await r.text(); })(); }
+  if (mode === 'release') { for (const [k, go] of waiters) if (k === 'held' || k.startsWith('hold')) go('x'); return 'released'; }
+  // Sends, waits to be released, then fetches: one a newer send let go meanwhile fetches nothing.
+  if (mode === 'hold-fetch') {
+    const k = 'hold' + ++holds;
+    t.send(k);
+    return (async () => { await new Promise(go => waiters.set(k, go)); try { return k + ' fetched ' + (await fetch(counter)).status; } catch (e: any) { leaked = k + ': ' + e.message; throw e; } })();
+  }
   if (mode === 'later') return Promise.resolve().then(() => { try { s.send('later'); return 'sent later'; } catch (e: any) { return 'later: ' + e.message; } });
   s.send(mode);
   if (mode === 'throw') throw new Error('source failed');
@@ -440,6 +455,21 @@ export function answer(name: string, args: any): any {
     await browser.tap('leaked');
     await until(s => JSON.stringify(s.slots.sent).includes('InvalidStateError: socket.send: the answer has given its value or was let go'));
     expect(received.length).toBe(quiet);
+    // A mutation whose source sent fetches in a later turn, and sends once more after it (LLP 1016.000 D7, amended
+    // 2026-11-12): both frames and the one request go, in order.
+    await browser.tap('send-await-fetch');
+    await until(s => JSON.stringify(s.slots.sent).includes('fetched counted') && received.includes('after 200'));
+    expect([counted, received.slice(-2)]).toEqual([1, ['before', 'after 200']]);
+    // Two sends of one mutation: the newer lets the older go. Released, the older's fetch is refused and makes no
+    // request; the newer's goes.
+    await browser.tap('hold');
+    await browser.tap('hold');
+    await until(() => received.includes('hold2'));
+    await browser.tap('release');
+    await until(s => JSON.stringify(s.slots.held).includes('hold2 fetched 200'));
+    await browser.tap('leaked');
+    await until(s => JSON.stringify(s.slots.sent).includes('hold1: the answer was let go before this fetch'));
+    expect(counted).toBe(2);
   } finally {
     await browser?.close(); server?.stop(true); peer.stop(true); rmSync(dir, { recursive: true, force: true });
   }

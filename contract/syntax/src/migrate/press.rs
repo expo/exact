@@ -66,19 +66,11 @@ impl Paints<'_> {
                     self.owner(attrs, *span, in_text || native)?;
                     self.nodes(children, matches!(tag.as_str(), "text" | "time" | "option"))?;
                 }
-                Node::Use { children, .. } => self.nodes(children, in_text)?,
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    self.nodes(then, in_text)?;
-                    self.nodes(otherwise, in_text)?;
+                node => {
+                    for list in node.child_lists() {
+                        self.nodes(list, in_text)?;
+                    }
                 }
-                Node::Each { body, .. } => self.nodes(body, in_text)?,
-                Node::Match { some, none, .. } => {
-                    self.nodes(&some.1, in_text)?;
-                    self.nodes(none, in_text)?;
-                }
-                Node::Children { .. } => {}
             }
         }
         Ok(())

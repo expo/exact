@@ -217,9 +217,9 @@ const conv = (v, t, target) => { const a = arrays(v, t, answered.get(target)); a
 // The app's page module as a source sees it (`native`, LLP 1067 D5), where
 // the app has one: `later` goes to the module artifact's `later` (native.js,
 // loaded after first paint); the web has no synchronous `call`; `watch`
-// re-asks the resources of the answer's source when the module announces
-// the topic (LLP 1016.002).
-const watched = new Map(); // topic -> sources
+// re-asks the resources whose current answers watch the topic when the
+// module announces it (LLP 1016.002): an answer's topics are its call's
+// `watches`, which rt.js keeps on the resource it asked for.
 let watching = null, page = null, load = null;
 // A resource with a request in flight is not asked now: that request's
 // reply lands, then it is asked again (`t.again`, rt.js), once however many
@@ -231,8 +231,8 @@ const changed = (r, topic) => {
   if (!t.again) journal.push(`t=${clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
   t.again = true;
 };
-const announce = (topic, why) => commit(() => { const s = watched.get(topic), m = moduleWatched.get(topic); for (const r of Resources) if (s?.has(r.source) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
-const watch = topic => (watched.get(topic) ?? watched.set(topic, new Set()).get(topic)).add(watching);
+const announce = (topic, why) => commit(() => { const m = moduleWatched.get(topic); for (const r of Resources) if (r.watches?.has(topic) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
+const watch = topic => answering.call.watches.add(topic);
 // A native module's name called from data code (LLP 1133.002 D14): admitted by
 // the page runtime's modules.js as a Contract read is; a source's reader is
 // asked again when its answer changes, as a topic's is.
@@ -252,8 +252,9 @@ globalThis.__exact_module = body => {
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
 globalThis.exact.moduleReaders = key => Resources.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
-// The documents the answers watch, for the agent's `state.watches`, as the runner lists them.
-(globalThis.exact ??= {}).watchState = () => [...watched.keys()].sort().flatMap(t => {
+// The documents the answers watch, for the agent's `state.watches`, as the runner lists them: a development page
+// names it (build.mjs), since the agent drives only that, and a production page does not link it.
+export const watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
   const m = /^doc-watch(-recursive)?:(.*)$/.exec(t);
   return m ? [{ path: m[2], recursive: !!m[1] }] : [];
 });
@@ -571,7 +572,7 @@ export function install(data, mixed = false, modules = null) {
   // paint (rt.js `painted`), whether or not anything asks `later`.
   load = modules && (() => painted().then(modules));
   if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => journal.push(`t=${clock.now} native: ${e.message}`));
-  let keys = null, asking = '', thrown = null, threwRead = false;
+  let keys = null, asking = '', thrown = null, threwRead = false, threwWatches = null;
   // The answer an async function was called under, put back around each of
   // its steps by the bundle's async helper (js/bake/src/typescript.mjs
   // `asyncContextHelper`, LLP 1133.002 D14), as Hermes's prelude does with
@@ -595,11 +596,14 @@ export function install(data, mixed = false, modules = null) {
   let seeded = !source.kept;
   const seed = () => {
     seeded = true;
-    const page = checkpoint().kept;
-    for (const r of page ? Resources : []) {
-      if (r.member) continue; // The checkpoint holds the list's aggregate; the source answers one member.
-      const k = page.get(r.name), types = sourceTypes[r.source];
-      if (k && types) try { source.kept(r.source, k[0].map((a, i) => named(a, types[0][i])), named(k[1], types[1])); } catch {}
+    for (const { source: sourceName, answers } of checkpoint().kept?.values() ?? []) {
+      const types = Object.hasOwn(sourceTypes, sourceName) ? sourceTypes[sourceName] : undefined;
+      if (!types) {
+        continue;
+      }
+      for (const [args, value] of answers) {
+        try { source.kept(sourceName, args.map((a, i) => named(a, types[0][i])), named(value, types[1])); } catch {}
+      }
     }
   };
   const ts = (name, args, store, target, mutation = false, forced) => {
@@ -608,7 +612,7 @@ export function install(data, mixed = false, modules = null) {
     // The store as the module sees it (LLP 1018): a read marks the answer.
     const seen = createSecretFacade(store, tsGrantSet, kept);
     // A call that read the store and then threw read it too: its resource is a store reader (LLP 1146 §2.3).
-    threwRead = false;
+    threwRead = false; threwWatches = null;
     try { return answerWith(name, args, target, mutation, types, params, result, seen, forced); } catch (e) { threwRead = !!seen.read; throw e; }
   };
   const answerWith = (name, args, target, mutation, types, params, result, seen, forced) => {
@@ -617,7 +621,7 @@ export function install(data, mixed = false, modules = null) {
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now(), watches: new Set() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
@@ -627,7 +631,7 @@ export function install(data, mixed = false, modules = null) {
     };
     let r;
     thrown = null;
-    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
+    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; threwWatches = call.watches; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
     const shaped = types ? v => checked(name, v, result) : v => v;
     // A stream's answer has replied once it returns (LLP 1016.000): what runs on is background work.
     // Socket operations go out only with a value given now: not with a
@@ -638,7 +642,7 @@ export function install(data, mixed = false, modules = null) {
     }
     const effects = effectsOf(!mutation || !!(r && typeof r.then === 'function'));
     // An upload's request identity: the same request for newer arguments keeps it (rt.js, LLP 1016.000 D10).
-    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects }; }
+    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects, watches: call.watches }; }
     if (r && typeof r.then === 'function') {
       pendingAnswers++;
       call.seen = seen; // a read after an `await` makes a store reader too: rt.js looks when the answer lands (LLP 1146 §2.3)
@@ -661,10 +665,10 @@ export function install(data, mixed = false, modules = null) {
       call.flight = true;
       const stood = Object.assign(() => { call.stood = true; for (const go of call.waiting ?? []) go(); call.waiting = null; },
         { refused: why => { call.stood = false; for (const go of call.waiting ?? []) go.refused(why); call.waiting = null; call.unsent = []; } });
-      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call };
+      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call, watches: call.watches };
     }
     call.settled = true; dropTimers(call); answering.untraced.delete(call);
-    return { v: conv(shaped(r), result, target_), store: seen.read, effects };
+    return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches };
   };
   // Beside a Rust source (LLP 1027.002): a source this module does not
   // answer is the Rust module's, not ready until it loads; rust-data.js
@@ -704,5 +708,7 @@ export function install(data, mixed = false, modules = null) {
   // A resource's source that sent and then threw: what it sent, which rt.js `ask` queues with the commit.
   data.thrown = () => { const t = thrown ?? []; thrown = null; return t; };
   data.threwRead = () => { const read = threwRead; threwRead = false; return read; };
+  // What a call that threw watched: its resource watches it too, as the runner's failed ask does.
+  data.threwWatches = () => { const w = threwWatches; threwWatches = null; return w; };
   for (const f of data.q.splice(0)) f();
 }

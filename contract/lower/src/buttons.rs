@@ -228,14 +228,11 @@ impl Lowerer<'_> {
                         .chain(attrs)
                         .any(|a| rows(a).into_iter().any(crate::fields::disables))
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => self.paints_a_radio(then)? || self.paints_a_radio(otherwise)?,
-                Node::Each { body, .. } => self.paints_a_radio(body)?,
-                Node::Match { some, none, .. } => {
-                    self.paints_a_radio(&some.1)? || self.paints_a_radio(none)?
+                Node::Element { .. } | Node::Use { .. } | Node::Children { .. } => false,
+                node => {
+                    let [first, second] = node.child_lists();
+                    self.paints_a_radio(first)? || self.paints_a_radio(second)?
                 }
-                _ => false,
             };
             if paints {
                 return Ok(true);

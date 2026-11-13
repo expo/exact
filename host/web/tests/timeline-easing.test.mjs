@@ -25,7 +25,7 @@ const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target')
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB_JS = resolve(WEB, '../web-js');
 const GLUE = readFileSync(resolve(WEB, 'glue.js'), 'utf8');
-const commitSource = glueDeclarations(GLUE, ['apply', 'applyBatch', 'holdWake', 'holdOrientation']);
+const commitSource = glueDeclarations(GLUE, ['apply', 'heldLinks', 'applyBatch', 'holdWake', 'holdOrientation']);
 // The wasm host's real operation switch and commit tail, with the unrelated
 // host pieces inert. Keeping both functions in this one closure matters:
 // the `timelines` operation sets the flag that the commit tail consumes.
@@ -39,7 +39,7 @@ const hostCommitBody = `
   const prepareContexts = () => {}, runFocusCommands = () => {}, inertAncestor = () => false, refreshSymbols = () => {};
   const focusAutofocus = () => {}, inputHandlers = null, positionContexts = () => {}, markScrollDocument = () => {}, syncLists = () => {};
   const followScroll = () => {}, settleFollow = () => {}, settleValue = () => {}, letGo = () => {}, flowBatch = () => {}, noteFit = () => {}, refitTexts = () => {};
-  const navigation = {project() {}, apply() {}}, log = () => {}, inputReady = false, agentMode = false, agentKeepsStore = false, frameSampler = null, clocks = {sync() {}};
+  const navigation = {project() {}, apply() {}, holdLink() {}}, log = () => {}, inputReady = false, agentMode = false, agentKeepsStore = false, frameSampler = null, clocks = {sync() {}};
   const viewFor = (_, id) => views.get(id), applyProps = () => {}, attach = () => {}, listView = () => {};
   const host = { timelinesMoved, agentClock, followOnSeek, listSelection, textflow, page, inputHandlers, inputReady, frameSampler };
   ${commitSource}

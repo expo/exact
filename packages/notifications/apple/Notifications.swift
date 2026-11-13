@@ -17,6 +17,8 @@
 //   the app becomes active, announced when it changes.
 // - An unbundled process has no notification centre (`current()` traps), so
 //   there `available` is false and every call refuses `NotSupportedError`.
+// - `actions` (stage 2) names the category the host registered at launch
+//   from the plan's literal lists; the host's delegate hears the choice.
 import ExactPackage
 import Foundation
 #if os(macOS)
@@ -100,7 +102,12 @@ public final class NotificationsModule: NSObject, ExactPackage {
         // The platform's sound unless `silent` (D2): a hand-built app sets it, as this does.
         content.sound = silent ? nil : .default
         let event: [String: Any] = ["tag": tag, "data": args["data"] ?? NSNull(), "title": title, "body": args["body"] ?? NSNull()]
-        content.userInfo = context.activation("notificationclick", [tag, event], navigate: args["navigate"] as? String)
+        // A chosen action writes its name and reply into the event, argument 1 (stage 2).
+        content.userInfo = context.activation("notificationclick", [tag, event], navigate: args["navigate"] as? String, chosen: 1)
+        // The category the host registered from this literal list: its actions' names, joined by commas.
+        if let actions = args["actions"] as? [[String: Any]], !actions.isEmpty {
+            content.categoryIdentifier = actions.compactMap { $0["action"] as? String }.joined(separator: ",")
+        }
         if let words = args["apple"] as? [String: Any] { apply(words, to: content) }
         let at = (args["showTrigger"] as? NSNumber)?.doubleValue
         let center = UNUserNotificationCenter.current()

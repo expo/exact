@@ -335,8 +335,19 @@ impl Scanner<'_> {
         }
         let j = self.closes[i];
         if j < hi && len <= hi - j {
+            let (mut from, mut to) = (i + len, j);
+            // CommonMark 0.31.2 §6.1 strips one space from each end when both
+            // are spaces and the content is not all spaces; `construct` hides
+            // them with the backticks. A line ending is not a space here.
+            if self.ch(from) == ' '
+                && self.ch(to - 1) == ' '
+                && (from..to).any(|k| self.ch(k) != ' ')
+            {
+                from += 1;
+                to -= 1;
+            }
             let outer = self.pos(i)..self.pos(j + len);
-            self.construct(CODE, outer, self.pos(i + len)..self.pos(j), None);
+            self.construct(CODE, outer, self.pos(from)..self.pos(to), None);
             return Some(j + len);
         }
         Some(i + len)

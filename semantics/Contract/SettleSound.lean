@@ -25,7 +25,7 @@ typed in a scope `G`, and an environment of the slots and any well-typed
 settled values satisfies `EnvOK` for `G`. -/
 structure SettleHyps (p : Program) (G : Scope) (slots : List (String × Value)) (now : F64) : Prop where
   prog : ProgOK p
-  derives : ∀ d ∈ p.derives, ∃ t, HasTy p G [] d.body t
+  derives : ∀ d ∈ p.derives, ∃ t, HasTy p G [] d.body t ∧ t.le d.ty = true
   resources : ∀ r ∈ p.resources, ∃ ts, ResTy p G r ts
   gates : ∀ r ∈ p.resources, ∀ g, r.gate = .some g → ∃ u, HasTy p G [] g u
   env : ∀ st : Settled, SettledOK p st →
@@ -133,14 +133,22 @@ theorem settle_pass_good {p : Program} {o : Oracle} {slots now prev force} {G : 
       split
       · next v hv =>
         split
-        · simp [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, GoodW, Legit]
+        · simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, GoodW]
+          refine ⟨fun hHy => ?_, by unfold unfit; split <;> simp⟩
+          have HH := hH hHy
+          obtain ⟨t, ht, hle⟩ := HH.derives d hd
+          have := eval_sound_ty (n := fuel) HH.prog (HH.env s.1 hs) LocalsOK.nil ht
+          rw [hv] at this
+          simp only [GoodR] at this
+          rw [unfit_typed (typed_of_valTy v (ValTy.mono this hle))]
+          trivial
         · next hc => exact hs.addDerive hd (by simpa using hc)
       · exact hs
       · next e hne he =>
         simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, GoodW]
         refine ⟨fun hHy => ?_, hne⟩
         have HH := hH hHy
-        obtain ⟨t, ht⟩ := HH.derives d hd
+        obtain ⟨t, ht, -⟩ := HH.derives d hd
         have := eval_sound_ty (n := fuel) HH.prog (HH.env s.1 hs) LocalsOK.nil ht
         rw [he] at this
         exact this

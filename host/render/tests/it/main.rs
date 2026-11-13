@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 mod boot;
 mod checkpoints;
 mod direct;
+mod each;
 mod longpoll;
 mod overload;
 mod serve;
@@ -439,6 +440,7 @@ fn a_document_whose_ids_nobody_keeps_is_the_settled_tree_projected() {
                 ids,
                 exact_render::Projection::Auto,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
             .unwrap()
         });
@@ -895,6 +897,7 @@ component Clock
             exact_render::Ids::Any,
             projection,
             now,
+            &Default::default(),
         )
         .unwrap();
         for label in ["First", "Clock", "Resource"] {
@@ -919,4 +922,142 @@ component Clock
     )
     .unwrap();
     assert!(fresh.state.now_ms > now);
+}
+
+#[test]
+fn rendered_delivery_uses_web_version_inputs() {
+    warm_transport();
+    let plan = contract::compile(
+        r#"
+routes nav
+  home "/" render=build activate=never
+shape Build
+  version: string
+  buildNumber: string
+component App
+  resource build = exactDelivery() as shape Build
+  view
+    text `${build.version} (${build.buildNumber})`
+"#,
+    )
+    .unwrap();
+    for (version, build_number) in [("2.3.4", "56"), ("", "")] {
+        let delivery = exact_runner::delivery::Delivery {
+            version: version.into(),
+            build_number: build_number.into(),
+            ..Default::default()
+        };
+        let expected = format!(">{version} ({build_number})<");
+        for (ids, projection) in [
+            (exact_render::Ids::Any, exact_render::Projection::Direct),
+            (exact_render::Ids::Any, exact_render::Projection::Kernel),
+            (exact_render::Ids::Runtime, exact_render::Projection::Kernel),
+        ] {
+            let rendered = exact_render::render_with_at(
+                &plan,
+                &|| Blog::default(),
+                Default::default(),
+                "/",
+                &SITE,
+                Duration::from_secs(5),
+                ids,
+                projection,
+                1700000123456.,
+                &delivery,
+            )
+            .unwrap();
+            assert!(
+                rendered.document.root.contains(&expected),
+                "{ids:?} {projection:?}: {}",
+                rendered.document.root
+            );
+            assert_eq!(rendered.activate, exact_plan::ActivatePolicy::Never);
+        }
+    }
+}
+
+#[test]
+fn served_delivery_uses_the_web_builds_version() {
+    const CHILD: &str = "EXACT_SERVE_VERSION_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "served_delivery_uses_the_web_builds_version",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("EXACT_VERSION")
+            .env_remove("EXACT_BUILD_NUMBER")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = root.join(format!("target/render-version-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("app.json"), r#"{"name":"Version","app":{"id":"test.render-version","name":"Version"},"host":{"web":{}}}"#).unwrap();
+    std::fs::write(
+        dir.join("app.contract"),
+        r#"
+routes nav
+  home "/" render=request activate=never
+shape Build
+  version: string
+  buildNumber: string
+component App
+  resource build = exactDelivery() as shape Build
+  view
+    text `${build.version} (${build.buildNumber})` testId="version"
+"#,
+    )
+    .unwrap();
+    let dist = dir.join("dist");
+    let built = std::process::Command::new("bun")
+        .args(["host/web-js/build.mjs", "render-version", "--out"])
+        .arg(&dist)
+        .args(["--render", "none"])
+        .current_dir(&root)
+        .env("EXACT_APP_DIR", &dir)
+        .env("EXACT_VERSION", "2.3.4")
+        .env("EXACT_BUILD_NUMBER", "56")
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&built.stdout),
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let plan = Plan::decode(&std::fs::read(dist.join("app.plan")).unwrap()).unwrap();
+    let server = exact_render::Server::bind(
+        exact_render::Serve {
+            dist: dist.clone(),
+            port: 0,
+            name: "Version".into(),
+            origin: None,
+            deadline: Duration::from_secs(5),
+            renders: 1,
+            queue: 1,
+            viewport: Default::default(),
+            lifetime: Duration::from_secs(60),
+            generations: None,
+        },
+        plan,
+        "",
+    )
+    .unwrap();
+    let server = serve::serving(server, Blog::default);
+    let (status, _, body) = serve::get(server.addr, "/");
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains(">2.3.4 (56)<"), "{body}");
+    assert!(!body.contains("type=\"module\""), "activate=never: {body}");
 }

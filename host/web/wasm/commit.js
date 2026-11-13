@@ -1,4 +1,4 @@
-import { views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
+import { views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
 import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
@@ -30,7 +30,7 @@ function apply(batch) {
   host.listSelection?.before();
   prepareContexts(batch);
   for (const s of followedScrolls.values()) {
-    s.scrolled();
+    s.observed();
   }
   const focusCommands = [];
   const collectionOp = batch.ops?.find((op) => op.op === "collections");
@@ -62,6 +62,9 @@ function apply(batch) {
         }
         case "theme":
           (document.getElementById("exact-theme") ?? document.head.appendChild(Object.assign(document.createElement("style"), { id: "exact-theme" }))).textContent = op.css;
+          break;
+        case "large-title":
+          root.style.setProperty("--exact-large-title-size", `${op.size}px`);
           break;
         // LLP 1055 D7: the page's @keyframes; LLP 1121 D8: a view's state looks (src/host/looks.rs); LLP 1095 D4: the theme's :root rule
         case "language":
@@ -405,7 +408,7 @@ function apply(batch) {
           // forgot it (`letGo`), as the native executor does: a write that
           // was sent was sent, and runs on, uncounted (LLP 1016 D5).
           const requestIncarnation = host.incarnation, controller = new AbortController(), started = performance.now();
-          let p, first, messages = 0;
+          let p, first, messages = 0, batch = [];
           const opened = new Promise((r) => {
             first = r;
           });
@@ -422,11 +425,20 @@ function apply(batch) {
             active: () => requestIncarnation === host.incarnation,
             // A stream's message (LLP 1016.000): after its first, the stream is open, not in flight, so `clock settle`
             // stops waiting on it (D5), an upload only at its reply — what is counted ends there, so a wait already racing it wakes (LLP 1069.004).
+            // Messages that arrive together (`more`) are one delivery, one commit (D4; host.rs `outcome_from`).
             message: (m) => {
               if (messages++ === 0) {
                 first();
               }
-              safelyFulfill(requestIncarnation, op.ticket, 8, 0, `event: ${m.event}\nid: ${m.id}\ncoalesced: ${m.coalesced}\nprotocol: ${m.protocol ?? ""}`, encoder.encode(m.data));
+              batch.push(m);
+              if (m.more) {
+                return;
+              }
+              const data = batch.map((m) => encoder.encode(m.data)), body = new Uint8Array(data.reduce((n, d) => n + d.length, 0));
+              data.reduce((at, d) => (body.set(d, at), at + d.length), 0);
+              const head = batch.map((m, i) => `event: ${m.event}\nid: ${m.id}\ncoalesced: ${m.coalesced}\nprotocol: ${m.protocol ?? ""}${batch.length > 1 ? `\nlength: ${data[i].length}` : ""}`).join("\n\n");
+              batch = [];
+              safelyFulfill(requestIncarnation, op.ticket, 8, 0, head, body);
             }
           };
           controllers.add(controller);
@@ -599,6 +611,8 @@ function apply(batch) {
               });
               if (r.error) {
                 console.warn("exact:", r.error);
+              } else {
+                globalThis.exact.pickerOpened?.();
               }
             } else if (!el) {
               log(`picker: refused: no file input with id "${op.args?.[0]}"`);
@@ -771,7 +785,9 @@ function apply(batch) {
             }
           } else if (op.name === "setWindowOpacity") {
             log("setWindowOpacity refused: a page cannot change its window's opacity");
-          } else if (!/^(playSound|playSounds|stopSounds|sendMIDI|requestMIDIAccess)$/.test(op.name)) {
+          } else if (op.name === "hideWindow") {
+            log("hideWindow refused: a page cannot hide its window");
+          } else if (!/^(playSound|playSounds|stopSounds|setSounds|sendMIDI|requestMIDIAccess)$/.test(op.name)) {
             console.warn(`exact: unknown command ${op.name}`);
           }
           /* LLP 1069.010 */
@@ -857,6 +873,20 @@ function apply(batch) {
   for (const snapshot of collectionOp?.items ?? []) {
     followScroll(views.get(snapshot.view), false);
   }
+  // A scroll the batch asks for wins over the end-follow, and owns the
+  // followed scrollers it moves until it settles (LLP 1070.000 §15).
+  const reveals = [];
+  for (const command of focusCommands) {
+    const el = command.name === "scrollIntoView" ? liveById(command.args?.[0], root) : null;
+    if (el) {
+      reveals.push([ownFollowed(el), command.args?.[3] ?? "auto"]);
+    }
+  }
+  for (const [el, offsets] of pendingScrolls) {
+    if (followedScrolls.has(el) && Object.entries(offsets).some(([name, offset]) => el[name] !== offset)) {
+      ownFollowed(el);
+    }
+  }
   for (const s of followedScrolls.values()) {
     settleFollow(s);
   }
@@ -886,7 +916,11 @@ function apply(batch) {
         }
       }
       const s = followedScrolls.get(el);
-      if (s) {
+      if (s?.owned && !agentMode && el.style.scrollBehavior === "smooth") {
+        // settles at its `scrollend`
+      } else if (s?.owned) {
+        releaseFollowed(s);
+      } else if (s) {
         rememberScroll(s);
       }
     }
@@ -919,6 +953,14 @@ function apply(batch) {
       });
     }
   }
+  // An instant reveal has landed; a smooth one settles at its `scrollend`.
+  for (const [owned, behavior] of reveals) {
+    for (const s of owned) {
+      if (behavior === "instant" || behavior === "auto" && getComputedStyle(s.el).scrollBehavior !== "smooth") {
+        releaseFollowed(s);
+      }
+    }
+  }
   focusAutofocus();
   host.inputHandlers?.arrive();
   // then the focus follows the route, unless either set it (input-glue.js; LLP 1115.000 D4.2)
@@ -927,22 +969,26 @@ function apply(batch) {
   markScrollDocument();
   return batch.timers;
 }
+const heldLinks = new WeakMap();
 export function applyBatch(batch) {
   for (const line of batch.alerts?.splice(0) ?? []) {
     console.error("exact:", line);
   }
+  const link = heldLinks.get(batch) ?? navigation.holdLink();
   if (host.page?.hold(batch) || presence.hold(batch)) {
+    if (link) heldLinks.set(batch, link);
     return {
       timers: batch.timers,
       batch
     };
   }
+  heldLinks.delete(batch);
   host.textflow?.beforeBatch(batch);
   const began = host.frameSampler ? performance.now() : 0;
   // what applying it cost, for the next frame's record (LLP 1079 D3)
   globalThis.exact.applyDepth = (globalThis.exact.applyDepth ?? 0) + 1;
   try {
-    const timers = apply(batch);
+    const timers = link ? navigation.withLink(link, () => apply(batch)) : apply(batch);
     letGo();
     refitTexts();
     if (host.wakeLock) {

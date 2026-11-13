@@ -2,9 +2,9 @@
 // `app:/` file, a `data:` URL or an http(s) URL, read as an `image` reads it
 // (`RasterInput.open`) and decoded at the pill's size off the main thread, an
 // SVG as the image host draws one (`exact_svg_image_scene`, `SvgIsland`).
-// The pill's picture asks for it as it draws; until it is here the pill keeps
-// the icon's room empty, and its field is restyled when it comes, which draws
-// the pill again. One that cannot be read is logged with the step that
+// The editor and reader keep the icon's room empty until it arrives, then
+// restyle the field or invalidate the reader's layout and paint. An icon
+// that cannot be read is logged with the step that
 // failed, and its pill then keeps no room. A picture does not follow the
 // appearance, as a browser's `<img>` does not: an app gives a face another
 // source for another scheme.
@@ -12,13 +12,44 @@ import CExact
 import CoreGraphics
 import Foundation
 import ImageIO
+#if os(macOS)
+import AppKit
+package typealias AtomPlatformImage = NSImage
+#else
+import UIKit
+package typealias AtomPlatformImage = UIImage
+#endif
 
 package enum AtomIcons {
+
+    package static func symbol(_ source: String, size: CGFloat) -> AtomPlatformImage? {
+        guard source.hasPrefix("symbol:sf/") else { return nil }
+        let name = String(source.dropFirst("symbol:sf/".count))
+        #if os(macOS)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: size, weight: .regular))
+        #else
+        return UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size))
+        #endif
+    }
+
+    static func cached(_ source: String, pixels: Int) -> CGImage? {
+        lock.lock(); defer { lock.unlock() }
+        return decoded["\(pixels) \(source)"] ?? nil
+    }
+
     private static let lock = NSLock()
     /// Each source's picture by its decode's longest side; a failed one is
     /// remembered as none, so it is not read again.
     nonisolated(unsafe) private static var decoded: [String: CGImage?] = [:]
-    nonisolated(unsafe) private static var waiting: [String: [() -> Void]] = [:]
+    private struct Waiting {
+        var anonymous: [() -> Void] = []
+        var nodes: [ObjectIdentifier: () -> Void] = [:]
+        mutating func add(_ ready: @escaping () -> Void, subscriber: ObjectIdentifier?) {
+            if let subscriber { nodes[subscriber] = ready }
+            else { anonymous.append(ready) }
+        }
+    }
+    nonisolated(unsafe) private static var waiting: [String: Waiting] = [:]
     static let queue = DispatchQueue(label: "exact.atom-icons", qos: .userInitiated, attributes: .concurrent)
 
     /// `source`'s picture at most `pixels` on its longest side for a pill
@@ -26,22 +57,24 @@ package enum AtomIcons {
     /// once it is) or when it cannot be.
     package static func image(_ source: String, pixels: Int, node: NodeView?) -> CGImage? {
         let session = node?.presenter?.session
-        return image(source, pixels: pixels, resolver: session?.app.resolver, log: { [weak session] in session?.log($0) }) { [weak node] in node?.restyleMarkup() }
+        return image(source, pixels: pixels, resolver: session?.app.resolver, log: { [weak session] in session?.log($0) }, subscriber: node.map(ObjectIdentifier.init)) { [weak node] in node?.restyleMarkup() }
     }
 
     /// `source`'s picture, or nil while it is read or when it cannot be;
     /// `ready` is called on main once it is read, and `log` with the reason
     /// when it cannot be.
     static func image(_ source: String, pixels: Int, resolver: AssetResolver?, log: @escaping (String) -> Void = { _ in },
-                      ready: @escaping () -> Void) -> CGImage? {
+                      subscriber: ObjectIdentifier? = nil, ready: @escaping () -> Void) -> CGImage? {
         let key = "\(pixels) \(source)"
         lock.lock()
         if let known = decoded[key] { lock.unlock(); return known }
-        if waiting[key] != nil { waiting[key]?.append(ready); lock.unlock(); return nil }
+        if waiting[key] != nil { waiting[key]?.add(ready, subscriber: subscriber); lock.unlock(); return nil }
         // A `data:` URL is its own bytes; any other source is the app's to
         // resolve, asked again once its field is in a session.
         guard resolver != nil || source.hasPrefix("data:") else { lock.unlock(); return nil }
-        waiting[key] = [ready]
+        var pending = Waiting()
+        pending.add(ready, subscriber: subscriber)
+        waiting[key] = pending
         lock.unlock()
         queue.async { read(key, source, pixels: max(1, pixels), resolver: resolver, log: log, attempt: 0) }
         return nil
@@ -66,7 +99,8 @@ package enum AtomIcons {
         }
         lock.lock()
         decoded[key] = .some(image)
-        let readies = waiting.removeValue(forKey: key) ?? []
+        let pending = waiting.removeValue(forKey: key)
+        let readies = (pending?.anonymous ?? []) + Array(pending?.nodes.values ?? [:].values)
         lock.unlock()
         DispatchQueue.main.async {
             if let failure { log("atom icon refused: \(named): \(failure) (LLP 1045.000 D2)") }
@@ -81,6 +115,15 @@ package enum AtomIcons {
         if case .some(.none) = decoded["\(pixels) \(source)"] { return true }
         return false
     }
+
+    #if DEBUG
+    /// Pending callbacks, read under the loader's lock by its tests.
+    static func pendingCount(_ source: String, pixels: Int) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard let pending = waiting["\(pixels) \(source)"] else { return 0 }
+        return pending.anonymous.count + pending.nodes.count
+    }
+    #endif
 
     /// Forget every picture (a test's).
     package static func reset() { lock.lock(); decoded = [:]; lock.unlock() }

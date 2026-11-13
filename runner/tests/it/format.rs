@@ -15,8 +15,20 @@
 //! `Dec 31, 1` for 1 BC or `Jan 1, 10000`, or throws past TimeClip's range.
 //! Bun prints U+0020 before AM/PM, so no row is normalized.
 
-use exact_plan::{Stdlib, Value};
-use exact_runner::{formatting, stdlib::format_time};
+use exact_plan::{Plan, Stdlib, Value};
+use exact_runner::stdlib::format_time;
+
+/// A plan with no strings tables: every entry formats `en-US`, as a call
+/// whose format locale is `""` (or absent) does.
+static PLAN: std::sync::LazyLock<Plan> = std::sync::LazyLock::new(|| {
+    exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1)
+        .finish()
+        .unwrap()
+});
+
+fn formatting(f: Stdlib, args: &[Value]) -> Option<Value> {
+    exact_runner::formatting(f, args, &PLAN)
+}
 
 /// (epochMs, utcOffset, formatTime "short", formatDate "medium", formatDate "month-year").
 #[rustfmt::skip]

@@ -18,19 +18,6 @@ use crate::LowerError;
 use contract_syntax::inline::calls::shown;
 use contract_syntax::{Attr, Expr, Node, Span, TemplatePart};
 
-/// The children of a node, through choices.
-pub(super) fn arms(node: &Node) -> Vec<&[Node]> {
-    match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => vec![children],
-        Node::When {
-            then, otherwise, ..
-        } => vec![then, otherwise],
-        Node::Match { some, none, .. } => vec![&some.1, none],
-        Node::Each { body, .. } => vec![body],
-        Node::Children { .. } => Vec::new(),
-    }
-}
-
 /// One piece of a name: written text, or a `${…}` hole.
 #[derive(Clone, PartialEq)]
 enum Piece {
@@ -42,6 +29,13 @@ enum Piece {
 /// spell (`row-${i}`, `delete-${m.id}`).
 #[derive(Clone, PartialEq)]
 struct Name(Vec<Piece>);
+
+pub(super) fn names_may_match(a: &Expr, b: &Expr) -> bool {
+    match (Name::of(a), Name::of(b)) {
+        (Some(a), Some(b)) => a.may_match(&b),
+        _ => true,
+    }
+}
 
 impl Name {
     /// The name, when it is a literal or a template of holes it can spell.
@@ -131,11 +125,42 @@ impl Name {
 
     /// Whether some value of the holes could make the two names one.
     fn may_match(&self, other: &Name) -> bool {
-        if let (Some(a), Some(b)) = (self.literal(), other.literal()) {
-            return a == b;
+        if let Some(a) = self.literal() {
+            return other.can_be(&a);
+        }
+        if let Some(b) = other.literal() {
+            return self.can_be(&b);
         }
         let (ha, hb, ta, tb) = (self.head(), other.head(), self.tail(), other.tail());
         (ha.starts_with(&hb) || hb.starts_with(&ha)) && (ta.ends_with(&tb) || tb.ends_with(&ta))
+    }
+
+    /// Holes may be empty, but cannot remove or overlap the written text.
+    fn can_be(&self, literal: &str) -> bool {
+        let mut chunks = vec![String::new()];
+        for piece in &self.0 {
+            match piece {
+                Piece::Text(text) => chunks.last_mut().unwrap().push_str(text),
+                Piece::Hole(_) => chunks.push(String::new()),
+            }
+        }
+        let Some(mut rest) = literal.strip_prefix(chunks[0].as_str()) else {
+            return false;
+        };
+        if chunks.len() == 1 {
+            return rest.is_empty();
+        }
+        let Some(middle) = rest.strip_suffix(chunks.last().unwrap().as_str()) else {
+            return false;
+        };
+        rest = middle;
+        for chunk in &chunks[1..chunks.len() - 1] {
+            let Some(position) = rest.find(chunk.as_str()) else {
+                return false;
+            };
+            rest = &rest[position + chunk.len()..];
+        }
+        true
     }
 
     /// As written: the literal's text, a template's with its holes.
@@ -182,7 +207,7 @@ fn ids<'a>(nodes: &'a [Node], out: &mut Vec<(Name, &'a Node)>) -> Option<()> {
                 out.push((Name::of(&id.value)?, node));
             }
         }
-        for list in arms(node) {
+        for list in node.child_lists() {
             ids(list, out)?;
         }
     }
@@ -316,7 +341,7 @@ fn route_keys<'a>(nodes: &'a [Node], out: &mut Vec<&'a Attr>) {
                 continue;
             }
         }
-        for list in arms(node) {
+        for list in node.child_lists() {
             route_keys(list, out);
         }
     }

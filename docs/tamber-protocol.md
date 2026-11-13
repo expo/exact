@@ -255,8 +255,9 @@ No WebSocket (LLP 1121 §10, stage 3 commit 4). Everything is HTTP on the server
   the digests an `import` carries to the server). A larger one gets 413, or the connection is cut
   while it is being read. (*1.17*) The local loopback token's body may be 16 MiB (a CLI import's
   sources, which the server plans as any import), judged from its length before a byte is read;
-  every paired, remote or relayed client's stays 1 MiB, as does a request through `tamber tool --via`'s
-  proxy.
+  every paired, remote or relayed client's stays 1 MiB. `tamber tool --via`'s proxy sends on an
+  `import` that carries a token up to 16 MiB, for the server to judge that token, and every other
+  request up to 1 MiB.
 - **A client's `ops`** (*1.17*) are at most 1024 in one request (`transaction`, `propose`, a
   scrub): more is refused with 400 and `id: "tamber-ops-size"` before any is read. Operations the
   server applies itself (accepting a held proposal, a revert's, an import it plans) are no
@@ -1480,8 +1481,9 @@ A write reaches every running development build at once. Release builds take non
     gained or lost. Which tokens the plan keeps is LLP 1121 D7's retention (`tamber::Retention`):
     every role override, what the views may name, and in an app that can name a token outside its
     views (a data or native module) every token, bounded by `exports`. `propose` and a
-    transaction's `class` ask the same retention, as the build last found it, so a plain app's
-    token no view names is `live` to add, and the dev loops publish nothing for it.
+    transaction's `class` reuse the build's view analysis and close native component params
+    over the current design, including package defaults. A plain app's token no view or
+    native param names is `live` to add, and the dev loops publish nothing for it.
 - **The batch** is an event on the dev stream the builds already hold (`/__dev`; the JS target's
   `/__dev/page`): `{kind: "tamber-batch", structure, base, design, tokens: [{name, value,
   slices}]}`.

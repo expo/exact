@@ -36,6 +36,13 @@
      half-circles on every platform. */
   :root { --exact-curve: round; --exact-curve-reach: 1; }
   @supports (corner-shape: superellipse(2)) { :root { --exact-curve: superellipse(1.6); --exact-curve-reach: 1.52; } }
+  /* LLP 1057.003 D5: a `scroll()` or `view()` consumer is paused only where the browser has no
+     `animation-timeline`, which would play it on the clock (css.rs). */
+  :root { --exact-timeline-play: paused; }
+  @supports (animation-timeline: scroll()) { :root { --exact-timeline-play: running; } }
+  /* Where it has none, a consumer of a timeline the browser would run (`--exact-css-timeline`, css.rs) shows its own
+     values, as an inactive timeline's does: no motion piece may be there to put it out of effect. */
+  @supports not (animation-timeline: scroll()) { [style*="--exact-css-timeline"] { animation-name: none !important; } }
   @media (min-resolution: 1.5dppx) { :root { --exact-hairline: calc(1px / 1.5); } }
   @media (min-resolution: 2dppx) { :root { --exact-hairline: .5px; } }
   @media (min-resolution: 2.5dppx) { :root { --exact-hairline: .4px; } }
@@ -370,6 +377,14 @@
      (element.rs `material_css`). It wins over an authored backdrop-filter on the same node, as the native hosts do. */
   [backgroundMaterial] { backdrop-filter: blur(var(--exact-material-blur)) saturate(var(--exact-material-saturate)) !important; background-color: light-dark(var(--exact-material-light), var(--exact-material-dark)); }
   [backgroundMaterial^="glass"] { box-shadow: 0 8px 24px #0000000d, inset 0 0 1px light-dark(#ffffffcc, #ffffff33); background-color: var(--exact-glass-tint, light-dark(var(--exact-material-light), var(--exact-material-dark))); }
+  /* LLP 1123 D9: a content owner's local insets, which a length reads as `var(--exact-safe-area-inset-*)`, each
+     registered so it computes to a length and inherits. The document's are the browser's `env()`; a sheet the
+     look draws says its own (neutral.css). */
+  @property --exact-safe-area-inset-top { syntax: "<length>"; inherits: true; initial-value: 0px; }
+  @property --exact-safe-area-inset-right { syntax: "<length>"; inherits: true; initial-value: 0px; }
+  @property --exact-safe-area-inset-bottom { syntax: "<length>"; inherits: true; initial-value: 0px; }
+  @property --exact-safe-area-inset-left { syntax: "<length>"; inherits: true; initial-value: 0px; }
+  :root { --exact-safe-area-inset-top: env(safe-area-inset-top, 0px); --exact-safe-area-inset-right: env(safe-area-inset-right, 0px); --exact-safe-area-inset-bottom: env(safe-area-inset-bottom, 0px); --exact-safe-area-inset-left: env(safe-area-inset-left, 0px); }
   /* `-exact-glass-tint`: the glass's own, never a glass box's below it. */
   @property --exact-glass-tint { syntax: "*"; inherits: false; }
   /* LLP 1061: a press multiplies the scale row's current number, including

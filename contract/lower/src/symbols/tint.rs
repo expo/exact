@@ -93,19 +93,12 @@ fn walk(nodes: &[Node], face: bool, pass: &mut Pass<'_>) {
                 let face = tag == "button" && native(node, attrs, pass.lowered, pass.made);
                 walk(children, face, pass);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, face, pass);
-                walk(otherwise, face, pass);
-            }
-            Node::Each { body, .. } => walk(body, face, pass),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, face, pass);
-                walk(none, face, pass);
-            }
             Node::Use { children, .. } => walk(children, false, pass),
-            Node::Children { .. } => {}
+            node => {
+                for list in node.child_lists() {
+                    walk(list, face, pass);
+                }
+            }
         }
     }
 }
