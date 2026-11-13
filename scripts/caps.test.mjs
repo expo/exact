@@ -449,11 +449,11 @@ for (const [name, html, files, expectCode, expect] of [
   // The cards are in the index the envelope names, fetched before the queue.
   const index = Buffer.from(JSON.stringify({ assets }));
   const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets: { url: origin + 'assets.json', bytes: index.length, sha256: sha256(index), count: 5 }, module };
-  let pending = [], peak = 0, count = 0, corrupt = false, wake = () => {};
+  let pending = [], peak = 0, count = 0, corrupt = false, asked = false, wake = () => {};
   const context = { crypto: globalThis.crypto, TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
     fetch: async url => {
-      if (url === origin + 'exact.json') return new Response(JSON.stringify(envelope));
+      if (url === origin + 'exact.json') { asked = true; return new Response(JSON.stringify(envelope)); }
       if (url === origin + 'assets.json') return new Response(index);
       count++;
       return await new Promise(resolve => {
@@ -464,8 +464,9 @@ for (const [name, html, files, expectCode, expect] of [
     } };
   runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
   const run = async (held) => {
-    let done = false;
-    const promise = context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal, false, held)
+    let done = false; asked = false;
+    // The held assets are read after the envelope: a page that boots this generation holds none before.
+    const promise = context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal, false, () => asked ? held : null)
       .then(value => ({ value }), error => ({ error })).finally(() => { done = true; wake(); });
     await new Promise(resolve => {
       wake = resolve;

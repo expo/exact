@@ -92,7 +92,7 @@ async function readEnvelope(url, signal) {
   const response = await readBounded(sameOrigin(url, location.href), 64 * 1024, signal);
   return { envelope: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes)), url: response.url };
 }
-async function fetchGeneration(message, signal, first = false, held = null) {
+async function fetchGeneration(message, signal, first = false, held = () => null) {
   const started = performance.now();
   const { envelope, url } = await readEnvelope(message.envelope, signal);
   const identity = envelope.dev;
@@ -136,7 +136,9 @@ async function fetchGeneration(message, signal, first = false, held = null) {
       || cards.reduce((sum, card) => sum + card.bytes, 0) > 4 * 1024 * 1024 * 1024) throw new Error("generation exceeds the payload budget");
   // All admitted payloads are independent. One bounded queue avoids separate
   // network rounds for the plan, assets and module without raising concurrency.
-  const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.map(card => [card, card.name, held?.get(card.name)]),
+  // Read now, after the page booted: an announcement of the generation it boots is fetched beside that boot.
+  const live = held();
+  const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.map(card => [card, card.name, live?.get(card.name)]),
     ...(envelope.module ? ['receipt', 'web'].map(key => [envelope.module[key], `module ${key}`]) : []),
     ...(rust ? [[rust.wasm.receipt, 'Rust receipt'], [rust.wasm.module, 'Rust Wasm']] : [])];
   const loaded = new Array(jobs.length);
@@ -232,10 +234,10 @@ if (es) {
   }
   // The module loader uses this implementation on trusted LAN HTTP too.
   globalThis.exact.moduleDigest = digest;
-  let retry = null, activeGeneration = null;
+  let retry = null, activeGeneration = null, firstAssets = null;
   // Inspect mode's outline, hidden on a new generation (set below).
   let outlineNone = () => {};
-  const client = generationClient({ fetchGeneration: (message, signal) => fetchGeneration(message, signal, false, activeGeneration?.assets), programChanged: () => { clearTimeout(retry); location.reload(); },
+  const client = generationClient({ fetchGeneration: (message, signal) => fetchGeneration(message, signal, false, () => activeGeneration?.assets ?? firstAssets), programChanged: () => { clearTimeout(retry); location.reload(); },
     apply: async (candidate, current) => {
       if (!current()) return false;
       const t = performance.now();
@@ -289,6 +291,8 @@ if (es) {
       try {
         const candidate = await fetchGeneration(JSON.parse(firstMeta.content), AbortSignal.timeout(15000), true);
         if (!candidate.rust) { client.adopt(candidate.generation); activeGeneration = candidate; }
+        // A Rust module is applied as an update of this generation, which keeps these assets.
+        else firstAssets = candidate.assets;
         return candidate;
       } catch (error) { show(String(error)); console.error("exact dev:", String(error)); return null; }
     };
