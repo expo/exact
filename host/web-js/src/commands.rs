@@ -1,11 +1,35 @@
 //! What a compiled plan links only because it uses it (LLP 1047.002 D1): the
-//! host commands its actions name, imported from commands.js by name, and the
-//! dialog glue its dialogs, alerts, menus and popovers need on the page.
+//! host commands its actions name, imported from commands.js by name, the
+//! dialog glue its dialogs, alerts, menus and popovers need on the page, and
+//! the pieces its links and iframes need.
 use crate::code::Uses;
 use crate::style;
 use exact_kernel::PropId;
 use exact_plan::{BindingKind, NodesId, Plan};
+use exact_web::host::template::Parts;
 use std::collections::BTreeSet;
+
+/// Whether a link binds its `href`, `rel` or `target`: its `rel` and `target`
+/// then follow them (links.js). A static link's the template wrote whole
+/// (element.rs `props_of`).
+pub(super) fn links(plan: &Plan, parts: &[Option<Parts>]) -> bool {
+    parts.iter().zip(plan.nodes.iter()).any(|(p, n)| {
+        p.as_ref().is_some_and(|p| p.tag == "a")
+            && n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+                b.kind == BindingKind::Prop
+                    && [PropId::Href, PropId::Rel, PropId::Target]
+                        .iter()
+                        .any(|id| b.id == *id as u16)
+                    && style::literal(plan, plan.code(b.expr)).is_none()
+            })
+    })
+}
+
+/// Whether the view has an iframe, whose guest origin, sources and app files
+/// iframes.js keeps.
+pub(super) fn iframes(parts: &[Option<Parts>]) -> bool {
+    parts.iter().flatten().any(|p| p.tag == "iframe")
+}
 
 /// The names host/web-js/commands.js exports: the host commands a compiled
 /// plan imports from it by name. Read from the file as the compiler is built,

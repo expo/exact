@@ -8,7 +8,7 @@ import { copyFileSync, cpSync, statSync, existsSync, lstatSync, mkdirSync, mkdte
 import { tmpdir } from 'node:os';
 import { basename, relative, resolve } from 'node:path';
 import { outsideWorkspaceProblems, pathFrom, readManifest, resolveApp } from '../scripts/app.mjs';
-import { bringPlatform, ensureShells, namePlatform, platformOf, shellCrates, withoutPlatformKeys } from '../scripts/app-shells.mjs';
+import { appCrateName, bringPlatform, ensureShells, namePlatform, platformOf, shellCrates, withoutPlatformKeys } from '../scripts/app-shells.mjs';
 import { authoredWorkspace } from '../scripts/cargo-check.mjs';
 import { appVerbs, beforeBuild } from '../scripts/app-cli.mjs';
 import { namesNative, nativePlatforms } from '../scripts/deploy.mjs';
@@ -747,6 +747,26 @@ test('offline, with none of exact2\'s crates in Cargo\'s cache, the generated wo
     for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     rmSync(parent, { recursive: true, force: true });
   }
+});
+
+test('--with tvos is refused before anything is written, since an Apple TV build takes host.ios', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-'));
+  try {
+    const fresh = resolve(parent, 'tv-new');
+    assert.throws(() => createApp(fresh, { with: ['tvos'] }), /--with tvos: .*an Apple TV build takes host\.ios/);
+    assert.equal(existsSync(fresh), false);
+    const dir = resolve(parent, 'tv-update');
+    createApp(dir);
+    const before = readFileSync(resolve(dir, 'app.json'), 'utf8');
+    assert.throws(() => createApp(dir, { update: true, with: ['ios', 'tvos'] }), /update --with tvos/);
+    assert.equal(readFileSync(resolve(dir, 'app.json'), 'utf8'), before, 'a refused update leaves the manifest as it was');
+    createApp(dir, { update: true, with: ['ios'] });
+    assert.ok(readManifest(dir, 'tv-update').host.ios, 'the platform an Apple TV build takes is one the reader accepts');
+    // An authored tvOS crate still names the app's crates, though tvOS is no platform --with takes.
+    mkdirSync(resolve(dir, 'tvos'));
+    writeFileSync(resolve(dir, 'tvos/Cargo.toml'), '[package]\nname = "set-top-tvos"\n');
+    assert.equal(appCrateName(dir), 'set-top');
+  } finally { rmSync(parent, { recursive: true, force: true }); }
 });
 
 test('failed creation removes the half-written app', () => {

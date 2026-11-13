@@ -1,6 +1,7 @@
 # clearTimeout leaves timers armed when their IDs arrive as strings
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A data source's `clearTimeout`, natively (js/src/time.js) and on the web JS target (ts-fetch.js), converts its argument to a `long` as Web IDL does before looking the timer up, so a handle's string or a boxed number clears it.
 **Systems:** JavaScript data sources, js/src/binary.js
 **Author:** Codex
 **Date:** 2026-11-12

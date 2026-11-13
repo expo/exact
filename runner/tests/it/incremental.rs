@@ -1,8 +1,8 @@
 //! An incremental update equals a full one (LLP 1005 §8): every app plan,
 //! compiled through the Contract API, runs twice in lockstep — once
 //! evaluating only what changed, once evaluating everything — through seeded
-//! random host events, clock seeks, late replies, store reads and writes,
-//! deferred activation, collection feedback (stale reports included) and
+//! random host and module events, clock seeks, late replies, store reads and
+//! writes, deferred activation, collection feedback (stale reports included) and
 //! reorder gestures. Receipts, the kernel tree, carried state, effects, the
 //! journal and every collection's protocol state (revision, epochs,
 //! measurements) must agree after every step; every run must boot, never
@@ -442,6 +442,56 @@ fn reorder(full: &mut Runner<Fake>, incremental: &mut Runner<Fake>, y: f64) -> (
     (a, b)
 }
 
+/// Arguments for a module event, in the shapes its action declares.
+fn module_args(plan: &Plan, row: usize, rng: &mut Rng) -> String {
+    let action = plan.action(plan.module_events[row].action);
+    let mut data = Fake::default();
+    let args: Vec<_> = action
+        .params
+        .iter()
+        .map(|p| {
+            let ty = plan.param(p).ty;
+            let value = data.gen(plan, ty, rng.next(), rng.next(), 0);
+            let shape = exact_js_value::Shape::from_plan(plan, ty).unwrap();
+            exact_js_value::to_json(&value, &shape).unwrap()
+        })
+        .collect();
+    serde_json::to_string(&args).unwrap()
+}
+
+fn module_event(r: &mut Runner<Fake>, plan: &Plan, row: usize, args: &str, id: u64) -> String {
+    let row = &plan.module_events[row];
+    let extension = plan.str(row.extension);
+    let name = plan.str(row.declared);
+    let raised = plan.str(row.raised);
+    if raised == "wake" {
+        r.raise_wake(
+            extension,
+            name,
+            args,
+            exact_runner::WakeHow {
+                id,
+                ..Default::default()
+            },
+        )
+    } else {
+        r.raise_module_event(
+            extension,
+            name,
+            args,
+            if raised == "activation" {
+                exact_runner::CallOrigin::App
+            } else {
+                exact_runner::CallOrigin::Device
+            },
+        )
+    }
+    .unwrap();
+    let (receipts, error) = r.apply_announced();
+    let result = error.map_or(Ok(receipts), Err);
+    format!("{result:?}")
+}
+
 /// Drive both runners through `steps` seeded steps; the number of commits.
 fn lockstep(app: &str, plan: &Plan, seed: u64, steps: usize, deferred: bool) -> usize {
     let mut full = boot(plan, true, deferred);
@@ -513,22 +563,39 @@ fn lockstep(app: &str, plan: &Plan, seed: u64, steps: usize, deferred: bool) -> 
             }
             _ => {
                 let views: Vec<(&ViewId, &Vec<EventKind>)> = handlers.iter().collect();
-                if views.is_empty() {
+                // An unsupported platform can hide a fixture's controls while
+                // its root still hears module events.
+                let choices = views.len() + plan.module_events.len();
+                if choices == 0 {
                     continue;
                 }
-                let (view, kinds) = *rng.pick(&views);
-                let kind = *rng.pick(kinds);
-                let Some(event) = event(&mut rng, kind) else {
-                    continue;
-                };
-                what = format!("{event:?} on view {view}");
-                let result = incremental.dispatch(*view, event.clone());
-                // A view with listeners is always found where it lives.
-                assert!(
-                    !matches!(result, Err(RunnerError::UnknownView(_))),
-                    "{app} step {step}: {what} found no instance"
-                );
-                (outcome(full.dispatch(*view, event)), outcome(result))
+                let choice = rng.below(choices);
+                if choice >= views.len() {
+                    let row = choice - views.len();
+                    let args = module_args(plan, row, &mut rng);
+                    what = format!(
+                        "module event {} {args}",
+                        plan.str(plan.module_events[row].declared)
+                    );
+                    (
+                        module_event(&mut full, plan, row, &args, step as u64 + 1),
+                        module_event(&mut incremental, plan, row, &args, step as u64 + 1),
+                    )
+                } else {
+                    let (view, kinds) = views[choice];
+                    let kind = *rng.pick(kinds);
+                    let Some(event) = event(&mut rng, kind) else {
+                        continue;
+                    };
+                    what = format!("{event:?} on view {view}");
+                    let result = incremental.dispatch(*view, event.clone());
+                    // A view with listeners is always found where it lives.
+                    assert!(
+                        !matches!(result, Err(RunnerError::UnknownView(_))),
+                        "{app} step {step}: {what} found no instance"
+                    );
+                    (outcome(full.dispatch(*view, event)), outcome(result))
+                }
             }
         };
         assert_eq!(a, b, "{app} step {step}: {}", clip(&what));
@@ -701,10 +768,10 @@ fn every_app_plan_updates_incrementally_exactly_as_it_does_in_full() {
                                         deferred,
                                     );
                                     eprintln!("{app} seed {seed}: {commits} commits");
-                                    // A plan with nothing to press (the hello
-                                    // app's one text) commits nothing, rightly.
+                                    // The hello app's one text has no event to hear.
                                     assert!(
-                                        plan.handlers.is_empty() || commits >= steps / 4,
+                                        (plan.handlers.is_empty() && plan.module_events.is_empty())
+                                            || commits >= steps / 4,
                                         "{app} seed {seed}: only {commits} commits"
                                     );
                                     commits
@@ -727,6 +794,42 @@ fn every_app_plan_updates_incrementally_exactly_as_it_does_in_full() {
         "only {total} commits across {} apps",
         names.len()
     );
+}
+
+#[test]
+fn generated_module_events_change_app_state() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps/geofence-fixture/app.contract");
+    let plan = contract::compile_path(&path).unwrap();
+    let row = plan
+        .module_events
+        .iter()
+        .position(|e| plan.str(e.declared) == "geofenceenter")
+        .unwrap();
+    for seed in 1..=4u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let mut full = boot(&plan, true, false);
+        let mut incremental = boot(&plan, false, false);
+        for count in 1..=2 {
+            let args = module_args(&plan, row, &mut rng);
+            let before = full.kernel().export(None).unwrap();
+            assert_eq!(
+                module_event(&mut full, &plan, row, &args, count),
+                module_event(&mut incremental, &plan, row, &args, count),
+            );
+            assert_eq!(observe(&mut full), observe(&mut incremental));
+            assert_eq!(
+                full.carry()
+                    .slots
+                    .iter()
+                    .find(|(name, _)| name == "arrivals")
+                    .unwrap()
+                    .1,
+                Value::Number(count as f64),
+                "seed {seed}: each typed arrival reaches its action"
+            );
+            assert_ne!(full.kernel().export(None).unwrap(), before);
+        }
+    }
 }
 
 /// Store provenance travels through derives and resource arguments even

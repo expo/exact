@@ -147,8 +147,10 @@ export class Sync {
 
   private connected() { return this.status === 'open' || this.status === 'ready'; }
 
-  /** A socket is being opened: `sessionId` names this client for as long as the module lives, so it is kept from the first. */
+  /** A socket is being opened: `sessionId` names this client for as long as the module lives, so it is kept from the first.
+   *  One still open is being replaced, and nothing of it will reach this client again, so it ends as its close would. */
   connecting(sessionId: string) {
+    if (this.connected()) this.closed('a new connection replaced it');
     if (!this.sessionId) this.sessionId = sessionId;
     this.status = 'connecting';
     this.error = '';

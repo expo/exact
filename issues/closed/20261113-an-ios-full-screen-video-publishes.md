@@ -1,6 +1,7 @@
 # An iOS full-screen video publishes Now Playing while a claimant owns the session
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The iOS full-screen controller takes `avkitPublishes` when made, and `sessionAVKitPublishes` sets it while it shows.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

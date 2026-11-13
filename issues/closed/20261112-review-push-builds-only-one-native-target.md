@@ -1,6 +1,7 @@
 # `push` builds only one native target for a channel with several targets
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `push` builds the Rust module for each native target its streams' binaries run, gives each stream the one for its target, and checks every stream's update before publishing any.
 **Systems:** scripts/push.mjs, scripts/rust.mjs
 **Author:** Codex
 **Date:** 2026-11-12

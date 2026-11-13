@@ -1,6 +1,7 @@
 # Queued file writes read a reused buffer after the call
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A data module's `writeFile`, `atomicWriteFile` and `appendFile` copy their bytes at the call (js/src/storage.js), so a write queued behind another operation writes what it was called with however the app reuses its buffer.
 **Systems:** js/src/prelude.js
 **Severity:** P2
 **Author:** Codex, repository review

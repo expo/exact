@@ -1,6 +1,7 @@
 # Refreshing a live Convex resource leaves its pending mutations and actions unresolved
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Connecting again while a connection is open ends that connection in `Sync.connecting` as its close would: acknowledged mutations settle with their results, unanswered requests reject saying they may have run, and none is sent again.
 **Systems:** packages/convex/index.ts, packages/convex/sync.ts
 **Author:** Codex
 **Date:** 2026-11-12

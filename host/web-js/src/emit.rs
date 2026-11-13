@@ -206,19 +206,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             }
         }
     }
-    // A link's `rel` and `target` follow its bound `href`, `rel` or `target` (links.js); a static
-    // link's the template wrote whole (element.rs `props_of`), so a plan without a bound one never
-    // links it (LLP 1047.002 D1).
-    let links = parts.iter().zip(plan.nodes.iter()).any(|(p, n)| {
-        p.as_ref().is_some_and(|p| p.tag == "a")
-            && n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
-                b.kind == BindingKind::Prop
-                    && [PropId::Href, PropId::Rel, PropId::Target]
-                        .iter()
-                        .any(|id| b.id == *id as u16)
-                    && style::literal(plan, plan.code(b.expr)).is_none()
-            })
-    });
+    let links = commands::links(plan, &parts);
+    let iframes = commands::iframes(&parts);
     let mut em = Em {
         plan,
         sites: &sites,
@@ -796,6 +785,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (em.follow, "import\"./follow.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),
+            (iframes, "import\"./iframes.js\";"),
             (midi, "import{midi as $midi}from\"./midi.js\";"),
             (transport, "import{sequence as $sequence,transport as $transport}from\"./transport.js\";"),
             (!facts.is_empty(), facts.as_str()),

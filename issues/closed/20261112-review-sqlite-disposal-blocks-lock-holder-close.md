@@ -1,6 +1,7 @@
 # Disposing a SQLite lock waiter blocks the holder's close until timeout
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Disposing a client of the web SQLite worker ends its opens still waiting for a file lock (`lockPaths` takes a cancel signal), so its disposal settles at once and neither the lock holder's close nor another client's work waits for the 10-second bound.
 **Systems:** web SQLite lifecycle, host/web/storage-worker.js, host/web/storage-sqlite.js
 **Author:** Codex
 **Date:** 2026-11-12

@@ -413,12 +413,21 @@
     };
     // LLP 1069.010.000 D2a: `{expect: stat}` refuses a doc:/ write `ECHANGED` if the file changed since; the stat runs
     // just before it.
+    // A write's bytes are copied at the call: it may wait in the queue behind another operation while the app refills
+    // its buffer, and the browser's filesystem writes what it was called with too (host/web/storage-fs.js).
+    function callBytes(data) {
+      if (data instanceof ArrayBuffer) return data.slice(0);
+      if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
+      return data;
+    }
     ["writeFile", "atomicWriteFile", "appendFile"].forEach(function (method) {
       var write = files[method],
         api = "storage.fs." + method + "()";
       files[method] = function (path, data, options) {
+        var args = Array.prototype.slice.call(arguments);
+        if (args.length > 1) data = args[1] = callBytes(data);
         var expect = options && options.expect;
-        if (!expect) return write.apply(null, arguments);
+        if (!expect) return write.apply(null, args);
         if (
           typeof path !== "string" ||
           path.indexOf("doc:/") !== 0 ||

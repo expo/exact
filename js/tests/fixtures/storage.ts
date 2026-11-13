@@ -565,6 +565,19 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     try { return {text: value + ":" + String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/note")))}; }
     catch (_) { return {text: value + ":empty"}; }
   }
+  // Each write of `value` from one buffer refilled after the call, behind an operation in flight: the file holds
+  // what was passed. (Returns each file's contents, joined.)
+  if (op === "reused-buffer") {
+    const data = storage.fs.directories.data, buffer = bytes(value), view = new Uint8Array(buffer.buffer, 1);
+    const writes = [storage.fs.mkdir(data + "/reused"),
+      storage.fs.writeFile(data + "/reused/write", buffer),
+      storage.fs.atomicWriteFile(data + "/reused/atomic", view),
+      storage.fs.appendFile(data + "/reused/append", buffer.buffer)];
+    buffer.fill(63);
+    await Promise.all(writes);
+    const read = async (name: string) => String.fromCharCode(...new Uint8Array(await storage.fs.readFile(data + "/reused/" + name)));
+    return {text:[await read("write"), await read("atomic"), await read("append")].join(",")};
+  }
   if (op === "read-at") return {text:String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/" + value)))};
   if (op === "read-size") {
     try { return {text:String((await storage.fs.readFile(value)).byteLength)}; }

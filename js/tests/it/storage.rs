@@ -327,6 +327,18 @@ fn storage_an_answer_does_not_await_still_lands() {
     assert_eq!(call(&mut m, &mut s, "read-at", "queued/file"), "third");
 }
 
+/// A write queued behind another operation writes the bytes it was called
+/// with, though the app refills its buffer before the write runs, as the
+/// browser's filesystem does (host/web/storage-fs.js).
+#[test]
+fn a_queued_write_keeps_the_bytes_of_its_call() {
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    assert_eq!(call(&mut m, &mut s, "reused-buffer", "AB"), "AB,B,AB");
+}
+
 /// An app that serializes its storage work through one promise chain starts the
 /// second answer's work in a microtask of the first. Each answer must still settle
 /// with its own value.

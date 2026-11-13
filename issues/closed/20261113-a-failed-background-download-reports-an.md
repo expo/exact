@@ -1,6 +1,7 @@
 # A failed background download reports an old saveTo file
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A record names its app file only after its body was moved there, which a mark in the registration's folder remembers across reads and launches.
 **Systems:** packages/background-transfer
 **Severity:** P2
 **Author:** Grok 4.7

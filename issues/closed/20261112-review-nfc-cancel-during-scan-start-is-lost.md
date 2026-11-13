@@ -1,6 +1,7 @@
 # Cancelling a web NFC scan while it starts leaves the reader scanning
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The web `scan` registers its claim before the shared reader starts and answers from the claim, so a cancel or `abortScan` during the start ends it at once and the last claim ending aborts the start.
 **Systems:** packages/nfc/web/index.js
 **Author:** Codex
 **Date:** 2026-11-12

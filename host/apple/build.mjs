@@ -1176,7 +1176,7 @@ async function main(args, lockHeld = false) {
     return arm(moduleArgs(on, [...target, probeMain], built, true, variant, variant === true ? simulatorArch : macArch, packagesIn, true).filter(a => a !== '-emit-library'), [...moduleSources, ...packageSources, probeMain], built, frameworkStamp(true, variant, variant === true ? simulatorArch : macArch) + packageStamp, true, true);
   };
   const firstRoute = routes.find(r => !r.lacking); if (firstRoute && !firstRoute.placed) try { firstRoute.placed = compileProbe(firstRoute); } catch (e) { firstRoute.placed = () => { throw e; }; }
-  const serviceDylibs = launchServices(launchModules(app.dir, app.manifest), webBuildDir); for (const svc of serviceDylibs) arms.push(arm(['--sdk', sdkName, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), ...serviceArgs(svc), ...(ios ? ['-target', device ? 'arm64-apple-ios17.0' : tv ? iosTripleFor(app, false, true) : iosTriple, '-sdk', sdk] : macTarget)], svc.sources, svc.built, '', true));
+  const serviceDylibs = launchServices(launchModules(app.dir, app.manifest), webBuildDir); for (const svc of serviceDylibs) arms.push(arm(['--sdk', sdkName, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), ...serviceArgs(svc), ...(ios ? ['-target', iosTripleFor(app, device, tv, compiled.ios), '-sdk', sdk] : macTarget)], svc.sources, svc.built, '', true));
   await hostCompile?.done({ repeated: true });
   // The early build stands when it succeeded and the bake came out as it was expected to.
   const linkedEarly = early ? await early.step.done({ repeated: true }) && expected.capture === libDir && expected.composition === composition && expected.scratch === paths.scratch : false;

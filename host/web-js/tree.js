@@ -6,8 +6,6 @@ import {
   listItem,
   syncListItemRoles,
   listOwner,
-  commitGuestOrigin,
-  pageGivenFiles,
   renderMarkup,
 } from './navigation.js';
 import { Docs } from './document.js';
@@ -15,7 +13,7 @@ import { Refusal } from './shape.js';
 import { regions } from './regions.js';
 import './said.js';
 import { backdropValue as backdropCss } from './backdrop.js';
-import { onEnd, effect, say, inflight, data, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
+import { onEnd, effect, say, inflight, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
 import { Adopt, adopting } from './mount.js';
 import { input } from './pieces.js';
 const SVG = 'http://www.w3.org/2000/svg';
@@ -26,7 +24,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (Adopt) {
     const e = adopt(p, tag, cls, attrs);
     if (tag === 'video' || tag === 'audio') Media.media(e, attrs);
-    if (tag === 'iframe') frame(e, attrs?.['data-app-src']);
+    if (tag === 'iframe') Hooks.frame(e, attrs?.['data-app-src']);
     if (tag === 'button') oneActivation(e);
     return e;
   }
@@ -51,7 +49,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   }
   if (Paint) e.$paintFacts = bits;
   if (text !== 0) e.textContent = text;
-  if (tag === 'iframe') frame(e, attrs?.['data-app-src']);
+  if (tag === 'iframe') Hooks.frame(e, attrs?.['data-app-src']);
   if (tag === 'button') oneActivation(e);
   p.append(owner ? listItem(e, owner) : e);
   // an `audio` is the same media host (LLP 1042 §8)
@@ -181,74 +179,14 @@ function writeValue(e, v) {
   Held.delete(e);
   if (e.value !== v) e.value = v;
 }
-const navigable = (v, e) => {
-    try {
-      const p = new URL(v, document.baseURI).protocol;
-      return (
-        ['http:', 'https:', 'mailto:', 'tel:'].includes(p) || (p === 'data:' && e?.localName === 'iframe' && opaque(e))
-      );
-    } catch {
-      return false;
-    }
-  },
-  // a frame also shows a `data:` document in an opaque sandbox (navigation.js `frameURL`)
-  opaque = e =>
-    e.hasAttribute('sandbox') &&
-    !e
-      .getAttribute('sandbox')
-      .toLowerCase()
-      .split(/[\t\n\f\r ]+/)
-      .includes('allow-same-origin');
-function frame(e, v) {
-  commitGuestOrigin(e);
-  // an app file, or a page of the app's origin whose query may name one (LLP 1020.001 D7; picker-glue.js decides)
-  const app = !!v?.startsWith('app:/') || pageGivenFiles(v ?? '');
-  if (app) e.setAttribute('data-app-src', v);
-  else e.removeAttribute('data-app-src');
-  if (globalThis.__exactRender) return app;
-  if (!e.$frame) {
-    e.$frame = true;
-    e.addEventListener(
-      'load',
-      ev => {
-        // Else the src that loaded, for the agent's tree, which loads after boot and cannot read another origin's
-        // readiness.
-        if (e.exactAppFrame && !e.exactAppFrame.url) ev.stopImmediatePropagation();
-        else e.exactLoaded = e.getAttribute('src');
-      },
-      true,
-    );
-    onEnd(() => e.exactAppFrame?.dispose());
+// a URL that navigates (navigation.js `navigableURL`); an iframe's is iframes.js's
+const navigable = v => {
+  try {
+    return ['http:', 'https:', 'mailto:', 'tel:'].includes(new URL(v, document.baseURI).protocol);
+  } catch {
+    return false;
   }
-  if (e.exactAppFrame?.path === v) return true;
-  e.exactAppFrame?.dispose();
-  e.exactAppFrame = null;
-  if (!app) return false;
-  const s = (e.exactAppFrame = {
-    path: v,
-    live: true,
-    url: null,
-    dispose() {
-      this.live = false;
-      if (this.url) URL.revokeObjectURL(this.url);
-    },
-  });
-  e.removeAttribute('src');
-  inflight.n++;
-  globalThis.exact ??= {};
-  import(new URL('./picker-glue.js', import.meta.url).href)
-    .then(m =>
-      m.appFrame(
-        e,
-        s,
-        data.appId,
-        () => commitGuestOrigin(e),
-        u => e.setAttribute('src', navigable(u, e) ? u : 'about:blank'),
-      ),
-    )
-    .finally(() => inflight.n--);
-  return true;
-}
+};
 /** A dynamic prop, by the DOM name the live host uses (`applyProps`). */
 export function P(e, name, f) {
   if (name === 'aria-keyshortcuts') input();
@@ -256,16 +194,10 @@ export function P(e, name, f) {
   effect(() => {
     let v = f();
     v = rel(name, v == null ? null : typeof v === 'boolean' ? String(v) : String(v));
-    const sandboxChanged = name === 'sandbox' && e.localName === 'iframe' && e.getAttribute(name) !== v;
     if (name === 'tabindex') e.exactAuthoredTabIndex = v;
-    // A URL that navigates is written only if the web host's policy takes it (navigation.js `navigableURL`,
-    // `frameURL`): a refused link loses its `href`, an iframe shows about:blank and keeps its source for its sandbox to
-    // decide.
-    if (name === 'src' && e.localName === 'iframe') {
-      e.$src = v;
-      if (frame(e, v)) return;
-      if (v != null && !navigable(v, e)) v = 'about:blank';
-    } else if (name === 'href' && v != null && (!navigable(v) || v === '')) v = null;
+    // A URL that navigates is written only if the web host's policy takes it (navigation.js `navigableURL`): a refused
+    // link loses its `href`. An iframe's `src` and `sandbox` are iframes.js's `PropHooks`.
+    if (name === 'href' && v != null && (!navigable(v) || v === '')) v = null;
     // no material, cleared as the runner clears it (bridge.rs `prop_value`)
     if (name === 'backgroundMaterial' && v === 'none') v = null;
     if (PropHooks[name]?.(e, v)) return;
@@ -311,16 +243,6 @@ export function P(e, name, f) {
     if (name === 'role') syncListItemRoles(e);
     else if (name === 'popover' && e.parentElement?.hasAttribute('data-exact-list-item')) listItem(e);
     if (e.localName === 'a' && (name === 'rel' || name === 'target' || name === 'href')) Links?.prop(e, name, v);
-    // a new sandbox takes effect on navigation, even to the same source; a literal source stays in src, a refused
-    // `data:` source in $src
-    if (name === 'sandbox' && e.localName === 'iframe' && !e.exactAppFrame) {
-      const source = e.$src ?? e.getAttribute('src');
-      if (source != null) {
-        const s = navigable(source, e) ? source : 'about:blank';
-        if (sandboxChanged || e.getAttribute('src') !== s) e.setAttribute('src', s);
-      }
-    }
-    if ((name === 'src' || name === 'sandbox') && e.localName === 'iframe') commitGuestOrigin(e);
   });
 }
 /** A reader uses built pieces; new text loads the parser on demand. */

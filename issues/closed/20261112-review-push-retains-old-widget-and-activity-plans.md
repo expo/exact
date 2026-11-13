@@ -1,6 +1,7 @@
 # `push` discards freshly baked named plans and republishes the old ones
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `push` publishes the `plans/` and `activities/` files its own Rust or TypeScript bake made, in place of the head's or the binary's whole set, so a changed, added or removed widget or Live Activity entry ships with the plan it was baked beside.
 **Systems:** scripts/push.mjs, scripts/rust.mjs, widgets, live activities
 **Author:** Codex
 **Date:** 2026-11-12

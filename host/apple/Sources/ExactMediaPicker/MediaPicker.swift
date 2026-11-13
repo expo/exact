@@ -23,7 +23,7 @@ import UIKit
 import UniformTypeIdentifiers
 
 final class MediaPicker: MediaPickerCapability {
-    func present(over controller: UIViewController, accept: [String], multiple: Bool, done: @escaping ([(url: URL, name: String)]) -> Void) {
+    func present(over controller: UIViewController, accept: [String], multiple: Bool, done: @escaping ([(url: URL, name: String)], String?) -> Void) {
         var config = PHPickerConfiguration()
         config.selectionLimit = multiple ? 0 : 1
         let images = accept.contains { $0.hasPrefix("image/") }, videos = accept.contains { $0.hasPrefix("video/") }
@@ -40,35 +40,54 @@ final class MediaPicker: MediaPickerCapability {
 
     private final class Delegate: NSObject, PHPickerViewControllerDelegate {
         nonisolated(unsafe) static var key = 0
-        private var done: (([(url: URL, name: String)]) -> Void)?
-        init(_ done: @escaping ([(url: URL, name: String)]) -> Void) { self.done = done }
+        private var done: (([(url: URL, name: String)], String?) -> Void)?
+        init(_ done: @escaping ([(url: URL, name: String)], String?) -> Void) { self.done = done }
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
             guard let done else { return }
             self.done = nil
-            // A cancel finishes with no results.
-            if results.isEmpty { done([]); return }
-            // The provider's URL is deleted when its callback returns: stage
-            // a copy there, for the core to copy into app:/tmp/picked/ (D4).
-            let group = DispatchGroup(), lock = NSLock()
-            var staged = [(url: URL, name: String)?](repeating: nil, count: results.count)
-            for (i, result) in results.enumerated() {
-                let provider = result.itemProvider
-                guard let type = provider.registeredTypeIdentifiers.first(where: {
-                    UTType($0).map { $0.conforms(to: .image) || $0.conforms(to: .movie) } ?? false
-                }) else { continue }
-                group.enter()
-                provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
-                    defer { group.leave() }
-                    guard let url else { return }
+            MediaPicker.stage(results.map(\.itemProvider), done: done)
+        }
+    }
+
+    /// Each chosen item's file, staged in the temporary directory: the
+    /// provider's URL is deleted when its callback returns, so a copy is
+    /// staged there, for the core to copy into app:/tmp/picked/ (D4). A
+    /// cancel finishes with no items. When an item does not stage, `done`
+    /// has why, beside the files that did.
+    static func stage(_ providers: [NSItemProvider], done: @escaping ([(url: URL, name: String)], String?) -> Void) {
+        if providers.isEmpty { return done([], nil) }
+        let group = DispatchGroup(), lock = NSLock()
+        var staged = [(url: URL, name: String)?](repeating: nil, count: providers.count)
+        var failures = [String?](repeating: nil, count: providers.count)
+        for (i, provider) in providers.enumerated() {
+            let label = provider.suggestedName ?? "item \(i + 1)"
+            guard let type = provider.registeredTypeIdentifiers.first(where: {
+                UTType($0).map { $0.conforms(to: .image) || $0.conforms(to: .movie) } ?? false
+            }) else {
+                failures[i] = "\(label) is neither an image nor a movie"
+                continue
+            }
+            group.enter()
+            provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+                defer { group.leave() }
+                let outcome: Result<(url: URL, name: String), Error> = Result {
+                    guard let url else { throw error ?? CocoaError(.fileReadUnknown) }
                     let stage = FileManager.default.temporaryDirectory.appendingPathComponent("exact-pick-\(UUID().uuidString).\(url.pathExtension)")
-                    guard (try? FileManager.default.copyItem(at: url, to: stage)) != nil else { return }
-                    let name = provider.suggestedName.map { $0 + "." + url.pathExtension } ?? url.lastPathComponent
-                    lock.lock(); staged[i] = (stage, name); lock.unlock()
+                    try FileManager.default.copyItem(at: url, to: stage)
+                    return (stage, provider.suggestedName.map { $0 + "." + url.pathExtension } ?? url.lastPathComponent)
+                }
+                lock.lock(); defer { lock.unlock() }
+                switch outcome {
+                case .success(let file): staged[i] = file
+                case .failure(let error): failures[i] = "\(label): \(error.localizedDescription)"
                 }
             }
-            group.notify(queue: .main) { done(staged.compactMap { $0 }) }
+        }
+        group.notify(queue: .main) {
+            let failed = failures.compactMap { $0 }
+            done(staged.compactMap { $0 }, failed.isEmpty ? nil : failed.joined(separator: "; "))
         }
     }
 }

@@ -1,6 +1,7 @@
 # Failure attribution treats an untested suite as passing on main
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `known.mjs` sorts each failure, and counts its rate, only against notes whose check of its kind ran it whole or ran a part holding its suites (read from the local log as the lane's `owners` reads them), so a partial run of another suite leaves it unknown.
 **Systems:** scripts/known.mjs, async verification
 **Author:** Codex
 **Date:** 2026-11-12

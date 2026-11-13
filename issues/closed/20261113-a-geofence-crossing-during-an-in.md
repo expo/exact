@@ -1,6 +1,7 @@
 # A geofence crossing during an in-flight wake is dropped
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `delivered` names the transition the package raised and the carrier clears only that one; a region crossed while in a wake is offered again when the wake ends.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

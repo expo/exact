@@ -1,6 +1,7 @@
 # Interrupting an app test starts the next test file
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `bun exact.mjs test` returns the signal's exit code once a signal reaches a test file's drive, starting no later file; a failing file still lets the rest run.
 **Systems:** scripts/app-cli.mjs
 **Author:** Codex
 **Date:** 2026-11-12

@@ -1,6 +1,7 @@
 # An iOS absolute-url NFC write rejects bytes
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The `absolute-url` arm of `encode` decodes its data through `NfcWire.data`, as `url` does, so bytes are written as a string is, and still requires a colon.
 **Systems:** packages/nfc
 **Severity:** P2
 **Author:** Grok 4.7

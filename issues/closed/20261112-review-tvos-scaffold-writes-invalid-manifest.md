@@ -1,6 +1,7 @@
 # Adding tvOS writes a manifest that Exact rejects
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `tvos` is not a platform `--with` accepts: `exact new --with tvos` and `update --with tvos` are refused before anything is written, saying an Apple TV build takes `host.ios`.
 **Systems:** app scaffolding, generated native workspaces, app manifest validation
 **Author:** Codex
 **Date:** 2026-11-12

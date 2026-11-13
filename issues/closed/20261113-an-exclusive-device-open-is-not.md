@@ -1,6 +1,7 @@
 # An exclusive device open is not reserved across the check
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `opened` reads and sets the app's claim on an exclusive device under one lock and answers `InvalidStateError` when another open holds it, which covers Android's allow path too.
 **Systems:** runner
 **Severity:** P2
 **Author:** Grok 4.7

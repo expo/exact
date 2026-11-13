@@ -4,6 +4,8 @@
 // carrier and installer stay loopback-only. Games serve HTTP during the first build.
 import { buildingServer } from '../../game/dev.mjs';
 import { acceptModuleReply, failedPhase, phased, phasedAsync } from './dev-phase.mjs';
+import { watchDirectoryInputs, watchModuleSources } from './dev-watch.mjs';
+import { directoryInputNames } from '../../scripts/cargo-dep-info.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 let tuning = null;
 import { createHash, randomBytes } from 'node:crypto';
@@ -11,7 +13,7 @@ import { createServer } from 'node:http';
 import { canonicalBytes, classifyArtifacts, cohortReceipt, sealEnvelope } from '../../scripts/deploy.mjs';
 import { filesystem } from '../../scripts/filesystem.mjs';
 import { allowHostArgs, developmentGate, installBrowserOrigins, LOCAL_IOS_INSTALL_ENDPOINT } from '../../scripts/install-page.mjs';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, unwatchFile, watch, watchFile, writeSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unwatchFile, watchFile, writeSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { slashRelative, within } from '../../scripts/paths.mjs';
 import { rustPackage, rustOutput, rustInputs, rustCards } from '../../scripts/rust.mjs';
@@ -587,81 +589,6 @@ function startCompiler() {
   });
   dev.on('exit', (code) => { if (dev === me) { console.error(`dev compiler exited ${code}`); killCompiler(); process.exit(code ?? 1); } });
 }
-// Direct file watchers avoid recursive-directory event coalescing on macOS.
-// The directory watcher discovers new paths; file metadata suppresses its
-// delayed duplicate events. Bounds match the producer's byte limits, with a
-// finite traversal/descriptor budget for the development watcher itself.
-function watchModuleSources(directory, ignore, changed) {
-  const files = new Map();
-  let identity = '', refusal = null, closed = false, queued = false;
-  const metadata = stat => [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
-  const rescan = () => {
-    if (closed || queued) return;
-    queued = true;
-    queueMicrotask(() => { queued = false; if (!closed) scan(true); });
-  };
-  function scan(notify) {
-    const next = new Map(), state = [];
-    let entries = 0, bytes = 0;
-    try {
-      const rootStat = lstatSync(directory);
-      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('module source root is not a regular directory');
-      function walk(at, prefix = '', depth = 0) {
-        if (depth > 64) throw new Error('module watcher source graph is too deep');
-        for (const entry of readdirSync(at, { withFileTypes: true })) {
-          const name = prefix + entry.name;
-          if (ignore(name)) continue;
-          if (++entries > 4096) throw new Error('module watcher source graph exceeds 4096 entries');
-          const path = resolve(directory, name), stat = lstatSync(path, { bigint: true });
-          // A link is what it leads to: retargeting it is an edit.
-          if (stat.isSymbolicLink()) {
-            let target = '';
-            try { const to = statSync(path, { bigint: true }); target = `${readlinkSync(path)}:${metadata(to)}:${to.dev}:${to.ino}`; } catch { target = 'dangling'; }
-            state.push([name, `symlink:${target}`]);
-            continue;
-          }
-          if (stat.isDirectory()) { walk(path,name+'/',depth+1); continue; }
-          // A design (`.tamber`) is a source: a value-only edit goes as a batch (LLP 1121 stage 4).
-          if (!/\.(ts|contract|json|tamber)$/.test(name) && !['.exact/backend-origin', '.env.local', '.env'].includes(name)) continue;
-          if (!stat.isFile()) { state.push([name,'not-regular']); continue; }
-          bytes += Number(stat.size);
-          if (stat.size > 16n*1024n*1024n || bytes > 64*1024*1024 || next.size >= 2048) throw new Error('module watcher source graph exceeds its file/byte budget');
-          const stamp = metadata(stat);
-          next.set(path,{ stamp, inode:stat.dev+':'+stat.ino });
-          state.push([name,stamp]);
-        }
-      }
-      walk(directory);
-      for (const [path, old] of files) if (!next.has(path) || next.get(path).inode !== old.inode) { old.watch.close(); files.delete(path); }
-      for (const [path, record] of next) {
-        const old = files.get(path);
-        const handle = old?.watch ?? watch(path, rescan);
-        if (!old) handle.on('error',()=>{handle.close();if(files.get(path)?.watch===handle)files.delete(path);rescan();});
-        files.set(path,{ ...record,watch:handle });
-      }
-      const value = JSON.stringify(state.sort(([a],[b])=>a<b?-1:a>b?1:0));
-      const different = value !== identity || refusal !== null;
-      identity = value; refusal = null;
-      if (notify && different) changed(null);
-    } catch (error) {
-      const different = refusal?.message !== error.message;
-      refusal = error;
-      if (notify && different) changed(error);
-    }
-  }
-  const rootStat = lstatSync(directory);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('module source root is not a regular directory');
-  scan(false);
-  const directoryWatch = watch(directory,{recursive:true},(_event,name)=>{ if(!name || !ignore(String(name))) rescan(); });
-  directoryWatch.on('error',error=>{refusal=error;changed(error);});
-  // FSEvents delivery is not guaranteed: Bun 1.4.2's fs.watch on macOS can
-  // report a save minutes late or never (oven-sh/bun#43870). A stat poll of
-  // the same identity bounds edit → plan at the compiler-input watcher's
-  // 100 ms, whatever the watchers deliver; a no-change scan is a few lstats.
-  const poll = setInterval(() => scan(true), 100);
-  poll.unref?.();
-  return { get error(){return refusal;}, close(){closed=true;clearInterval(poll);directoryWatch.close();for(const file of files.values())file.watch.close();files.clear();} };
-}
 let moduleWatch = null, moduleTimer = null, moduleRun = 0, moduleStage = null, moduleSaved = 0;
 /** The Contract sources the app reads from packages (LLP 1091 D10), and
  * the directories to watch for them: each package's root, and the nearest
@@ -841,8 +768,7 @@ async function startModuleCompiler() {
       if (packageDirs.has(key)) continue;
       packageDirs.add(key);
       try {
-        const handle = watch(dir, (_event, name) => { if (String(name) === entry) moduleChanged(); });
-        watches.push({ error: null, close: () => handle.close() });
+        watches.push(watchDirectoryInputs(dir, () => moduleChanged(), { ignore: name => name !== entry }));
       } catch (error) { console.error(`cannot watch ${dir}: ${error.message}`); }
     }
   };
@@ -853,7 +779,7 @@ async function startModuleCompiler() {
   produce();
 }
 function readRustGeneration() {
-  if (building || changed.size) return;
+  if (building || changed.size) return false;
   const directory = rustOutput(app), id = readFileSync(resolve(directory, 'current'), 'utf8');
   if (!/^[0-9a-f]{64}$/.test(id)) throw new Error('invalid Rust generation pointer');
   if (id === currentRustId && current) return;
@@ -927,7 +853,7 @@ function produceRustNow() {
           if(reply.id!==rustRun||!rustActive||typeof reply.ok!=='boolean')throw new Error('invalid Rust producer reply');
           rustActive=false;clearInterval(rustHeartbeat);rustHeartbeat=null;
           if(!reply.ok){early?.phase('rust','failed');console.error(reply.error);push({error:reply.error});}
-          // The reply follows the pointer's rename; the directory watch would see it a filesystem event later and then finds it current.
+          // The reply follows the pointer's rename; a later watcher scan finds it current.
           // A repair that makes the running generation again publishes nothing new: it is announced once more, so a client showing the save's error takes it down (LLP 1159.001).
           else try{readRustGeneration();early?.phase('rust','ready');contractReady();if(push.refused&&current)push(announcement());}catch(error){console.error(error.message);push({error:error.message});}
           if(rustDirty && rebuildOn.rust==='save') rustPending = true;
@@ -946,10 +872,9 @@ function produceRustNow() {
 function startRustCompiler() {
   rustInputFiles = new Set(rustInputs(app, buildEnv, {reloadOnly:true}));
   const directory = rustOutput(app); mkdirSync(directory, {recursive:true});
-  rustOutputWatch = watch(directory, (_event,name) => {
-    if (name !== 'current') return;
-    try { readRustGeneration(); } catch (error) { console.error(error.message); push({error:error.message}); }
-  });
+  rustOutputWatch = watchDirectoryInputs(directory, () => {
+    try { return readRustGeneration(); } catch (error) { console.error(error.message); push({error:error.message}); }
+  }, { ignore: name => name !== 'current' });
   rustSourceWatch = watchModuleSources(app.dir, rustWatchIgnores, error => {
     if (error) { push({error:error.message}); return; }
     // The TS producer owns mixed Contract edits. If a Contract changes
@@ -1154,8 +1079,8 @@ let compilerInputFiles = new Set(), compilerInputTrees = [], compilerMissingInpu
 const optionalRoots = () => ['assets', 'deck', 'gpu', 'gpu/shaders'].map(root => existsSync(resolve(app.dir, root)) ? 1 : 0).join('');
 let optionalRootsSeen = optionalRoots();
 function watchCompilerInputs() {
-  // Poll declared file metadata: saves and replacement survive directory-event
-  // coalescing. Only open-ended source discovery needs a directory watch.
+  // Poll file and directory-entry metadata: saves, replacements and new paths
+  // remain visible when filesystem notifications are lost or coalesced.
   // A Contract package's files are inputs wherever they are installed,
   // node_modules included (LLP 1091 D10).
   const contract=contractGraph(); for (const path of contract.sources) readinessContracts.add(path);
@@ -1175,7 +1100,7 @@ function watchCompilerInputs() {
     const file=files.has(target),dir=file?resolve(target,'..'):target;
     const changedPath=name=>{
       if(file)name=basename(target);
-      if(!name||skipped.test(name)||/(^|[\\/])\./.test(name)||name.endsWith('dev.js')||assetTrees.some(([tree])=>within(tree, resolve(dir,name)))||resolve(dir,name)===source)return;
+      if(name==null||skipped.test(name)||/(^|[\\/])\./.test(name)||name.endsWith('dev.js')||assetTrees.some(([tree])=>within(tree, resolve(dir,name)))||resolve(dir,name)===source)return;
       // Parent-directory notifications include unrelated documents and output.
       // Only receipt inputs, declared trees/missing paths, and Swift's implicit
       // source discovery can invalidate the host. Rust additions are reached
@@ -1211,7 +1136,10 @@ function watchCompilerInputs() {
         };
         watchFile(target,{bigint:true,interval:100},listener);
         watched.set(target,{close:()=>unwatchFile(target,listener)});
-      }else if(existsSync(target))watched.set(target,watch(target,(_event,name)=>changedPath(name)));
+      }else watched.set(target,watchDirectoryInputs(target,changedPath,{
+        readNames:compilerInputTrees.includes(target)?directoryInputNames:readdirSync,
+        ignore:name=>skipped.test(name)||/(^|\/)\./.test(name),
+      }));
     }catch(error){console.error(`cannot watch ${target}: ${error.message}`);}
   }
 }

@@ -1,6 +1,7 @@
 # A failed photo pick is reported as a cancel
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The photo picker hands the core why a chosen item did not stage, and the core refuses that pick with the reason logged instead of answering it as a cancel or a shorter list.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

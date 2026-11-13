@@ -1,6 +1,7 @@
 # An iOS mail compose is untracked while attachments are read
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The iOS mail composer is in flight from before its attachments are read, so a second compose fails and a cancel or destroy answers `AbortError` and stops the present; macOS aborts a pending share the same way.
 **Systems:** packages/compose
 **Severity:** P2
 **Author:** Grok 4.7

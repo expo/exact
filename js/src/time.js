@@ -145,6 +145,7 @@
       return arm("setTimeout()", callback, Math.max(Number(delay) | 0, 0), Array.prototype.slice.call(arguments, 2));
     });
     fixed("clearTimeout", function clearTimeout(id) {
+      id = Number(id) | 0; // `long`, as WebIDL converts it: a handle's string or a boxed number clears it too
       var timer = armed.get(id);
       if (timer) timer.call.ran = true; // Its parked deadline must be read again (LLP 1162 D3).
       armed.delete(id);

@@ -887,8 +887,10 @@ export function hatch(args, say = console.log) {
   const has = (crate, ...hosts) => existsSync(resolve(dir, crate)) || hosts.some(h => manifest.host?.[h]);
   if (has('apple', 'ios', 'macos')) {
     platforms.push(...['ios', 'macos'].filter(p => !manifest.host || manifest.host[p]));
-    const mod = resolve(dir, 'modules/apple'), has = existsSync(mod) && readdirSync(mod).some(f => f.endsWith('.swift'));
-    const main = has ? readdirSync(mod).map(f => resolve(mod, f)).find(f => readFileSync(f, 'utf8').includes('// exact:element')) ?? resolve(mod, readdirSync(mod).find(f => f.endsWith('.swift'))) : resolve(mod, 'Hatches.swift');
+    // Its Swift sources, beside which it may keep directories and assets.
+    const mod = resolve(dir, 'modules/apple'), sources = existsSync(mod) ? readdirSync(mod, { withFileTypes: true }).filter(e => e.isFile() && e.name.endsWith('.swift')).map(e => resolve(mod, e.name)) : [];
+    const has = sources.length > 0;
+    const main = has ? sources.find(f => readFileSync(f, 'utf8').includes('// exact:element')) ?? sources[0] : resolve(mod, 'Hatches.swift');
     if (!has) write(main, `// ${title}'s native module on Apple: its access hatches. Written by \`exact hatch\`; yours from here.
 // A hatch is handed the platform object Exact built (a view, a window), configures it, and changes Contract
 // state only by acting on authored nodes: click(), focus(), blur(), input(text). The app works without it

@@ -119,6 +119,28 @@ fn an_app_file_iframe_keeps_its_source_for_the_file_loader() {
     assert!(!js.contains("about:blank"), "{js}");
 }
 
+/// @ref LLP 1047.002 D1 — iframes.js (an iframe's guest origin, sources and app
+/// files) is linked only by a plan with an iframe, a repeated one included.
+#[test]
+fn iframes_link_only_where_a_plan_has_an_iframe() {
+    let emitted = |view: &str| {
+        let source = format!(
+            "component App\n  state url = \"https://example.com\"\n  view\n    column\n{view}"
+        );
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for view in [
+        "      iframe src=url\n",
+        "      for u in [url] key=u\n        iframe src=u sandbox=\"allow-scripts\"\n",
+    ] {
+        assert!(emitted(view).contains("import\"./iframes.js\";"), "{view}");
+    }
+    let js = emitted("      link href=url\n        text \"Go\"\n");
+    assert!(!js.contains("iframes.js"), "{js}");
+}
+
 /// LLP 1055 D4: the SVG namespace follows the node type, so a module's custom
 /// element named `felt-…` is HTML and the glue attaches its factory.
 #[test]

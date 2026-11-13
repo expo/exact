@@ -1,6 +1,7 @@
 # A tvOS device build compiles launch services as iOS
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Every launch service compiles with `iosTripleFor(app, device, tv, compiled.ios)`, so a `--tvos --device` build embeds a tvOS service and iOS services follow `compiled.ios`.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

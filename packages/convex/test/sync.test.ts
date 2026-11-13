@@ -4,7 +4,8 @@
 // 1.49.0's protocol; the rest follow `convex@1.49.0`'s
 // `src/browser/sync/protocol.ts`.
 import { expect, test } from 'bun:test';
-import { canonicalPath, ProtocolError, Sync, tsAtOrBefore, type Outcome } from '../sync.ts';
+import { convex } from '../index.ts';
+import { canonicalPath, ConvexFailure, ProtocolError, Sync, tsAtOrBefore, type Outcome } from '../sync.ts';
 
 // The frames here carry JSON alone, which Convex's encoding leaves as it is.
 const JSON_ONLY = { convexToJson: (value: unknown) => value, jsonToConvex: (json: unknown) => json };
@@ -144,6 +145,36 @@ test('the socket closing ends what waits, and the next connection starts from ve
   ]);
   sync.frame(transition(version(0, 0, T0), version(1, 0, T3), [updated(0, [HELLO]), updated(1, 1)]));
   expect([sync.status, sync.rev]).toEqual(['ready', 2]);
+});
+
+// The client's `live()` refreshed starts a connection whose mapper ignores every later event of the last one, its
+// close included, so connecting again ends what the last one had not answered, as its close would have.
+test('connecting again ends what the last connection had not answered, and sends none of it again', async () => {
+  const mappers: ((event: object, socket?: object) => unknown)[] = [];
+  const fetched = globalThis.fetch;
+  globalThis.fetch = ((_: string, init: { exactStream: (typeof mappers)[number] }) => { mappers.push(init.exactStream); return new Promise(() => {}); }) as never;
+  try {
+    const client = convex('https://example.convex.cloud', { getFunctionName: (name: unknown) => name as string, ...JSON_ONLY });
+    const open = (n: number) => {
+      const sent: string[] = [];
+      mappers[n]({ type: 'open', data: '' }, { send: (data: string) => sent.push(JSON.parse(data).type), close() {} });
+      return sent;
+    };
+    client.live();
+    open(0);
+    mappers[0]({ type: 'message', data: transition(version(0, 0, T0), version(1, 0, T1)) });
+    const action = client.action('billing:charge' as never, {}), mutation = client.mutation('messages:send' as never, {});
+    const acknowledged = client.mutation('messages:send' as never, {});
+    mappers[0]({ type: 'message', data: JSON.stringify({ type: 'MutationResponse', requestId: 2, success: true, result: 3, ts: T2, logLines: [] }) });
+    client.live();
+    const ended = (p: Promise<unknown>) => settled(p.then(value => ({ ok: true, value }), (e: ConvexFailure) => ({ ok: false, message: e.message, again: e.again })));
+    const replaced = 'The connection to Convex closed before it answered (a new connection replaced it)';
+    expect(await ended(action)).toEqual({ ok: false, message: `${replaced}; the action may have run.`, again: undefined });
+    expect(await ended(mutation)).toEqual({ ok: false, message: `${replaced}; the mutation may have run.`, again: 1 });
+    expect(await ended(acknowledged)).toEqual({ ok: true, value: 3 });
+    expect(client.inspect().requests).toBe(0);
+    expect(open(1)).toEqual(['Connect', 'ModifyQuerySet']);
+  } finally { globalThis.fetch = fetched; }
 });
 
 test('a new token withholds answers until Convex confirms it, and keeps the ones it does not name', async () => {

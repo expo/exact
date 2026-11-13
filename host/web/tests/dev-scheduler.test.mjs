@@ -1,16 +1,23 @@
 import {test} from 'bun:test';
 import assert from 'node:assert/strict';
-import {readFileSync, writeFileSync, mkdirSync, unlinkSync, mkdtempSync, openSync, ftruncateSync, closeSync, rmSync, existsSync, readdirSync, watch, renameSync, watchFile, unwatchFile, statSync, lstatSync, readlinkSync, utimesSync, symlinkSync} from 'node:fs';
+import {readFileSync, writeFileSync, mkdirSync, unlinkSync, mkdtempSync, openSync, ftruncateSync, closeSync, rmSync, existsSync, readdirSync, watch, renameSync, watchFile, unwatchFile, statSync, lstatSync, utimesSync, symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {basename, join, resolve} from 'node:path';
+import {within} from '../../../scripts/paths.mjs';
 import {open} from '../../../scripts/agent.mjs';
 import {compilerPaths, gpuModules, pendingBuildInputs} from '../../../scripts/app.mjs';
+import {directoryInputNames} from '../../../scripts/cargo-dep-info.mjs';
 import {createHash} from 'node:crypto';
 import {runInNewContext} from 'node:vm';
+
+// The `new Function` harnesses below run slices of dev.mjs at global scope, where its module imports are not; these two it
+// uses on its watch paths are given as globals.
+Object.assign(globalThis, { basename, within });
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {watchStaticTrees} from '../serve.mjs';
 import {acceptModuleReply} from '../dev-phase.mjs';
+import {watchDirectoryInputs, watchModuleSources} from '../dev-watch.mjs';
 import {cdpBrowser, chromium} from '../../../scripts/agent-launch.mjs';
 import {need} from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
@@ -411,7 +418,7 @@ test('generated game arguments use the resident plan compiler without a host reb
     const swift=join(logic,'main.swift'),contract=join(dir,'app.contract'),missing=join(dir,'missing/config.json');
     const app={dir,manifest:{game:{}}}, callbacks=new Map();
     const start=source.indexOf('const watched=new Map();'), end=source.indexOf('\nwatchCompilerInputs();',start);
-    const changed=new Function('app','paths','watch','resolve','existsSync','watchFile','unwatchFile',`
+    const changed=new Function('app','paths','watchDirectoryInputs','directoryInputNames','readdirSync','resolve','existsSync','watchFile','unwatchFile',`
       const source=resolve(app.dir,'app.contract'), skipped=/(^|\\/)(target|dist)(\\/|$)/;
       const builtReceipts=[{binary:{inputs:paths.map(path=>({path})),directories:[{path:resolve(app.dir,'.shells')}],missing:[resolve(app.dir,'missing/config.json')]}}];
       const readinessContracts=new Set(), contractGraph=()=>({files:new Set(),sources:new Set()});
@@ -421,7 +428,7 @@ test('generated game arguments use the resident plan compiler without a host reb
       const clearTimeout=()=>{},setTimeout=()=>0,rebuild=()=>{};let timer;
       ${source.slice(start,end)}
       watchCompilerInputs();return changed;
-    `)(app,[declaration,rust,manifest,swift,contract],(dir,callback)=>{callbacks.set(dir,callback);return {};},resolve,existsSync,
+    `)(app,[declaration,rust,manifest,swift,contract],(dir,callback)=>{callbacks.set(dir,(_event,name)=>callback(name));return {};},directoryInputNames,readdirSync,resolve,existsSync,
       (path,options,listener)=>{callbacks.set(path,()=>listener({mtimeNs:1n},{mtimeNs:0n}));},()=>{});
     callbacks.get(declaration)();
     callbacks.get(contract)();
@@ -585,6 +592,255 @@ test('GPU reloads refresh their includes while retaining the current app input g
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
+// Filesystem notifications are withheld; each tick runs one metadata poll and
+// then the queued callbacks and build debounce, without waiting on wall time.
+function quietWatches() {
+  const files = new Map(), intervals = new Map(), events = new Map(), tasks = new Map(), microtasks = [];
+  let serial = 0;
+  const stats = path => statSync(path, { bigint: true, throwIfNoEntry: false }) ?? {};
+  const clock = {
+    watch(path, ...args) {
+      if (!existsSync(path)) throw new Error('ENOENT');
+      const handle = { callback: args.at(-1), close() { events.delete(handle); }, on() { return handle; } };
+      events.set(handle, path); return handle;
+    },
+    watchFile(path, options, listener) {
+      assert.equal(options.interval, 100);
+      files.set(path, { listener, previous: stats(path) });
+    },
+    unwatchFile(path) { files.delete(path); },
+    setInterval(callback, ms) {
+      assert.equal(ms, 100);
+      const timer = { unref() {} }; intervals.set(timer, callback); return timer;
+    },
+    clearInterval(timer) { intervals.delete(timer); },
+    setTimeout(callback) { tasks.set(++serial, callback); return serial; },
+    clearTimeout(timer) { tasks.delete(timer); },
+    queueMicrotask(callback) { microtasks.push(callback); },
+  };
+  const flush = () => {
+    while (microtasks.length) microtasks.shift()();
+    for (const [id, callback] of [...tasks]) { tasks.delete(id); callback(); }
+  };
+  const watchSource = readFileSync(new URL('../dev-watch.mjs', import.meta.url), 'utf8');
+  clock.watchDirectoryInputs = runInNewContext(watchSource.slice(watchSource.indexOf('export function watchDirectoryInputs')).replace('export function ', 'function ') + '\nwatchDirectoryInputs;', {
+    ...clock, resolve, readdirSync, lstatSync,
+  });
+  return { clock, files, intervals, events, tasks,
+    tick() {
+      for (const [path, record] of files) {
+        const previous = record.previous; record.previous = stats(path); record.listener(record.previous, previous);
+      }
+      for (const callback of [...intervals.values()]) callback();
+      flush();
+    },
+    notify(flushNow = true) { for (const handle of events.keys()) handle.callback('rename', 'current'); if (flushNow) flush(); },
+    closed() { assert.equal(files.size + intervals.size + events.size + tasks.size + microtasks.length, 0); },
+  };
+}
+
+function compilerWatches(directory, quiet, { inputs = [], directories = [], gpuInputs = [], appInputs = [] } = {}) {
+  const context = { ...quiet.clock, resolve, basename, within, existsSync, readdirSync, lstatSync, statSync, directoryInputNames,
+    app: { dir: directory, manifest: {} }, source: resolve(directory, 'app.contract'), skipped: /(^|\/)(target|dist)(\/|$)/,
+    builtReceipts: [{ binary: { inputs: inputs.map(path => ({ path })), directories: directories.map(path => ({ path })), missing: [] } }],
+    readinessContracts: new Set(), contractGraph: () => ({ files: new Set(), sources: new Set() }),
+    rustInputFiles: new Set(), gpuInputs: new Set(gpuInputs), appInputs: new Set(appInputs), failedInputs: new Set(), assetTrees: [],
+    typescript: false, portableRust: false, producersOnly: false, timer: null, rebuildOn: { rust: 'save' }, changed: new Set(), tuning: { paths: new Set() },
+    console: { log() {}, error(message) { throw Error(message); } }, builds: [],
+    rebuild() { context.builds.push({ paths: [...context.changed].sort(), gpu: context.isGpuOnly([...context.changed]) }); context.changed.clear(); },
+  };
+  const begin = source.indexOf('const watched=new Map();'), end = source.indexOf('\nwatchCompilerInputs();', begin);
+  const gpu = source.slice(source.indexOf('const gpuOnly ='), source.indexOf(';', source.indexOf('const gpuOnly =')) + 1);
+  runInNewContext(`${gpu}\nglobalThis.isGpuOnly = gpuOnly;\n${source.slice(begin, end)}\nwatchCompilerInputs();\nglobalThis.close = () => { for (const handle of watched.values()) handle.close(); };`, context);
+  return context;
+}
+
+test('compiler polls report deletion, recreation and type changes of empty declared roots', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-compiler-root-'));
+  const tree = resolve(directory, 'inputs'), quiet = quietWatches();
+  let context;
+  try {
+    mkdirSync(tree);
+    context = compilerWatches(directory, quiet, { directories: [tree] });
+    for (const action of [() => rmSync(tree, { recursive: true }), () => mkdirSync(tree),
+      () => { rmSync(tree, { recursive: true }); writeFileSync(tree, 'now a file'); },
+      () => { unlinkSync(tree); mkdirSync(tree); }]) {
+      const count = context.builds.length;
+      action(); quiet.tick();
+      assert.deepEqual(context.builds.slice(count), [{ paths: [tree], gpu: false }]);
+      quiet.notify(); quiet.tick();
+      assert.equal(context.builds.length, count + 1, 'late events do not repeat root invalidation');
+    }
+    quiet.notify(false); context.close(); quiet.tick(); quiet.closed();
+  } finally { context?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('compiler polls keep nested atomic saves GPU-only and ignore directory metadata noise', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-compiler-gpu-'));
+  const tree = resolve(directory, 'src'), nested = resolve(tree, 'net'), input = resolve(nested, 'mod.rs');
+  const quiet = quietWatches();
+  let context;
+  try {
+    mkdirSync(nested, { recursive: true }); writeFileSync(input, 'before');
+    context = compilerWatches(directory, quiet, { inputs: [input], directories: [tree, nested], gpuInputs: [input], appInputs: [resolve(directory, 'host.rs')] });
+    writeFileSync(input + '.new', 'after'); renameSync(input + '.new', input); quiet.tick();
+    assert.deepEqual(context.builds, [{ paths: [input], gpu: true }]);
+    writeFileSync(resolve(nested, '.DS_Store'), 'ignored'); quiet.tick(); quiet.notify();
+    assert.equal(context.builds.length, 1, 'ignored descendants do not invalidate parent directories');
+    context.close(); quiet.tick(); quiet.closed();
+  } finally { context?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('compiler polls omit package tests while retaining explicitly declared test inputs', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-compiler-package-'));
+  const pkg = resolve(directory, 'pkg'), tests = resolve(pkg, 'test'), input = resolve(tests, 'explicit.mjs'), other = resolve(tests, 'case.mjs');
+  const quiet = quietWatches();
+  let context;
+  try {
+    mkdirSync(tests, { recursive: true }); writeFileSync(resolve(pkg, 'package.json'), '{}');
+    writeFileSync(input, 'before'); writeFileSync(other, 'before');
+    context = compilerWatches(directory, quiet, { inputs: [input], directories: [pkg] });
+    writeFileSync(other, 'after'); quiet.tick(); quiet.notify();
+    assert.deepEqual(context.builds, [], 'test descendants excluded by the receipt do not rebuild');
+    writeFileSync(input, 'explicit edit'); quiet.tick();
+    assert.deepEqual(context.builds, [{ paths: [input], gpu: false }]);
+    // The exclusion applies to the top-level test directory's presence too.
+    rmSync(tests, { recursive: true }); quiet.tick();
+    const count = context.builds.length;
+    mkdirSync(tests); writeFileSync(other, 'recreated test'); quiet.tick(); quiet.notify();
+    assert.equal(context.builds.length, count, 'recreating excluded tests does not rebuild');
+    rmSync(tests, { recursive: true }); quiet.tick();
+    assert.equal(context.builds.length, count, 'removing excluded tests does not rebuild');
+    context.close(); quiet.tick(); quiet.closed();
+  } finally { context?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('shallow Contract package entries are polled without filesystem notifications', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-package-shallow-'));
+  const quiet = quietWatches(), entry = 'node_modules', path = resolve(directory, entry);
+  const first = resolve(directory, 'first'), second = resolve(directory, 'second');
+  let context;
+  try {
+    mkdirSync(first); mkdirSync(second);
+    context = { ...quiet.clock, watchModuleSources, existsSync,
+      contractGraph: () => ({ sources: [], dirs: [], shallow: [[directory, entry]] }),
+      contractSources: new Set(), watches: [], changes: 0,
+      moduleChanged(error) { assert.equal(error, undefined, 'entry names are not producer errors'); context.changes++; }, console,
+    };
+    const begin = source.indexOf('  const packageDirs = new Set();'), end = source.indexOf('\n  moduleWatch =', begin);
+    runInNewContext(source.slice(begin, end), context);
+    for (const action of [() => mkdirSync(path), () => rmSync(path, { recursive: true }),
+      () => symlinkSync(first, path, 'dir'), () => { unlinkSync(path); symlinkSync(second, path, 'dir'); },
+      () => unlinkSync(path)]) {
+      const count = context.changes;
+      action(); quiet.tick();
+      assert.equal(context.changes, count + 1);
+      quiet.notify(); quiet.tick();
+      assert.equal(context.changes, count + 1, 'late notifications do not repeat a shallow change');
+    }
+    writeFileSync(resolve(directory, 'unrelated'), 'ignored'); quiet.tick();
+    assert.equal(context.changes, 5);
+    quiet.notify(false); for (const handle of context.watches) handle.close(); quiet.tick(); quiet.closed();
+  } finally { for (const handle of context?.watches ?? []) handle.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('Rust pointer replacement is admitted once without filesystem notifications and closes its polls', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-rust-pointer-'));
+  const quiet = quietWatches(), published = [], errors = [];
+  let context;
+  try {
+    context = { ...quiet.clock, resolve, mkdirSync, readFileSync, readdirSync, lstatSync, existsSync,
+      app: { dir: directory }, buildEnv: {}, rustInputs: () => [], rustOutput: () => directory,
+      watchModuleSources: () => ({ close() {} }), rustWatchIgnores: () => false, produceRust() {},
+      readRustGeneration: undefined, rustCards: files => files.has('module.wasm'),
+      rustOutputWatch: null, rustSourceWatch: null, rustInputFiles: new Set(),
+      building: false, changed: new Set(), current: {}, currentRustId: '', currentRust: null, seq: 0,
+      rustSaved: 0, pending: new Map(), typescript: false, rebuildOn: { rust: 'save' },
+      watchCompilerInputs() {}, captureGeneration() {}, announcement: () => context.currentRustId,
+      sayReady() {}, push: id => published.push(id), console: { error: message => errors.push(message) },
+    };
+    const read = source.slice(source.indexOf('function readRustGeneration()'), source.indexOf('\nfunction produceRust()'));
+    const start = source.slice(source.indexOf('function startRustCompiler()'), source.indexOf('\n// App-relative names'));
+    runInNewContext(`${read}\n${start}\nstartRustCompiler();`, context);
+    const replace = letter => {
+      const id = letter.repeat(64), generation = resolve(directory, id);
+      mkdirSync(generation); writeFileSync(resolve(generation, 'module.wasm'), letter);
+      writeFileSync(resolve(directory, 'next'), id); renameSync(resolve(directory, 'next'), resolve(directory, 'current'));
+      return id;
+    };
+    const first = replace('a'); quiet.tick();
+    assert.deepEqual(published, [first], 'pointer creation publishes the complete generation');
+    quiet.tick(); quiet.notify(); quiet.tick();
+    assert.deepEqual(published, [first], 'late notifications and unchanged polls do not publish again');
+    context.building = true;
+    const second = replace('b'); quiet.tick();
+    assert.deepEqual(published, [first], 'a host build still blocks generation admission');
+    quiet.tick();
+    assert.deepEqual(published, [first], 'unchanged polls still respect the build admission guard');
+    context.building = false; quiet.tick();
+    assert.deepEqual(published, [first, second], 'the next poll admits the generation deferred during a build');
+    context.changed.add('host.rs');
+    const third = replace('c'); quiet.tick();
+    assert.deepEqual(published, [first, second], 'pending compiler inputs still block generation admission');
+    context.changed.clear(); quiet.tick();
+    assert.deepEqual(published, [first, second, third], 'atomic pointer replacement is seen without a notification');
+    writeFileSync(resolve(directory, 'next'), 'invalid'); renameSync(resolve(directory, 'next'), resolve(directory, 'current'));
+    quiet.tick(); quiet.tick(); quiet.notify(); quiet.tick();
+    assert.deepEqual(errors, ['invalid Rust generation pointer'], 'invalid pointers are reported once rather than retried');
+    assert.equal(published.length, 4);
+    assert.equal(published[3].error, 'invalid Rust generation pointer');
+    quiet.notify(false); context.rustOutputWatch.close(); quiet.tick(); quiet.closed();
+    replace('d'); quiet.tick();
+    assert.equal(published.length, 4, 'closing the watcher ends polling');
+  } finally { context?.rustOutputWatch?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('compiler directories discover and coalesce input changes without filesystem notifications', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-compiler-poll-'));
+  const tree = resolve(directory, 'inputs'), swift = resolve(directory, 'swift'), optional = resolve(directory, 'optional');
+  const quiet = quietWatches(), builds = [];
+  let context;
+  try {
+    mkdirSync(tree); mkdirSync(swift); writeFileSync(resolve(swift, 'main.swift'), 'main');
+    context = { ...quiet.clock, resolve, basename, within, existsSync, readdirSync, lstatSync, statSync, directoryInputNames,
+      app: { dir: directory, manifest: {} }, source: resolve(directory, 'app.contract'), skipped: /(^|\/)(target|dist)(\/|$)/,
+      builtReceipts: [{ binary: { inputs: [{ path: resolve(swift, 'main.swift') }, { path: directory }],
+        directories: [{ path: tree }, { path: optional }], missing: [] } }],
+      readinessContracts: new Set(), contractGraph: () => ({ files: new Set(), sources: new Set() }),
+      rustInputFiles: new Set(), gpuInputs: new Set(), appInputs: new Set(), failedInputs: new Set(), assetTrees: [],
+      typescript: false, portableRust: false, timer: null, rebuildOn: { rust: 'save' }, changed: new Set(), tuning: { paths: new Set() },
+      console: { log() {}, error(message) { throw Error(message); } }, gpuOnly: () => false,
+      rebuild() { builds.push([...context.changed].sort()); context.changed.clear(); },
+    };
+    const begin = source.indexOf('const watched=new Map();'), end = source.indexOf('\nwatchCompilerInputs();', begin);
+    runInNewContext(`${source.slice(begin, end)}\nwatchCompilerInputs();\nglobalThis.close = () => { for (const handle of watched.values()) handle.close(); };`, context);
+    let changedAt = 1_800_000_000;
+    const edit = (paths, action) => {
+      const count = builds.length; action();
+      // Each save crosses a poll interval in use; give these immediate writes distinct timestamps too.
+      for (const path of paths) if (existsSync(path)) utimesSync(path, ++changedAt, changedAt);
+      quiet.tick();
+      assert.deepEqual(builds.slice(count), [paths.sort()], 'one polling pass coalesces one build of the changed inputs');
+      quiet.notify(); quiet.tick();
+      assert.equal(builds.length, count + 1, 'late filesystem events do not repeat the build');
+    };
+    const input = resolve(tree, 'config.json'), extra = resolve(swift, 'extra.swift');
+    edit([input, extra], () => { writeFileSync(input, 'one'); writeFileSync(extra, 'extra'); });
+    edit([input, extra], () => { writeFileSync(input, 'two inputs'); writeFileSync(extra, 'other Swift source'); });
+    edit([input], () => { writeFileSync(input + '.new', 'new'); renameSync(input + '.new', input); });
+    edit([input, extra], () => { unlinkSync(input); unlinkSync(extra); });
+    edit([optional], () => { mkdirSync(optional); writeFileSync(resolve(optional, 'added.json'), 'new root'); });
+    edit([directory], () => { mkdirSync(resolve(directory, 'gpu')); });
+    edit([directory], () => { rmSync(resolve(directory, 'gpu'), { recursive: true }); });
+    const count = builds.length;
+    writeFileSync(resolve(swift, 'notes.txt'), 'not a Swift input'); quiet.tick();
+    assert.equal(builds.length, count, 'unrelated files remain ignored');
+    quiet.notify(false); context.close(); quiet.tick(); quiet.closed();
+    writeFileSync(input, 'closed'); quiet.tick();
+    assert.equal(builds.length, count, 'closing the watcher ends polling');
+  } finally { context?.close?.(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('declared source files report in-place edits after inclusion and replacement', () => {
   // The dev loop polls each declared file's metadata (`watchFile`) and debounces a build (`setTimeout`). The test
   // stats the real files itself and runs the debounce at once, so what it checks holds at any machine speed
@@ -606,7 +862,7 @@ test('declared source files report in-place edits after inclusion and replacemen
       for(const [id,fn] of [...timers]){timers.delete(id);fn();}
     };
     const start=source.indexOf('const watched=new Map();'),end=source.indexOf('\nwatchCompilerInputs();',start);
-    api=new Function('app','main','watch','resolve','existsSync','watchFile','unwatchFile','setTimeout','clearTimeout',`
+    api=new Function('app','main','watchDirectoryInputs','resolve','existsSync','watchFile','unwatchFile','setTimeout','clearTimeout',`
       const source=resolve(app.dir,'app.contract'),skipped=/(^|\\/)(target|dist)(\\/|$)/;
       const builtReceipts=[{binary:{inputs:[{path:main}],directories:[],missing:[]}}];
       const readinessContracts=new Set(), contractGraph=()=>({files:new Set(),sources:new Set()});
@@ -618,7 +874,7 @@ test('declared source files report in-place edits after inclusion and replacemen
       watchCompilerInputs();
       return {changed,builds,table(path){tuning.paths.add(path);},asset(path){assetTrees.push([path,'assets']);},add(path){gpuInputs.add(path);watchCompilerInputs();},remove(path){gpuInputs.delete(path);watchCompilerInputs();},
         has:path=>watched.has(path),close(){for(const record of watched.values())record.close();}};
-    `)({dir,manifest:{game:{}}},main,watch,resolve,existsSync,fakeWatchFile,fakeUnwatchFile,fakeSetTimeout,fakeClearTimeout);
+    `)({dir,manifest:{game:{}}},main,watchDirectoryInputs,resolve,existsSync,fakeWatchFile,fakeUnwatchFile,fakeSetTimeout,fakeClearTimeout);
     const edit=(path,text,atomic=false)=>{
       const count=api.builds.length;
       if(text===null)unlinkSync(path);
@@ -678,8 +934,7 @@ test('the JS dev loop rebuilds backend selection creation, edits and removal',as
 
 test('the resident module watcher follows backend selection and the settings files without other local state',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'exact-resident-backend-'));let watcher,changes=0;
-  const begin=source.indexOf('function watchModuleSources('),end=source.indexOf('\nlet moduleWatch',begin);
-  const make=new Function('lstatSync','readdirSync','resolve','readlinkSync','statSync','watch',source.slice(begin,end)+';return watchModuleSources;')(lstatSync,readdirSync,resolve,readlinkSync,statSync,watch);
+  const make=watchModuleSources;
   const dotInput=new Function('return '+source.match(/const dotInput = (.*?); \/\//)[1])();
   const until=async()=>{const n=changes,end=Date.now()+3000;while(changes===n&&Date.now()<end)await new Promise(r=>setTimeout(r,10));assert.ok(changes>n,'the resident producer was notified');};
   try{

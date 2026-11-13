@@ -6,11 +6,11 @@
  * (`refs/notes/async`, tier 2's `refs/notes/async2`; `publish` below), pushed to origin. This runs a
  * test command, prints its output as it comes, names its failures as the lane does (async.mjs
  * `failures`), and sorts each against the nearest first-parent ancestor of HEAD on origin/main whose
- * note ran a check of the same kind to the end:
+ * note ran its suite to the end, in a check of the same kind run whole or in the part that holds it:
  *
  *   known      it failed there too, with how often it failed in the last ten such notes
- *   new        that check ran there and this test did not fail
- *   unknown    no note there ran such a check to the end, so nothing is known of it
+ *   new        its suite ran there and this test did not fail
+ *   unknown    no note there ran its suite to the end, so nothing is known of it
  *
  * The exit status is the command's: a known failure is still a failure.
  *
@@ -22,7 +22,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { failures } from './async.mjs';
+import { failures, owners } from './async.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -87,29 +87,49 @@ export function mainNotes({ fetch = true, depth = 400, cwd = ROOT } = {}) {
   return out;
 }
 
-/** Each local failure sorted against `history` (`mainNotes`) for checks of `kind`. */
-export function classify(local, kind, history) {
-  const covering = (n) => Object.values(n.checks).some((c) => !c.skipped && c.complete && kindOf(c.command) === kind);
-  const seen = history.flatMap(({ sha, notes }) => notes.filter(covering).map((n) => ({ sha, note: n })));
-  const at = seen[0] ?? null, recent = seen.slice(0, RATE_OVER);
+/** The lane's check that runs tests of each kind, by whose name `owners` reads a failure's suites. */
+const LANE_CHECK = { cargo: 'test', bun: 'glue', xctest: 'ios' };
+
+/** The suites (async.mjs `owners`: `cargo:<package>`, `bun:<file>`, `xctest:ios:<Class>`) each of `local`'s failures of
+ *  `kind` belongs to, where `log` says; none for a failure it does not say of. */
+export function suitesOf(local, kind, log) {
+  const name = LANE_CHECK[kind], named = local.map((f) => `${name}: ${identity(f)}`), own = owners(name, log, named);
+  return Object.fromEntries(local.map((f, i) => [f, own[named[i]] ?? []]));
+}
+
+/** Each local failure sorted against `history` (`mainNotes`) by the notes that ran its suites (`suitesOf`'s) to the
+ *  end: a check of `kind` whole, or the part of one that holds every suite of the failure. A part says nothing of a
+ *  failure whose suites are not known, nor of one it left out, so neither does what it kept of that failure from an
+ *  earlier run (async.mjs `retainSkippedFailures`). Each row names the note it was sorted against (`sha`); `at` is the
+ *  nearest of them. */
+export function classify(local, kind, history, suites = {}) {
+  const notes = history.flatMap(({ sha, notes }) => notes.map((note) => ({ sha, note })));
+  const ran = (note, ids) => Object.values(note.checks).some((c) => !c.skipped && c.complete && kindOf(c.command) === kind
+    && (!c.covers || (ids.length > 0 && ids.every((id) => c.covers.includes(id)))));
+  let at = null;
   const rows = local.map((failure) => {
-    const id = identity(failure);
-    if (!at) return { failure, verdict: 'unknown' };
-    const failedIn = recent.filter(({ note }) => note.failures.some((f) => identity(f) === id)).length;
-    return at.note.failures.some((f) => identity(f) === id)
-      ? { failure, verdict: 'known', rate: `${failedIn} of its last ${recent.length} lane runs` }
-      : { failure, verdict: 'new', ...(failedIn ? { rate: `${failedIn} of the last ${recent.length} lane runs` } : {}) };
+    const id = identity(failure), seen = notes.filter(({ note }) => ran(note, suites[failure] ?? []));
+    if (!seen.length) return { failure, verdict: 'unknown' };
+    const recent = seen.slice(0, RATE_OVER), failedIn = recent.filter(({ note }) => note.failures.some((f) => identity(f) === id)).length;
+    if (!at || notes.indexOf(seen[0]) < notes.indexOf(at)) at = seen[0];
+    const row = { failure, sha: seen[0].sha };
+    return seen[0].note.failures.some((f) => identity(f) === id)
+      ? { ...row, verdict: 'known', rate: `${failedIn} of its last ${recent.length} lane runs` }
+      : { ...row, verdict: 'new', ...(failedIn ? { rate: `${failedIn} of the last ${recent.length} lane runs` } : {}) };
   });
   return { at: at && { sha: at.sha, when: at.note.at, tier: at.note.tier }, rows };
 }
 
-/** One line for the run, then each failure that is not known. */
+/** One line for the run, then each failure, with the note it was sorted against when that is not `at`. */
 export function report({ at, rows }) {
   if (!rows.length) return [];
   const count = (v) => rows.filter((r) => r.verdict === v).length;
-  if (!at) return [`${rows.length} failed: unknown on origin/main (no lane note there ran this kind of check to the end; \`git fetch origin 'refs/notes/async*:refs/notes/async*'\` fetches them)`];
+  if (!at) return [`${rows.length} failed: unknown on origin/main (no lane note there ran their suites to the end; \`git fetch origin 'refs/notes/async*:refs/notes/async*'\` fetches them)`];
   const lines = [`${rows.length} failed: ${count('known')} known on origin/main at ${at.sha.slice(0, 10)} (lane${at.tier === 2 ? ' tier 2' : ''}, ${at.when?.slice(0, 16).replace('T', ' ') ?? 'undated'}), ${count('new')} new${count('unknown') ? `, ${count('unknown')} unknown` : ''}`];
-  for (const r of rows) lines.push(`  ${r.verdict.padEnd(5)} ${identity(r.failure)}${r.rate ? ` (failed ${r.rate})` : ''}`);
+  for (const r of rows) {
+    const said = [r.rate && `failed ${r.rate}`, r.sha && r.sha !== at.sha && `at ${r.sha.slice(0, 10)}`].filter(Boolean);
+    lines.push(`  ${r.verdict.padEnd(5)} ${identity(r.failure)}${said.length ? ` (${said.join('; ')})` : ''}`);
+  }
   return lines;
 }
 
@@ -140,6 +160,6 @@ if (import.meta.main) {
     process.exit(2);
   }
   const local = status === 0 ? [] : failures('local', log, status);
-  for (const line of report(classify(local, kind, mainNotes({ fetch })))) console.error(line);
+  for (const line of report(classify(local, kind, mainNotes({ fetch }), suitesOf(local, kind, log)))) console.error(line);
   process.exit(status);
 }

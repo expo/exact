@@ -1,6 +1,7 @@
 # Expose cannot send another assistant message after a response-body failure
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Already fixed by 0d5b4ee14, which ends the turn from a `catch` over the whole fetch and read and lets Clear abort a turn still answering; its test in apps/expose/app.test.mjs drives invalid native JSON and an interrupted stream.
 **Systems:** apps/expose/app.ts
 **Author:** Codex
 **Date:** 2026-11-12

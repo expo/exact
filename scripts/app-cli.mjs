@@ -533,7 +533,10 @@ if (verb === 'contract') {
     const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
     for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
       if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
-      failed = (await script(verbs.test, ['--test', file, ...rest])) || failed;
+      const code = await script(verbs.test, ['--test', file, ...rest]);
+      // A signal passed to this file's drive was a request to stop the run, not a failing test.
+      if (stopped) return code || 128 + (constants.signals[stopped] ?? 0);
+      failed = code || failed;
     }
     return failed;
   }, { verb: 'test', optional: true }));

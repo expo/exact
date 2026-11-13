@@ -1,6 +1,7 @@
 # Every push downloads and verifies the stream's entire release history
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The publisher keeps, per AppDrop stream on this machine, the seq of each release record it has authenticated (and of each it writes), so the sequence floor and the latest record read only records it has not seen, while the floor still counts every record the origin lists.
 **Systems:** scripts/deploy.mjs, scripts/push.mjs, scripts/origin.mjs
 **Author:** Codex
 **Date:** 2026-11-12

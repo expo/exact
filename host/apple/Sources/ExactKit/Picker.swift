@@ -24,9 +24,10 @@ package protocol MediaPickerCapability: AnyObject {
     /// Present the photo picker over `controller` for a media-only
     /// `accept`. `done` runs once, on the main queue, with each chosen file
     /// staged in the temporary directory and the name to give it (none
-    /// when cancelled); the caller removes the staged files.
+    /// when cancelled), and why a chosen file could not be staged, if one
+    /// could not; the caller removes the staged files.
     func present(over controller: UIViewController, accept: [String], multiple: Bool,
-                 done: @escaping ([(url: URL, name: String)]) -> Void)
+                 done: @escaping ([(url: URL, name: String)], String?) -> Void)
 }
 
 /// The photo picker's module, installed by the composition.
@@ -365,8 +366,14 @@ extension Picker: UIDocumentPickerDelegate {
             guard let link = MediaPickerLink.installed else {
                 session.log("picker: refused: this build links no photo picker (media_picker); rebuild"); cancel(r.view); return
             }
-            link.present(over: controller, accept: r.accept, multiple: r.multiple) { [weak self] files in
-                self?.finish(r, files: files)
+            link.present(over: controller, accept: r.accept, multiple: r.multiple) { [weak self] files, failure in
+                // A chosen file that did not stage refuses the pick, as one
+                // that does not copy in does (`deliver`): never a shorter list.
+                if let failure {
+                    if r.issued.session != nil { self?.session.log("picker: refused: \(failure)"); self?.cancel(r.view) }
+                } else {
+                    self?.finish(r, files: files)
+                }
                 for f in files { try? FileManager.default.removeItem(at: f.url) }
             }
         } else {

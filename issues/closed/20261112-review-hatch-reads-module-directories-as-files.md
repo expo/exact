@@ -1,6 +1,7 @@
 # Adding an Apple hatch fails when its module directory contains a subdirectory
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `exact hatch` looks for the Apple module's main file among the regular `.swift` files of modules/apple only, so a directory or asset beside them is never read.
 **Systems:** scripts/exact.mjs, native module scaffolding
 **Author:** Codex
 **Date:** 2026-11-12

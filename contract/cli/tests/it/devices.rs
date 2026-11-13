@@ -529,6 +529,41 @@ fn android_asks_at_open_for_an_ungranted_device_and_has_no_hid() {
     assert_eq!(hid["error"], "NotSupportedError");
 }
 
+/// Two sessions whose opens of one port both wait on Android's permission
+/// ticket: the first allowed opens it, the second fails `InvalidStateError`,
+/// and the port stays claimed while the first holds it.
+#[test]
+fn an_exclusive_port_allowed_in_two_sessions_opens_in_one() {
+    let shared = exact_runner::AppState::default();
+    let mut list = ports();
+    list[0]["granted"] = json!(false);
+    let mut sessions = Vec::new();
+    for name in ["exclusive-a", "exclusive-b"] {
+        let (app, mut r, mut parked) = boot(name, "android");
+        r.share_app_state(shared.clone());
+        prefer(&mut r, "serial.ports", list.clone());
+        r.act("connect", vec![]).unwrap();
+        pump(&mut r, &mut parked);
+        assert!(!r.device_holds().is_empty(), "{name}: a permission ticket");
+        sessions.push((app, r, parked));
+    }
+    for (_, r, parked) in &mut sessions {
+        let hold = r.device_holds().last().cloned().unwrap();
+        let allow = exact_runner::HoldAnswer::Choice("allow".into());
+        r.answer_hold(hold.ticket, &allow).unwrap();
+        pump(r, parked);
+    }
+    let (a, b) = (&sessions[0].1, &sessions[1].1);
+    assert_eq!(text(a, "conn"), "true true");
+    assert_eq!(text(b, "open-error"), "InvalidStateError");
+    assert!(extension(b, "serial")["connections"].is_null());
+    assert_eq!(
+        shared.lock().unwrap()["devices.open"]["serial s3"],
+        true,
+        "the port stays claimed by the session that holds it"
+    );
+}
+
 #[test]
 fn a_tool_cannot_open_a_port() {
     let (_app, mut r, mut parked) = boot("tool", "macos");

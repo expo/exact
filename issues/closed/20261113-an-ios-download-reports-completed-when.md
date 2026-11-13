@@ -1,6 +1,7 @@
 # An iOS download reports completed when no export picker can show
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A download that went to iOS's temporary place and finishes with no presenter for the export picker is reported cancelled and its folder removed.
 **Systems:** host/apple
 **Severity:** P2
 **Author:** Grok 4.7

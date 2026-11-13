@@ -204,7 +204,7 @@ export function createApp(destination, options = {}) {
   let created;
   const existingBackend = options.snapback && existsSync(resolve(dir, '..', 'snapback/schema.q'));
   try {
-    for (const platform of options.with ?? []) if (!(platform in PLATFORMS)) throw new Error(`exact new --with ${platform}: the platforms are ios, mac, linux, android, windows`);
+    checkPlatforms('exact new', options.with ?? []);
     created = writeApp(dir, crateName, { ...options, title: options.title ?? titleOf(name) });
     for (const platform of options.with ?? []) namePlatform(dir, platform);
     if (!options.snapback) return created;
@@ -1264,11 +1264,19 @@ test "the app opens"
 `);
 }
 
+/** Throws, before anything is written, unless each of `--with`'s platforms is one a manifest can name. */
+function checkPlatforms(verb, platforms) {
+  for (const platform of platforms) {
+    if (platform in PLATFORMS) continue;
+    const tv = platform === 'tvos' ? '; an Apple TV build takes host.ios, which --with ios names' : '';
+    throw new Error(`${verb} --with ${platform}: the platforms are ios, mac, linux, android, windows${tv}`);
+  }
+}
+
 /** `--with` and `--without` on the manifest: what each wrote or removed, as one phrase each. */
 function platformEdits(dir, platforms, without, drop = withoutPlatformKeys) {
   const said = [];
   for (const platform of platforms) {
-    if (!(platform in PLATFORMS)) throw new Error(`update --with ${platform}: the platforms are ios, mac, linux, android, windows`);
     const wrote = namePlatform(dir, platform);
     said.push(wrote.length ? `with ${platform} (added ${wrote.join(', ')})` : `with ${platform} (named already)`);
   }
@@ -1305,6 +1313,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
     return `Updated ${dir}: exact.mjs${notes.length ? `, ${notes.join(', ')}` : ''}${drift ? `\n${drift}` : ''}`;
   }
   if (!existsSync(resolve(dir, 'app.contract'))) throw new Error(`${dir}: no app here to update (no app.contract)`);
+  checkPlatforms('update', platforms);
   // An app that authored no workspace (LLP 1153 D1): no Cargo file to rewrite; the platforms it ships are app.json's keys,
   // and the verb that builds one regenerates its workspace from them.
   if (!authoredApp(dir)) {

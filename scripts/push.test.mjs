@@ -8,20 +8,24 @@ import {fileURLToPath} from 'node:url';
 import {bakedEntryAssets, classifyArtifacts} from './app.mjs';
 import {spawnSync as realSpawnSync} from 'node:child_process';
 import {channelOf} from './deploy.mjs';
-import {filesystem, filesystemRead} from './filesystem.mjs';
+import {filesystem, filesystemRead, filesystemTree} from './filesystem.mjs';
 import {unbundledTextures} from './texture-families.mjs';
 
 // The publisher's functions with boundary doubles, for an app at a fresh
 // root whose cohort's binary has prelude runtime 4 and whose baked module
 // needs `runtime` (its receipt's). Bun's native subprocess import bypasses
 // module mocks; explicit bindings also isolate deployment tests.
-function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4, grants='', watch=fs.watch}={}) {
+// `entries`: the named entries (name to text) the Rust or TypeScript bake makes beside the plan.
+function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4, grants='', watch=fs.watch, targets, entries={}}={}) {
   const root=fs.mkdtempSync(resolve(tmpdir(),'exact-push-profile-'));
   const app={id:'fixture',name:'fixture',dir:root,target:root,manifest:{app:{origin:root},deploy:{signing:{keys:{test:'public'}}}}};
   const compat={id:'a'.repeat(32),target:'fixture',inputs:{app:'fixture',platform:'linux',store:{L:'A'},rustMode:'native',grantCeiling:grants,keys:{test:'public'},typescriptRuntime:cohortRuntime}};
   const graph={artifacts:[{name:'app.plan',requires:{sources:{}},sha256:'plan'}]};
   const cohort={version:1,compat,binary:'binary',sources:{}};
   const build={trust:'production',compat,graph};
+  // `targets`: a production build for each [target, rustMode], each its own cohort.
+  const builds=targets?targets.map(([target,rustMode],i)=>({trust:'production',compat:{...compat,id:String(i).repeat(32),target,inputs:{...compat.inputs,rustMode}},graph})):[build];
+  const bundled=[];
   const calls=[], published=[], bundles=[], destinations=[], rows=[];
   const sealed=(name,env)=>{
     calls.push(name);
@@ -30,13 +34,13 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
   };
   const bindings={
     ...Object.fromEntries(['existsSync','readFileSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
-    filesystem, filesystemRead, unbundledTextures,
+    filesystem, filesystemRead, filesystemTree, unbundledTextures,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
     console:{log(){}},Refusal:Error,refuse(message){throw Error(message)},
-    loadSigner:()=>({keyId:'test'}),resolveApp:()=>app,readBuilds:()=>[build],
+    loadSigner:()=>({keyId:'test'}),resolveApp:()=>app,readBuilds:()=>builds,
     bakedEntryAssets,bakeOutput:()=>resolve(root,'bake'),
-    cohortReceipt:()=>cohort,classifyArtifacts:classify,
+    cohortReceipt:b=>b===build?cohort:{version:1,compat:b.compat,binary:'binary',sources:{}},classifyArtifacts:classify,
     openOrigin:mock(spec=>({writable:true,list:async path=>{destinations.push({origin:spec,path});return []},describe:()=>spec})),
     channelOrigin,sha256:()=> 'digest',blobPath:x=>x,streamPath:()=> 'stream',
     defaultRelease:()=> 'r-fixture',admitHead(){throw Error('unexpected head')},
@@ -46,8 +50,8 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
       return {action:'current',platform:'linux',compatibilityId:compat.id};
     },
     RustBaker:class {constructor(app,env){sealed('resident',env)}close(){calls.push('close')}},
-    async buildRust(app,opts){sealed('rust',opts.env);expect(opts.profile).toBe('release');return {plan:Buffer.from('plan')}},
-    rustBundle:(app,bundle,build)=>({bundle,build}),
+    async buildRust(app,opts){sealed('rust',opts.env);expect(opts.profile).toBe('release');return {plan:Buffer.from('plan'),target:opts.nativeTarget,entries:new Map(Object.entries(entries).map(([name,text])=>[name,Buffer.from(text)]))}},
+    rustBundle:(app,bundle,build,built)=>{bundled.push([build.compat.target,built.target]);return {bundle,build}},
     spawnSync(tool,args,opts){
       if(tool==='git')return {status:0,stdout:'b'.repeat(40)};
       const name=tool==='cargo'?'tools':args[0]==='graph'?'graph':'typescript';
@@ -60,6 +64,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
         fs.writeFileSync(resolve(out,'app.hbc'),'bytecode');
         // The runtime the bake found the module uses (`typescript_runtime_of`).
         fs.writeFileSync(resolve(out,'app.module.json'),JSON.stringify({appId:'fixture',grants:'',typescriptRuntime:runtime}));
+        for(const [name,text] of Object.entries(entries)){fs.mkdirSync(resolve(out,name,'..'),{recursive:true});fs.writeFileSync(resolve(out,name),text);}
       }
       return {status:0,stdout:JSON.stringify(graph)};
     },
@@ -68,7 +73,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
   const functions=source.slice(source.indexOf('function parseArgs('),source.indexOf('\nif (process.argv[1]'))
     .replace('export async function pusher','async function pusher');
   const pusher=new Function(...Object.keys(bindings),functions+'\nreturn pusher;')(...Object.values(bindings));
-  return {root,app,build,calls,published,bundles,destinations,rows,bindings,pusher};
+  return {root,app,build,calls,published,bundles,bundled,destinations,rows,bindings,pusher};
 }
 
 test.each([
@@ -126,29 +131,46 @@ test('push sends a TypeScript module that uses nothing newer to an older binary'
   } finally {fs.rmSync(root,{recursive:true,force:true})}
 });
 
-// A TypeScript app with a Live Activity: its production bake lists the activity's plan and schema and the module pair
-// (bake/src/widgets.rs), which exist only in the bake's output, beside the receipt readBuilds reads.
-test('push starts a stream for a TypeScript app with a Live Activity from what its bake made, listing one module pair', async () => {
-  const {root,build,published,bundles,pusher}=harness(classifyArtifacts);
+// A Rust module is built for each native target a stream's binary runs, whichever comes first, and each stream gets its
+// own; one stream that cannot take the update publishes none.
+test('push builds a Rust module for each native target and checks every stream before publishing', async () => {
+  const x86='x86_64-unknown-linux-gnu', arm='aarch64-unknown-linux-gnu';
+  for (const targets of [[[x86,'native'],[arm,'tiered'],['wasm32-unknown-unknown','wasm']],[[arm,'native'],['wasm32-unknown-unknown','wasm'],[x86,'native']]]) {
+    const {root,bundled,published,pusher}=harness(undefined,4,{targets});
+    try {
+      expect(await pusher({_:[root],origin:root,keys:root})).toBe(0);
+      const native=targets.filter(([,mode])=>mode!=='wasm').map(([t])=>t);
+      expect(bundled.filter(([cohort])=>cohort!=='wasm32-unknown-unknown')).toEqual(native.map(t=>[t,t]));
+      expect(new Set(bundled.map(([,built])=>built))).toEqual(new Set(native));
+      expect(published.map(b=>b.compat.target)).toEqual(targets.map(([t])=>t));
+    } finally {fs.rmSync(root,{recursive:true,force:true})}
+  }
+  const {root,published,pusher}=harness(build=>build.compat.target===arm?{bundle:false,missing:['rustTarget']}:{bundle:true},4,{targets:[[x86,'native'],[arm,'native']]});
   try {
-    fs.writeFileSync(resolve(root,'app.ts'),'');
-    const made={'plans/departure.plan':'activity plan','activities/departure.schema.json':'{}','typescript/app.hbc':'baked bytecode','typescript/app.module.json':'{}'};
-    const entries=resolve(root,'bake',`${build.compat.inputs.platform}-${build.compat.target}.entries`);
-    for(const [name,text] of Object.entries(made)){
-      fs.mkdirSync(resolve(entries,name,'..'),{recursive:true});fs.writeFileSync(resolve(entries,name),text);
-      build.graph.artifacts.push({name,sha256:sha256(Buffer.from(text)),bytes:text.length,kind:'bundle',requires:{}});
-    }
-    expect(await pusher({_:[root],origin:root,keys:root})).toBe(0);
-    const names=['activities/departure.schema.json','app.plan','plans/departure.plan','typescript/app.hbc','typescript/app.module.json'];
-    expect(published[0].graph.artifacts.map(a=>a.name).sort()).toEqual(names);
-    expect(bundles[0].assets.map(a=>a.name).sort()).toEqual(names.filter(n=>n!=='app.plan'));
-    // The plans are the bake's; the pair is the one push baked.
-    const bytes=Object.fromEntries(bundles[0].assets.map(a=>[a.name,a.bytes.toString()]));
-    expect([bytes['plans/departure.plan'],bytes['typescript/app.hbc']]).toEqual(['activity plan','bytecode']);
-    // A file the bake no longer holds as it listed it refuses.
-    fs.writeFileSync(resolve(entries,'plans/departure.plan'),'edited');
-    await expect(pusher({_:[root],origin:root,keys:root})).rejects.toThrow(/plans\/departure\.plan: .* is not the file the linux bake listed/);
+    await expect(pusher({_:[root],origin:root,keys:root})).rejects.toThrow('cannot take this as an update — rustTarget');
+    expect(published).toEqual([]);
   } finally {fs.rmSync(root,{recursive:true,force:true})}
+});
+
+// An app with widgets or Live Activities: the binary's production bake listed their plans, schemas and, for a TypeScript
+// app, the module pair (bake/src/widgets.rs). An update carries the ones push baked, in place of those whole: a changed
+// entry's new bytes, an added one, and none removed since.
+test('push starts a stream with the named entries and module pair it baked, in place of the binary\'s', async () => {
+  for (const typescript of [true, false]) {
+    const baked={'plans/departure.plan':'activity plan','plans/arrival.plan':'added plan','activities/departure.schema.json':'{}'};
+    const {root,build,published,bundles,pusher}=harness(classifyArtifacts,4,{entries:baked});
+    try {
+      if(typescript)fs.writeFileSync(resolve(root,'app.ts'),'');
+      const installed={'plans/departure.plan':'installed plan','plans/gone.plan':'removed plan','typescript/app.hbc':'installed bytecode'};
+      for(const [name,text] of Object.entries(installed))build.graph.artifacts.push({name,sha256:sha256(Buffer.from(text)),bytes:text.length,kind:'bundle',requires:{}});
+      expect(await pusher({_:[root],origin:root,keys:root})).toBe(0);
+      const names=['activities/departure.schema.json','app.plan','plans/arrival.plan','plans/departure.plan',...(typescript?['typescript/app.hbc','typescript/app.module.json']:[])];
+      expect(published[0].graph.artifacts.map(a=>a.name).sort()).toEqual(names);
+      expect(bundles[0].assets.map(a=>a.name).sort()).toEqual(names.filter(n=>n!=='app.plan'));
+      const bytes=Object.fromEntries(bundles[0].assets.map(a=>[a.name,a.bytes.toString()]));
+      expect([bytes['plans/departure.plan'],bytes['plans/arrival.plan'],bytes['typescript/app.hbc']]).toEqual(['activity plan','added plan',typescript?'bytecode':undefined]);
+    } finally {fs.rmSync(root,{recursive:true,force:true})}
+  }
 });
 
 test('push refuses a TypeScript module that needs a newer prelude than the cohort has', async () => {
@@ -230,11 +252,14 @@ test('push inventories current app files and carries only head-owned artifacts',
     for (const folder of ['assets', 'deck', 'deck/nested']) fs.writeFileSync(resolve(root, folder, '.DS_Store'), 'Bud1');
     const shader = Buffer.from('shader');
     const source = fs.readFileSync(new URL('./push.mjs', import.meta.url), 'utf8');
-    const fn = source.slice(source.indexOf('async function carriedAssets('), source.indexOf('\nfunction gitHead('));
+    const named = source.indexOf('const namedEntry');
+    const fn = `${source.slice(named, source.indexOf('\n', named))}\n${source.slice(source.indexOf('async function carriedAssets('), source.indexOf('\nfunction gitHead('))}`;
     const carried = new Function('filesystem', 'filesystemRead', 'unbundledTextures', 'resolve', 'sha256', 'blobPath', 'refuse', fn + ';return carriedAssets;')(filesystem, filesystemRead, unbundledTextures, resolve, sha256, blobPath, (message) => { throw Error(message); });
     const asked = [];
     const assets = await carried({ get: async (path) => { asked.push(path); return shader; } }, { dir: root }, { assets: [
       { name: 'assets/deleted.png', sha256: 'deleted' }, { name: 'shaders/x.wgsl', sha256: sha256(shader) },
+      // The named entries are push's own bake's.
+      { name: 'plans/widget.plan', sha256: 'old widget' }, { name: 'activities/trip.schema.json', sha256: 'old schema' },
     ] });
     expect(assets.map(a => a.name)).toEqual(['assets/new.png', 'deck/nested/.config', 'shaders/x.wgsl']);
     expect(assets.map(a => a.bytes.toString())).toEqual(['new', 'config', 'shader']);
@@ -262,7 +287,8 @@ test.each([
     const names = Array.from({ length: count }, (_, i) => `assets/${i}.bin`);
     for (const name of names) fs.writeFileSync(resolve(root, name), bytes);
     const source = fs.readFileSync(new URL('./push.mjs', import.meta.url), 'utf8');
-    const fn = source.slice(source.indexOf('async function carriedAssets('), source.indexOf('\nfunction gitHead('));
+    const named = source.indexOf('const namedEntry');
+    const fn = `${source.slice(named, source.indexOf('\n', named))}\n${source.slice(source.indexOf('async function carriedAssets('), source.indexOf('\nfunction gitHead('))}`;
     const carried = new Function('filesystem', 'filesystemRead', 'unbundledTextures', 'resolve', 'sha256', 'blobPath', 'refuse', fn + ';return carriedAssets;')(filesystem, filesystemRead, unbundledTextures, resolve, sha256, blobPath, (message) => { throw Error(message); });
     const assets = await carried({}, { dir: root }, {});
     expect(assets.map(asset => asset.name)).toEqual(names);
