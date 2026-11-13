@@ -522,6 +522,11 @@ test('outside production trust the SDK compiles for iOS 17.0, and the app keeps 
   assert.deepEqual(compiledTargets({ manifest: {} }, 'development'), deploymentTargets({ manifest: {} }));
   const launching = { manifest: { launch: ['player'], host: { ios: { minimumOS: '18.0' } } } };
   assert.deepEqual(compiledTargets(launching, 'development'), deploymentTargets(launching), 'launch Swift compiles in the host package at the app minimum');
+
+  // One spelling per version, so apps that write it differently share one Swift scratch (expo/exact-build#94).
+  for (const minimumOS of ['18', '18.0', '18.0.0', 18]) assert.equal(deploymentTargets({ manifest: { host: { ios: { minimumOS } } } }).ios, '18.0', String(minimumOS));
+  assert.equal(deploymentTargets({ manifest: { host: { ios: { minimumOS: '18.4.1' } } } }).ios, '18.4.1');
+  assert.equal(deploymentTargets({ manifest: { host: { macos: { minimumOS: '15' } } } }).macos, '15.0');
 });
 
 test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsymutil', 'nm'].every(tool => Bun.which(tool))).each([false, true])('production iOS bundles keep symbols and owning privacy declarations (disk-space service: %s)', async diskService => {

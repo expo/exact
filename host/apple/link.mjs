@@ -47,6 +47,13 @@ export function iosSimulatorTarget(arch = process.env.EXACT_IOS_SIM_ARCH ?? (pro
   return { target: cpu === 'arm64' ? 'aarch64-apple-ios-sim' : 'x86_64-apple-ios', triple: `${cpu}-apple-ios17.0-simulator` };
 }
 
+/** A dotted version as major.minor, with a patch only when it is not 0: `18` and `18.0.0` are `18.0`. One spelling
+ * per version keeps the Swift scratch and triple, which these name, shared between apps that write it differently. */
+const majorMinor = version => {
+  const parts = String(version).trim().split('.');
+  while (parts.length > 2 && Number(parts.at(-1)) === 0) parts.pop();
+  return parts.length === 1 ? `${parts[0]}.0` : parts.join('.');
+};
 const newer = (a, b) => (a.split('.').map(Number).reduce((x, n, i) => x || n - (b.split('.').map(Number)[i] ?? 0), 0) > 0 ? a : b);
 /** The deployment targets an app builds for: its manifest's `minimumOS`, never
  * below the host's own floor (Package.swift's). They are what its Info.plist
@@ -55,8 +62,8 @@ const newer = (a, b) => (a.split('.').map(Number).reduce((x, n, i) => x || n - (
  * time); `compiledTargets` is what the rest compiles for. */
 export function deploymentTargets(app) {
   return {
-    ios: newer(String(app.manifest.host?.ios?.minimumOS ?? '17.0'), '17.0'),
-    macos: newer(String(app.manifest.host?.macos?.minimumOS ?? '14.0'), '14.0'),
+    ios: newer(majorMinor(app.manifest.host?.ios?.minimumOS ?? '17.0'), '17.0'),
+    macos: newer(majorMinor(app.manifest.host?.macos?.minimumOS ?? '14.0'), '14.0'),
   };
 }
 /** The deployment targets the SDK's units compile for: its Rust and C (the
