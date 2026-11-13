@@ -492,7 +492,7 @@ public final class ExactSession {
     func trackInputHold(_ hold: SwipeHold) { inputHolds.add(hold) }
     func retireInputHold(_ hold: SwipeHold) { inputHolds.remove(hold) }
     var pendingSurfaceRecords: [(String, String?, Bool)] = []
-    private var pendingSurfaceWork: [([String: Any], Int)] = []
+    var pendingSurfaceWork: [([String: Any], Int)] = []
     /// Authentication sessions this session opened (`Auth.swift`, LLP 1069.006).
     let authSessions = AuthSessions()
 
@@ -1161,6 +1161,7 @@ public final class ExactSession {
         ThemeRoles.apply(batch, root: presenter.root); if batch.ops.contains(where: { $0.op == .roles }) { presenter.applyThemeTint() }
         let orientationChanged = presenter.orientationChangesScreen(batch)
         ThemeRoles.within(presenter.root) { presenter.apply(batch) }; Tambers.moved(self) // bindings' places (LLP 1121 D12)
+        drainCanvasCaptures(batch)
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         AnimatedRasters.shared.poke()
         for op in batch.ops where op.op == .reorder { presenter.reorder?.observe(ReorderState(op.payload)); presenter.reorderGroup?.observe(ReorderGroupState(op.payload)) }
@@ -1280,17 +1281,12 @@ public final class ExactSession {
     private func drainSurfaceWork() {
         guard canvases.ready || canvases.failed != nil || canvases.isEmpty,
               !pendingSurfaceWork.isEmpty else { return }
-        let work = pendingSurfaceWork
-        pendingSurfaceWork = []
+        let work = pendingSurfaceWork.filter { $0.0["mode"] as? String != "canvas" }
+        pendingSurfaceWork.removeAll { $0.0["mode"] as? String != "canvas" }
         DispatchQueue.main.async { [weak self] in
             guard let self, state != .destroyed else { return }
             for (op, owner) in work { canvases.surfaceWork(op, generation: owner) }
         }
-    }
-
-    package func completeSurface(_ ticket: UInt64, generation owner: Int, kind: UInt32, body: Data = Data()) {
-        guard state != .destroyed, generation == owner, runtime.requestActive(ticket) else { return }
-        apply(runtime.fulfillSurface(ticket, kind: kind, body: body, now: now()))
     }
 
     /// The first node drew: the GPU module may load now (LLP 1009 D4), on

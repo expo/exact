@@ -334,15 +334,7 @@ fn a_runtime_adopts_the_document_it_would_have_rendered() {
         .runner()
         .journal()
         .any(|l| l.contains("checkpoint: 7 of 7 answers taken")));
-    // A query the route table doesn't read, or another spelling of the
-    // same path, is the same page: the runtime boots at the page's path,
-    // keeping the browser's query, and adopts.
-    let (host, batch) = open("//?utm=x", &page, &written);
-    assert!(adopted(&batch));
-    assert!(batch.contains("\"url\":\"/?utm=x\""), "{batch}");
-    assert_eq!(host.location(), "/?utm=x");
-    // Another path isn't this page's (a static host's 404.html, its
-    // fallback to `/`), even where the tree would match: render fresh.
+    // A document rendered at `/` does not belong to another path: render fresh.
     let (host, batch) = open("/elsewhere?utm=x", &page, &written);
     assert!(!batch.contains("\"op\":\"adopt\""));
     assert!(host
@@ -365,6 +357,46 @@ fn a_runtime_adopts_the_document_it_would_have_rendered() {
         .runner()
         .journal()
         .any(|l| l.contains("document: the checkpoint doesn't read")));
+}
+
+#[test]
+fn a_page_whose_view_ignores_the_query_adopts_its_canonical_path() {
+    let plan = contract::bake(
+        contract::compile(
+            r#"routes nav
+  home "/" render=build
+component App
+  resource greeting = say() as shape string
+  view
+    text greeting
+"#,
+        )
+        .unwrap(),
+        Says("Hello"),
+    )
+    .unwrap()
+    .encode();
+    exact_web::link(exact_web_capabilities::ALL);
+    let rendered = Host::boot(&plan, Says("Hello"), Default::default(), "/")
+        .unwrap()
+        .0;
+    let page = checkpoint(rendered.runner(), "/");
+    let root = rendered.document().unwrap().root;
+    let written = digest(&rendered.runner().plan().encode(), "/", &page, &root);
+    let (host, batch) = Host::boot_checkpoint(
+        &plan,
+        Says("Hello"),
+        &page,
+        &written,
+        Vec::new(),
+        None,
+        Default::default(),
+        "//?utm=x",
+    )
+    .unwrap();
+    assert!(batch.contains("{\"op\":\"adopt\",\"adopted\":true}"));
+    assert!(batch.contains("\"url\":\"/?utm=x\""), "{batch}");
+    assert_eq!(host.location(), "/?utm=x");
 }
 
 #[test]

@@ -266,24 +266,13 @@ const BOUNDS: [&str; 4] = [
 
 /// Classify the runner's Debug reason, never the semantics' prose. The
 /// names are RunnerError and Trap variants; an unknown variant stays visible.
+/// Evaluation and bound suffixes after the trap token do not change its class.
 pub fn refusal_class(reason: &str) -> &'static str {
-    fn variant(s: &str) -> &str {
-        s.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-            .next()
-            .unwrap_or("")
-    }
-    let reason = reason.strip_prefix("# ").unwrap_or(reason);
-    let tag = variant(reason);
+    let (tag, reason) = refusal_parts(reason);
     if BOUNDS.contains(&tag) {
         return "limit";
     }
     match tag {
-        "HandlerArguments" => refusal_class(
-            reason
-                .split_once(", error: ")
-                .map_or("", |(_, error)| error),
-        ),
-        "Trap" | "Instance" => refusal_class(reason.split_once('(').map_or("", |(_, inner)| inner)),
         "Data"
         | "Shape"
         | "UnknownView"
@@ -317,6 +306,26 @@ pub fn refusal_class(reason: &str) -> &'static str {
         | "Bridge"
         | "Pending" => "unclassified",
         _ => "unclassified",
+    }
+}
+
+/// The unwrapped variant and its Debug text, including any diagnostic suffix.
+fn refusal_parts(reason: &str) -> (&str, &str) {
+    fn variant(s: &str) -> &str {
+        s.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or("")
+    }
+    let reason = reason.strip_prefix("# ").unwrap_or(reason);
+    let tag = variant(reason);
+    match tag {
+        "HandlerArguments" => refusal_parts(
+            reason
+                .split_once(", error: ")
+                .map_or("", |(_, error)| error),
+        ),
+        "Trap" | "Instance" => refusal_parts(reason.split_once('(').map_or("", |(_, inner)| inner)),
+        _ => (tag, reason),
     }
 }
 
@@ -374,7 +383,7 @@ fn compare(rust: Vec<String>, lean: Vec<String>) -> Verdict {
         lines.by_ref().filter(|l| !l.starts_with('#')).nth(at)?;
         lines
             .take_while(|l| l.starts_with('#'))
-            .find(|l| BOUNDS.iter().any(|b| l.contains(b)))
+            .find(|l| BOUNDS.contains(&refusal_parts(l).0))
             .map(|l| format!("{l} (the runner's evaluation bound, LLP 1090 D8)"))
     };
     // A binding past a bound was unset and the runner went on (LLP
@@ -388,7 +397,10 @@ fn compare(rust: Vec<String>, lean: Vec<String>) -> Verdict {
                 if seen > at + 1 {
                     return None;
                 }
-            } else if l.contains(" trapped Trap(") && BOUNDS.iter().any(|b| l.contains(b)) {
+            } else if l
+                .split_once(" trapped ")
+                .is_some_and(|(_, reason)| BOUNDS.contains(&refusal_parts(reason).0))
+            {
                 return Some(format!("{l} (the runner's evaluation bound, LLP 1090 D8)"));
             }
         }
@@ -747,10 +759,13 @@ mod tests {
     fn a_bound_refusal_is_outside_and_another_refusal_diverges() {
         let lean = lines(&["== boot", "outcome ok", "== tap \"go\"", "outcome ok"]);
         for (reason, outside) in [
-            ("# Trap(IterationLimit { pc: 17 })", true),
+            ("# Trap(IterationLimit { pc: 17 }) in derive \"visible\": past the 65,536 list steps one evaluation may take", true),
             ("# StringTooLong { name: \"text\" }", true),
-            ("# Instance(Trap(ValueTooLarge { pc: 3 }))", true),
+            ("# Instance(Trap(ValueTooLarge { pc: 3 })) in view 3 (site 1) each subject: past the 16,777,216 nodes or 64 MiB a value may hold", true),
+            ("# HandlerArguments { action: \"go\", error: Instance(Trap(ValueTooDeep { pc: 4 })) in view 3 (site 1) press argument 1: past the 32 levels a value may nest }", true),
             ("# Trap(UnwrapNone { pc: 4 })", false),
+            ("# Trap(UnwrapNone { pc: 4 }) in derive \"IterationLimit\"", false),
+            ("# HandlerArguments { action: \"ValueTooLarge\", error: Trap(PathParameter { pc: 4 }) in view 3 (site 1) press argument 1 }", false),
         ] {
             let rust = lines(&[
                 "== boot",
@@ -772,6 +787,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_queue_full_refusal_diverges() {
+        let rust = lines(&["outcome refused", "# QueueFull { mutation: \"save\" }"]);
+        let lean = lines(&["outcome ok"]);
+        assert!(matches!(compare(rust, lean), Verdict::Diverge { .. }));
+    }
+
+    #[test]
+    fn a_timer_fire_limit_refusal_diverges() {
+        let rust = lines(&["outcome refused", "# TimerFireLimit { limit: 10000 }"]);
+        let lean = lines(&["outcome ok"]);
+        assert!(matches!(compare(rust, lean), Verdict::Diverge { .. }));
+    }
+
     #[test]
     fn a_trace_disagreement_or_an_omitted_commit_cannot_be_hidden_as_outside() {
         let rust = lines(&[
@@ -826,7 +856,7 @@ mod tests {
         ]);
         for (note, outside) in [
             (
-                "# view 3 (site 1): text trapped Trap(IterationLimit { pc: 5 }); unset",
+                "# view 3 (site 1): text trapped Trap(IterationLimit { pc: 5 }): past the 65,536 list steps one evaluation may take; unset",
                 true,
             ),
             (

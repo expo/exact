@@ -14,7 +14,7 @@ use exact_runner::{
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 10;
+pub const ABI: u32 = 11;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -546,6 +546,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                     w.string(name);
                     bytes(w, payload);
                 }
+                SurfaceRequest::Canvas { name, path, .. } => {
+                    w.u8(16);
+                    w.string(name);
+                    w.string(path);
+                }
             }
             w.u8(u8::from(r.grants.is_some()));
             w.string(r.grants.as_deref().unwrap_or(""));
@@ -703,8 +708,13 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             Ok(Answer::Later(request))
         }
-        tag @ (7 | 8) => {
+        tag @ (7 | 8 | 16) => {
             let name = r.string().map_err(error)?;
+            let path = if tag == 16 {
+                Some(r.string().map_err(error)?)
+            } else {
+                None
+            };
             let payload = if tag == 8 {
                 Some(read_bytes(r)?.to_vec())
             } else {
@@ -712,9 +722,10 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             let present = r.u8().map_err(error)?;
             let scope = r.string().map_err(error)?;
-            let mut request = match payload {
-                Some(bytes) => Request::restore_surface(name, bytes),
-                None => Request::capture_surface(name),
+            let mut request = match (payload, path) {
+                (Some(bytes), _) => Request::restore_surface(name, bytes),
+                (None, Some(path)) => Request::capture_canvas(name, path),
+                (None, None) => Request::capture_surface(name),
             };
             request.grants = match present {
                 0 => None,
@@ -753,6 +764,7 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
 /// terms after its body (LLP 1016.000 D8), a two-way socket's (LLP 1016.003).
 fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
     let mut request = Request {
+        module: None,
         stream: tag >= 9,
         socket: tag == 11,
         bytes: false,
@@ -861,6 +873,10 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             1 => true,
             _ => return Err("invalid read flag".into()),
         };
+        let topics = (0..r.count().map_err(error)?)
+            .map(|_| r.string().map_err(error))
+            .collect::<Result<Vec<_>, _>>()?;
+        let entropy = r.u32().map_err(error)?;
         let count = r.count().map_err(error)?;
         let mut writes = Vec::new();
         for _ in 0..count {
@@ -868,26 +884,43 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             if name.starts_with(Store::KEPT) || !store.granted().contains(&name) {
                 return Err(format!("module wrote ungranted secret {name}"));
             }
-            let value = match r.u8().map_err(error)? {
-                0 => None,
+            // Bit 0: a value follows (else the name is forgotten); bit 1: the
+            // module persisted it under an exclusive lease (`set_durable`).
+            let tag = r.u8().map_err(error)?;
+            if tag > 3 {
+                return Err("invalid write tag".into());
+            }
+            let value = match tag & 1 {
                 1 => Some(r.string().map_err(error)?),
-                _ => return Err("invalid write tag".into()),
+                _ => None,
             };
-            writes.push((name, value));
+            writes.push((name, value, tag & 2 != 0));
         }
         let sockets = read_socket_ops(&mut r)?;
         let result = read_result(&mut r)?;
         end(&r)?;
-        Ok((observed, writes, sockets, result))
+        Ok((observed, topics, entropy, writes, sockets, result))
     };
-    let (observed, writes, (ops, overload), result) = decode().map_err(DataError::Unavailable)?;
+    let (observed, topics, entropy, writes, (ops, overload), result) =
+        decode().map_err(DataError::Unavailable)?;
     if observed {
         store.observe_external_read();
     }
-    for (name, value) in writes {
-        match value {
-            Some(value) => store.set(&name, &value)?,
-            None => store.forget(&name)?,
+    // What the answer watched and drew, as an embedded source's store
+    // records it: the runner takes them after the reply (LLP 1016.002, LLP
+    // 1069.005 D2).
+    for topic in &topics {
+        store.observe_topic(topic);
+    }
+    for _ in 0..entropy {
+        store.observe_entropy();
+    }
+    for (name, value, durable) in writes {
+        match (value, durable) {
+            (Some(value), false) => store.set(&name, &value)?,
+            (Some(value), true) => store.set_durable(&name, &value)?,
+            (None, false) => store.forget(&name)?,
+            (None, true) => store.forget_durable(&name)?,
         };
     }
     // What the module staged, through the same checks on the turn the
@@ -986,11 +1019,17 @@ impl<D: DataSource> Session<D> {
                     None => result,
                 };
                 w.u8(u8::from(store.reads() > 0));
+                let topics = store.take_topics();
+                w.u32(topics.len() as u32);
+                for topic in &topics {
+                    w.string(topic);
+                }
+                w.u32(store.entropy_draws() as u32);
                 let writes = store.take_writes();
                 w.u32(writes.len() as u32);
                 for write in writes {
                     w.string(&write.name);
-                    w.u8(u8::from(write.value.is_some()));
+                    w.u8(u8::from(write.value.is_some()) | u8::from(write.durable) << 1);
                     if let Some(value) = write.value {
                         store_value(&mut w, &value);
                     }

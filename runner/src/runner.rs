@@ -6,9 +6,12 @@
 //! Kernel validation precedes every write; a refusal leaves the kernel untouched.
 mod admission;
 mod advance;
+mod capture;
 mod native_timers;
+mod retirement;
 pub use native_timers::NativeTimer;
 use native_timers::Timer;
+pub use retirement::{ModuleIdentity, ModuleInstance};
 mod background;
 mod commit;
 mod control;
@@ -248,6 +251,7 @@ enum Seed<'a> {
 /// answers, and the arguments it was asked with (what `parse` sees).
 #[derive(Clone)]
 struct PendingReq {
+    module: Option<ModuleInstance>,
     inspection_generation: u64,
     refusal: Option<(&'static str, bool)>,
     /// The host refused this ordered request before execution (LLP 1041 §8.4).
@@ -408,6 +412,11 @@ pub struct Runner<D: DataSource> {
     reuse: bool,
     /// The 2D canvases (LLP 1056 D4), when Canvas 2D is linked.
     canvases: Option<Box<dyn canvas2d::CanvasEngine>>,
+    canvas_owner: std::sync::Arc<()>,
+    canvas_captures: Vec<(
+        crate::Request,
+        std::sync::Weak<std::sync::Mutex<crate::canvas_capture::CaptureState>>,
+    )>,
     /// Requests in flight (LLP 1016): at most one per resource or mutation.
     pending: Vec<PendingReq>,
     /// This commit let a request go: `conclude` tells the source what is still in flight.
@@ -424,6 +433,7 @@ pub struct Runner<D: DataSource> {
     /// for this answer to reject it in a module turn, so a refused aborting
     /// commit still delivers it on the next pump.
     module_aborts: Vec<u64>,
+    failed_tickets: std::collections::BTreeMap<u64, String>,
     /// The tickets answered aborted, until the host cancels their requests
     /// whatever their method ([`Runner::take_explicit_aborts`]).
     explicit_aborts: Vec<u64>,
@@ -866,6 +876,8 @@ impl<D: DataSource> Runner<D> {
             shown: Default::default(),
             reuse: false,
             canvases: links.canvas.map(|engine| engine()),
+            canvas_owner: std::sync::Arc::new(()),
+            canvas_captures: Vec::new(),
             pending: Vec::new(),
             pending_mut: Vec::new(),
             announced: Default::default(),
@@ -878,10 +890,11 @@ impl<D: DataSource> Runner<D> {
             background: Default::default(),
             module_work: Default::default(),
             mapper_turns: Default::default(),
-            picked_count: 0,
+            picked_count: carried.map_or(0, |c| c.picked_count),
             forgot: false,
             heard_aborts: Vec::new(),
             module_aborts: Vec::new(),
+            failed_tickets: Default::default(),
             explicit_aborts: Vec::new(),
             retired_fetches: Vec::new(),
             uploads: Default::default(),
@@ -1058,6 +1071,7 @@ impl<D: DataSource> Runner<D> {
         let receipt = runner.apply(ops)?;
         runner.samples_stood();
         runner.publish_surfaces(surfaces);
+        runner.pin_canvas_captures();
         let line = lines::boot(carried.is_some(), runner.kernel.live_count(), receipt.epoch);
         runner.log(line);
         runner.persist_boot();

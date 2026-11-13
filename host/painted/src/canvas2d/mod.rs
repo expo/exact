@@ -12,9 +12,11 @@
 //! operators, patterns, images and conic gradients; text is glyph outlines
 //! (`text.rs`).
 
+mod capture;
 mod draw;
 pub(crate) mod text;
 
+pub(crate) use capture::capture;
 use draw::Geom;
 use exact_canvas::list::{self, text_at, Op};
 use exact_kernel::ViewId;
@@ -501,6 +503,7 @@ pub(crate) fn replay(
 /// text engine.
 #[derive(Default)]
 pub(crate) struct Canvases {
+    completed: BTreeMap<ViewId, u64>,
     replayers: BTreeMap<ViewId, Replayer>,
     snapshots: BTreeMap<ViewId, CanvasPaint>,
     pub(crate) images: ImageCache,
@@ -518,6 +521,9 @@ impl Canvases {
             text: self.text.as_deref(),
         };
         for c in lists {
+            if c.fresh {
+                self.completed.remove(&c.view);
+            }
             if c.fresh {
                 self.snapshots.remove(&c.view);
                 match Replayer::new(
@@ -547,6 +553,9 @@ impl Canvases {
                     errors.push(format!("canvas {}: {e}", c.view));
                 }
             }
+            if c.seq > 0 {
+                self.completed.insert(c.view, c.seq);
+            }
             touched.push(c.view);
         }
         touched.dedup();
@@ -566,6 +575,7 @@ impl Canvases {
     /// Drop the canvases whose nodes are gone, and the images when no
     /// canvas is left.
     pub(crate) fn retain(&mut self, live: &[ViewId]) {
+        self.completed.retain(|v, _| live.contains(v));
         self.replayers.retain(|v, _| live.contains(v));
         self.snapshots.retain(|v, _| live.contains(v));
         if live.is_empty() {

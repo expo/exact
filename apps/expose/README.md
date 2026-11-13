@@ -4,6 +4,14 @@ A phone operating system's face, in Exact2: a lock screen, a home screen, a
 Messages app whose pinned thread is an assistant, a Reader with five articles,
 and Settings — all set in the three faces from the Expose type program.
 
+The lock screen is `/`, followed by `/home`, `/messages`, `/reader` and
+`/settings`. Conversations use `/messages/:thread`, articles `/reader/:article`,
+and the settings pages `/settings/intelligence`, `/settings/display` and
+`/settings/about`. Direct links and reload restore the screen with its declared
+parents. Reader and settings shortcuts include their declared parents. Other
+in-app transitions keep their caller, which the Back label names. Browser
+Forward revisits the screen left behind.
+
 - **Exciting** (Black, v18) speaks loudest: the clock, the marks on the app
   tiles, the Reader masthead. One word at a time, never a sentence.
 - **Exciting Lilt** (Semibold and Bold, v10) carries titles, names and actions,
@@ -77,7 +85,7 @@ Drive it: `bun scripts/agent.mjs --app expose web --url <url> "tap lock-unlock"
 
 ## Layout
 
-- `app.contract` — the root component and the five screens.
+- `app.contract` — the routes, root component and screens.
 - `parts.contract` — shapes, named styles, keyframes, and the leaf components
   (status bar, tiles, notices, settings rows, bubbles, the home bar).
 - `app.ts` — the sources: clock strings, inbox and threads, the assistant,

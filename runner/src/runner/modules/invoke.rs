@@ -71,6 +71,9 @@ pub(super) enum To {
 
 /// A handler awaiting a request of its own.
 struct Running {
+    module: Option<crate::ModuleInstance>,
+    fetch: Option<u64>,
+    continuation: Option<u64>,
     at: String,
     source: String,
     args: Value,
@@ -248,6 +251,12 @@ impl<D: DataSource> Runner<D> {
         final_of: Option<u64>,
     ) {
         let run = Running {
+            module: self
+                .data
+                .module_identity(&format!("tool:{handler}"))
+                .map(|m| m.instance()),
+            fetch: None,
+            continuation: None,
             at,
             source: format!("tool:{handler}"),
             args: Value::from(args.to_string()),
@@ -347,7 +356,12 @@ impl<D: DataSource> Runner<D> {
                 let ticket = self.next_ticket;
                 self.next_ticket += 1;
                 request.reach = self.reach_of(run.origin);
+                if request.module.is_some() {
+                    run.module = request.module.clone();
+                }
                 run.effects = request.has_effects();
+                run.fetch = request.fetch;
+                run.continuation = request.continuation;
                 // A program starts only from the app's origin (LLP 1133.007
                 // D13): a handler's is refused before it reaches the host,
                 // so no ordered work waits on it.
@@ -397,6 +411,35 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    pub(in crate::runner) fn failed_tool_tickets(&self) -> Vec<(u64, String)> {
+        self.extensions
+            .invocations
+            .running
+            .iter()
+            .filter_map(|(ticket, run)| Some((*ticket, run.module.as_ref()?.failure()?.to_owned())))
+            .collect()
+    }
+
+    pub(in crate::runner) fn discard_failed_tools(&mut self) {
+        let tokens: Vec<_> = self
+            .extensions
+            .invocations
+            .running
+            .values()
+            .filter(|run| run.module.as_ref().and_then(|m| m.failure()).is_some())
+            .filter_map(|run| run.continuation)
+            .collect();
+        for token in tokens {
+            self.data.discard(token);
+        }
+    }
+
+    pub(in crate::runner) fn fail_tool(&mut self, ticket: u64, message: &str) {
+        if let Some(run) = self.extensions.invocations.running.remove(&ticket) {
+            self.tool_step(run, Err(DataError::Unavailable(message.into())));
+        }
+    }
+
     /// Whether `ticket` is a handler's request.
     pub(in crate::runner) fn is_tool(&self, ticket: u64) -> bool {
         self.extensions.invocations.running.contains_key(&ticket)
@@ -432,7 +475,14 @@ impl<D: DataSource> Runner<D> {
         let answer = self.as_invocation(run.origin, 0, |r| {
             let args = std::slice::from_ref(&run.args);
             r.store.set_clock_ms(r.now_ms);
-            (r.data).parse(&mut r.store, &run.source, args, outcome)
+            (r.data).parse_tool(
+                run.fetch,
+                run.continuation,
+                &mut r.store,
+                &run.source,
+                args,
+                outcome,
+            )
         });
         self.tool_step(run, answer);
     }
@@ -538,6 +588,9 @@ mod tests {
     /// Handler `h`'s run, answering `to`.
     fn running(to: Option<To>) -> Running {
         Running {
+            module: None,
+            fetch: None,
+            continuation: None,
             at: "test: h".into(),
             source: "tool:h".into(),
             args: Value::str("{}"),

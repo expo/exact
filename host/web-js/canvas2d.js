@@ -61,6 +61,8 @@ export function engine(rt) {
   const x = globalThis.exact;
   const records = new Map(); // view id -> record
   let module = null; // the module's draws, once it is ready
+  let drewReady;
+  const drawingReady = new Promise(resolve => { drewReady = resolve; });
   let undrawn = null; // why nothing will draw, once the module is known to draw nothing
   // Said once a surface, as the module turns out to draw nothing or, usually later, as its canvas mounts.
   const undrawnSaid = new Set();
@@ -90,12 +92,12 @@ export function engine(rt) {
   function drawAll() {
     if (!module) return;
     for (const [id, r] of records) {
-      if (!r.backing || !r.backing.w || !r.backing.h || !r.causes) continue;
+      if (!r.backing || !r.backing.w || !r.backing.h || (!r.causes && !r.captureRequested)) continue;
       const b = r.backing, el = r.c.e, color = colour(el), rtl = rtlOf(el), seq = r.seq++, was = r.drawnIn;
       r.drawnIn = drawnIn(color, rtl);
       // A draw for another cause that finds its colour or direction changed carries "style" too: one draw, as the runner's.
       const causes = r.causes | (was && was !== r.drawnIn ? STYLE : 0);
-      r.causes = 0;
+      r.causes = 0; r.captureRequested = false;
       if (causes & FRAME) r.framedAt = clock.now;
       let reply;
       try {
@@ -211,6 +213,7 @@ export function engine(rt) {
     for (const r of records.values()) if (r.frames && r.framedAt !== clock.now) r.causes |= FRAME;
     drawAll();
   }
+  x.canvas2dFrame = frame;
   // Under the agent the clock is the driver's: its moves are the frames.
   // The agent's `state.canvas` (runner/src/runner/canvas2d.rs `state`): each
   // 2D canvas's generation, draws, backing and last error.
@@ -220,6 +223,28 @@ export function engine(rt) {
     colorSpace: r.backing ? (r.backing.p3 ? 'display-p3' : 'srgb') : null, colorType: r.backing ? (r.backing.float16 ? 'float16' : 'unorm8') : null, error: r.error ?? undrawn, refused: null }));
   if (clock.agent && x.advance) { const advance = x.advance; x.advance = (to, wall, stop) => { const r = advance(to, wall, stop); frame(); return r; }; }
   const glue = x.canvas2dGlue({ views: rt.views, now: () => clock.now });
+  // A capture's canvas (ts-data.js `captureCanvas`): the runner's checks
+  // (runner/src/runner/canvas2d.rs `capture`), then the glue's PNG.
+  x.canvas2dCapture = (surface, targets) => {
+    const mounted = [...records].filter(([, r]) => r.c.name === surface && r.c.e.isConnected);
+    targets ??= mounted.map(([, r]) => r.c);
+    if (!targets.length) return { name: 'NotFoundError', message: `no canvas of surface ${JSON.stringify(surface)} is mounted` };
+    if (targets.length > 1) return { name: 'InvalidStateError', message: `${targets.length} canvases of surface ${JSON.stringify(surface)} are mounted; a capture names one` };
+    const target = mounted.find(([, r]) => r.c === targets[0]);
+    if (!target) return { name: 'EncodingError', message: "the capture's canvas was unmounted or replaced" };
+    const [id, r] = target;
+    // A capture itself needs a completed drawing after its commit, including
+    // a frame task whose animation callback has not run yet.
+    r.captureRequested = true;
+    glue.geometry(id);
+    frame();
+    const b = r.backing;
+    if (!module) return { name: 'NotSupportedError', message: undrawn ?? 'the canvas drawer is not ready' };
+    if (!b || !b.w || !b.h) return { name: 'IndexSizeError', message: `the canvas of surface ${JSON.stringify(surface)} has no bitmap: its box has no area` };
+    if (b.p3 || b.float16) return { name: 'NotSupportedError', message: 'a capture is an sRGB PNG of 8-bit pixels: this canvas is display-p3 or float16' };
+    if (b.w * b.h > 1 << 26) return { name: 'QuotaExceededError', message: `${b.w} × ${b.h} px is over the ${1 << 26} px a capture writes` };
+    return { width: b.w, height: b.h, scale: b.scale, png: () => glue.capture(id, r.lifetime, r.generation, b.w, b.h, r.seq - 1) };
+  };
   host();
   // The module arrives after first pixel (rust-data.js); until then causes wait.
   const ready = () => {
@@ -233,6 +258,7 @@ export function engine(rt) {
       sayUndrawn();
     }
     drawAll();
+    drewReady();
   };
   // A TypeScript draw is in the page already; it starts once the page's
   // declared faces have loaded (or failed), as a module arriving after
@@ -241,10 +267,11 @@ export function engine(rt) {
   if (drawer) {
     inflight.n++;
     const faces = document.fonts ? [...document.fonts].map(f => (f.status === 'unloaded' ? f.load() : f.loaded).catch(() => {})) : [];
-    Promise.all(faces).then(() => { module = drawer; drawAll(); }).finally(() => inflight.n--);
+    Promise.all(faces).then(() => { module = drawer; drawAll(); drewReady(); }).finally(() => inflight.n--);
   }
   else if (data.logic) ready(); else data.ready(ready);
   return {
+    ready: drawingReady,
     args(c) {
       if (!c.e.isConnected) return;
       const id = rt.viewId(c.e);

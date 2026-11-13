@@ -272,6 +272,15 @@ pub struct Core {
 /// through: the platform's, unless the embedder names another.
 pub type StreamHost = Arc<dyn Fn() -> ibex2::host::Host + Send + Sync>;
 
+// With no I/O grants there is nothing to endow. Refusal must not wait
+// for platform initialization, including the default stores' bundle identity.
+fn independent_bindings(grants: &str, host: &StreamHost) -> Option<ibex2::host::Bindings> {
+    ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+        .ok()
+        .filter(|grants| !grants.is_empty())
+        .map(|grants| host().endow(grants))
+}
+
 /// The ordered owner (the boot's bindings) and the independent ones. The
 /// boot endowed its bindings with the data module's grants, before the plan
 /// was read; their fetch takes `grants`, the app's, which add the origins
@@ -1056,7 +1065,7 @@ fn worker(
 ) {
     let parsed = || ibex2::grant::GrantSet::parse(&exact_runner::io_grants(&grants));
     let bindings = if lane == 1 && bindings.is_none() {
-        parsed().ok().map(|g| host().endow(g))
+        independent_bindings(&grants, &host)
     } else {
         bindings
     };

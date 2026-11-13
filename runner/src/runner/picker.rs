@@ -156,40 +156,62 @@ pub fn extension(name: &str) -> String {
 /// The MIME type a file's name says, as a browser guesses it; unknown is
 /// `application/octet-stream`.
 pub fn mime_for(name: &str) -> &'static str {
-    match extension(name).as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "heic" => "image/heic",
-        "heif" => "image/heif",
-        "avif" => "image/avif",
-        "tif" | "tiff" => "image/tiff",
-        "svg" => "image/svg+xml",
-        "bmp" => "image/bmp",
-        "ico" => "image/vnd.microsoft.icon",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "m4v" => "video/x-m4v",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "m4a" => "audio/mp4",
-        "ogg" => "audio/ogg",
-        "pdf" => "application/pdf",
-        "json" => "application/json",
-        "md" | "markdown" => "text/markdown",
-        "txt" | "log" => "text/plain",
-        "csv" => "text/csv",
-        "tsv" => "text/tab-separated-values",
-        "html" | "htm" => "text/html",
-        "xhtml" => "application/xhtml+xml",
-        "css" => "text/css",
-        "xml" => "application/xml",
-        "yaml" | "yml" => "application/yaml",
-        _ => "application/octet-stream",
-    }
+    let ext = extension(name);
+    MIME_TYPES
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map_or("application/octet-stream", |(_, m)| m)
 }
+
+/// Keep a matching name extension; otherwise use the delivered MIME's extension.
+pub fn extension_for(name: &str, mime: &str) -> String {
+    if mime_for(name) == mime {
+        return extension(name);
+    }
+    MIME_TYPES
+        .iter()
+        .find(|(_, m)| *m == mime)
+        .map_or_else(|| extension(name), |(e, _)| (*e).into())
+}
+
+const MIME_TYPES: &[(&str, &str)] = &[
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("png", "image/png"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("heic", "image/heic"),
+    ("heif", "image/heif"),
+    ("avif", "image/avif"),
+    ("tif", "image/tiff"),
+    ("tiff", "image/tiff"),
+    ("svg", "image/svg+xml"),
+    ("bmp", "image/bmp"),
+    ("ico", "image/vnd.microsoft.icon"),
+    ("mp4", "video/mp4"),
+    ("mov", "video/quicktime"),
+    ("m4v", "video/x-m4v"),
+    ("webm", "video/webm"),
+    ("mp3", "audio/mpeg"),
+    ("wav", "audio/wav"),
+    ("m4a", "audio/mp4"),
+    ("ogg", "audio/ogg"),
+    ("pdf", "application/pdf"),
+    ("json", "application/json"),
+    ("md", "text/markdown"),
+    ("markdown", "text/markdown"),
+    ("txt", "text/plain"),
+    ("log", "text/plain"),
+    ("csv", "text/csv"),
+    ("tsv", "text/tab-separated-values"),
+    ("html", "text/html"),
+    ("htm", "text/html"),
+    ("xhtml", "application/xhtml+xml"),
+    ("css", "text/css"),
+    ("xml", "application/xml"),
+    ("yaml", "application/yaml"),
+    ("yml", "application/yaml"),
+];
 
 /// Whether `accept` takes a file named `name` of type `mime`, as HTML
 /// matches it: absent or `*/*` accepts all; otherwise an extension,
@@ -201,6 +223,15 @@ pub fn accepts(accept: &[String], name: &str, mime: &str) -> bool {
     let ext = format!(".{}", extension(name));
     accept.iter().any(|t| {
         t == &ext
+            || (t.starts_with('.')
+                && mime_for(t) != "application/octet-stream"
+                && mime_for(t) == mime
+                && (!name
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(name)
+                    .contains('.')
+                    || mime_for(name) == mime))
             || t == mime
             || t.strip_suffix("/*")
                 .is_some_and(|kind| mime.split('/').next() == Some(kind))
@@ -445,6 +476,26 @@ mod tests {
             assert!(accepts(&[mime.into()], name, mime_for(name)), "{name}");
         }
         assert_eq!(mime_for("page.xhtml"), "application/xhtml+xml");
+    }
+
+    #[test]
+    fn extension_accepts_match_provider_mime_without_accepting_unknown_binary_types() {
+        for name in ["photo.jpeg", "photo"] {
+            assert!(accepts(&[".jpg".into()], name, "image/jpeg"));
+        }
+        for name in ["invoice.exe", "scan.png", "scan.v2"] {
+            assert!(!accepts(&[".jpg".into()], name, "image/jpeg"), "{name}");
+        }
+        assert!(!accepts(
+            &[".board".into()],
+            "photo",
+            "application/octet-stream"
+        ));
+        assert!(accepts(
+            &[".board".into()],
+            "design.board",
+            "application/octet-stream"
+        ));
     }
 
     #[test]

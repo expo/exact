@@ -169,11 +169,14 @@ test('the Caltrain JS dev loop keeps its station search across an app edit', asy
     await drive.tap('change-station');
     await drive.type('station-search','Palo');
     const before=await drive.state();
-    assert.equal(before.slots.screen,'stations');assert.equal(before.slots.query,'Palo');
+    assert.equal(before.navigation.url,'/stations');
+    assert.equal(before.slots.query,'Palo');
     writeFileSync(contract,edited);
     const tree=await waitFor(()=>drive.tree(),t=>t.nodes.some(n=>n.props?.testId==='brand'&&n.props?.text==='Caltrain reloaded'));
     const state=await drive.state(),search=tree.nodes.find(n=>n.props?.testId==='station-search');
-    assert.equal(state.slots.screen,'stations');assert.equal(state.slots.query,'Palo');assert.equal(state.focus.logical,search.id);
+    assert.equal(state.navigation.url,'/stations');
+    assert.equal(state.slots.query,'Palo');
+    assert.equal(state.focus.logical,search.id);
   } finally {
     writeFileSync(contract,original);
     restoreTimes();

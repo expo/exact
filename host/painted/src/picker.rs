@@ -488,20 +488,30 @@ fn exif_rotates(tiff: &[u8]) -> Option<bool> {
     Some(false)
 }
 
+fn read_dimensions(source: impl std::io::Read) -> Option<(f64, f64)> {
+    use std::io::Read;
+    // Metadata beyond this header stays absent; the picked file itself has no size limit.
+    let mut bytes = Vec::new();
+    source.take(1024 * 1024).read_to_end(&mut bytes).ok()?;
+    dimensions(&bytes)
+}
+
 /// Copy the driver's file at `source` to `app_path` (under
 /// `app:/tmp/picked/`), and describe it as `change` delivers it. The type
-/// is what the name says; a video's duration is not read here.
+/// comes from the provider or the name; a video's duration is not read here.
 pub fn copy_in(source: &Path, app_path: &str, mime: &str) -> Result<exact_runner::Picked, String> {
     let target = resolve(app_path).ok_or_else(|| format!("{app_path}: not an app path"))?;
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    std::fs::copy(source, &target).map_err(|e| format!("{}: {e}", source.display()))?;
-    let size = std::fs::metadata(&target).map_err(|e| e.to_string())?.len() as f64;
-    let (width, height) = if mime.starts_with("image/") {
-        std::fs::read(&target)
+    let size = copy_size(source, &target, |from, to| std::fs::copy(from, to))?;
+    let (width, height) = if matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        std::fs::File::open(&target)
             .ok()
-            .and_then(|b| dimensions(&b))
+            .and_then(read_dimensions)
             .map_or((None, None), |(w, h)| (Some(w), Some(h)))
     } else {
         (None, None)
@@ -518,6 +528,20 @@ pub fn copy_in(source: &Path, app_path: &str, mime: &str) -> Result<exact_runner
         height,
         duration: None,
     })
+}
+
+fn copy_size(
+    source: &Path,
+    target: &Path,
+    copy: impl FnOnce(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<f64, String> {
+    let result = copy(source, target)
+        .and_then(|_| std::fs::metadata(target))
+        .map(|metadata| metadata.len() as f64);
+    if result.is_err() {
+        let _ = std::fs::remove_file(target);
+    }
+    result.map_err(|e| format!("{}: {e}", source.display()))
 }
 
 /// A cold share's claim (LLP 1133.024 D9), whose copies the presenter makes
@@ -662,6 +686,29 @@ mod tests {
         assert!(unlinked(&tree).is_ok());
         assert!(unlinked(&base.join("cache/exact/app.id/agent/absent")).is_ok());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn image_metadata_reads_only_a_bounded_header_even_for_large_unsupported_files() {
+        use std::io::Read;
+        let header = include_bytes!("../../../scripts/fixtures/picker/photo.png");
+        let mut source = header
+            .as_slice()
+            .chain(std::io::repeat(0).take(16 * 1024 * 1024));
+        assert_eq!(read_dimensions(&mut source), Some((160.0, 106.0)));
+        let mut left = Vec::new();
+        source.read_to_end(&mut left).unwrap();
+        assert!(
+            left.len() >= 15 * 1024 * 1024,
+            "metadata consumed the whole image"
+        );
+        let mut tiff = b"II*\0"
+            .as_slice()
+            .chain(std::io::repeat(0).take(16 * 1024 * 1024));
+        assert_eq!(read_dimensions(&mut tiff), None);
+        let mut left = Vec::new();
+        tiff.read_to_end(&mut left).unwrap();
+        assert!(left.len() >= 15 * 1024 * 1024);
     }
 
     #[test]
@@ -907,4 +954,18 @@ mod tests {
                 .join("exact/test.exact.roots/agent/s1/data/photos/a.jpg")
         );
     }
+}
+
+#[test]
+fn failed_copy_removes_its_partial_destination() {
+    let target = std::env::temp_dir().join(format!("exact-copy-failure-{}", std::process::id()));
+    let result = copy_size(Path::new("source"), &target, |_, to| {
+        std::fs::write(to, b"partial bytes")?;
+        assert!(to.exists());
+        Err(std::io::Error::other("copy failed after writing"))
+    });
+    assert!(result.unwrap_err().contains("copy failed after writing"));
+    let left = target.exists();
+    let _ = std::fs::remove_file(target);
+    assert!(!left, "a failed copy left its partial destination");
 }

@@ -205,6 +205,31 @@ class AuthTest {
         return intArrayOf(17, id, body.size) + body.toIntArray()
     }
 
+    @Test fun filesDeliveredByTheOwnerAfterDestructionAreCancelled() {
+        val owner = Owner(false, false, 0) { "0" }
+        val thread = Owner::class.java.getDeclaredField("thread").apply { isAccessible = true }
+            .get(owner) as android.os.HandlerThread
+        Exact.owner = owner
+        owner.running(false)
+        owner.asked = { Requests(activity).perform(it) }
+        try {
+            controller.pause().stop().destroy()
+            assertNull(Exact.reader)
+            owner.call { Host.pending.set(intArrayOf(18, 377, 3, 42, 0, 0)) }
+            owner.ask { }
+            shadowOf(Looper.getMainLooper()).idle()
+            owner.ask { }
+            assertEquals(listOf(377 to "file picker: activity unavailable"), Host.answers)
+            assertNull(shadowOf(activity).nextStartedActivityForResult)
+        } finally {
+            Exact.owner = null
+            thread.quitSafely(); thread.join(5000)
+            assertFalse(thread.isAlive)
+            controller = Robolectric.buildActivity(Reader::class.java, intent())
+            controller.create().start().resume()
+        }
+    }
+
     @Test fun authDeliveredByTheOwnerAfterDestructionIsCancelled() {
         browser(true)
         Auth.open(activity, 2, "https://login.test/authorize", "app.test:/cb", "s1")
@@ -220,7 +245,7 @@ class AuthTest {
         try {
             controller.pause().stop().destroy()
             assertNull(Exact.reader)
-            owner.call { Host.pending.set(intArrayOf(18, 3, 1, 2) + authRequest(1)) }
+            owner.call { Host.pending.set(intArrayOf(19, 3, 1, 2) + authRequest(1)) }
             owner.ask { } // Request delivery is now queued on main.
             shadowOf(Looper.getMainLooper()).idle()
             owner.ask { } // The cancellation has reached the owner.
@@ -252,7 +277,7 @@ class AuthTest {
         assertTrue(Auth.receive(activity, callback))
         assertEquals(listOf(uri.toString()), Host.urls)
         assertNull(callback.data)
-        requests.perform(intArrayOf(18, 2, 1, 1))
+        requests.perform(intArrayOf(19, 2, 1, 1))
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(11))
         assertTrue(Host.answers.isEmpty())
     }

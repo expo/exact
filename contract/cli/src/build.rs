@@ -231,7 +231,7 @@ fn build(options: &Options) -> ExitCode {
     refused.extend(crate::ambient::check(Path::new(input)));
     if !json && !errors_only {
         for finding in &clocks {
-            eprintln!("warning: {finding}");
+            eprintln!("{}", crate::warning(finding.clone()));
         }
     }
     // Warnings never fail the build; they follow its refusals (LLP 1116 D6).

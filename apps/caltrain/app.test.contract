@@ -1,28 +1,30 @@
 // Caltrain's tests (LLP 1017 P7): `test` blocks whose steps are the agent
-// API's nine operations and `expect` lines over their replies — run on any
+// API's operations and `expect` lines over their replies — run on any
 // host with `bun scripts/agent.mjs <host> --test apps/caltrain/app.test.contract`,
 // and by the smoke. There is no second evaluator: a test is this script.
 
 test "the home screen names the station"
   expect tree has "caltrain-main"
   expect text "station-name" == "Mountain View"
-  expect state screen == "home"
+  expect state current.url == "/"
 
 test "changing the station goes through the stations screen"
   tap "change-station"
+  clock settle
   expect tree has "stations-screen"
-  expect state screen == "stations"
+  expect state current.url == "/stations"
   type "station-search" "Palo"
   expect tree has "station-paloalto"
   expect tree missing "station-mv"
   tap "station-paloalto"
-  expect state screen == "home"
+  clock settle
+  expect state current.url == "/"
   expect text "station-name" == "Palo Alto"
   expect state query == ""
 
 test "the clock is the driver's"
   clock +60000
-  expect state screen == "home"
+  expect state current.url == "/"
 
 after "chooseScheme" "chooseScheme writes only none"
   writes none
@@ -33,5 +35,5 @@ after clock "the clock writes only nowMs"
 always "material is one of 3 values"
   expect state material in "crt" "glass" "ink"
 
-always "screen is one of 3 values"
-  expect state screen in "home" "stations" "web-deck"
+always "each screen has a route"
+  expect state screen in "home" "stations" "webDeck" "notfound"

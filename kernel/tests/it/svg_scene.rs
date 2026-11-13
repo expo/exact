@@ -16,6 +16,8 @@ mod filters;
 mod lengths;
 #[path = "svg_scene/object_box.rs"]
 mod object_box;
+#[path = "svg_scene/refs.rs"]
+mod refs;
 
 fn style(id: u32, rows: &[(StyleId, &str)]) -> Op {
     let mut patch = StyleProps::default();

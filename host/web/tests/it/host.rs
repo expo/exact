@@ -238,20 +238,20 @@ fn later_batches_carry_only_what_changed() {
     assert!(batch.contains("\"text\":"));
     assert!(!batch.contains("\"op\":\"create\""));
 
+    let home = view_with_test_id(&host, "home-screen");
     let change_station = view_with_test_id(&host, "change-station");
     let batch = host.dispatch(change_station, Event::Press);
-    assert!(
-        batch.contains("\"op\":\"destroy\""),
-        "the home screen's arm is torn down"
-    );
+    assert_eq!(view_with_test_id(&host, "home-screen"), home);
     assert!(batch.contains("\"data-testid\":\"stations-screen\""));
     assert!(batch.contains("\"tag\":\"input\""));
     assert!(batch.contains("\"handlers\":[\"input\",\"focus\",\"blur\",\"key\"]"));
     assert!(batch.contains("\"op\":\"children\",\"id\":"));
-    assert!(
-        !batch.contains("\"data-testid\":\"caltrain-main\""),
-        "the unchanged root is not re-sent"
-    );
+    let changes: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    assert!(changes["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|op| { op["op"] != "create" || op["props"]["data-testid"] != "caltrain-main" }));
     assert!(batch.contains("\"error\":null"));
 
     let search = view_with_test_id(&host, "station-search");

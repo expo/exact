@@ -1427,51 +1427,6 @@ macro_rules! list_exports {
     };
 }
 
-/// GPU surfaces' export group (LLP 1047 D3), beside [`host!`]: the generated
-/// entry invokes it when the plan has a canvas with a surface, and the glue
-/// calls it only for one.
-#[macro_export]
-macro_rules! surface_exports {
-    () => {
-        /// A 2D canvas's content box and device scale (LLP 1056 D4), from
-        /// the page's `ResizeObserver`; returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_canvas_geometry(
-            view: u32,
-            width: f64,
-            height: f64,
-            scale: f64,
-        ) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_geometry(view, width, height, scale))
-        }
-
-        /// A Canvas 2D image handle loaded or failed (LLP 1056 D9); the
-        /// payload is in the input buffer. Returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_canvas_image(len: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_image(len as usize))
-        }
-
-        /// A font finished loading (LLP 1056 D8); returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_canvas_fonts() -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_fonts())
-        }
-
-        /// Publish or clear a named surface record; returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_surface_record(len: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| {
-                let Ok(mut bridge) = b.try_borrow_mut() else {
-                    eprintln!("exact_surface_record refused: nested bridge export");
-                    return 0;
-                };
-                bridge.surface_record(len as usize)
-            })
-        }
-    };
-}
-
 /// What the page holds, as `name NUL value NUL …`. `localStorage` holds
 /// text, so a kept answer's bytes are base64 there (`Batch::store`); one
 /// that is not (an older build's hex) is kept empty, so it is never used

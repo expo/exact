@@ -857,7 +857,7 @@ fn commands_exit_the_side_and_refusals_leave_the_kernel_untouched() {
     let err = r.act("rogue", vec![]).unwrap_err();
     assert!(matches!(
         err,
-        RunnerError::Trap(Trap::WriteNotDeclared { slot: 2, .. })
+        RunnerError::Evaluation { ref error, .. } if matches!(**error, RunnerError::Trap(Trap::WriteNotDeclared { slot: 2, .. }))
     ));
     assert_eq!(r.slot("nowMs"), Some(&Value::Number(0.0)));
     assert_eq!(r.kernel().export(None).unwrap(), before);

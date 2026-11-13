@@ -23,8 +23,6 @@ struct Wasm {
         target_os = "android"
     ))]
     stateless: bool,
-    /// Set when the module traps; its memory and state are then undefined.
-    trapped: bool,
     store: Store<StoreLimits>,
     memory: Memory,
     session: u32,
@@ -121,7 +119,6 @@ pub(crate) fn load(bytes: &[u8]) -> Result<Box<dyn Executor>, String> {
             target_os = "android"
         ))]
         stateless,
-        trapped: false,
         memory,
         session,
         alloc: instance
@@ -156,7 +153,6 @@ impl Drop for Wasm {
 }
 impl Wasm {
     fn trap(&mut self, e: wasmi::Error, fuel: u64, len: u32) -> String {
-        self.trapped = true;
         if e.as_trap_code() == Some(wasmi::TrapCode::OutOfFuel) {
             format!("Rust wasm: the call used all of its {fuel} fuel ({len} input bytes)")
         } else {
@@ -173,9 +169,6 @@ impl Executor for Wasm {
     ))]
     fn stateless(&self) -> bool {
         self.stateless
-    }
-    fn trapped(&self) -> bool {
-        self.trapped
     }
     fn call(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
         if bytes.len() > MAX_MESSAGE {

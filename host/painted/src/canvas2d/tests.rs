@@ -173,3 +173,69 @@ fn a_conic_gradient_starts_at_its_angle_and_turns_clockwise() {
     assert!(at(&p, 38, 20)[0] > 200, "red at angle 0");
     assert!(at(&p, 2, 20)[2] > 200, "blue half way round");
 }
+
+#[test]
+fn capture_refuses_an_unheld_generation_without_overwriting_a_file() {
+    use exact_runner::canvas_capture::{captured_image, CanvasCapture};
+    let root = std::env::temp_dir().join(format!("exact-canvas-missing-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("shot.png");
+    let mut canvases = Canvases::default();
+    let mut c = CanvasCapture {
+        view: 7,
+        lifetime: 1,
+        generation: 0,
+        sequence: 1,
+        job: None,
+        path: "app:/tmp/shot.png".into(),
+        width: 4,
+        height: 4,
+        scale: 1.,
+    };
+    let roots = [root.clone(), root.clone(), root.clone()];
+    for held in [false, true] {
+        if held {
+            canvases
+                .replayers
+                .insert(7, Replayer::new(4, 4, 1., 1, 0).unwrap());
+        }
+        canvases.completed.insert(7, 1);
+        c.generation = 1;
+        std::fs::write(&path, b"keep this file").unwrap();
+        let outcome = super::capture::capture(
+            &canvases,
+            Ok(c.clone()),
+            Some(roots.clone()),
+            "fs.write app:/tmp",
+            None,
+        );
+        assert!(
+            captured_image(&outcome).is_err(),
+            "a missing generation must refuse"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep this file");
+    }
+    c.generation = 0;
+    // Allocation alone is not a completed draw.
+    canvases.completed.clear();
+    assert!(captured_image(&super::capture::capture(
+        &canvases,
+        Ok(c.clone()),
+        Some(roots.clone()),
+        "fs.write app:/tmp",
+        None
+    ))
+    .is_err());
+    canvases.completed.insert(7, 1);
+    let outcome = super::capture::capture(&canvases, Ok(c), Some(roots), "fs.write app:/tmp", None);
+    assert!(
+        captured_image(&outcome).is_ok(),
+        "a completed empty bitmap is capturable"
+    );
+    assert!(Pixmap::load_png(&path)
+        .unwrap()
+        .pixels()
+        .iter()
+        .all(|p| p.alpha() == 0));
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -19,7 +19,7 @@ export const grants = [
 type Clock = Result<'clock'>;
 type Inbox = Result<'inbox'>;
 type Thread = Inbox['threads'][number];
-type Conversation = Result<'conversation'>;
+type Conversation = Result<'conversations'>[number];
 type Message = Conversation['messages'][number];
 type Turn = Result<'ask'>;
 type Library = Result<'library'>;
@@ -159,6 +159,7 @@ function finish(thread: string, error = ''): Turn {
   streaming.set(thread, false);
   answering.delete(thread);
   if (error) errors.set(thread, error);
+  else errors.delete(thread);
   const rows = threads.get(thread) ?? [];
   const last = rows[rows.length - 1];
   if (last && last.role === 'assistant') {
@@ -169,12 +170,18 @@ function finish(thread: string, error = ''): Turn {
   return turn(true, error);
 }
 // One turn: the person's words go in, the assistant's answer comes back;
-// `conversation(thread, revision)` re-asks as the revision moves.
+// Conversations are read again as the revision moves.
 function ask(thread: string, text: string, article: string, epochMs: number, store: Store): Turn | Promise<Turn> {
   const body = text.trim();
   const rows = threads.get(thread);
   if (!rows || thread !== 'expose') return turn(true, 'This thread is authored; only Expose answers.');
-  if (streaming.get(thread)) return turn(false, 'Expose is still answering.');
+  if (streaming.get(thread)) {
+    // Said on the thread, where the person looks, until the answer ends.
+    const refused = 'Expose is still answering.';
+    errors.set(thread, refused);
+    revision++;
+    return turn(false, refused);
+  }
   const piece = article ? articles.find((a) => a.id === article) : undefined;
   if (!body && !piece) return turn(true);
   errors.delete(thread);
@@ -435,7 +442,7 @@ async function weather(revision: number): Promise<Weather> {
 const sources: Sources = {
   clock: ([minuteKey, utcOffset]) => clock(minuteKey, utcOffset),
   inbox: () => inbox(),
-  conversation: ([id]) => conversation(id),
+  conversations: ([ids]) => [...new Set(ids)].map(conversation),
   ask: ([thread, text, article, epochMs], store) => ask(thread, text, article, epochMs, store),
   clearThread: ([thread]) => clearThread(thread),
   library: () => library(),

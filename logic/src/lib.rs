@@ -40,11 +40,6 @@ pub const MAX_MODULE: usize = 32 << 20;
 
 trait Executor {
     fn call(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String>;
-    /// Whether a call trapped. A trapped instance's memory and state are
-    /// undefined, so it takes no further calls.
-    fn trapped(&self) -> bool {
-        false
-    }
     #[cfg(any(
         target_os = "macos",
         target_os = "linux",
@@ -226,9 +221,12 @@ impl<D: DataSource> Swappable<D> {
         let bytes = self.run(&request)?;
         abi::call_reply(&bytes, store)
     }
-    /// Run one request on the active executor. After a trap the instance is
-    /// discarded and the module activated afresh, so the trap costs that call
-    /// only (LLP 1029.000 §3: module-local caches may be discarded).
+    /// Run one request on the active executor. A call that fails may have
+    /// run, and changed the module's own state, before it failed: a trap
+    /// leaves the instance's memory undefined, and a reply over the seam's
+    /// bound is refused after its answer ran. So the instance is discarded
+    /// and the module activated afresh, and the failure costs that call only
+    /// (LLP 1029.000 §3: module-local caches may be discarded).
     fn run(&mut self, request: &[u8]) -> Result<Vec<u8>, DataError> {
         let engine = self.executor.as_mut().ok_or_else(|| {
             DataError::Unavailable("Rust module awaits post-pixel activation".into())
@@ -237,13 +235,11 @@ impl<D: DataSource> Swappable<D> {
             Ok(bytes) => return Ok(bytes),
             Err(error) => error,
         };
-        if engine.trapped() {
-            self.executor = None;
-            if let Err(again) = self.activate_module() {
-                return Err(DataError::Interface(format!(
-                    "{error}; activating the module again failed: {again}"
-                )));
-            }
+        self.executor = None;
+        if let Err(again) = self.activate_module() {
+            return Err(DataError::Interface(format!(
+                "{error}; activating the module again failed: {again}"
+            )));
         }
         Err(DataError::Interface(error))
     }
@@ -506,6 +502,28 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             .map(DataSource::take_logs)
             .unwrap_or_default()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        if let Some(source_impl) = &mut self.embedded {
+            source_impl.parse_tool(fetch, continuation, store, source, args, outcome)
+        } else {
+            self.call(store, source, args, Some(&outcome))
+        }
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.embedded
+            .as_ref()
+            .and_then(|m| m.module_identity(source))
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.embedded
             .as_mut()

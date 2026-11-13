@@ -35,7 +35,7 @@ export function sendRequest(t, land, out, data, inflight, say) {
       (t.stream ? t.stream(o => done(o, true), t.ctl) : data.fetch(t.req, streamed, t.ctl)).then(done, failed);
     };
     if (t.stream || t.req?.stream || t.req?.cancel) open();
-    else if (t.req) data.fetch(t.req).then(done, failed);
+    else if (t.req) data.fetch(t.req, undefined, { active: () => t.held() && !t.r?.gone }).then(done, failed);
     else {
       // An answer in flight that opens its stream in a later turn (ts-data.js `late`) opens it here; its promise is no
       // longer the answer.
@@ -43,5 +43,23 @@ export function sendRequest(t, land, out, data, inflight, say) {
       if (globalThis.__exactRender) trackAnswer(t);
       t.promise.then(v => t.stream || done({ v }), e => t.stream || done({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
     }
+  });
+}
+
+// Pin the mounted canvas when the requesting commit has applied its tree.
+export function committedCanvas(surface, active, finishes, canvas, mounts) {
+  return new Promise((resolve, reject) => {
+    const done = ok => {
+      if (!ok) return reject(new DOMException("the capture's commit was refused", "InvalidStateError"));
+      const targets = [...mounts].filter(c => c.name === surface && c.e.isConnected);
+      Promise.resolve(canvas()).then(m => m?.ready).then(() => {
+        if (surface === undefined) return resolve();
+        if (!active()) throw new DOMException("the capture's ticket is no longer held", "AbortError");
+        const c = globalThis.exact?.canvas2dCapture?.(surface, targets) ?? { name: "NotFoundError", message: `no canvas of surface ${JSON.stringify(surface)} is mounted` };
+        if (c.name) return resolve(c);
+        const png = c.png(); png.catch(() => {}); resolve({ ...c, png: () => png });
+      }).catch(reject);
+    };
+    if (finishes) finishes.push(done); else done(true);
   });
 }

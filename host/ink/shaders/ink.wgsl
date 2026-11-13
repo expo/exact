@@ -248,7 +248,7 @@ fn brush(v: Vertex, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
                 uv = (v.local - v.param.xy) / max(v.param.zw, vec2<f32>(0.00001));
             }
             if (flags & 1073741824u) != 0u {
-                uv = v.position.xy / vec2<f32>(textureDimensions(picture));
+                uv = (v.position.xy - v.param.zw) / vec2<f32>(textureDimensions(picture));
             }
             var c = textureSample(picture, filtering, uv);
             if (v.data.x >> 16u) == 3u {
@@ -274,6 +274,14 @@ fn mirror_index(value: i32, size: i32) -> i32 {
     return select(period - 1 - index, index, index < size);
 }
 
+fn picture_pixel(at: vec2<i32>) -> vec4<f32> {
+    // Backdrop snapshots omit pixels beyond the visible output's sampling support.
+    if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(textureDimensions(picture))) {
+        return vec4<f32>(0.0);
+    }
+    return textureLoad(picture, at, 0);
+}
+
 fn blur_pixel(v: Vertex) -> vec4<f32> {
     let lo = vec2<i32>(v.rect.xy);
     let size = vec2<i32>(v.rect.zw);
@@ -286,7 +294,7 @@ fn blur_pixel(v: Vertex) -> vec4<f32> {
         p = lo + vec2<i32>(mirror_index(p.x, size.x), mirror_index(p.y, size.y));
         var weight = 1.0;
         if v.param.w > 0.0 { weight = exp(-0.5 * f32(k * k) / (v.param.w * v.param.w)); }
-        sum += textureLoad(picture, p, 0) * weight;
+        sum += picture_pixel(p + vec2<i32>(v.uv.xy)) * weight;
         total += weight;
     }
     return sum / total;
@@ -303,7 +311,7 @@ fn area_pixel(v: Vertex) -> vec4<f32> {
         for (var x = i32(floor(lo.x)); x < i32(ceil(hi.x)); x++) {
             let p = vec2<f32>(f32(x), f32(y));
             let weight = max(vec2<f32>(0.0), min(hi, p + 1.0) - max(lo, p));
-            sum += textureLoad(picture, vec2<i32>(x, y), 0) * weight.x * weight.y;
+            sum += picture_pixel(vec2<i32>(x, y)) * weight.x * weight.y;
         }
     }
     return sum / (ratio.x * ratio.y);
@@ -408,7 +416,7 @@ fn fs_main(v: Vertex) -> @location(0) vec4<f32> {
         }
         case 6u: { color = blur_pixel(v); }
         case 7u: {
-            let c = textureLoad(picture, vec2<i32>(v.position.xy), 0);
+            let c = picture_pixel(vec2<i32>(v.position.xy) + vec2<i32>(v.uv.xy));
             let gray = dot(c.rgb, vec3<f32>(0.213, 0.715, 0.072));
             color = vec4<f32>(clamp(vec3<f32>(gray) + v.param.x * (c.rgb - vec3<f32>(gray)), vec3<f32>(0.0), vec3<f32>(c.a)), c.a);
         }
@@ -433,11 +441,11 @@ fn fs_main(v: Vertex) -> @location(0) vec4<f32> {
     }
     alpha = clamp(alpha, 0.0, 1.0);
     if (flags & 1073741824u) != 0u {
-        return mix(textureLoad(destination, vec2<i32>(v.position.xy), 0), color, alpha);
+        return mix(textureLoad(destination, vec2<i32>(v.position.xy - v.param.xy), 0), color, alpha);
     }
     let mode = (flags >> 11u) & 15u;
     if mode != 0u {
-        return blended(textureLoad(destination, vec2<i32>(v.position.xy), 0), color * alpha, mode);
+        return blended(textureLoad(destination, vec2<i32>(v.position.xy - v.param.xy), 0), color * alpha, mode);
     }
     return color * alpha;
 }

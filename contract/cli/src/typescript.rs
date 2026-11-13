@@ -155,6 +155,8 @@ pub fn typescript_exporting(
            function openAuthSession(url: string, options: { callback: string; state: string; ephemeral?: boolean; message?: string }): Promise<string>;\n\
            /** This carrier's auth callback, known before PAR (LLP 1069.006 D2). */\n\
            function authCallback(): string;\n\
+           /** The kept bitmap of the one mounted 2D canvas of `surface`, what its host has drawn, written as a straight-alpha sRGB PNG at device pixels to the `app:/` file `path` under `fs.write` (LLP 1056 D9). Rejects with a DOMException: `NotFoundError` (none mounted), `InvalidStateError` (several, or its size refused), `IndexSizeError` (no bitmap), `QuotaExceededError` (over 8192² px), `NotSupportedError` (`display-p3` or `float16`, or a host that cannot), `NotAllowedError` (the path), `EncodingError`. */\n\
+           function captureCanvas(surface: string, path: string): Promise<{ readonly path: string; readonly width: number; readonly height: number; readonly scale: number }>;\n\
          }\n\
          export interface NativeModule { readonly available: boolean; call(request: Record<string, unknown>): Record<string, unknown>; later(request: Record<string, unknown>): Promise<Record<string, unknown>>; watch(topic: string): void }\n\
          /** A resource-owned WebSocket, for TypeScript on the web JS target and native hosts (LLP 1016.000 D7). Methods are synchronous-mutation-only; refresh or disposal invalidates it. */\n\

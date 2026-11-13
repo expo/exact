@@ -317,6 +317,8 @@ struct Record {
     generation: u32,
     next_seq: u64,
     applied_seq: u64,
+    rejected_seq: u64,
+    capture_requested: bool,
     geometry: Option<Geometry>,
     backing: Option<Backing>,
     /// A new generation not yet announced to the host.
@@ -383,6 +385,8 @@ pub trait CanvasEngine {
     fn frame(&mut self, now: f64);
     /// [`Runner::canvas_wants_frame`].
     fn wants_frame(&self) -> bool;
+    /// Whether a draw is waiting on its executor.
+    fn in_flight(&self) -> bool;
     /// [`Runner::canvas_owed`].
     fn owed(&self, ready: bool, on_screen: &dyn Fn(ViewId) -> bool, style: NodeStyle<'_>) -> bool;
     /// Drop the canvases `alive` denies, and take the generations retired
@@ -413,6 +417,8 @@ pub trait CanvasEngine {
     fn take(&mut self) -> Vec<CanvasList>;
     /// [`Runner::is_canvas_2d`].
     fn is_2d(&self, view: ViewId) -> bool;
+    /// Whether this canvas lifetime still owns the view.
+    fn mounted(&self, view: ViewId, lifetime: u64) -> bool;
     /// `state.canvas`'s records.
     fn state(&self, s: &mut String);
     /// [`Runner::canvas_describe`].
@@ -427,6 +433,21 @@ pub trait CanvasEngine {
     fn image(&mut self, src: &str, result: Result<(u32, u32), String>, also: &[u64]);
     /// [`Runner::canvas_fonts_loaded`].
     fn fonts_loaded(&mut self);
+    /// Bind a capture to its mounted lifetime and minimum completed sequence,
+    /// scheduling a drawing if none is in flight.
+    fn request_capture(
+        &mut self,
+        surface: &str,
+        alive: &dyn Fn(ViewId) -> bool,
+    ) -> Option<(ViewId, u64, u64)>;
+    /// The mounted canvas's latest completed drawing, or its refusal.
+    fn capture(
+        &self,
+        surface: &str,
+        path: &str,
+        target: Option<(ViewId, u64, u64)>,
+        alive: &dyn Fn(ViewId) -> bool,
+    ) -> Result<crate::canvas_capture::CanvasCapture, (&'static str, String)>;
 }
 
 /// A Canvas 2D engine: what [`crate::RunnerLinks::canvas`] names.
@@ -497,6 +518,8 @@ impl CanvasEngine for Canvases {
                             generation: 0,
                             next_seq: 1,
                             applied_seq: 0,
+                            rejected_seq: 0,
+                            capture_requested: false,
                             geometry: None,
                             backing: None,
                             fresh: false,
@@ -594,6 +617,7 @@ impl CanvasEngine for Canvases {
         if had {
             self.retired.push((r.lifetime, r.generation));
             r.generation += 1;
+            r.applied_seq = 0;
             r.causes = r.causes.with(Causes::SIZE);
         }
         r.fresh = true;
@@ -609,6 +633,10 @@ impl CanvasEngine for Canvases {
                 r.causes = r.causes.with(Causes::FRAME);
             }
         }
+    }
+
+    fn in_flight(&self) -> bool {
+        self.records.values().any(|r| r.in_flight.is_some())
     }
 
     fn wants_frame(&self) -> bool {
@@ -631,7 +659,9 @@ impl CanvasEngine for Canvases {
                 if causes.has(Causes::FRAME) && !on_screen(*view) {
                     causes = Causes(causes.0 & !Causes::FRAME.0);
                 }
-                !causes.is_empty() || r.drawn_in.is_some_and(|was| was != style(*view))
+                r.capture_requested
+                    || !causes.is_empty()
+                    || r.drawn_in.is_some_and(|was| was != style(*view))
             })
     }
 
@@ -693,9 +723,10 @@ impl CanvasEngine for Canvases {
                 // causes draw now.
                 causes = Causes(causes.0 & !Causes::FRAME.0);
             }
-            if causes.is_empty() {
+            if causes.is_empty() && !r.capture_requested {
                 continue;
             }
+            r.capture_requested = false;
             r.causes = Causes(r.causes.0 & !causes.0);
             if causes.has(Causes::FRAME) {
                 r.framed_at = Some(now);
@@ -792,6 +823,8 @@ impl CanvasEngine for Canvases {
                     r.wants_frame = false;
                     self.retired.push((r.lifetime, r.generation));
                     r.generation += 1;
+                    r.applied_seq = 0;
+                    r.rejected_seq = seq;
                     r.fresh = true;
                     r.ctx = Context2d::new();
                     r.gradients.clear();
@@ -834,9 +867,7 @@ impl CanvasEngine for Canvases {
             settings: b.settings,
         };
         let surface = r.surface.clone();
-        if !out.lists.is_empty() {
-            self.out.push(out);
-        }
+        self.out.push(out);
         for n in reply.notes {
             self.notes.push(format!("canvas {view} ({surface}): {n}"));
         }
@@ -855,6 +886,12 @@ impl CanvasEngine for Canvases {
 
     fn is_2d(&self, view: ViewId) -> bool {
         self.records.contains_key(&view)
+    }
+
+    fn mounted(&self, view: ViewId, lifetime: u64) -> bool {
+        self.records
+            .get(&view)
+            .is_some_and(|r| r.lifetime == lifetime)
     }
 
     fn state(&self, s: &mut String) {
@@ -922,6 +959,108 @@ impl CanvasEngine for Canvases {
             s.push('}');
         }
         s.push(']');
+    }
+
+    fn request_capture(
+        &mut self,
+        surface: &str,
+        alive: &dyn Fn(ViewId) -> bool,
+    ) -> Option<(ViewId, u64, u64)> {
+        let mut found = self
+            .records
+            .iter_mut()
+            .filter(|(v, r)| r.surface == surface && alive(**v));
+        let (view, r) = found.next()?;
+        if found.next().is_some() {
+            return None;
+        }
+        // An in-flight draw can finish after this commit. Otherwise request a
+        // draw even when the canvas's arguments and geometry did not change.
+        if r.in_flight.is_none() {
+            r.capture_requested = true;
+        }
+        Some((
+            *view,
+            r.lifetime,
+            r.in_flight.map_or(r.next_seq, |(_, seq)| seq),
+        ))
+    }
+
+    fn capture(
+        &self,
+        surface: &str,
+        path: &str,
+        target: Option<(ViewId, u64, u64)>,
+        alive: &dyn Fn(ViewId) -> bool,
+    ) -> Result<crate::canvas_capture::CanvasCapture, (&'static str, String)> {
+        let mounted: Vec<_> = (self.records.iter())
+            .filter(|(v, r)| {
+                alive(**v)
+                    && target.map_or(r.surface == surface, |(view, lifetime, _)| {
+                        **v == view && r.lifetime == lifetime
+                    })
+            })
+            .collect();
+        let (view, r) = match mounted[..] {
+            [one] => one,
+            [] => {
+                return Err((
+                    "NotFoundError",
+                    format!("no canvas of surface {surface:?} is mounted"),
+                ))
+            }
+            _ => {
+                return Err((
+                    "InvalidStateError",
+                    format!(
+                        "{} canvases of surface {surface:?} are mounted; a capture names one",
+                        mounted.len()
+                    ),
+                ))
+            }
+        };
+        if target.is_some_and(|(_, _, first)| r.rejected_seq >= first) {
+            return Err(("EncodingError", "the capture's drawing was rejected".into()));
+        }
+        if let Some(why) = &r.refused {
+            return Err(("InvalidStateError", format!("its size was refused: {why}")));
+        }
+        let Some(b) = r.backing.filter(|b| !b.empty()) else {
+            return Err((
+                "IndexSizeError",
+                format!("the canvas of surface {surface:?} has no bitmap: its box has no area"),
+            ));
+        };
+        if b.settings.p3 || b.settings.float16 {
+            return Err((
+                "NotSupportedError",
+                "a capture is an sRGB PNG of 8-bit pixels: this canvas is display-p3 or float16"
+                    .into(),
+            ));
+        }
+        let pixels = b.pixel_width as u64 * b.pixel_height as u64;
+        if pixels > crate::canvas_capture::MAX_PIXELS {
+            return Err((
+                "QuotaExceededError",
+                format!(
+                    "{} × {} px is over the {} px a capture writes",
+                    b.pixel_width,
+                    b.pixel_height,
+                    crate::canvas_capture::MAX_PIXELS
+                ),
+            ));
+        }
+        Ok(crate::canvas_capture::CanvasCapture {
+            view: *view,
+            lifetime: r.lifetime,
+            generation: r.generation,
+            sequence: r.applied_seq,
+            job: None,
+            path: path.into(),
+            width: b.pixel_width,
+            height: b.pixel_height,
+            scale: b.scale,
+        })
     }
 
     fn describe(&self, view: ViewId) -> Option<Vec<String>> {
@@ -1012,6 +1151,7 @@ impl<D: DataSource> Runner<D> {
         if let Some(c) = self.canvases.as_mut() {
             c.set_geometry(view, geometry);
         }
+        self.complete_canvas_captures();
     }
 
     /// A canvas's explicit bitmap size, from `bitmap-width` and
@@ -1131,6 +1271,7 @@ impl<D: DataSource> Runner<D> {
         for line in lines {
             self.log(line);
         }
+        self.complete_canvas_captures();
     }
 
     /// A draw's reply (LLP 1056 D4). Applied, in order, only if its stamps
@@ -1157,6 +1298,7 @@ impl<D: DataSource> Runner<D> {
         for line in lines {
             self.log(line);
         }
+        self.complete_canvas_captures();
         result
     }
 

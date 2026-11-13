@@ -382,6 +382,14 @@ package final class Runtime {
         }
     }
     package func requestActive(_ ticket: UInt64) -> Bool { on(busy: false) { exact_request_active(rt, ticket) != 0 } }
+    /// The replay queue waits here: copying and marking share the runtime owner's
+    /// turn, so unmount cannot retire the job between them. Encoding runs afterward.
+    package func snapshotCanvas(_ ticket: UInt64, copy: () -> Bool) -> Bool {
+        on(busy: false) {
+            guard exact_request_active(rt, ticket) != 0, copy() else { return false }
+            return exact_canvas_snapshotted(rt, ticket) != 0
+        }
+    }
     package func fulfillSurface(_ ticket: UInt64, kind: UInt32, body: Data = Data(), now: Double) -> Batch {
         return on {
             let n = write(body)

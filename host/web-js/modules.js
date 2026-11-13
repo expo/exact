@@ -5,7 +5,9 @@
 // a source's preferred value (`prefer extension`) or its default; a send
 // answered from its `from` source's preferred value, else held under its
 // `ticket` for the agent (`type @t …`). A held request is a promise the
-// agent's answer settles. Imported by an app's module only when its plan
+// agent's answer settles. A `check` send waits for a tap of the person's
+// answer; `facts` overlay a source's default and preferred value with what
+// the host can do. Imported by an app's module only when its plan
 // names a module or places a package's view (views.js).
 //
 // Every call is admitted first (LLP 1133.002 D14, as the runner's
@@ -117,7 +119,18 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     const partial = row.sub.partial || (row.sub.implementation && d && typeof d === "object");
     return partial && p && !errorCode(p) ? overlay(structuredClone(d ?? {}), p) : p;
   };
-  const valueOf = row => row.sub.index === "entries" ? rc.value(row) : row.sub.listed ? wk.listed(row.sub.listed) : row.sub.web ? { ...(preferredOver(row) ?? restricted(row) ?? {}), ...row.sub.web } : preferredOver(row) ?? restricted(row);
+  const valueOf = row => {
+    if (row.sub.index === "entries") return rc.value(row);
+    if (row.sub.listed) return wk.listed(row.sub.listed);
+    let v = preferredOver(row) ?? restricted(row);
+    if (row.sub.web) v = { ...(v ?? {}), ...row.sub.web };
+    // The browser keeps no presence secrets (LLP 1133.010 D15), whatever the preferred status says.
+    if (row.sub.facts && v && typeof v === "object" && !Array.isArray(v)) {
+      v = structuredClone(v);
+      for (const [field, fact] of Object.entries(row.sub.facts ?? {})) if (fact === "presence-secrets") v[field] = false;
+    }
+    return v;
+  };
   // What the permission decides of a call now: its status's answer, a denial or a ticket; null when it allows it.
   // The permission a call asks: its declared one, or, where the interface declares several and the name's grants
   // are a line per argument (`permissionBy`), the one of the arguments it was given that settles the call now: a
@@ -130,28 +143,46 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   const permissionsOf = row => [row.sub.permission, ...Object.values(row.sub.permissionBy ?? {})].filter(Boolean);
   const permissionNamed = (row, name) => permissionsOf(row).find(p => p.name === name);
+  // A denied permission may gate only an option (`continues`: Face ID denied still leaves the passcode, D12).
+  const denialFails = (permission, args) => typeof permission?.continues !== "string" || args?.[permission.continues] === true;
+  const statusOf = (row, permission = row.sub.permission) => {
+    const status = sibling(row, permission?.status);
+    return status ? valueOf(status) ?? {} : {};
+  };
+  const statusAsks = (row, permission) => {
+    const status = statusOf(row, permission);
+    return Object.entries(permission?.asks ?? {}).every(([k, v]) => equalJson(status[k], v));
+  };
   // A name admitted with no permission is never held or refused, and a request answers the status in every state but
   // `prompt` (`admission`, LLP 1133.004 §7).
-  const decidePermission = (row, send, p = row.sub.permission) => {
+  const decidePermission = (row, send, p = row.sub.permission, args = {}) => {
     if (!p || row.sub.admission === "none") return null;
     const state = stateOf(p.name);
     // A target that makes the module absent keeps its own answer (`unknown`), as the runner's.
     if (!send && isStatus(row)) return { now: row.sub.targets?.web?.available === false ? valueOf(row) : { ...(valueOf(row) ?? {}), [p.field]: row.sub.web?.[p.field] ?? state } };
     // A source that reads a value of its own until the permission is granted (`ungranted`), as the runner's.
     if (!send && "ungranted" in row.sub && state !== "granted") return { now: structuredClone(row.sub.ungranted) };
-    if (state === "denied" && row.sub.admission !== "request") return { now: { error: p.denied } };
-    return state === "prompt" && asks(row, send) ? { hold: "permission" } : null;
+    if (state === "denied" && row.sub.admission !== "request" && denialFails(p, args)) return { now: { error: p.denied } };
+    return state === "prompt" && asks(row, send) && statusAsks(row, p) ? { hold: "permission" } : null;
   };
   const decide = (row, send, args = {}) => {
     // A target's own restriction holds under the agent too (§6): the web has no precision request.
     if (row.sub.unsupported?.includes("web")) return { now: { error: "NotSupportedError" } };
-    const p = decidePermission(row, send);
+    const p = decidePermission(row, send, permissionOf(row, args), args);
     if (p) return p;
     const s = sp.decide(row, send, args);
     if (s) return s;
     // A tag's arrival decides its own names (LLP 1133.035 §10, `arrival.js`).
     const arriving = ar.decide(row, send, args);
     if (arriving) return arriving;
+    if (send && row.sub.check) {
+      const status = statusOf(row);
+      for (const [field, byValue] of Object.entries(row.sub.check.unless ?? {})) {
+        const code = byValue[serdeJson(status[field])];
+        if (code !== undefined) return { now: { error: code } };
+      }
+      return { hold: "check" };
+    }
     if (send && row.sub.ceremony) return ceremonies.decide(row, args);
     if (send && row.sub.records) return { now: null }; // a signal the substitute records (LLP 1133.011 §9)
     if (send && row.sub.shortcuts === "pin") return { now: rc.pin(row, args) };
@@ -179,7 +210,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     return value(json, row.type, row.key);
   };
   const capability = h => h.waits === "permission" ? "permission" : h.waits === "raise" ? h.row.sub.raise.ticket : h.waits === "ceremony" ? h.row.sub.ceremony.ticket
-    : h.waits === "choose" ? h.row.sub.choose.ticket : h.waits === "device" ? "chooser" : h.row.sub.ticket;
+    : h.waits === "check" ? h.row.sub.check.ticket ?? "check" : h.waits === "choose" ? h.row.sub.choose.ticket : h.waits === "device" ? "chooser" : h.row.sub.ticket;
   // `forward`: the implementation's call, made once the ticket allows it.
   // A newer ask of the same reader or mutation supersedes its held one, whatever answers the newer (§6: retired).
   // A forwarded call let go is cancelled at its implementation (LLP 1133.016 D15 item 2).
@@ -839,6 +870,10 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   // Admitted, then what answers: `{now}`, `{hold}`, or `{forward}` (the implementation).
   const admitted = (row, args, origin, send, timeout) => {
+    if (row.sub.origin === "person" && origin !== "app") {
+      say(`${row.key}: refused, person-required (${origin} origin)`);
+      return { now: { error: "PERMISSION_DENIED", message: "person-required" } };
+    }
     // A grant matched by the argument's value fails with its own code (`SecurityError` for an RP ID, LLP 1133.011 D6).
     const byValue = ceremonies.grants(row, args) ?? (row.sub.ceremony?.asks ? paySheets.admit(row, args) : null);
     if (byValue) { say(`${row.key}: refused, ${byValue.error}: ${byValue.message}`); return { now: byValue }; }
@@ -854,8 +889,8 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     // Under the agent: the web's own restriction, then the permission's ticket, a sheet's or the raise's (LLP 1133.018
     // D13 item 4); else the implementation.
     const agentDecision = () => row.sub.unsupported?.includes("web") ? { now: { error: "NotSupportedError" } }
-      : decidePermission(row, send, p) ?? (send && row.sub.choose ? { hold: "choose" } : null) ?? (send && row.sub.raise ? decide(row, send, args) : null) ?? { forward: true };
-    const deviceDecision = () => row.sub.unsupported?.includes("web") ? { now: { error: "NotSupportedError" } } : decidePermission(row, send, p) ?? dv.decide(row, args);
+      : decidePermission(row, send, p, args) ?? (send && row.sub.choose ? { hold: "choose" } : null) ?? (send && row.sub.raise ? decide(row, send, args) : null) ?? { forward: true };
+    const deviceDecision = () => row.sub.unsupported?.includes("web") ? { now: { error: "NotSupportedError" } } : decidePermission(row, send, p, args) ?? dv.decide(row, args);
     let d = r === "agent" ? agentDecision() : dv.role(row) ? deviceDecision() : decideTimed(row, send, timeout, args);
     // A name whose grants are per argument asks permission only for an argument it was given (LLP 1133.009 D3).
     const g = row.sub.nameGrants, asks = !g || Array.isArray(g) || Object.keys(g).some(a => given(args, a));
@@ -962,12 +997,13 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (state === "granted") allow(name);
     for (const h of [...held]) {
       if (h.permission !== name) continue;
-      if (state === "denied") { release(h, { error: permissionNamed(h.row, name).denied }); continue; }
-      if (state !== "granted" || h.waits !== "permission") continue;
+      const p = permissionNamed(h.row, h.permission), fails = denialFails(p, h.args);
+      if (state === "denied" && fails) { release(h, { error: p.denied }); continue; }
+      if ((state !== "granted" && !(state === "denied" && !fails)) || h.waits !== "permission") continue;
       // A call that needs another permission too asks it next (`getUserMedia(audio=true, video=true)`).
       const next = permissionOf(h.row, h.args);
       if (next && next.name !== name) {
-        const d = decidePermission(h.row, h.send, next);
+        const d = decidePermission(h.row, h.send, next, h.args);
         if (d?.now) { release(h, d.now); continue; }
         if (d?.hold) { h.permission = next.name; h.ticket = nextTicket(); say(`device ${capability(h)} ${h.ticket} held (agent)`); continue; }
       }
@@ -1097,6 +1133,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     },
     holds: () => [...held.filter(h => !h.queued).map(h => ({ name: h.name, ticket: h.ticket, device: { capability: capability(h),
       args: h.waits === "permission" ? { capability: h.permission, request: h.row.key.split(".")[1], origin: "app" } : h.waits === "ceremony" ? ceremonies.args(h)
+        : h.waits === "check" ? { request: h.row.key.split(".")[1], origin: "app" }
         // A sheet shows what the call asked (the properties, the event).
         : h.waits === "choose" ? { request: h.row.key.split(".")[1], origin: "app", options: h.args ?? {} } : h.waits === "device" ? dv.ticket(h).args : { request: h.row.key.split(".")[1] } } })),
       ...effects.map(h => ({ name: h.row.key, ticket: h.ticket, device: { capability: "permission", args: { capability: h.row.sub.permission.name, request: h.row.key.split(".")[1], origin: "app" } } }))],
@@ -1188,6 +1225,14 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         if (req.choice === "allow") setPermission(h.permission, "granted");
         else if (req.choice === "deny") setPermission(h.permission, "denied");
         else release(h, { error: permissionNamed(h.row, h.permission).denied });
+        return { ticket: req.ticket, capability: cap, answered: req.choice, delivery: "substituted" };
+      }
+      if (h.waits === "check") {
+        if (req.op !== "tap") return { error: `@${h.ticket} (${cap}): answered by tap, not type` };
+        const check = h.row.sub.check, choices = ["allow", ...["fail", "lockout"].filter(c => check.choices?.[c] != null)];
+        if (req.choice !== "cancel" && !choices.includes(req.choice)) return { error: `@${h.ticket} (${cap}): tap takes ${["cancel", ...choices].join(" | ")}, not ${req.choice}` };
+        say(`device ${cap} ${h.ticket} ${req.choice === "cancel" ? "cancelled" : `answered: ${req.choice}`}`);
+        release(h, req.choice === "allow" ? filled(h.row, check.allow ?? {}) : { error: req.choice === "cancel" ? check.cancel : check.choices[req.choice] });
         return { ticket: req.ticket, capability: cap, answered: req.choice, delivery: "substituted" };
       }
       if (h.waits === "raise") {
@@ -1344,6 +1389,21 @@ function partial(v, type, at) {
   }
   if (Array.isArray(type) && type[0] === "?") { if (v != null) partial(v, type[1], at); return; }
   value(v, type, at);
+}
+
+function equalJson(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every(k => Object.hasOwn(b, k) && equalJson(a[k], b[k]));
+}
+
+/** `v` as the runner's serde_json writes it, its objects' keys sorted; "" for no value. */
+function serdeJson(v) {
+  if (Array.isArray(v)) return `[${v.map(serdeJson).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${serdeJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "";
 }
 
 /** Set `path` (`coords.accuracy`) in `v` to `filler` where it is absent. */

@@ -144,7 +144,10 @@ impl Core {
                 return Err((reason, work));
             }
         };
-        let queued_deadline = if lane == 1 && !r.request.stream && work.is_none() {
+        // Only a request that waits in its lane's queue has one: a stream or
+        // a one-shot starts on a thread of its own at once.
+        let queues = !r.request.stream && !one_shot;
+        let queued_deadline = if lane == 1 && queues && work.is_none() {
             match r
                 .request
                 .timeout_ms

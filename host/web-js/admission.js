@@ -1,3 +1,4 @@
+import { rt } from './rt-link.js';
 import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { faultMessage, takeFault } from '../web/faults.js';
 import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';
@@ -167,10 +168,22 @@ export function fetchHostAsset(input, init = {}) {
 
 export function createRequestExecutor(appId, sourceSet, readBody = response => response.arrayBuffer()) {
   let storage = null;
-  return async (req, signal) => {
+  return async (req, signal, controller) => {
     const admitted = scopedGrantSet(sourceSet, req.scope);
     const why = grantError(admitted);
     if (why) return { failed: 2, message: why };
+    if (req.canvas) {
+      if (globalThis.__exactRender) return { refused: 'canvas capture' };
+      const active = controller?.active ?? (() => true), ready = rt.canvasCommitted(req.canvas.surface, active);
+      ready.catch(() => {});
+      const { captureCanvas, writeCanvas } = await import('./canvas-capture.js');
+      let status = 200, value;
+      try {
+        value = await captureCanvas(req.canvas.surface, req.canvas.path,
+          (path, png) => writeCanvas(appId, admitted, path, png, active), ready, active);
+      } catch (e) { status = 400; value = { name: e?.name ?? 'EncodingError', message: String(e?.message ?? e) }; }
+      return { status, headers: [['content-type', 'application/json']], body: new TextEncoder().encode(JSON.stringify(value)) };
+    }
     if (req.storage != null) {
       if (globalThis.__exactRender) return { refused: 'storage request' };
       storage ??= import(new URL('./storage-request.js', import.meta.url).href).then(m => m.createStorageRequests(appId, sourceSet));

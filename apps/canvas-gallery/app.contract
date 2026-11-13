@@ -5,6 +5,8 @@
 // direct.html, which runs the same fixtures on Chrome's context directly.
 //
 // Page 3's fixtures are sequences: `step` redraws them on the same context.
+// Page 6 captures canvases as PNG files (`captureCanvas`, LLP 1056 D9) and
+// shows each file beside its canvas, so one screenshot compares the two.
 // `backdrop` puts every canvas on black instead of white, without a redraw:
 // what shows through is the bitmap's alpha (LLP 1056 §4).
 
@@ -17,6 +19,11 @@ font "Exposure Sans"
   400 italic = "assets/ExposureSansOriginal03-Italic.ttf"
   700 = "assets/ExposureSansOriginal03-Bold.ttf"
 
+// A capture's answer, or its refusal, as text; `path` is empty for a refusal.
+shape Captured
+  record: string
+  path: string
+
 style Tile
   width=150
   height=100
@@ -26,6 +33,7 @@ component Gallery
   state page = 1
   state step = 0
   state dark = false
+  state captureWidth = 150
   action one
     page = 1
   action two
@@ -36,6 +44,21 @@ component Gallery
     page = 4
   action five
     page = 5
+  action six
+    page = 6
+  mutation captured as shape Captured
+  action take(surface: string, path: string)
+    send captured = capture(surface, path)
+  action drawAndCapture(resize: bool, rust: bool)
+    step = step + 1
+    if resize
+      captureWidth = captureWidth + 10
+    if rust
+      send captured = captureRust("annotate", `app:/tmp/rust-${step}.png`)
+    else
+      send captured = capture("annotate", `app:/tmp/turn-${step}.png`)
+  action rustRefused
+    send captured = captureRust("annotate", "app:/data/rust.png")
   action advance
     step = step + 1
   action flip
@@ -54,6 +77,8 @@ component Gallery
           text "4" font-size=13
         button press=five testId="page-5" padding-left=10 padding-right=10 padding-top=4 padding-bottom=4 border-radius=6 background-color=(page == 5 ? "#e2e8f0" : "#f8fafc")
           text "5" font-size=13
+        button press=six testId="page-6" padding-left=10 padding-right=10 padding-top=4 padding-bottom=4 border-radius=6 background-color=(page == 6 ? "#e2e8f0" : "#f8fafc")
+          text "6" font-size=13
         button press=advance testId="step" padding-left=10 padding-right=10 padding-top=4 padding-bottom=4 border-radius=6 background-color="#f8fafc"
           text `step ${step}` font-size=13
         button press=flip testId="backdrop" padding-left=10 padding-right=10 padding-top=4 padding-bottom=4 border-radius=6 background-color="#f8fafc"
@@ -69,6 +94,45 @@ component Gallery
           Text(bg=(dark ? "#000000" : "#ffffff"))
         if page == 5
           Pictures(bg=(dark ? "#000000" : "#ffffff"))
+        // Captures (LLP 1056 D9): an annotation over an image with text,
+        // which accumulates a stroke a step, and a canvas that draws nothing.
+        // Each button writes one as a PNG, shown beside its canvas; the
+        // grants write only `app:/tmp`, so the `app:/data` one is refused,
+        // as is a surface that is not mounted.
+        if page == 6
+          column gap=8
+            row gap=8
+              canvas surface=annotate(step) class=Tile width=captureWidth background-color="#ffffff" testId="cap-annotate"
+              match captured
+                case some(c)
+                  if c.path != ""
+                    image c.path class=Tile width=(c.path == "app:/tmp/blank.png" ? 150 : captureWidth) testId="cap-file"
+                case none
+                  box width=150 height=100
+            canvas surface=blank() class=Tile testId="cap-blank"
+            row gap=8 flex-wrap="wrap"
+              button appearance="none" press=take("annotate", `app:/tmp/annotate-${step}.png`) testId="capture-annotate"
+                text "Annotation" font-size=13
+              button appearance="none" press=take("blank", "app:/tmp/blank.png") testId="capture-blank"
+                text "Blank" font-size=13
+              button appearance="none" press=take("annotate", "app:/data/annotate.png") testId="capture-refused"
+                text "Outside the grant" font-size=13
+              button appearance="none" press=take("nowhere", "app:/tmp/nowhere.png") testId="capture-missing"
+                text "Not mounted" font-size=13
+            row gap=8 flex-wrap="wrap"
+              button appearance="none" press=drawAndCapture(false, false) testId="capture-turn"
+                text "Draw and capture" font-size=13
+              button appearance="none" press=drawAndCapture(true, false) testId="capture-resize"
+                text "Resize and capture" font-size=13
+              button appearance="none" press=drawAndCapture(true, true) testId="capture-rust"
+                text "Rust resize and capture" font-size=13
+              button appearance="none" press=rustRefused testId="capture-rust-refused"
+                text "Rust outside grant" font-size=13
+            match captured
+              case some(c)
+                text c.record testId="captured"
+              case none
+                text "" testId="captured"
 
 // Shapes and paths: arcs first (the direction under Core Graphics' flip).
 component Shapes

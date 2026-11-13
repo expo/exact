@@ -83,6 +83,7 @@ impl Request {
     /// the child; anything else answers once, within `max_response_bytes`.
     pub fn process(body: Vec<u8>, stream: bool, max_response_bytes: u32) -> Request {
         Request {
+            module: None,
             http: HttpScheduling::Independent { max_response_bytes },
             continuation: None,
             storage: None,

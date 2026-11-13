@@ -1336,18 +1336,42 @@ export function appSources(app, out) {
 }
 
 /** For a build whose app's sources are beside it, as `settleBuild` builds a changed setting again: a function a
- * request for a page awaits (`asksPage`), which builds the site again once a source changed since the build (newer
- * than its receipt) or one came or went (`appSources`), as a framework's dev server does, or once another build with
- * other settings replaced it (a test run's, for its own API), and answers the build's output when it failed (null when
- * it built or nothing changed). Null for a build without its sources (a site copied to a host), which is served as it is. */
-function rebuildOnChange(dist) {
+ * request for a page awaits (`asksPage`), which builds the site again once a source changed since the build or one
+ * came or went (`appSources`), as a framework's dev server does, or once another build with other settings replaced it
+ * (a test run's, for its own API), and answers the build's output when it failed (null when it built or nothing
+ * changed). Null for a build without its sources (a site copied to a host), which is served as it is. `build` runs one
+ * build and answers its exit code and output; a test gives its own.
+ *
+ * A build this server ran covers the sources as they were when it started, not when it wrote its receipt: a save
+ * during the build is newer than the first and older than the second, so the server builds once more before the
+ * requests waiting on it are answered. A build it did not run is taken to cover what its receipt's time does. */
+export function rebuildOnChange(dist, build = null) {
   let marker;
   try { marker = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); } catch { return null; }
   const app = sourcesOf(dist, marker.app?.id);
   if (!app || (!marker.release && resolve(dist) !== webDist())) return null;
   const out = resolve(dist), receipt = () => { try { return statSync(resolve(dist, '.exact-build.json')).mtimeMs; } catch { return 0; } };
-  let since = receipt(), checked = 0, running = null;
   const target = marker.target === 'js' ? [] : ['--wasm'], release = marker.release ? ['--out', dist] : [];
+  build ??= () => new Promise((done) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('./build.mjs', import.meta.url)), app, ...target, ...release],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, EXACT_APP_DIR: app, ...(marker.release ? {} : { EXACT_WEB_DIST: dist }) } });
+    let said = '';
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', (d) => { said += d; });
+    child.on('close', (code) => done({ code, said }));
+  });
+  // `covered`: the newest source time the served build includes; `ours`: the receipt time this server's last build
+  // wrote, which tells a receipt another build wrote apart.
+  let covered = receipt(), ours = null, checked = 0, running = null;
+  const newer = (sources) => sources.newest > (receipt() === ours ? covered : Math.max(covered, receipt()));
+  const again = async () => {
+    for (;;) {
+      const basis = appSources(app, out).newest, { code, said } = await build();
+      if (code !== 0) { console.error(said.trimEnd()); return said; }
+      covered = basis; ours = receipt();
+      if (!newer(appSources(app, out))) return null;
+      console.log(`${app}: a source changed while it built: building it again`);
+    }
+  };
   return () => {
     if (running) return running;
     if (Date.now() - checked < 300) return null;
@@ -1355,16 +1379,9 @@ function rebuildOnChange(dist) {
     let settings = [], built = null;
     try { const now = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); settings = settingChanges(now.env ?? {}, process.env, app); built = now.sources; } catch { /* being replaced */ }
     const sources = appSources(app, out);
-    if (!settings.length && sources.newest <= Math.max(since, receipt()) && sources.digest === built) return null;
-    const started = Date.now();
+    if (!settings.length && !newer(sources) && sources.digest === built) return null;
     console.log(`${app}: ${settings.length ? `the build has other settings than this server (${settings.map((c) => c.name).join(', ')})` : 'a source changed since the build'}: building it again`);
-    running = new Promise((done) => {
-      const child = spawn(process.execPath, [fileURLToPath(new URL('./build.mjs', import.meta.url)), app, ...target, ...release],
-        { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, EXACT_APP_DIR: app, ...(marker.release ? {} : { EXACT_WEB_DIST: dist }) } });
-      let said = '';
-      for (const stream of [child.stdout, child.stderr]) stream.on('data', (d) => { said += d; });
-      child.on('close', (code) => { if (code === 0) since = started; else console.error(said.trimEnd()); done(code === 0 ? null : said); });
-    }).finally(() => { running = null; });
+    running = again().finally(() => { running = null; });
     return running;
   };
 }

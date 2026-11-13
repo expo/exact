@@ -133,6 +133,36 @@ final class BoxPaintMacTests: XCTestCase {
         XCTAssertFalse(fill.isHidden, "the fill shows again after the shot")
     }
 
+    func testARoundedDrawnImageKeepsItsBackgroundBehindItsPixels() throws {
+        let (page, image) = try imageOnPage(red: 1, style: [
+            "object_fit": "fill", "background_color": [0, 0, 255, 255], "border_radius": 12])
+        for partial in [false, true] {
+            var style: NodeStyle = ["object_fit": "fill", "background_color": [0, 0, 255, 255]]
+            if partial {
+                style["border_radius_top_left"] = 12
+                style["overflow_x"] = "hidden"; style["overflow_y"] = "hidden"
+            } else {
+                style["border_radius"] = 12
+            }
+            image.applyStyle(style)
+            image.applyContentBox(padding: [8, 8, 8, 8])
+            image.needsDisplay = true
+            image.displayIfNeeded()
+            XCTAssertNil(image.imageLayer, "padding requires the drawn image path")
+            let layer = try XCTUnwrap(image.layer)
+            let context = try XCTUnwrap(CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8,
+                bytesPerRow: 160, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            layer.render(in: context)
+            let live = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+            let center = rgba(live, 20, 20), padding = rgba(live, 4, 20)
+            XCTAssert(center[0] > 0.9 && center[2] < 0.1, "live picture above its fill: \(center)")
+            XCTAssert(padding[2] > 0.9 && padding[0] < 0.1, "background in the padding: \(padding)")
+            let shot = rgba(capture(page), 20, 20)
+            XCTAssert(shot[0] > 0.9 && shot[2] < 0.1, "capture agrees with the live layer: \(shot)")
+        }
+    }
+
     /// A 40-point image of opaque or translucent red, on a white page, its
     /// pixels loaded.
     private func imageOnPage(red alpha: CGFloat, style: NodeStyle) throws -> (NodeView, NodeView) {

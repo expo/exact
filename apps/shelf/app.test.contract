@@ -22,6 +22,7 @@ test "search and the segmented filter narrow the list"
 
 test "the add sheet validates, saves and persists"
   tap "add-book"
+  clock settle
   expect tree has "route-add"
   tap "add-save"
   expect text "error-title" == "Enter a title."
@@ -33,6 +34,7 @@ test "the add sheet validates, saves and persists"
   tap "add-status-done"
   tap "add-save"
   clock data
+  expect state current.name == "library"
   expect text "library-count" == "4 of 4 books"
   expect state visible.0 .title == "Middlemarch"
   reload
@@ -40,6 +42,7 @@ test "the add sheet validates, saves and persists"
 
 test "the add sheet's Cancel discards the draft"
   tap "add-book"
+  clock settle
   type "add-title" "Draft"
   tap "add-cancel"
   expect state current.name == "library"

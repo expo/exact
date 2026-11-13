@@ -75,6 +75,12 @@ impl<D: DataSource> Host<D> {
         for ticket in self.runner.take_explicit_aborts() {
             batch.abort(ticket);
         }
+        self.canvas2d
+            .captures
+            .retain(|ticket, _| self.runner.holds(*ticket));
+        self.canvas2d
+            .snapshotting
+            .retain(|ticket, _| self.runner.holds(*ticket));
         let collections = self.runner.collections_json();
         if collections != self.collections {
             self.collections = collections;
@@ -115,6 +121,9 @@ impl<D: DataSource> Host<D> {
         if r.request.is_auth() {
             return self.emit_auth(r, batch);
         }
+        let Some(r) = self.canvas_capture_request(r, batch, immediate) else {
+            return;
+        };
         let Some(token) = r.request.continuation else {
             batch.request(&r);
             return;
