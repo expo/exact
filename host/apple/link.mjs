@@ -106,8 +106,10 @@ export function appleComposition(graph, production, ahead = [], granted = false)
 /** The system frameworks only a capability's Swift half brings, and so
  * absent from an executable whose composition does not link it (LLP
  * 1047.001.000 §6, the check's first form). SafariServices belongs to
- * @exact/in-app-browser in ExactAppModules, not a SwiftPM capability product. */
-const CAPABILITY_FRAMEWORKS = [['@exact/in-app-browser', 'SafariServices'], ['ExactMediaPicker', 'PhotosUI'], ['ExactAuthSession', 'AuthenticationServices'], ['ExactNumerals', 'SwiftUI'], ['ExactSnapshot', 'WidgetKit'], ['ExactSnapshot', 'ActivityKit']];
+ * @exact/in-app-browser and TipKit to @exact/tips, each in ExactAppModules
+ * (the app's module, loaded after first pixel), not a SwiftPM capability
+ * product: no executable links TipKit. */
+const CAPABILITY_FRAMEWORKS = [['@exact/in-app-browser', 'SafariServices'], ['@exact/tips', 'TipKit'], ['ExactMediaPicker', 'PhotosUI'], ['ExactAuthSession', 'AuthenticationServices'], ['ExactNumerals', 'SwiftUI'], ['ExactSnapshot', 'WidgetKit'], ['ExactSnapshot', 'ActivityKit']];
 
 export function appleLaunchFrameworks(destination, product) {
   return destination === 'ios' && ['ExactIOS', 'ExactHostIOS'].includes(product) ? ['SafariServices'] : [];

@@ -1,0 +1,1 @@
+../../../../packages/tips/apple/Tips.swift

@@ -11,7 +11,7 @@
 //
 // The host's table, handed to the module once (`module_connect`):
 //
-//    0  u32 size                192
+//    0  u32 size                200
 //    8  resolve(host, routeKey, keyLen, id, idLen) → node (0: none)
 //   16  act(host, node, action) → 0 done   action 0 click, 1 focus, 2 blur
 //   24  log(host, text, len)
@@ -52,6 +52,9 @@
 //        with len 0 for no answer
 //  184  after_coalescing(host, token, ms): refresh at the next clock instant
 //        at or past the deadline, without adding a seek stop (HatchClock.swift)
+//  192  anchor(host, id, len, kind) → object: what the element with that HTML
+//        id is drawn as, for a package that presents from it
+//        (`Presenter.anchor(id:)`); `kind` 2 a bar item, 1 a view, 0 none
 //
 // `host` is the session's runtime handle, as for `changed` and `now`: a
 // destroyed session's is answered with nothing. Service queries use the
@@ -111,6 +114,13 @@ private let hatchResolve: HatchResolveFn = { host, key, keyLength, id, idLength 
     #else
     0
     #endif
+}
+
+private typealias HatchAnchorFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt32>?) -> UnsafeMutableRawPointer?
+private let hatchAnchor: HatchAnchorFn = { host, id, length, kind in
+    let anchor = hatchSession(host)?.presenter.anchor(id: hatchText(id, length))
+    kind?.pointee = anchor.map { $0.bar ? 2 : 1 } ?? 0
+    return anchor.map { Unmanaged.passUnretained($0.object).toOpaque() }
 }
 
 private let hatchAct: HatchActFn = { host, node, action in
@@ -400,7 +410,7 @@ private let hatchService: @convention(c) (UnsafeMutableRawPointer?, UnsafePointe
 /// The host's callbacks, one table for the process: each finds its session
 /// by the handle it is called with.
 private let hatchHostTable: UnsafeRawPointer = {
-    let size = 192
+    let size = 200
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: UInt32(size), as: UInt32.self)
@@ -426,6 +436,7 @@ private let hatchHostTable: UnsafeRawPointer = {
     t.storeBytes(of: unsafeBitCast(hatchArrangement, to: UnsafeRawPointer.self), toByteOffset: 168, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchService, to: UnsafeRawPointer.self), toByteOffset: 176, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchAfterCoalescing, to: UnsafeRawPointer.self), toByteOffset: 184, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(hatchAnchor, to: UnsafeRawPointer.self), toByteOffset: 192, as: UnsafeRawPointer.self)
     return UnsafeRawPointer(t)
 }()
 
@@ -606,5 +617,31 @@ extension NativeViews {
             }
         }
         if event == .ended { session?.presenter.elements.regions.ended(scope: "route \(key)") }
+    }
+}
+
+extension Presenter {
+    /// What the element with HTML id `id` is drawn as, for a package that
+    /// presents from it (a popover's source): the item a bar that shows has
+    /// made of it (the navigation bar's or toolbar's on iOS, the window
+    /// toolbar's on the Mac), else its view while it shows (a native
+    /// button's control), else nil.
+    func anchor(id: String) -> (bar: Bool, object: AnyObject)? {
+        let nodes = views.values.filter { $0.props["id"] == id }.sorted { $0.id < $1.id }
+        #if os(iOS) || os(tvOS)
+        if let item = nodes.lazy.compactMap({ self.navigation.shownBarItem($0.id) }).first { return (true, item) }
+        #elseif os(macOS)
+        if let bar = toolbar.toolbar, viewport.window?.toolbar === bar,
+           let item = nodes.lazy.compactMap({ self.toolbar.items[$0.id] }).first(where: { item in bar.items.contains { $0 === item } }) {
+            return (true, item)
+        }
+        #endif
+        func shown(_ view: NodeView) -> Bool {
+            var at: PlatformView? = view
+            while let a = at { if a.isHidden { return false }; at = a.superview }
+            return view.window != nil
+        }
+        guard let node = nodes.first(where: shown) else { return nil }
+        return (false, node.isNativeButton ? controls.controls[node.id] ?? node : node)
     }
 }

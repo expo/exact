@@ -1,0 +1,31 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/tips@^1.0",
+  "platform": "apple",
+  "targets": [
+    "ios",
+    "macos"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "swift": [
+      "Tips.swift"
+    ]
+  },
+  "frameworks": {
+    "SwiftUI": {
+      "ios": "17.0",
+      "macos": "14.0"
+    },
+    "TipKit": {
+      "ios": "17.0",
+      "macos": "14.0"
+    }
+  },
+  "artifacts": [],
+  "class": "TipsModule"
+}

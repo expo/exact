@@ -2,7 +2,8 @@
 // press of `share-home` runs `share(…)`, which the runner asks the session
 // for; a press of `more-home` adds a control; and `bare-toggle`, in the page,
 // leaves the bar only a status readout and gives the controls back, so the
-// bar's items change on a route that shows.
+// bar's items change on a route that shows. TipsIOSTests anchors tips to
+// `share-home`'s bar item and to `bare-toggle` by their ids.
 component BarShare
   state more = false
   state bare = false
@@ -21,7 +22,7 @@ component BarShare
             row role="status" aria-label="Idle" testId="status-home"
               text "Idle"
           if not bare
-            button press=shareIt aria-label="Share" testId="share-home" padding=6
+            button press=shareIt id="share" aria-label="Share" testId="share-home" padding=6
               image "symbol:share" width=20 height=20
             button press=addMore aria-label="More" testId="more-home" padding=6
               image "symbol:add" width=20 height=20
@@ -29,5 +30,5 @@ component BarShare
               button press=addMore aria-label="Star" testId="star-home" padding=6
                 image "symbol:star" width=20 height=20
         column flex=1
-          button press=toggleBare testId="bare-toggle"
+          button press=toggleBare id="toggle" testId="bare-toggle"
             text "Toggle"

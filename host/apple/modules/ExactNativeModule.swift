@@ -584,6 +584,9 @@ final class ExactHatches {
     let serviceFn: ServiceFn?
     /// One of 192 or more: an after that coalesces across a seek.
     let coalescingAfterFn: ExactModuleContext.AfterFn?
+    /// One of 200 or more: what an element is drawn as, for a package that presents from it (`ExactPackageContext.anchor`).
+    typealias AnchorFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt32>?) -> UnsafeMutableRawPointer?
+    let anchorFn: AnchorFn?
     #if os(iOS) || os(tvOS)
     var navigations: [ObjectIdentifier: ExactNavigation] = [:]
     var routes: [String: ExactRoute] = [:]
@@ -637,6 +640,8 @@ final class ExactHatches {
             ? table.load(fromByteOffset: 176, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ServiceFn.self) } : nil
         coalescingAfterFn = table.load(as: UInt32.self) >= 192
             ? table.load(fromByteOffset: 184, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ExactModuleContext.AfterFn.self) } : nil
+        anchorFn = table.load(as: UInt32.self) >= 200
+            ? table.load(fromByteOffset: 192, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: AnchorFn.self) } : nil
     }
 
     /// A package picture changed (0) or revoked (1): the host's raster loader acts on it.
@@ -664,6 +669,16 @@ final class ExactHatches {
                 }
             }
         }
+    }
+
+    /// The bar item (`bar`) or view the element with HTML id `id` is drawn as; nil when none shows.
+    func anchor(_ id: String) -> (bar: Bool, object: AnyObject)? {
+        guard let anchorFn else { return nil }
+        var kind: UInt32 = 0
+        let bytes = Array(id.utf8)
+        let object = bytes.withUnsafeBufferPointer { anchorFn(host, $0.baseAddress, UInt32($0.count), &kind) }
+        guard let object, kind != 0 else { return nil }
+        return (kind == 2, Unmanaged<AnyObject>.fromOpaque(object).takeUnretainedValue())
     }
 
     func onLine() -> Bool? { onLineFn.flatMap { f in let answer = f(host); return answer > 1 ? nil : answer == 1 } }

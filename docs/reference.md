@@ -2452,6 +2452,17 @@ APNs, the entitlement signed against a profile with Push Notifications, and a
 production build. `packages/push/test/checklist.md` is those checks; until
 they pass, nothing here is claimed for a device.
 
+### Onboarding tips (`@exact/tips`)
+
+`showTip(id=, title=, message=, image=, source=)` offers Apple's TipKit popover
+over the element whose `id` is `source`, on the bar item when the header puts that
+element in a bar, on iOS and iPadOS 17 and macOS 14 and later. TipKit decides
+whether it shows and keeps what the person closed across launches;
+`invalidateTip(id=)` closes it for good. Both fail `NotSupportedError` on every
+other host. Install with `bun exact.mjs add @exact/tips`; the `tips` recipe is the
+rest. The package's Swift is part of the app's module, loaded after first pixel:
+an app without the package links neither TipKit nor SwiftUI.
+
 ### Local network
 
 Services on the local network are found by DNS-SD through `@exact/local-network`

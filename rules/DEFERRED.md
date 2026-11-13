@@ -1408,6 +1408,18 @@ reading. Nothing that isn't HTML is added by it.
   sound as tier 1, buttons that run app code, an author-drawn countdown,
   alarms set or resumed by tools and wakes, the Windows cell until the
   desktop builder, and the web, macOS, Linux and tvOS cells.
+- Onboarding tips were never on the doing list. **Expanded (Charlie,
+  2026-11-12, expo/exact#364, after a three-model panel; LLP 1035.006 row
+  11.08):** a tip over a control by Apple's TipKit (`@exact/tips`:
+  `showTip` anchored to an element by its `id`, a bar item where a bar
+  shows it, and `invalidateTip`), on iOS, iPadOS and macOS, unsupported
+  elsewhere; TipKit keeps frequency and what was seen. It is a package, so
+  an app that does not use it links neither TipKit nor SwiftUI. Consumer:
+  the reporter's app, which patched it in for a tip over a header button.
+  Take: none named; the ruling admits it on that condition. Still out: a
+  `tip=` property or an `app.json` table of tips, TipKit's rules, events,
+  actions, inline tips and display-frequency setting, and a tip on any
+  host without TipKit.
 - Finding services on the local network was never on the doing list, and
   the listener's record above keeps listening beyond loopback out.
   **Expanded (Charlie, 2026-10-26, "Accept r9, build (Recommended)",

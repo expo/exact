@@ -1,0 +1,10 @@
+{
+  "name": "@exact/tips",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Onboarding tips by TipKit, over an element (LLP 1035.006 row 11.08).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json"
+  }
+}

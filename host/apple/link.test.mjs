@@ -380,6 +380,21 @@ test('ordinary app executables refuse WidgetKit, ActivityKit and SwiftUI, includ
   } finally { rmSync(dir, {recursive:true,force:true}); }
 });
 
+test('@exact/tips links SwiftUI and TipKit into the app module alone: an executable that links TipKit is refused', () => {
+  const tips = JSON.parse(readFileSync(join(import.meta.dir, '../../packages/tips/apple/exact.json'), 'utf8'));
+  for (const os of ['ios', 'macos']) assert.deepEqual(systemFrameworks([tips], os, os === 'ios' ? '17.0' : '14.0'), ['-framework', 'SwiftUI', '-framework', 'TipKit']);
+  assert.deepEqual(systemFrameworks([], 'ios', '17.0'), [], 'an app without the package links neither');
+  const dir = mkdtempSync(join(tmpdir(), 'exact-tips-links-'));
+  try {
+    const name = Buffer.from('/System/Library/Frameworks/TipKit.framework/TipKit\0');
+    const size = (24 + name.length + 7) & ~7, bytes = Buffer.alloc(32 + size);
+    bytes.writeUInt32LE(0xfeedfacf, 0); bytes.writeUInt32LE(1, 16); bytes.writeUInt32LE(size, 20);
+    bytes.writeUInt32LE(0xc, 32); bytes.writeUInt32LE(size, 36); bytes.writeUInt32LE(24, 40); name.copy(bytes, 56);
+    const executable = join(dir, 'App'); writeFileSync(executable, bytes);
+    assert.throws(() => assertCapabilityFrameworks(executable, ['ExactNumerals']), /TipKit \(only @exact\/tips may\)/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the ActivityKit arm compiles the checkout's sources when the build runs from an app's own directory", () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-activity-arm-'));
   try {

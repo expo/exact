@@ -14,11 +14,25 @@ import Security
 import AppKit
 /// The platform's view a package's view puts in its node's box.
 public typealias ExactPackagePlatformView = NSView
+/// The item a bar shows an element as (`ExactAnchor`).
+public typealias ExactPackageBarItem = NSToolbarItem
 #else
 import UIKit
 /// The platform's view a package's view puts in its node's box.
 public typealias ExactPackagePlatformView = UIView
+/// The item a bar shows an element as (`ExactAnchor`).
+public typealias ExactPackageBarItem = UIBarButtonItem
 #endif
+
+/// What an element is drawn as, for a presentation anchored to it
+/// (`ExactPackageContext.anchor`).
+public enum ExactAnchor {
+    /// The element's view; a native button's control.
+    case view(ExactPackagePlatformView)
+    /// The item of a bar that shows the element: a navigation bar's or
+    /// toolbar's on iOS, the window toolbar's on the Mac.
+    case barItem(ExactPackageBarItem)
+}
 
 /// What a package refuses, said by name (a view it does not serve, props it cannot take).
 public struct ExactPackageRefusal: Error, CustomStringConvertible {
@@ -120,6 +134,7 @@ public final class ExactPackageContext {
     private let pictureFn: (UInt32, String) -> Void
     private let orientationFn: () -> Double
     private let viewFn: () -> ExactPackagePlatformView?
+    private let anchorFn: (String) -> ExactAnchor?
     private let invokeFn: (String, String, [String: Any], @escaping ([String: Any]) -> Void) -> Void
     private let emitFn: (String, [Any]) -> Void
     private let stateFn: ([String: Any]) -> Void
@@ -152,6 +167,7 @@ public final class ExactPackageContext {
                 picture: @escaping (UInt32, String) -> Void = { _, _ in },
                 surfaces: ExactSurfaces = ExactSurfaces { _ in nil }, orientation: @escaping () -> Double = { 0 },
                 view: @escaping () -> ExactPackagePlatformView? = { nil },
+                anchor: @escaping (String) -> ExactAnchor? = { _ in nil },
                 invoke: @escaping (String, String, [String: Any], @escaping ([String: Any]) -> Void) -> Void = { _, _, _, reply in reply(["error": "NotSupportedError"]) },
                 emit: @escaping (String, [Any]) -> Void = { _, _ in },
                 activation: @escaping (String, [Any], String?) -> [AnyHashable: Any] = { _, _, _ in [:] },
@@ -173,7 +189,7 @@ public final class ExactPackageContext {
         self.data = data ?? scratch; self.cache = cache ?? scratch; self.temporary = temporary ?? scratch
         changedFn = changed; logFn = log; nowFn = now
         self.tracks = tracks; fileFn = file; self.audioSession = audioSession; pictureFn = picture
-        self.surfaces = surfaces; orientationFn = orientation; viewFn = view; invokeFn = invoke
+        self.surfaces = surfaces; orientationFn = orientation; viewFn = view; anchorFn = anchor; invokeFn = invoke
         emitFn = emit; activationFn = activation; wakeFn = wake; self.wakes = wakes; self.transfers = transfers
         self.pads = pads; afterFn = after; self.regions = regions; self.push = push; expireWakeFn = expireWake; stateFn = state
     }
@@ -255,6 +271,11 @@ public final class ExactPackageContext {
     /// window; nil while the session's view is in no window. A package
     /// presents in its own session rather than the key window's.
     public var presentation: ExactPresentation? { view.flatMap(ExactPresentation.init) }
+
+    /// What the session's element with HTML id `id` is drawn as now, for a
+    /// presentation anchored to it: the item of a bar that shows it, else its
+    /// view; nil when no element of that id shows. Main thread.
+    public func anchor(_ id: String) -> ExactAnchor? { anchorFn(id) }
 
     /// The file an admitted `app:/` path names (LLP 1133.009 D10 item 4):
     /// the session's own directories, a scratch tree under the agent.

@@ -386,6 +386,10 @@ extension ExactExtensions {
             },
             orientation: { [weak m] in m?.hatches?.window?.angle ?? 0 },
             view: { [weak module] in module?.sessionView as? ExactPackagePlatformView },
+            anchor: { [weak m] id in
+                guard let found = m?.hatches?.anchor(id) else { return nil }
+                return found.bar ? (found.object as? ExactPackageBarItem).map(ExactAnchor.barItem) : (found.object as? ExactPackagePlatformView).map(ExactAnchor.view)
+            },
             invoke: { [weak m] handle, handler, args, reply in
                 let body: [String: Any] = ["extension": name, "handle": handle, "handler": handler, "args": args]
                 Invocations.invoke(m?.hatches, body, reply: reply)

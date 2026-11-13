@@ -1,0 +1,49 @@
+{
+  "kind": "interface",
+  "name": "@exact/tips",
+  "version": "1.0.0",
+  "substitute": "implementation",
+  "shapes": {},
+  "names": [
+    {
+      "send": "showTip",
+      "origin": "app",
+      "foreground": true,
+      "options": {
+        "id": "string",
+        "title": "string",
+        "message": "option<string>",
+        "image": "option<string>",
+        "source": "string"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "linux",
+          "windows",
+          "android",
+          "tvos",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "invalidateTip",
+      "options": {
+        "id": "string"
+      },
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "linux",
+          "windows",
+          "android",
+          "tvos",
+          "terminal"
+        ]
+      }
+    }
+  ]
+}
