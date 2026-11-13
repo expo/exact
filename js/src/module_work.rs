@@ -14,9 +14,8 @@ use std::collections::HashMap;
 /// is in flight.
 #[derive(Default)]
 pub(crate) struct Letting {
-    /// Let-go calls whose awaited fetch has effects, set aside until the
-    /// commit that let them go ends: the runner then names the ones it keeps,
-    /// and the rest are forgotten.
+    /// Calls set aside for effects or prefetches until the commit ends:
+    /// the runner names the requests it keeps, and the rest are forgotten.
     calls: Vec<(Key, Parked)>,
     /// What the runner said is in flight at its last `forgotten`, by key: a
     /// continuation's token, or `None` for a plain request.
@@ -49,8 +48,8 @@ impl Module {
         replaced
     }
 
-    /// Calls let go now: one whose awaited fetch has effects is set aside for
-    /// `keep_sent_now`, and the others' calls are returned, to forget now. A
+    /// Set aside effectful fetches and prefetches (LLP 1162.000 D5) for
+    /// `keep_sent_now`; return the other calls to forget now. A
     /// worker keeps a protected secret's sent effect too: its proxy delivers
     /// the retained reply on the owner before releasing the lease.
     pub(crate) fn set_aside(&mut self, gone: Vec<(Key, Parked)>) -> Vec<u64> {
@@ -58,8 +57,8 @@ impl Module {
             .iter()
             .filter(|(key, p)| {
                 key.0.is_some()
-                    && (self.main_thread || self.host.secrets.holds(p.call))
-                    && p.effects
+                    && (p.prefetch
+                        || (self.main_thread || self.host.secrets.holds(p.call)) && p.effects)
             })
             .map(|(_, p)| p.call)
             .collect();
@@ -91,9 +90,9 @@ impl Module {
         let mut forget = Vec::new();
         for f in let_go {
             let key = Module::key(Some(f.target), f.source, f.args);
-            let Some(at) = (self.work.calls.iter())
-                .position(|(k, p)| *k == key && Some(p.ticket) == f.fetch && p.effects)
-            else {
+            let Some(at) = (self.work.calls.iter()).position(|(k, p)| {
+                *k == key && Some(p.ticket) == f.fetch && (p.effects || p.prefetch)
+            }) else {
                 kept.push(None);
                 continue;
             };

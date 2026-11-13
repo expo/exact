@@ -6,6 +6,14 @@ use exact_kernel::CommitReceipt;
 const UNCHANGED: &str = "{\"ops\":[],\"unchanged\":true}";
 
 impl<D: DataSource> Host<D> {
+    pub(crate) fn launch_store_pending(&self) -> bool {
+        self.store_refresh_pending
+            || self
+                .launch_store
+                .as_ref()
+                .is_some_and(|store| store.pending())
+    }
+
     /// The common post-pixel activation order for committed sources.
     pub(crate) fn activate_source(source: &mut D) -> Result<(), exact_runner::DataError> {
         Self::configure_storage(source)?;
@@ -30,8 +38,15 @@ impl<D: DataSource> Host<D> {
 
     /// Load deferred app logic only after the presenter reports first pixel.
     pub fn activate_data(&mut self) -> String {
+        if self
+            .launch_store
+            .as_ref()
+            .is_some_and(|store| store.take_changed())
+        {
+            self.store_refresh_pending = true;
+        }
         if self.data_activated {
-            return self.refresh_store_after(true);
+            return self.refresh_store_after(!self.store_refresh_pending);
         }
         match self.runner.data_ref().preload() {
             Ok(false) => {

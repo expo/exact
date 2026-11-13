@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 #[path = "launch_rust.rs"]
 mod rust;
+#[path = "launch_store.rs"]
+mod store;
+pub(crate) use store::StoreWatch;
 
 const BEGUN: u8 = 1;
 const PREWARM: u8 = 2;
@@ -33,6 +36,7 @@ struct Launch {
     set: OnceLock<Set>,
     invalidated: Mutex<BTreeMap<String, u64>>,
     rust: OnceLock<Arc<rust::Running>>,
+    hosts: Mutex<Vec<std::sync::Weak<StoreWatch>>>,
     foreground: Mutex<Vec<rust::Prepared>>,
     #[cfg(test)]
     backend: Mutex<Option<Arc<dyn exact_data::secrets::Backend>>>,

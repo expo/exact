@@ -695,13 +695,16 @@ fn worker_budget() -> Arc<AtomicUsize> {
     }
 }
 
-/// Wake the workers when one of them has something to do: a queued job (it
-/// may now fit its bytes) or work to destroy. With neither, nothing a worker
-/// waits for has changed, and none is woken: `forget` runs after every commit
-/// and woke all seven for nothing (1-2 ms/s each through a list's fling).
-/// Retirement wakes them itself.
+/// Wake workers for queued jobs, disposal, or a held prefetch's expiry
+/// (LLP 1162.000 D5). An idle core without holds needs no wake.
 fn rouse(shared: &Shared, state: &State) {
-    if !state.discard.is_empty() || state.jobs.iter().any(|lane| !lane.is_empty()) {
+    if !state.discard.is_empty()
+        || state.jobs.iter().any(|lane| !lane.is_empty())
+        || state
+            .cache
+            .as_ref()
+            .is_some_and(|cache| cache.prefetches.iter().any(|p| p.used().is_some()))
+    {
         #[cfg(test)]
         shared.worker_notifications.fetch_add(1, Ordering::Relaxed);
         shared.ready.notify_all();
@@ -1031,7 +1034,11 @@ fn worker(
                     continue;
                 }
                 if let Some(cache) = state.cache.as_mut() {
+                    let bytes = cache.bytes;
                     preload::expire(cache);
+                    if cache.bytes != bytes {
+                        shared.ready.notify_all();
+                    }
                 }
                 if let Some(next) = reads::next_job(&shared, &mut state, lane) {
                     break next;
@@ -1041,7 +1048,7 @@ fn worker(
                     state.jobs[lane]
                         .iter()
                         .filter_map(|job| job.preload_due)
-                        .chain(preload::pending_due(cache))
+                        .chain(preload::timer::wake_due(cache))
                         .filter(|due| *due > now)
                         .min()
                         .map(|due| due.saturating_duration_since(now))

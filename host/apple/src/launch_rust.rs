@@ -267,6 +267,7 @@ impl<'a> Context<'a> {
         let backend = self.backend.clone().ok_or("launch secrets unavailable")?;
         self.launch.with_secret_version(name, |version| {
             backend.write(name, value)?;
+            self.launch.store_written();
             self.versions.insert(name.into(), version);
             self.used.insert(name.into(), version);
             match value {

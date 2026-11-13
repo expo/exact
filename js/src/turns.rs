@@ -120,6 +120,7 @@ impl Module {
         let parked = &mut self.parked[at].1;
         parked.ticket = TIMER;
         parked.effects = false;
+        parked.prefetch = false;
         Some((ticket, Request::continuation(call)))
     }
 

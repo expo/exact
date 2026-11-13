@@ -585,3 +585,67 @@ fn a_refresh_drops_an_equal_prefetch_ready_or_inflight() {
         }
     }
 }
+
+#[test]
+fn idle_prefetch_holds_release_their_bytes_when_the_timer_fires() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous, true);
+        let clock = clock(&core);
+        let before = core
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .cache
+            .as_ref()
+            .unwrap()
+            .bytes;
+        for ticket in 1..=8 {
+            let path = format!("/{ticket}");
+            server.plan(&path, Plan::new(503, &[], &[b'x'; 1024]));
+            ask(&core, &woke, job(ticket, server.request(&path).prefetch()));
+        }
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert!(state.jobs.iter().all(VecDeque::is_empty));
+            let cache = state.cache.as_ref().unwrap();
+            assert_eq!(
+                cache
+                    .prefetches
+                    .iter()
+                    .filter(|p| p.used().is_some())
+                    .count(),
+                8
+            );
+            assert!(cache.bytes > before + 8 * 1024);
+        }
+        *clock.lock().unwrap() += HOLD;
+        if let Some(machine) = &core.machine {
+            machine.timer.expire((0, 0));
+        } else {
+            core.shared.ready.notify_all();
+        }
+        let state = core.shared.state.lock().unwrap();
+        let (state, timeout) = core
+            .shared
+            .ready
+            .wait_timeout_while(state, HANG, |state| {
+                state.cache.as_ref().unwrap().bytes != before
+            })
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "idle prefetch bytes did not expire: asynchronous={asynchronous}"
+        );
+        assert_eq!(state.cache.as_ref().unwrap().bytes, before);
+        assert!(state
+            .cache
+            .as_ref()
+            .unwrap()
+            .prefetches
+            .iter()
+            .all(|p| matches!(p.reply, ReplyState::Gone)));
+        assert_eq!(server.count(), 8);
+    }
+}

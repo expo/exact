@@ -199,3 +199,7 @@ fn fetch_carries_prefetch_and_refuses_non_reads_and_invalid_values() {
         Value::str("Error: prefetch getter")
     );
 }
+
+#[cfg(unix)]
+#[path = "prefetch_abort.rs"]
+mod prefetch_abort;

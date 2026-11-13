@@ -3,147 +3,9 @@ use crate::executor::PreloadEvent;
 use exact_data::secrets::Backend;
 use exact_runner::request::{Launch as Entry, LaunchContext, LaunchRequest};
 use exact_runner::{Placement, Request};
-
-#[derive(Clone)]
-struct RustSource {
-    base: Source,
-    manifest: bool,
-    entry: Entry,
-    request: Request,
-}
-impl DataSource for RustSource {
-    fn launch(&self) -> Option<Entry> {
-        Some(self.entry.clone())
-    }
-    fn preloads(&self) -> &[Baked] {
-        if self.manifest {
-            self.base.definitions
-        } else {
-            &[]
-        }
-    }
-    fn grants(&self) -> &str {
-        &self.base.grants
-    }
-    fn query(&mut self, name: &str, args: &[Value]) -> Result<Value, DataError> {
-        self.base.query(name, args)
-    }
-    fn answer(
-        &mut self,
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-    ) -> Result<Answer, DataError> {
-        if matches!(source, "rotate" | "first") {
-            self.base.answer(store, source, args)
-        } else if source == "public" {
-            Ok(Answer::Later(
-                self.base.definitions[0].fill(|_| None).unwrap(),
-            ))
-        } else {
-            Ok(Answer::Later(self.request.clone()))
-        }
-    }
-    fn parse(
-        &mut self,
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-        outcome: Outcome,
-    ) -> Result<Answer, DataError> {
-        self.base.parse(store, source, args, outcome)
-    }
-}
-type Data = exact_logic::Swappable<exact_data::Mixed<(), exact_data::Placed<RustSource>>>;
-fn composed(source: RustSource) -> Data {
-    exact_logic::Swappable::off(
-        exact_data::Mixed::new(
-            (),
-            exact_data::Placed::new(source, Placement::Main),
-            &[],
-            &["read", "rotate", "public", "first", "timeline"],
-        )
-        .unwrap(),
-    )
-}
-fn source(
-    server: &Server,
-    run: impl Fn(&mut dyn LaunchContext) + Send + Sync + 'static,
-) -> RustSource {
-    let base = server.source(PreloadWhen::Start, false);
-    let request = base.definitions[0].fill(|_| None).unwrap();
-    RustSource {
-        base,
-        request,
-        manifest: false,
-        entry: Entry::new("launch-data", run),
-    }
-}
-fn begin(launch: &LaunchPreloads, source: &RustSource, prewarm: bool) {
-    let source = source.clone();
-    launch.begin(prewarm, move || composed(source));
-}
-fn signal(launch: &LaunchPreloads, source: &RustSource, opened: bool) {
-    let source = source.clone();
-    launch.signal(opened, move || composed(source));
-}
-struct Drive {
-    bridge: Bridge<Data>,
-    _wake: Box<Sender<()>>,
-    wakes: Receiver<()>,
-}
-impl Drive {
-    fn boot(source: &RustSource, plan: &[u8]) -> (Self, String) {
-        let (send, wakes) = channel();
-        let sender = Box::new(send);
-        extern "C" fn wake(ctx: *mut std::ffi::c_void) {
-            // SAFETY: Drive retains the sender until after the bridge is dropped.
-            #[allow(unsafe_code)]
-            let send = unsafe { &*ctx.cast::<Sender<()>>() };
-            let _ = send.send(());
-        }
-        let hooks = Hooks {
-            wake: Some(wake),
-            wake_ctx: (&*sender as *const Sender<()>).cast_mut().cast(),
-            ..Hooks::none()
-        };
-        let mut bridge = Bridge::with_links(Links {
-            io: Some(IoLinks {
-                preloads: local,
-                endow: memory_endow,
-                start: start_io,
-                ..IoLinks::LINKED
-            }),
-            ..Links::ALL
-        });
-        let len = bridge.boot(plan, composed(source.clone()), hooks, 100., 100.);
-        let batch = String::from_utf8(bridge.output_bytes(len as usize).to_vec()).unwrap();
-        assert!(!batch.contains("\"error\":\""), "{batch}");
-        (
-            Self {
-                bridge,
-                _wake: sender,
-                wakes,
-            },
-            batch,
-        )
-    }
-    fn complete(&mut self, source: &RustSource) {
-        while source.base.parsed.load(Ordering::Acquire) == 0 {
-            self.wakes.recv_timeout(HANG).unwrap();
-            self.bridge.pump(0.);
-        }
-    }
-    fn logs(&mut self) -> String {
-        let len = self.bridge.input_write(br#"{"op":"logs"}"#);
-        let len = self.bridge.agent(len);
-        String::from_utf8(self.bridge.output_bytes(len as usize).to_vec()).unwrap()
-    }
-}
-fn definitions(launch: &LaunchPreloads) {
-    launch.0.set.get().unwrap().control.wait_definitions();
-}
-
+#[path = "launch_rust_fixture.rs"]
+mod fixture;
+use fixture::{begin, composed, definitions, signal, source, Drive};
 #[test]
 fn rust_request_reaches_a_held_server_without_a_runner_and_boot_takes_it_once() {
     for asynchronous in [false, true] {
@@ -1471,3 +1333,6 @@ fn a_panic_cancels_the_functions_handed_and_foreground_requests() {
         assert_eq!(server.count.load(Ordering::Acquire), 2);
     }
 }
+
+#[path = "launch_secret_tests.rs"]
+mod secrets;

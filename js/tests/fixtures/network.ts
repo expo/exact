@@ -1,5 +1,6 @@
 // LLP 1162 D1, D2: the answer records the order its fetches resume in.
 const delivered: string[] = [];
+let prefetchController: AbortController;
 
 async function read(origin: string, path: string, method: string): Promise<string> {
   const response = await fetch(`${origin}/${path}`, method === "POST" ? {
@@ -17,6 +18,16 @@ async function read(origin: string, path: string, method: string): Promise<strin
   appId: "test.network",
   grants: "net.fetch http:",
   async answer(source: string, args: unknown[]) {
+    if (source === "prefetchHolding") {
+      if (!args[0]) return "hidden";
+      prefetchController = new AbortController();
+      return fetch(String(args[1]), { signal: prefetchController.signal, exactPrefetch: args[2] } as RequestInit)
+        .then(r => r.text(), () => "aborted");
+    }
+    if (source === "abortPrefetch") {
+      prefetchController.abort();
+      return "aborting";
+    }
     const origin = String(args[0]);
     if (source === "batch") {
       const values = await Promise.all(Array.from({ length: Number(args[1]) }, (_, i) =>

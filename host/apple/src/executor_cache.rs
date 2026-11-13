@@ -99,6 +99,7 @@ pub(super) struct Cache {
     pub(super) prefetch_aborts: Vec<AbortController>,
     pub(super) journal: Vec<super::preload::Fact>,
     pub(super) clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+    pub(super) expiry: Option<super::preload::timer::Expiry>,
     tick: usize,
 }
 impl Cache {
@@ -116,6 +117,7 @@ impl Cache {
             prefetch_aborts: Vec::new(),
             journal: Vec::new(),
             clock: Arc::new(Instant::now),
+            expiry: None,
             tick: 0,
         }
     }
@@ -196,7 +198,11 @@ impl Cache {
 impl Core {
     #[allow(dead_code)] // The render host leaves its shared core uncached (LLP 1162 D4).
     pub(in super::super) fn enable_http_cache(&self) {
-        self.shared.state.lock().unwrap().cache = Some(Cache::new(self.grants.clone()));
+        let mut cache = Cache::new(self.grants.clone());
+        if let Some(machine) = &self.machine {
+            super::preload::timer::install(&mut cache, &self.shared, machine);
+        }
+        self.shared.state.lock().unwrap().cache = Some(cache);
     }
 }
 

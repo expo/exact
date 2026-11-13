@@ -100,6 +100,11 @@ impl<D: DataSource> Bridge<D> {
         // menu may use this fresh-state path to reload the baked plan.
         // A fresh named drive empties leftover secrets before that read.
         // An archive that links no I/O binds nothing (LLP 1047.001).
+        let launch_store = self
+            .links
+            .io
+            .and_then(|io| (io.preloads)())
+            .map(|launch| launch.watch_store(|| false));
         let crate::store::Endowed {
             bindings,
             snapshot,
@@ -150,6 +155,7 @@ impl<D: DataSource> Bridge<D> {
             )
         }) {
             Ok((mut host, batch)) => {
+                host.launch_store = launch_store;
                 if let Some(why) = unbound {
                     host.log(&format!("{why}; every request is refused"));
                 }

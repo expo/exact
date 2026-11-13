@@ -187,6 +187,7 @@ pub(in super::super) fn finish(state: &mut State, ticket: u64, outcome: &Outcome
         used,
     });
     cache.charge(bytes);
+    timer::arm(cache);
 }
 
 pub(in super::super) fn cancel(state: &mut State, tickets: &[u64]) {

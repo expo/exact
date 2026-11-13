@@ -212,6 +212,8 @@ impl cache::Cache {
 
 #[path = "executor_prefetch.rs"]
 pub(super) mod prefetch;
+#[path = "executor_preload_timer.rs"]
+pub(super) mod timer;
 
 /// Launch measurements, independent of executor adoption (LLP 1162.000 D4).
 #[derive(Clone, Copy)]
@@ -533,7 +535,9 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             if state.retired {
                 return None;
             }
-            let result = f(state.cache.as_mut()?);
+            let cache = state.cache.as_mut()?;
+            let result = f(cache);
+            timer::arm(cache);
             cache::serve_ready(&mut state);
             rouse(&shared, &state);
             shared.ready.notify_all();
@@ -558,16 +562,8 @@ impl Core {
             return Err(set);
         };
         cache.grants = self.grants.clone();
-        if let (Some(machine), Some(due)) = (&self.machine, pending_due(&cache)) {
-            let destination = Arc::downgrade(&set.destination);
-            machine.timer.arm_callback(
-                due.saturating_duration_since((cache.clock)()),
-                Box::new(move || {
-                    if let Some(destination) = destination.upgrade() {
-                        update(&destination, expire);
-                    }
-                }),
-            );
+        if let Some(machine) = &self.machine {
+            timer::install(&mut cache, &self.shared, machine);
         }
         state.cache = Some(*cache);
         *destination = Destination::Adopted(Arc::downgrade(&self.shared));
@@ -1144,16 +1140,7 @@ fn run(
         let delay = update(destination, |cache| {
             expire(cache);
             let now = (cache.clock)();
-            cache
-                .preloads
-                .iter()
-                .filter_map(|p| match &p.reply {
-                    ReplyState::Pending { due, .. } => Some(*due),
-                    ReplyState::Ready(r) => Some(r.completed + HOLD),
-                    ReplyState::Gone => None,
-                })
-                .min()
-                .map(|at| at.saturating_duration_since(now))
+            timer::wake_due(cache).map(|at| at.saturating_duration_since(now))
         });
         let Some(delay) = delay else {
             return;

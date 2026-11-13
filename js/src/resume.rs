@@ -248,6 +248,7 @@ impl Module {
             ticket,
             more: None,
             effects: request.has_effects(),
+            prefetch: request.prefetch,
             work_taken: false,
             ready: false,
             due: request.wake_ms.or(request.due_ms),
