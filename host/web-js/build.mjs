@@ -351,6 +351,8 @@ async function typecheck(checking) {
       // Nor is what a build in `dist` keeps beside it (`web-build --out dist`: serve.mjs `replaceBuild`, generations.mjs).
       if (top && besideDist(name)) continue;
       if (top && mounts.some(([mount]) => mount === name)) continue;
+      // Native link inputs, fingerprinted by the Apple build, as in js/bake's capture.
+      if (entry.isDirectory() && name.endsWith('.xcframework') && /^(modules|(?:ios|macos|tvos)\/modules)\//.test(relative(appDir, path).split(sep).join('/'))) continue;
       // Links are refused, except a document link outside the static trees
       // (CLAUDE.md → AGENTS.md), as js/bake's capture: no build reads one.
       if (entry.isSymbolicLink()) {

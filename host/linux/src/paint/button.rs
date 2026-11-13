@@ -138,6 +138,8 @@ pub(super) struct FaceLayout {
     pub(super) padding: [f32; 4],
     pub(super) text: (f32, f32),
     pub(super) symbol: f32,
+    pub(super) symbol_box: (f32, f32),
+    pub(super) symbol_offset: (f32, f32),
     pub(super) gap: f32,
     pub(super) column: bool,
     pub(super) leading: bool,
@@ -222,9 +224,6 @@ pub(super) fn face_layout(
     if !symbol_style.mask.has(StyleId::FontWeight) {
         symbol_style.font_weight = title_style.font_weight;
     }
-    if let Some((_, size)) = rows.neutral_bar_symbol {
-        symbol_style.font_size = size;
-    }
     let mut column = matches!(
         face.placement,
         ButtonImagePlacement::Top | ButtonImagePlacement::Bottom
@@ -236,6 +235,19 @@ pub(super) fn face_layout(
     if tab_root.is_some() && !declared(&rows.button, StyleId::FlexDirection) {
         column = leading;
     }
+    let lone_symbol =
+        (face.symbol.is_some() || face.raster) && face.title.is_none() && face.subtitle.is_none();
+    // A lone bar item's symbol is already at the bar's scaled size.
+    let bar_symbol = rows.neutral_bar_symbol.filter(|_| face.symbol.is_some());
+    if let Some((_, size)) = bar_symbol {
+        symbol_style.font_size = size;
+    }
+    let symbol_scale = match face.symbol.as_deref() {
+        Some(role) if bar_symbol.is_none() && !rows.neutral_role_floor => {
+            look::symbol_scale(role, true)
+        }
+        _ => 1.0,
+    };
     let offer = match width {
         AxisOffer::Definite(w) => Some(w),
         AxisOffer::MinContent => Some(0.0),
@@ -253,8 +265,6 @@ pub(super) fn face_layout(
     let padding_inline = neutral
         && !rows.neutral_role_floor
         && (said(StyleId::PaddingLeft) || said(StyleId::PaddingRight));
-    let lone_symbol =
-        (face.symbol.is_some() || face.raster) && face.title.is_none() && face.subtitle.is_none();
     let inline = if tab_root.is_some() {
         tab_length(metric::TABBAR_PADDING_INLINE, em)
     } else if filled {
@@ -279,7 +289,11 @@ pub(super) fn face_layout(
     } else if neutral_segment {
         look::px(metric::SEGMENT_PADDING_BLOCK, em)
     } else if said_height {
-        0.0
+        if symbol_scale > 1.0 && !column && !lone_symbol {
+            em * 0.125
+        } else {
+            0.0
+        }
     } else {
         look::px(metric::BUTTON_PADDING_BLOCK, em)
     };
@@ -335,10 +349,33 @@ pub(super) fn face_layout(
         }
     });
     let symbol = if face.symbol.is_some() {
-        symbol_style.font_size
+        symbol_style.font_size * symbol_scale
     } else {
         0.0
     };
+    // The neutral sheet lets the large symbol overhang its one-em slot.
+    // Beside a title it keeps its full width; stacked, only its margin
+    // toward the title is negative, a quarter of the box's growth.
+    let (symbol_box, symbol_offset) = if let Some((slot, _)) = bar_symbol {
+        let offset = (slot - symbol) / 2.0;
+        ((slot, slot), (offset, offset))
+    } else if symbol_scale > 1.0 {
+        let em = symbol_style.font_size;
+        let growth = symbol - em;
+        if lone_symbol {
+            ((em, em), (-growth / 2.0, -growth / 2.0))
+        } else if column {
+            (
+                (symbol, symbol - growth / 4.0),
+                (0.0, if leading { 0.0 } else { -growth / 4.0 }),
+            )
+        } else {
+            ((symbol, em), (0.0, -growth / 2.0))
+        }
+    } else {
+        ((symbol, symbol), (0.0, 0.0))
+    };
+    let (sw, sh) = symbol_box;
     let gap = if symbol > 0.0 && (face.title.is_some() || face.subtitle.is_some()) {
         if tab_root.is_some() {
             let (id, own_gap) = if column {
@@ -355,16 +392,25 @@ pub(super) fn face_layout(
             }
         } else {
             rows.image_gap.unwrap_or_else(|| {
-                if neutral {
-                    // The page's gap is a space in the button's type.
+                if !neutral {
+                    title_style.font_size * 0.5
+                } else if !rows.neutral_role_floor {
+                    look::px(metric::BUTTON_IMAGE_GAP, em)
+                } else if column {
+                    // A stacked face's space is `var(--exact-button-row-gap, 1em)`
+                    // (button_css.rs), which only the ordinary face sets.
+                    em
+                } else if rows.neutral_menu_row && !rows.button.mask.has(StyleId::FlexDirection) {
+                    look::px(metric::MENU_ROW_GAP, em)
+                } else {
+                    // A space in the button's type: the shell's own, which a
+                    // written direction restores on a menu row (button_css.rs).
                     let mut wide = |text| {
                         engine
                             .paragraph(&super::text_spec(&title_style, text), None)
                             .width
                     };
                     (wide("a a") - wide("aa")).max(0.0)
-                } else {
-                    title_style.font_size * 0.5
                 }
             })
         }
@@ -417,7 +463,7 @@ pub(super) fn face_layout(
     .map(|(t, s)| engine.paragraph(&super::text_spec(s, t), None).width)
     .fold(0.0f32, f32::max);
     let room = offer.map(|w| {
-        (w - padding[1] - padding[3] - check - if column { 0.0 } else { symbol + gap }).max(0.0)
+        (w - padding[1] - padding[3] - check - if column { 0.0 } else { sw + gap }).max(0.0)
     });
     let room = room.map(|room| room.min(natural));
     let mut paragraph = |text: Option<&str>, style: &StyleProps| {
@@ -440,11 +486,10 @@ pub(super) fn face_layout(
         .max(subtitle.as_ref().map_or(0.0, |p| p.width));
     let tw = room.filter(|w| *w > 0.0).unwrap_or(extent);
     let th = title.as_ref().map_or(0.0, |p| p.height) + subtitle.as_ref().map_or(0.0, |p| p.height);
-    let symbol_space = rows.neutral_bar_symbol.map_or(symbol, |(body, _)| body);
     let (w, h) = if column {
-        (tw.max(symbol_space), th + symbol_space + gap)
+        (tw.max(sw), th + sh + gap)
     } else {
-        (tw + symbol_space + gap, th.max(symbol_space))
+        (tw + sw + gap, th.max(sh))
     };
     let w = w + check;
     FaceLayout {
@@ -456,6 +501,8 @@ pub(super) fn face_layout(
         padding,
         text: (tw, th),
         symbol,
+        symbol_box,
+        symbol_offset,
         gap,
         column,
         leading,
@@ -891,20 +938,13 @@ impl Painter {
         let scale = control_scale(rows.button.control_size);
         let check = (material_segment.is_some() && checked).then(|| segment::check_room(scale));
         let room = check.unwrap_or(0.0);
+        let (sw, sh) = layout.symbol_box;
         // The content (a line, or a stack in a column) and the check beside
         // it, in one horizontal line.
-        let (stack, ch) = if let Some((body, _)) = rows.neutral_bar_symbol {
-            (body, body)
-        } else if layout.column {
-            (
-                layout.text.0.max(layout.symbol),
-                layout.text.1 + layout.symbol + layout.gap,
-            )
+        let (stack, ch) = if layout.column {
+            (layout.text.0.max(sw), layout.text.1 + sh + layout.gap)
         } else {
-            (
-                layout.text.0 + layout.symbol + layout.gap,
-                layout.text.1.max(layout.symbol),
-            )
+            (layout.text.0 + sw + layout.gap, layout.text.1.max(sh))
         };
         let cw = stack + room;
         let free = (w - pl - pr - cw).max(0.0);
@@ -934,9 +974,7 @@ impl Painter {
         // line. The image keeps its size; the centered title is clipped by the
         // authored button box, as on the page.
         let text_room = if tab && layout.column {
-            (h - pt - pb - layout.symbol - layout.gap)
-                .max(0.0)
-                .min(layout.text.1)
+            (h - pt - pb - sh - layout.gap).max(0.0).min(layout.text.1)
         } else {
             layout.text.1
         };
@@ -944,37 +982,22 @@ impl Painter {
         let (tx, ty, sx, sy) = if layout.column {
             (
                 bx + (stack - layout.text.0) / 2.0,
-                by + text_shift
-                    + if leading {
-                        layout.symbol + layout.gap
-                    } else {
-                        0.0
-                    },
-                bx + (stack - layout.symbol) / 2.0,
+                by + text_shift + if leading { sh + layout.gap } else { 0.0 },
+                bx + (stack - sw) / 2.0,
                 by + if leading { 0.0 } else { text_room + layout.gap },
             )
         } else {
             let symbol_left = leading != (rows.button.direction == exact_kernel::Direction::Rtl);
             (
-                bx + if symbol_left {
-                    layout.symbol + layout.gap
-                } else {
-                    0.0
-                },
+                bx + if symbol_left { sw + layout.gap } else { 0.0 },
                 by + (ch - layout.text.1) / 2.0,
                 bx + if symbol_left {
                     0.0
                 } else {
                     layout.text.0 + layout.gap
                 },
-                by + (ch - layout.symbol) / 2.0,
+                by + (ch - sh) / 2.0,
             )
-        };
-        let (sx, sy) = if let Some((body, _)) = rows.neutral_bar_symbol {
-            let margin = (body - layout.symbol) / 2.0;
-            (bx + margin, by + margin)
-        } else {
-            (sx, sy)
         };
         let fade_face =
             neutral && look == "text" && !disabled && !menu_row && self.presses(node.id);
@@ -1014,7 +1037,25 @@ impl Painter {
                 resolved
             }
         };
-        self.backend.push_clip(&Shape::rect(rect), ts);
+        // Only the lone neutral symbol overhangs the face's clip. Ancestor
+        // clips still apply, and hit testing keeps the button's border box.
+        let overhang = neutral
+            && !rows.neutral_role_floor
+            && face.title.is_none()
+            && face.subtitle.is_none()
+            && face
+                .symbol
+                .as_deref()
+                .is_some_and(|s| look::symbol_scale(s, true) > 1.0)
+            && !node.is_neutral_sheet_word();
+        let face_clip = if overhang {
+            super::field::overflow_clip(&shape, [0.0; 4], super::field::effective_overflow(node))
+        } else {
+            Some(Shape::rect(rect))
+        };
+        if let Some(clip) = &face_clip {
+            self.backend.push_clip(clip, ts);
+        }
         if let Some(p) = &layout.title {
             let painted = super::material::FieldText::painted(p, (tx, ty), ts);
             self.labels.label(node.id, painted);
@@ -1068,7 +1109,12 @@ impl Painter {
             self.symbol_face(
                 symbol,
                 &layout.symbol_style,
-                (sx, sy, layout.symbol, layout.symbol),
+                (
+                    sx + layout.symbol_offset.0,
+                    sy + layout.symbol_offset.1,
+                    layout.symbol,
+                    layout.symbol,
+                ),
                 tint,
                 ts,
             );
@@ -1081,7 +1127,9 @@ impl Painter {
             let style = layout.title_style.clone();
             self.segment_check((cx, cy, icon, icon), &style, tint, ts);
         }
-        self.backend.pop_clip();
+        if face_clip.is_some() {
+            self.backend.pop_clip();
+        }
         if focused && !disabled && !super::control::ringless(node) {
             self.field_ring(&shape, accent, ts);
         }
@@ -1113,6 +1161,7 @@ mod tests {
                 neutral_bar_symbol: None,
                 neutral_tab_root: None,
                 neutral_role_floor: false,
+                neutral_menu_row: false,
                 title: StyleProps::default(),
                 subtitle: None,
                 symbol: StyleProps::default(),

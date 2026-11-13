@@ -126,9 +126,8 @@ pub struct NodeArena {
     /// The margin the platform's cell gives a cells list's rows at each end,
     /// by the list's slot (LLP 1138): a few lists at most.
     list_margins: Vec<(u32, [f32; 2])>,
-    /// Alert roots whose host supplies the CSS `::before` title item. The
-    /// engine derives the item from the root's live label and inherited text.
-    pub(crate) alert_prefixes: SlotSet,
+    /// Host-rendered alert titles, and the popovers open as choosers.
+    pub(crate) alert_state: alert::State,
     /// The containing blocks hosts gave subtrees (LLP 1115.002 D8.2).
     pub(crate) blocks: crate::kernel::Blocks,
     taffy: Vec<Option<NodeId>>,
@@ -207,7 +206,7 @@ impl Clone for NodeArena {
             covers: self.covers.clone(),
             grouped_margins: self.grouped_margins.clone(),
             list_margins: self.list_margins.clone(),
-            alert_prefixes: self.alert_prefixes.clone(),
+            alert_state: self.alert_state.clone(),
             blocks: self.blocks.clone(),
             taffy: self.taffy.clone(),
             is_root: self.is_root.clone(),
@@ -306,7 +305,7 @@ impl NodeArena {
         self.covers.clear();
         self.grouped_margins.clear();
         self.list_margins.clear();
-        self.alert_prefixes.clear();
+        self.alert_state.clear();
         self.blocks = Default::default();
         self.free = (0..self.live.len() as u32).rev().collect();
         self.roots.clear();
@@ -955,7 +954,7 @@ impl NodeArena {
         self.covers.retain(|(s, _)| *s != slot);
         self.grouped_margins.retain(|(s, _)| *s != slot);
         self.list_margins.retain(|(s, _)| *s != slot);
-        self.alert_prefixes.remove(slot);
+        self.alert_state.remove(slot);
         self.blocks.remove(slot);
         self.taffy[s] = None;
         if self.is_root[s] {

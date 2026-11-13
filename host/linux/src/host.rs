@@ -1093,8 +1093,8 @@ impl<D: DataSource> Host<D> {
     }
 
     /// A symbol picture (`symbol:<role>`) a commit made, renewed or touched
-    /// takes its natural size, the em square the image sync reports for it
-    /// (LLP 1035.004), before this commit's layout: not in a second layout
+    /// takes the natural size the image sync reports for it (LLP 1011 §3),
+    /// before this commit's layout: not in a second layout
     /// once the sync after the commit reports it (every list row built
     /// with an icon paid one).
     fn size_new_symbols(&mut self, receipts: &[Timed]) {
@@ -1117,9 +1117,7 @@ impl<D: DataSource> Host<D> {
                 {
                     continue;
                 }
-                let size = node.bar_symbol_size().unwrap_or_else(|| {
-                    node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size)
-                });
+                let size = crate::paint::look::symbol_size(&node);
                 sizes.push((node.id, (size > 0.).then_some((size, size))));
             }
         }

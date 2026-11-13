@@ -969,22 +969,26 @@ function apply(batch) {
   markScrollDocument();
   return batch.timers;
 }
+const heldLinks = new WeakMap();
 export function applyBatch(batch) {
   for (const line of batch.alerts?.splice(0) ?? []) {
     console.error("exact:", line);
   }
+  const link = heldLinks.get(batch) ?? navigation.holdLink();
   if (host.page?.hold(batch) || presence.hold(batch)) {
+    if (link) heldLinks.set(batch, link);
     return {
       timers: batch.timers,
       batch
     };
   }
+  heldLinks.delete(batch);
   host.textflow?.beforeBatch(batch);
   const began = host.frameSampler ? performance.now() : 0;
   // what applying it cost, for the next frame's record (LLP 1079 D3)
   globalThis.exact.applyDepth = (globalThis.exact.applyDepth ?? 0) + 1;
   try {
-    const timers = apply(batch);
+    const timers = link ? navigation.withLink(link, () => apply(batch)) : apply(batch);
     letGo();
     refitTexts();
     if (host.wakeLock) {

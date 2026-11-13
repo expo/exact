@@ -1,3 +1,4 @@
+import { writePrivacyManifest } from './privacy.mjs';
 // @ref LLP 1133.024 D4, D22 item 5 — app extensions of more than one kind:
 // what an appex compile links with, and the share extension, which links
 // no Exact runtime and writes only its inbox in the App Group.
@@ -84,6 +85,7 @@ export function packageShareExtension({ app, bundle, directory, sdk, triple, dev
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     resolve(root, 'host/apple/share/ShareInbox.swift'), resolve(root, 'host/apple/share/ShareViewController.swift'), '-o', binary]);
   stripProductionExecutable(binary, { production, dsym: resolve(symbols, 'ExactShare.appex.dSYM'), sourceDsym: `${binary}.dSYM` });
+  writePrivacyManifest(mac ? resolve(extensionContents, 'Resources') : extension, [binary], { mac });
   sign(extension, entitlementPath);
   return extension;
 }

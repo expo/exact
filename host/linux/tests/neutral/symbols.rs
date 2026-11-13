@@ -167,7 +167,9 @@ pub(super) fn route_bar_symbols() {
             (22., 20.),
             "a count restores authored sizing"
         );
-        assert_eq!(size(&mut p, "relative"), (40., 40.));
+        // Its own natural size again, `symbol-scale` times its font: the
+        // source document.rs writes for it, above its 1em minimum.
+        assert_eq!(size(&mut p, "relative"), (48., 48.));
         p.tap(item).unwrap();
         assert!((size(&mut p, "sized").0 - bar * 1.2).abs() < 0.06);
     }

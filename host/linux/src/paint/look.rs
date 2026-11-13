@@ -61,6 +61,37 @@ pub(crate) fn number(index: usize) -> f32 {
     }
 }
 
+/// The neutral box of a symbol drawn for an SF Symbol (LLP 1011 §3).
+/// An app's own icon and an unresolved name retain their one-em box.
+pub(crate) fn symbol_scale(role: &str, button: bool) -> f32 {
+    if !neutral()
+        || exact_kernel::Icon::parse(role).is_some_and(|icon| icon.sf.is_empty())
+        || exact_kernel::symbol_path(role).is_none()
+    {
+        return 1.0;
+    }
+    number(if button {
+        metric::BUTTON_SYMBOL_SCALE
+    } else {
+        metric::SYMBOL_SCALE
+    })
+}
+
+/// A standalone symbol's natural size, shared by layout, image sync and
+/// paint: the bar's square on a lone bar item's face (LLP 1115.000 D4.15),
+/// else its font size at the look's scale.
+pub(crate) fn symbol_size(node: &exact_kernel::NodeRef<'_>) -> f32 {
+    if let Some(size) = node.bar_symbol_size() {
+        return size;
+    }
+    let role = node
+        .props
+        .str(exact_kernel::PropId::ImageSource)
+        .and_then(|s| s.strip_prefix("symbol:"))
+        .unwrap_or("");
+    node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size) * symbol_scale(role, false)
+}
+
 /// A colour role as this process shows it under a scheme.
 pub(crate) fn role(name: &str, dark: bool) -> [u8; 4] {
     roles::role(name).map_or([0, 0, 0, 255], |id| {

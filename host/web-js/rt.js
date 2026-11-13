@@ -4,7 +4,7 @@ export { px, lt, presenceUse } from './presence-bindings.js';
 // Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan binds one (LLP 1047.002 D1)
 let Probes = null; export function usePresenceBindings(b) { Probes = b; } const presentArm = (view, ...a) => Probes ? Probes.arm(view, ...a) : view; export const presentRows = (row, ...a) => Probes ? Probes.rows(row, ...a) : row;
 import { inOrder, rowKey } from './rows.js';
-import { resourceInspection } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
+import { resourceInspection, retainedAnswer } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
 export { liveTime } from "./live-time.js";
 import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
@@ -12,7 +12,7 @@ import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } 
 let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
 import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { heldAsks, heldReplies, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
-let Media = null; export function useMedia(m) { Media = m; } let Traversal = null; export function useTraversal(f) { Traversal = f; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
+let Media = null; export function useMedia(m) { Media = m; } let Traversal = null, Nav = null; export function useTraversal(f, nav = null) { Traversal = f; Nav = nav; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` and the page's navigation.js (the link a deferred tree update keeps) only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links them (LLP 1047.002 D1)
 let Links = null; export function useLinks(l) { Links = l; } // links.js only where a plan binds a link's `href`, `rel` or `target` (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
 // Semantics kept from the runner (LLP 1005 §6):
@@ -212,7 +212,8 @@ export function commit(f, what = "commit", finished) {
   // What the commit would have sent and did not is refused, whatever stopped its tree update (a hook that threw, a
   // poisoned tree, a tail a view transition never ran): an answer's batches that wait for it too (ts-stream.js).
   let sent = 0; const unrun = why => { for (const go of out.splice(sent)) go.refused?.(why); };
-  const tail = Object.assign(() => { try { return update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
+  const link = Nav?.holdLink();
+  const tail = Object.assign(() => { try { return link ? Nav.withLink(link, update) : update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
   const update = () => { // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
     for (const f of Before) f();
     Pres?.before({ ops: Probes?.gains() ?? [] }, Views); // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
@@ -220,6 +221,7 @@ export function commit(f, what = "commit", finished) {
     for (const f of finishes) f(ok);
     settled(true); if (!ok) return Sched?.scan(false), false;
     clock.epoch++; Store.persist();
+    for (const r of Resources) retainedAnswer(r, say);
     while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(inflight, say); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit (LLP 1016.001 D3).
     for (const m of landed) if (m.then) { m.due = armedAt(); if (!clock.agent) drive(); }

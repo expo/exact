@@ -41,14 +41,19 @@ approves each app. Nathan Schroeder implements it, with T3 Code's browser as
 the consumer. Take: none offered; waived by Charlie. Still out: http and https
 handlers for any app that does not opt in.
 
-**Expanded (Charlie, 2026-10-26, #1002; LLP 1133.028 §10):** Apple builds write
-a privacy manifest (`PrivacyInfo.xcprivacy`) into each bundle that links a
-required-reason API (the app, a widget extension, `ExactCore.framework` and
-the other Exact frameworks). It is generated from an audited table of the
-APIs Exact itself calls; a call with no approved reason is removed rather
-than given one. Nathan Schroeder implements it (#1004). Take: none offered;
-waived by Charlie. Still out: an app's own declarations, until an app with
-native code of its own asks.
+**Expanded (Charlie, 2026-10-26, #1002; LLP 1133.028 §10):** Apple builds
+write `PrivacyInfo.xcprivacy` before signing each app, extension and Exact
+framework. Built under #366: imports and Objective-C selector references select
+the categories each bundle uses; an audited table supplies Exact's reasons.
+Apple uses system SQLite, removing bundled SQLite's filesystem-type probes
+rather than claiming a disk-space reason. An unexplained disk-space or
+`getattrlist` use refuses packaging on platforms requiring API reasons.
+An app may supply a manifest beside `app.json`; a package supplies one beside
+its Apple implementation. Supplied API reasons join only categories the owning
+bundle uses, including frameworks and the watch companion. The app's tracking
+and collected-data declarations stay on its app, App Clip and host sample
+bundles. Captured manifest bytes are binary receipt inputs and remain fixed
+through GPU preparation and packaging. Take: none offered; waived by Charlie.
 
 **Expanded (Charlie, 2026-10-26, Excord):** a virtualized `list` takes
 `reach-margin`, a nonnegative `px` or `%` distance along the scroll axis, one

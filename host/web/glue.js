@@ -906,4 +906,5 @@ navigation.connect(root, navigate, log, (id) => {
   if (host.inputReady) {
     applyBatch(JSON.parse(readOut(host.wasm.exact_host_back(id, now()))));
   }
-}, globalThis.exact.go = hostGo, (href) => !!host.wasm && host.wasm.exact_route_match(writeIn(href)) === 1, true);
+}, globalThis.exact.go = hostGo, (href) => !!host.wasm && host.wasm.exact_route_match(writeIn(href)) === 1, true,
+  (location) => host.wasm ? readOut(host.wasm.exact_location_of(writeIn(location))) : location);

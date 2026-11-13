@@ -227,6 +227,14 @@ impl<D: DataSource> Presenter<D> {
             placement: top::area::History::default(),
         });
         if !modal {
+            if let Err(e) = self
+                .host
+                .runner_mut()
+                .kernel_mut()
+                .set_popover_source_visible(id, anchor.is_some())
+            {
+                self.host.log(format!("popover source: {e:?}"));
+            }
             if let Err(e) = self.host.show_authored_popover(Some(id)) {
                 self.host.log(e);
                 self.alert_close(now);
@@ -310,6 +318,9 @@ impl<D: DataSource> Presenter<D> {
                 let k = self.host.runner_mut().kernel_mut();
                 if open.kind == Kind::Alert {
                     let _ = k.set_alert_prefix(id, false);
+                }
+                if !open.modal {
+                    let _ = k.set_popover_source_visible(id, false);
                 }
                 if open.modal {
                     let _ = k.set_host_block(id, None);

@@ -44,7 +44,7 @@ export async function fixture(options = {}) {
     gpu_assets: () => '{"requests":[],"retired":[]}', gpu_asset: () => true, gpu_lifecycle: () => true, gpu_clock: () => true, gpu_period: () => {},
   };
   const glue = readFileSync(process.env.R8A_GLUE_SOURCE || new URL('../glue.js', import.meta.url), 'utf8');
-  const applySource = glueDeclarations(glue, ['applyBatch', 'holdWake', 'holdOrientation']);
+  const applySource = glueDeclarations(glue, ['heldLinks', 'applyBatch', 'holdWake', 'holdOrientation']);
   const operationSource = glueDeclarations(glue, ['apply']);
   const applyOperations = new Function('exact', 'views', 'globalThis', `
     let timelinesMoved = false;
@@ -58,6 +58,7 @@ export async function fixture(options = {}) {
   `)(exact, views, {exact});
   const applyBatch = new Function('globalThis', 'apply', `
     let timelinesMoved = false, agentClock = 0, followOnSeek = true;
+    const navigation = { holdLink() { return null; }, withLink(_link, update) { return update(); } };
     const register = () => {}, seek = () => {}, root = {}, log = () => {};
     const loadAfterPaint = () => { throw new Error('surface fixture: unexpected lazy module load'); };
     const agentMode = false, frameSampler = null, textflow = null, page = null, clocks = {sync() {}}, presence = {hold: () => false}, letGo = () => {}, motion = {commit() {}, followTimelines() {}}, arrange = {commit() {}}, flowBatch = () => {}, refitTexts = () => {};

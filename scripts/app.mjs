@@ -1,3 +1,5 @@
+import { capturePrivacyManifest } from '../host/apple/privacy.mjs';
+import { appleImplementations } from '../js/bake/src/typescript.mjs';
 import { webHostFiles, hostModuleSources } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
 import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames } from './cargo-dep-info.mjs';
@@ -980,7 +982,7 @@ function buildGraph(app, target, kind, env, gpu) {
   }
   return { metadata, packages, root, surface, modules, roles };
 }
-function completeBuild(app, platform, target, graph, messages, roots, env, prepared = new Map(), generatedInputs = {products:[], watchedDirectories:[]}) {
+function completeBuild(app, platform, target, graph, messages, roots, env, prepared = new Map(), generatedInputs = {products:[], watchedDirectories:[]}, privacyManifests = []) {
   const scripts = messages.filter((m) => m.reason === 'build-script-executed' && graph.roles.has(m.package_id));
   const targetDirs = [app.target, graph.metadata.build_directory].map(dir => resolve(dir, target));
   const roleOf = (path) => targetDirs.some(dir => under(dir, path)) ? target : 'host';
@@ -1099,6 +1101,8 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     add(resolve(app.dir, 'render/build.rs'), true);
   }
   if (platform === 'macos' || platform === 'ios') {
+    add(resolve(ROOT, 'host/apple/privacy.mjs'));
+    privacyManifests.push(...appleImplementations(app.dir, target.includes('-tvos') ? 'tvos' : platform, bundleGraph.extensions ?? {}, bundleGraph.contractSources ?? []).map(p => capturePrivacyManifest(p.privacyManifest)));
     const packageRoot=resolve(ROOT,'host/apple');
     const swiftEnv = {...env, EXACT_APP_COMPOSITION: compat.inputs.store.L === '0' ? 'embedded' : 'updating'}; delete swiftEnv.SDKROOT;
     // Cache SwiftPM's description by manifest, composition and source inventory.
@@ -1147,6 +1151,10 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   if (launchImage) add(resolve(app.dir, launchImage.src));
   const metadata={...(appleAssetCatalogs.length ? {appleAssetCatalogs} : {}),...(launchImage ? {launchImage} : {}),...(nativeResources.length ? {nativeResources} : {}),...nativeManifestMetadata(app.manifest, platform),delivery:compat.delivery,store:compat.inputs.store,keys:compat.inputs.keys};
   const configuration={target,units:orderedBuild([...new Map(units.map(u=>[canonicalBuild(u),u])).values()]),builders:orderedBuild([...new Map(builders.map(u=>[canonicalBuild(u),u])).values()]),rustc:buildCommand('rustc',['-vV'],app,env).stdout,flags:{...Object.fromEntries(['RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','MACOSX_DEPLOYMENT_TARGET','IPHONEOS_DEPLOYMENT_TARGET','TVOS_DEPLOYMENT_TARGET','WATCHOS_DEPLOYMENT_TARGET'].map((k)=>[k,env[k]??null])),...(env.EXACT_WEB_LINK?{EXACT_WEB_LINK:env.EXACT_WEB_LINK}:{}),...(env.EXACT_WEB_SIZE?{EXACT_WEB_SIZE:env.EXACT_WEB_SIZE}:{})}};
+  for (const captured of privacyManifests) {
+    const name = nameOf(captured.path); inputs.delete(name); absent.delete(name);
+    if (captured.bytes === null) absent.set(name, captured.path); else inputs.set(name, { name, path: captured.path, sha256: buildHash(Buffer.from(captured.bytes, 'base64')) });
+  }
   const files=[...inputs.values()].sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
   const fingerprint={files:files.map(({name,sha256})=>({name,sha256})),absent:[...absent.keys()].sort(),configuration,metadata};
   const products=roots.flatMap((r)=>messages.filter((m)=>m.reason==='compiler-artifact'&&m.package_id===r.package&&m.target.name===r.name).flatMap((m)=>m.filenames)).filter((p)=>!p.endsWith('.d')&&!p.endsWith('.dSYM')).map((path)=>prepared.get(path)??path).map((path)=>{const info=statSync(path);return {path,bytes:info.size,sha256:hashes.of(path,info)};})
@@ -1155,9 +1163,8 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, [
     app.target, graph.metadata.build_directory, env.EXACT_BAKE_OUTPUT, env.OUT_DIR, ...scripts.map(script => script.out_dir),
   ])} : {};
-  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs]), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
+  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs]), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
 }
-
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.
 let buildLock;
 export function claimBuildOutput(app, path) {
@@ -1209,7 +1216,6 @@ export function claimLive(text) {
   if (ps.status !== 0 || !Number.isFinite(started)) return true; // running, and `ps` cannot say since when: never guess
   return !(started > Date.parse(claim.started) + 1000); // `lstart` has whole seconds: a holder started after its claim is a reused pid
 }
-
 /** Cargo library filenames use the selected target name, with hyphens
  * normalized to underscores, even when the package has another name. */
 export const cargoLibraryTarget = (pkg) => pkg.targets.find(t => t.kind.some(k => ['cdylib','staticlib','rlib','lib'].includes(k)));
@@ -1235,20 +1241,16 @@ export function wholeProgram(kind, profile) {
   return ['apple','ios','macos','tvos','android'].includes(kind) && profile === 'release' ? ['--config','profile.release.lto="fat"'] : [];
 }
 
-/** One actual target build, including the optional GPU artifact. Consumers
- * classify its completed receipt; compatibility is never recomputed in JS.
- * `check` runs `cargo check`: the build scripts (the bake) and the receipt,
- * with no linked product (delivery's web bake, host/web/build.mjs --bake).
- * `options.kind` overrides the crate kind the platform implies. */
 /** What an app's bake watches besides its sources (its asset roots that exist, whether a backend origin is chosen, which of the settings files `.env.local` and `.env` exist); unset, a missing one stays an input where the app holds its build output, and every build reruns the script and relinks (bake/src/receipt/watch.rs). Every baking build passes it. `app`: its `dir`, `manifest`. */
 export const bakeWatchEnv = app => ({ EXACT_ASSET_ROOTS: ['assets', 'deck', ...(app.manifest.game ? [] : ['gpu/shaders'])].filter(root => (root === 'assets' && app.manifest.game && (app.manifest.game.assets === true || existsSync(resolve(app.dir, 'art')))) || existsSync(resolve(app.dir, root))).join(','), EXACT_BACKEND_SELECTION: existsSync(resolve(app.dir, '.exact/backend-origin')) ? 'present' : 'absent', EXACT_ENV_FILES: ['.env.local', '.env'].filter(file => existsSync(resolve(app.dir, file))).join(',') });
 /** The dev loop's bake driver (host/web/dev.mjs): an app's `<app>-dev` bin (`devBin`), else `exact-dev`, on host-dev (seconds after an edit, not release's minute), with `bakeWatchEnv` (nothing rebuilt when nothing changed): its cargo args before `--`, cwd and env over `env`. */
 export const devBinRun = (app, devBin, env) => ({ args: ['run', '-q', ...(devBin ? injectedProfiles(app) : []), '--profile', HOST_DEV, '-p', devBin ? app.crate('web') : 'exact-web', '--bin', devBin ?? 'exact-dev'], cwd: devBin ? app.workspace : ROOT, env: { ...env, ...bakeWatchEnv(app) } });
+/** Build the target and optional GPU, returning Cargo's actual receipt. `check` builds no linked product; `options.kind` selects a crate kind independently of the receipt's platform. */
 export function buildBake(app, platform, target, options = {}) {
   // `kind` names another crate for the platform's cohort: Android's Canvas host bakes as Linux from `<app>-android`.
   const kind=options.kind??platformCrateKind(app.dir,platform), apple=['apple','ios','macos','tvos'].includes(kind);
   let env=withHostDeployment({...process.env,...options.env});env.CARGO_TARGET_DIR=app.target;env.EXACT_BAKE_OUTPUT=options.output??bakeOutput(app,env);
-  const watch = target.includes('apple-watchos');
+  const privacyManifests = apple ? [capturePrivacyManifest(resolve(app.dir, 'PrivacyInfo.xcprivacy'))] : [], watch = target.includes('apple-watchos');
   if(platform==='web'||watch)env=webToolchainEnv(env);
   if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
   mkdirSync(env.EXACT_BAKE_OUTPUT,{recursive:true});
@@ -1319,7 +1321,7 @@ export function buildBake(app, platform, target, options = {}) {
       if (!product) throw new Error(`GPU product missing for ${pkg.name}`);
       // A host may prepare (sign) a copy; that copy is the product from here on.
       // Cargo's messages keep Cargo's file: its rustc dep-info is found beside it.
-      const prepared = options.prepareGpu?.(product) ?? product;
+      const prepared = options.prepareGpu?.(product, privacyManifests[0]) ?? product;
       if (prepared !== product) preparedProducts.set(product, prepared);
       // Each module's signed digest is bound beside the primary's (LLP 1009 D6).
       const module = gpuModules(app.manifest).find(({name}) => app.crate(`gpu-${name}`) === pkg.name);
@@ -1334,20 +1336,18 @@ export function buildBake(app, platform, target, options = {}) {
     // host bake output to classify when only the surface graph was selected.
     return {products:messages.filter(m=>m.reason==='compiler-artifact' && bakeSelection(graph,'gpu').some(pkg=>pkg.id===m.package_id)).flatMap(m=>m.filenames).map(f=>preparedProducts.get(f)??f)};
   }
-  const receipt=completeBuild(app,platform,target,graph,messages,roots,env,preparedProducts,generatedInputs);
+  const receipt=completeBuild(app,platform,target,graph,messages,roots,env,preparedProducts,generatedInputs,privacyManifests);
   writeFileSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}.build.json`),JSON.stringify(receipt)+'\n');
   options.capture?.(receipt);
   return receipt;
   } finally { for (const release of releases.reverse()) release(); }
 }
-
 /** Read completed binary-producing receipts only; absent platforms remain
  * unbuilt rather than acquiring a second, guessed compatibility identity. */
 export function readBuilds(app, env = process.env) {
   const directory=bakeOutput(app,env);if(!existsSync(directory))return [];
   return readdirSync(directory).filter((name)=>name.endsWith('.build.json')).map((name)=>JSON.parse(readFileSync(resolve(directory,name),'utf8'))).filter((r)=>r.version===1&&r.compat?.inputs?.app===app.id);
 }
-
 /** Frozen capabilities and the binary input identity; small enough to bind
  * inside the signed stream envelope. Absolute source paths stay private. */
 export function cohortReceipt(build) {

@@ -844,6 +844,15 @@ fn sources(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
             }
             let relative = path.strip_prefix(root).unwrap();
             let kind = entry.file_type().map_err(|e| e.to_string())?;
+            // Native link inputs, fingerprinted by the Apple build, not app sources.
+            if kind.is_dir()
+                && name.ends_with(".xcframework")
+                && ["modules", "ios/modules", "macos/modules", "tvos/modules"]
+                    .iter()
+                    .any(|tree| relative.starts_with(tree))
+            {
+                continue;
+            }
             if let Some((_, dir)) = mounts.iter().find(|(m, _)| at == root && **m == *name) {
                 // An editor's link to the mounted directory is allowed and
                 // skipped: the mount itself is captured below. Anything else

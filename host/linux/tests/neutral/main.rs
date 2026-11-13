@@ -132,6 +132,11 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     // Initialize the shared header defaults while the first theme is bound.
     headers::route_header_colors_follow_each_sessions_theme();
     symbols::route_bar_symbols();
+    buttons::popover_sources_and_sheet_word_clips_match_the_browser();
+    buttons::symbols_use_the_neutral_metrics_in_layout_and_paint();
+    buttons::symbol_face_exceptions_match_the_browser();
+    buttons::chooser_symbols_exclude_text_and_inputs();
+    buttons::bar_symbols_keep_the_header_exclusions();
     fields::bare_size_and_empty_date_regressions();
     buttons::control_sizes_follow_the_root_in_measure_and_paint();
     buttons::plain_faces_fade_without_a_wash();

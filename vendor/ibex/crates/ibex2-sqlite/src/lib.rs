@@ -77,6 +77,13 @@ fn sql_error(e: rusqlite::Error) -> HostError {
     match (REFUSED.take(), e.sqlite_error_code()) {
         (Some(why), _) => error(format!("not authorized: {why}")),
         (None, Some(DatabaseBusy | DatabaseLocked)) => HostError::Failed(format!("{BUSY}{e}")),
+        // System SQLite may omit the function and fail before calling the authorizer.
+        (None, _)
+            if e.to_string()
+                .eq_ignore_ascii_case("no such function: load_extension") =>
+        {
+            error("not authorized: load_extension: extensions are not loaded")
+        }
         (None, _) => error(e),
     }
 }

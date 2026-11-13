@@ -27,3 +27,7 @@ Only the code path was checked; the timings are the reporter's, and how the 0.4 
 ## Fix
 
 Measure first, with the launch trace's module and data steps. Then the likely moves: load and evaluate the module on the owner thread while the first frame is being drawn, committing only after first pixel, so step 2 overlaps the paint; and make the independent lane's transport when the module is prepared, not at the first request.
+
+## Owner
+
+LLP 1162.000 owns this: its stage 4 is LLP 1027.008's early evaluation, and its §7 paired comparison on a device is the measurement this issue needs. A design review on 2026-11-12 ruled for evaluating the module's top level before first pixel on a launch thread of its own, never on the main or owner thread. A preload alone does not remove the wait, because its reply is taken only when the module asks. The review recommended shipping only if, on an iPhone Release build, first pixel moves less than a frame at p50 and p90 and fresh content arrives at least 100 ms sooner. That reverses the 2026-10-23 decline, which is the maintainer's call. Close this issue in the commit that lands it, or say here why the measurement declined it.

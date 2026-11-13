@@ -24,3 +24,7 @@ Checked by reading the code; the connection counts are the reporter's.
 ## Fix
 
 Give the independent lane's workers one shared transport (bindings endowed once, cloned into each worker), keeping streams on their own as now. Alternatively make the asynchronous core the default on Apple, which has one session per lane. A test beside `host/executor/src/scope_tests.rs` that counts the connections a loopback HTTP/1.1 keep-alive server accepts for six concurrent independent reads, as the scoped-request issue's did, would pin it.
+
+## Owner
+
+LLP 1162 owns this: D5 (one loader a process) and D8 (the transport is the platform's client, with stage 4's campaign deciding whether the asynchronous machine becomes Apple's default). It is built in that LLP's stages, not as a separate fix. A design review on 2026-11-12 ruled that the per-worker transport should go: on the portable transport the independent workers share one transport, and on Apple the asynchronous machine, with one `URLSession` a lane, is the way there. It also recommended that D8's thread-or-memory condition be reported rather than required, since this is now a defect and not an optimisation. Close this issue in the commit that lands that change, or say here why the campaign kept the workers.

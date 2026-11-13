@@ -11,6 +11,13 @@ export function resourceKey(r) {
   return `${r.name}[${memberIds.get(r)}]`;
 }
 
+// Called after a successful commit: a refused settlement spends no diagnostic.
+export function retainedAnswer(r, say) {
+  if (r.reportedPreviousAnswer || r.gone || r.asleep || r.placeholder || r.settled === undefined || r.asked === undefined || equal(r.settled, r.asked)) return;
+  r.reportedPreviousAnswer = true;
+  say(`resource ${r.name} shows its answer for previous arguments (LLP 1016 D3)`);
+}
+
 export function resourceInspection(enabled, now) {
   let serial = 0;
   const since = enabled ? now() : null;

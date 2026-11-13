@@ -713,3 +713,55 @@ test("a refresh of a resource that slept through its source becoming ready is a 
     expect(observed).toEqual({ asleep: 0, sent: ['reload'] });
   } finally { await browser.close(); server.stop(true); }
 });
+
+test.each(['promise', 'stream', 'build', 'ready'])('a %s answer retained for previous arguments is journaled once per resource', async kind => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async kind => {
+      const rt = await import('/host/web-js/rt.js'), argument = rt.sig('A'), replies = [];
+      rt.clock.agent = true;
+      let ready = kind !== 'ready';
+      rt.data.answer = () => {
+        if (!ready) return null;
+        if (kind === 'stream') return { stream: deliver => new Promise(end => replies.push({ deliver, end })) };
+        return { promise: new Promise(resolve => replies.push({ deliver: v => resolve(v.v) })) };
+      };
+      const initial = ['build', 'ready'].includes(kind);
+      const answer = rt.res('answer', 'read', () => [argument()], initial ? 'A answer' : undefined,
+        initial ? ['A'] : undefined, 's', 'loading');
+      rt.commit(() => {});
+      window.fixture = { rt, argument, answer, replies,
+        pick: a => rt.commit(() => rt.W(argument, a)),
+        lines: () => rt.journal.filter(l => l.includes('shows its answer for previous arguments')),
+        ready: () => { ready = true; for (const f of rt.data.q.splice(0)) f(); } };
+    }, kind);
+    expect(await page.evaluate(() => fixture.lines())).toEqual([]);
+    if (kind === 'promise' || kind === 'stream') {
+      await page.evaluate(() => fixture.pick('B'));
+      expect(await page.evaluate(() => fixture.lines())).toEqual([]); // a placeholder answers no previous arguments
+      await page.evaluate(() => fixture.replies.at(-1).deliver({ v: 'B answer' }));
+      await page.waitForFunction(() => fixture.answer() === 'B answer');
+    }
+    // A refusal after settlement must neither report nor spend the once-only diagnostic.
+    await page.evaluate(() => {
+      const { rt, argument, answer } = fixture;
+      const guard = rt.memo(() => { answer(); if (argument() === 'refused') throw new rt.Refusal('refused'); return 0; });
+      rt.commit(() => rt.W(argument, 'refused'));
+      rt.end(guard.n);
+    });
+    expect(await page.evaluate(() => fixture.lines())).toEqual([]);
+    await page.evaluate(() => fixture.pick('C'));
+    expect(await page.evaluate(() => [fixture.answer(), fixture.answer.p()]))
+      .toEqual([kind === 'promise' || kind === 'stream' ? 'B answer' : 'A answer', true]);
+    expect(await page.evaluate(() => fixture.lines().map(l => l.replace(/^t=\S+ /, ''))))
+      .toEqual(['resource answer shows its answer for previous arguments (LLP 1016 D3)']);
+    if (kind === 'ready') await page.evaluate(() => fixture.ready());
+    await page.evaluate(() => { fixture.pick('D'); fixture.rt.commit(() => {}); });
+    expect(await page.evaluate(() => fixture.lines())).toHaveLength(1);
+    await page.evaluate(() => fixture.replies.at(-1).deliver({ v: 'D answer' }));
+    await page.waitForFunction(() => fixture.answer() === 'D answer');
+    await page.evaluate(() => { fixture.pick('E'); fixture.rt.commit(() => {}); });
+    expect(await page.evaluate(() => fixture.lines())).toHaveLength(1);
+  } finally { await browser.close(); server.stop(true); }
+});

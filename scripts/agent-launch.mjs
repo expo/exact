@@ -475,6 +475,15 @@ export async function suiteBrowser(engine = 'chromium', { needs = [], timeout, .
 }
 
 const sharedCdpBrowsers = new Map();
+// Bun's test runner exits without `beforeExit` or `exit`, so a test file's
+// shared browsers close in an `afterAll`. It is registered here, as the file
+// loads, so it runs when the file ends: registered inside `cdpBrowser`, it ran
+// when the `beforeAll` that called it ended (Bun 1.4.2), before the tests.
+// Outside the test runner `afterAll` throws, and nothing is registered.
+try {
+  const { afterAll } = await import('bun:test');
+  afterAll(() => Promise.all([...sharedCdpBrowsers.values()].map(shared => shared.close())), 15000);
+} catch {}
 process.on('beforeExit', async () => {
   try { await Promise.all([...sharedCdpBrowsers.values()].map(shared => shared.close())); }
   catch (error) { console.error(error); process.exitCode = 1; }
@@ -518,8 +527,6 @@ export async function cdpBrowser({ needs = [], args = [] } = {}) {
     // Shared, it must not hold the process open: a pending call's deadline does that while one waits.
     for (const handle of [child, child.stderr, child.stdio[3], child.stdio[4]]) handle.unref?.();
     sharedCdpBrowsers.set(key, shared);
-    // Bun's test runner exits without beforeExit; its file hook can await shutdown.
-    try { const { afterAll } = await import('bun:test'); afterAll(shared.close, 15000); } catch {}
   }
   const shared = sharedCdpBrowsers.get(key), { cdp, lines } = shared;
   let browserContextId;

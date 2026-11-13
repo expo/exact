@@ -209,14 +209,19 @@ test('a boundary names the looks whose colour reaches it', async () => {
   const untinted = el(plain, 'c2', { 'data-x-b': '0' });
   const literal = el(root, 'c4', { 'data-exact-looks': '4' });
   const underLiteral = el(literal, 'c2', { 'data-x-b': '0' });
+  // Four looks deep: the nearest three by position, any further out sharing the last (looks.rs `LOOK_DEPTH`).
+  let deep = root;
+  for (const set of ['5', '6', '7', '8']) deep = el(deep, '', { 'data-exact-looks': set });
+  const underDeep = el(deep, 'c2', { 'data-x-b': '0' });
   modes([], { c1: { 0: 0 }, c3: { 0: -1 }, c4: { 0: -1 } }, ['color:var(--x-ink)'], {}, [], { '--x-ink': 'ink' });
   for (const f of After) f();
-  expect(below.getAttribute('data-x-lc')).toBe('1 3');
-  expect(inWriter.getAttribute('data-x-lc')).toBe('2');
+  expect(below.getAttribute('data-x-lc')).toBe('1:1 2:3');
+  expect(inWriter.getAttribute('data-x-lc')).toBe('1:2');
   expect(own.getAttribute('data-x-lc')).toBeNull();
   expect(untinted.getAttribute('data-x-lc')).toBeNull();
   // A literal base colour: the look's token still resolves on the boundary.
-  expect(underLiteral.getAttribute('data-x-lc')).toBe('4');
+  expect(underLiteral.getAttribute('data-x-lc')).toBe('1:4');
+  expect(underDeep.getAttribute('data-x-lc')).toBe('1:8 2:7 3:6 3:5');
 });
 
 // A dev reload's checkpoint carries the window's modes: each axis the

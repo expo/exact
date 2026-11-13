@@ -835,9 +835,10 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         css.push_str(&exact_web::host::template::look_rules(&at, looks));
         // A boundary below that its colour reaches says so (modes.js `data-x-lc`).
         if boundaries {
-            let below = format!("[data-x-lc~=\"{}\"]", i + 1);
             css.push_str(&exact_web::host::template::look_colour_below(
-                &at, looks, &below,
+                &at,
+                looks,
+                i + 1,
             ));
         }
     }

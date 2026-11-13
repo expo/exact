@@ -24,7 +24,7 @@ def main(args):
         at = args.index('-o'); output = args[at + 1]; del args[at:at + 2]
     if args[:1] == ['--']: args.pop(0)
     if len(args) != 1: raise ValueError('expected one plist file')
-    path = pathlib.Path(args[0]); data = path.read_bytes()
+    path = pathlib.Path(args[0]); data = sys.stdin.buffer.read() if args[0] == '-' else path.read_bytes()
     try: document = plistlib.loads(data)
     except plistlib.InvalidFileException: document = json.loads(data)
     result = document

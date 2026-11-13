@@ -30,10 +30,7 @@ final class LocalInsetsIOSTests: XCTestCase {
     }
 
     /// The fixture in a window of the test host's scene, the screen's size.
-    private func fixture(_ key: String = "BAR_INSETS") throws -> (ExactSession, ExactView) {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
-            throw missing("scene", "the bars and the safe area are a scene window's")
-        }
+    private func fixture(_ scene: UIWindowScene, _ key: String = "BAR_INSETS") throws -> (ExactSession, ExactView) {
         let session = ExactApp.shared.makeSession(label: "bar-insets")
         sessions.append(session)
         let view = ExactView(session: session)
@@ -58,7 +55,10 @@ final class LocalInsetsIOSTests: XCTestCase {
     private func onScreen(_ view: UIView) -> CGRect { view.convert(view.bounds, to: nil) }
 
     func testARoutesContentReadsItsBarsAndABackgroundReachesUnderThem() throws {
-        let (session, view) = try fixture()
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the bars and the safe area are a scene window's")
+        }
+        let (session, view) = try fixture(scene)
         until("the route shows under its bar") {
             guard let route = node(session, "route"), let c = session.presenter.navigation.controllers[route.id] else { return false }
             return c.viewIfLoaded?.window != nil && c.view.safeAreaInsets.top > view.safeAreaInsets.top
@@ -82,7 +82,10 @@ final class LocalInsetsIOSTests: XCTestCase {
     }
 
     func testASheetsContentReadsTheSheetsInsets() throws {
-        let (session, _) = try fixture()
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the bars and the safe area are a scene window's")
+        }
+        let (session, _) = try fixture(scene)
         until("the route shows") { self.node(session, "open") != nil }
         _ = Agent(session: session).tap(["id": Int(try XCTUnwrap(node(session, "open")).id)])
         until("the sheet is presented") {
@@ -98,7 +101,10 @@ final class LocalInsetsIOSTests: XCTestCase {
     }
 
     func testAScrollerAtTheTopOptsOutAndItsFirstBoxReachesUnderTheBar() throws {
-        let (session, _) = try fixture("BAR_HERO")
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the bars and the safe area are a scene window's")
+        }
+        let (session, _) = try fixture(scene, "BAR_HERO")
         until("the route shows under its bar") {
             guard let route = self.node(session, "route"), let c = session.presenter.navigation.controllers[route.id] else { return false }
             return c.viewIfLoaded?.window != nil && c.view.safeAreaInsets.top > 0 && c.collapseScroll != nil

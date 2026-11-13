@@ -412,7 +412,7 @@ impl Images {
             );
             view.fit = plain_box(node.style).then_some(node.style.object_fit);
             view.object_fit = node.style.object_fit;
-            // LLP 1035.004.000: a symbol is an em square no file fills (the
+            // LLP 1011 §3: a symbol is a font-relative box no file fills (the
             // paint walk strokes a portable role's path into it, `symbol`),
             // never a file request and never the previously accepted raster.
             if source.starts_with("symbol:") {
@@ -427,9 +427,7 @@ impl Images {
                 view.refusal = None;
                 view.displayed_source.clear();
                 self.bitmaps.remove(id);
-                let size = node.bar_symbol_size().unwrap_or_else(|| {
-                    node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size)
-                });
+                let size = crate::paint::look::symbol_size(&node);
                 if view.source != source || view.symbol_size != Some(size) {
                     reports.push((*id, (size > 0.).then_some((size, size))));
                     view.source = source.to_owned();

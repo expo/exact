@@ -10,7 +10,39 @@ let last = null, refused = new WeakMap();
 let managed = new WeakMap(), shown = new WeakMap(), placed = new WeakMap();
 let written = [], gone = new Set(), cursor = 0, first = null, originIndex = null, echo = null, pop = null, draining = false;
 const queue = [], waiters = new Set();
-let root, navigate, log, hostBack, hostGo, routeMatches = () => false;
+let root, navigate, log, hostBack, hostGo, routeMatches = () => false, canonicalOf = (location) => location;
+let pressedLink = null, heldLink = null, reportedLinkPop = false, duplicateIds = new WeakMap();
+// Bound inspection by projections, including when an agent holds time still.
+function inspectTestIds(root, log) {
+  let inspection = duplicateIds.get(root);
+  if (!inspection) duplicateIds.set(root, inspection = { left: 32, reported: new Set() });
+  if (inspection.left === 0) return;
+  inspection.left--;
+  const seen = new Map();
+  for (const el of root.querySelectorAll('[data-testid]')) {
+    const route = el.closest('[navigationKey]');
+    if (!route || route.hasAttribute('navigationBack') || el.closest('[data-exiting]')) continue;
+    const id = el.getAttribute('data-testid');
+    if (!id) continue;
+    if (seen.has(id) && seen.get(id) !== route && !inspection.reported.has(id)) {
+      inspection.reported.add(id);
+      log(`navigation: testId ${JSON.stringify(id)} occurs on multiple routes; covered routes remain mounted`);
+    }
+    seen.set(id, route);
+  }
+}
+function captureLink(event) {
+  pressedLink = null;
+  const link = event.target.closest?.('a[href]');
+  if (!link || !root.contains(link) || event.defaultPrevented || event.button !== 0 ||
+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+      link.hasAttribute('download') || link.target && link.target !== '_self') return;
+  const url = new URL(link.href, location.href);
+  if (url.origin !== location.origin || !routeMatches(url.pathname + url.search)) return;
+  // `url` names the link as clicked; `at` is the router's spelling of it, which a stored visit keeps.
+  const press = pressedLink = { event, from: last?.top, url: url.pathname + url.search + url.hash, at: canonicalOf(url.pathname + url.search) };
+  setTimeout(() => { if (pressedLink === press) pressedLink = null; }, 0);
+}
 const routesIn = (node) => viewChildren(node).filter((r) => r.hasAttribute("navigationKey") && !r.hasAttribute("data-exiting"));
 const setInert = (el, on) => {
   if (el.inert !== on) {
@@ -765,14 +797,25 @@ export const navigation = {
   get traversing() {
     return pop;
   },
-  /** `dispatch(location)` is false when no `navigate` handler heard it; `back(id)` is the runner's own `back` from visit `id`, `goTo(location)` its own `go`. */
-  connect(hostRoot, dispatch, journal, back = null, goTo = null, matchesRoute = () => false, waitForActivation = false) {
+  // A view transition or module load may defer a click's tree update until after dispatch.
+  holdLink() {
+    return heldLink ?? (pressedLink?.event.eventPhase ? pressedLink : null);
+  },
+  withLink(link, update) {
+    const was = heldLink;
+    heldLink = link;
+    try { return update(); } finally { heldLink = was; }
+  },
+  /** `dispatch(location)` is false when no `navigate` handler heard it; `back(id)` is the runner's own `back` from visit `id`, `goTo(location)` its own `go`;
+   * `canonical(location)` is the router's form of a path and query (route/src/location.rs `canonical`). */
+  connect(hostRoot, dispatch, journal, back = null, goTo = null, matchesRoute = () => false, waitForActivation = false, canonical = (location) => location) {
     root = hostRoot;
     navigate = dispatch;
     log = journal;
     hostBack = back;
     hostGo = goTo;
     routeMatches = matchesRoute;
+    canonicalOf = canonical;
     for (const type of [
       "wheel",
       "touchmove",
@@ -797,6 +840,7 @@ export const navigation = {
     }
     // Capture before either target's link listener commits. Early replay before connect has no action-row association.
     document.addEventListener("click", captureRow, true);
+    document.addEventListener("click", captureLink, true);
     document.addEventListener("dragstart", (event) => {
       if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img")) {
         event.preventDefault();
@@ -872,6 +916,9 @@ export const navigation = {
     rowOf = new WeakMap();
     actionRows = new WeakMap();
     pressedRow = pendingRow = null;
+    pressedLink = heldLink = null;
+    reportedLinkPop = false;
+    duplicateIds = new WeakMap();
     visits = new Map((op?.visits ?? []).map(([id, url]) => [String(id), url]));
     if (op && written[cursor]?.id === op.top) {
       return;
@@ -890,6 +937,13 @@ export const navigation = {
     }
   },
   apply(op) {
+    const link = navigation.holdLink();
+    pressedLink = null;
+    if (!reportedLinkPop && !pop && link && link.from === last?.top &&
+        link.at === visits.get(String(op.top)) && op.removed.includes(link.from)) {
+      reportedLinkPop = true;
+      log(`navigation: link ${JSON.stringify(link.url)} popped the stack to a retained visit`);
+    }
     visits = new Map((op.visits ?? []).map(([id, url]) => [String(id), url]));
     pendingRow = pressedRow && pressedRow.event.eventPhase !== 0 && op.url !== pressedRow.from ? {
       row: pressedRow.row,
@@ -1097,6 +1151,7 @@ export const navigation = {
       }
     }
     pendingRow = null;
+    inspectTestIds(root, log);
     // The page module's container hatches, when it has them (LLP 1075.003.000 §3.7); the wake lock, which follows what shows (LLP 1125 D11).
     globalThis.exact?.onProject?.(root);
     globalThis.exact?.wakeLockGlue?.projected(root);

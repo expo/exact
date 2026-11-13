@@ -1150,7 +1150,7 @@ export function appleImplementations(app, target, extensions, contractSources = 
     // An interface that declares an authenticator entry (LLP 1133.010 D13): its class serves it in process.
     const authenticator=!!i.declaration?.authenticator?.apple;
     const events=(i.declaration.names ?? []).some(n=>n.event);
-    return [{extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
+    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
   });
 }
 

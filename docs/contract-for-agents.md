@@ -3959,6 +3959,19 @@ the box and set no view props; write `object-fit` on the camera tag to configure
 viewfinder. A renamed spelling (`fontSize`) is refused whatever is declared. Do not
 turn a missing widget or canvas operation into invented Contract syntax.
 
+Put vendor `.xcframework` bundles beside an Apple native module's Swift files
+(`modules/apple`, or its platform-local replacement). The Apple build selects
+by platform, device or simulator, and architecture from each bundle's `Info.plist`.
+Static libraries are linked into the module. Dynamic frameworks are copied with
+their resources into the app's `Frameworks` (`Contents/Frameworks` on macOS) and
+signed with the app's identity before the app is signed, in development and
+production, including versioned macOS frameworks (`Versions/A`). Their install
+names must use `@rpath/<Name>.framework/…`. An xcframework may carry macOS and
+iOS slices together: source capture skips the binary bundle, including its
+version links. Changing a selected binary requires a new native build. Framework
+filenames must be unique across package libraries, module dependencies and the
+host runtime (`ExactCore.framework`); a collision fails the build, naming both sources.
+
 Apple native modules can include asset catalogs beside their Swift sources:
 `modules/apple/*.xcassets`, or `ios/modules/*.xcassets` / `macos/modules/*.xcassets`
 when the app has a platform-local module directory. The local directory replaces

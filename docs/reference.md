@@ -1387,6 +1387,56 @@ enters the compatibility id. An older bake without the fields answers `""`.
 The web JS build uses these variables at build time and answers `""` for each
 unset variable. No `app.json` version key is defined.
 
+## Apple privacy manifests
+
+Apple builds write `PrivacyInfo.xcprivacy` before signing each app, App Clip,
+watch app, extension and Exact framework. Declarations follow the APIs linked
+into that bundle, so an unused category is omitted. Exact declares:
+
+| Category | Exact's use | Reasons |
+| --- | --- | --- |
+| File timestamps | Metadata for app-container files and documents the person selected | `C617.1`, `3B52.1` |
+| System boot time | Elapsed time between app events and timers | `35F9.1` |
+| User defaults | App-owned settings and registrations | `CA92.1` |
+| Active keyboards | Selecting the enabled emoji keyboard for an emoji input | `54BD.1` |
+
+The motion and altimeter packages also declare `8FFB.1` for converting sensor
+events to timestamps. Other packages declare their own uses beside their Apple
+implementation. The build includes only the packages the app links. Hermes is
+statically linked; its surviving calls are covered in the containing bundle.
+Apple builds use the system SQLite, avoiding the bundled SQLite filesystem-type
+probes, for which no approved disk-space reason applies. Exact declares no
+disk-space use; an unaccounted-for disk-space import fails packaging on
+platforms subject to required-reason reporting.
+
+Put an Apple-format `PrivacyInfo.xcprivacy` beside your `app.json` to add your
+app's declarations. A package puts the same file beside its Apple implementation's
+`exact.json`; a prebuilt framework includes its manifest in its own resources.
+API reasons are merged without duplicates for categories the owning binary uses. Tracking is combined
+with Boolean OR; domains and collected-data purposes are unioned, and linked-data
+and tracking-data flags keep any `true`. An app cannot erase a dependency's
+disclosures. Each supplied reason must be one of Apple's approved codes for its
+category; an unknown code or a code from another category fails the build.
+The files are binary inputs: the build captures their bytes once, including
+absence, and uses that snapshot through packaging. Changing one requires rebuilding and reinstalling, not an
+over-the-air update.
+Only your app's API reasons accompany Exact frameworks (including native modules
+and launch services) and the watch companion. They must cover any additional APIs
+your native code uses. Your tracking and collected-data disclosures stay on the
+app, App Clip and host sample bundles.
+
+Exact itself collects no data and adds no tracking, tracking domains or
+`NSPrivacyCollectedDataTypes`. Your app must declare its own data collection and
+tracking, and any additional reasons for its native code. A tracking-consent
+grant does not infer these declarations. Review the finished manifests against
+[Apple's approved reasons](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)
+and [privacy-manifest requirements](https://developer.apple.com/documentation/bundleresources/privacy-manifest-files)
+before submitting. Required-reason reporting applies to iOS/iPadOS, tvOS,
+watchOS and visionOS; collected-data reporting applies to all platforms. Mac
+builds also write manifests, under `Contents/Resources` for apps and
+`Versions/A/Resources` for frameworks, following
+[Apple's bundle layout](https://developer.apple.com/documentation/bundleresources/placing-content-in-a-bundle).
+
 ## Open the same development URL on Apple hosts
 
 Start `bun host/web/dev.mjs` and open a printed URL in your browser. Build
@@ -1788,7 +1838,9 @@ answers; `doc:/` handles do not need that store.
 Generated declarations export Ibex2's `Storage` and related types; Rust sources
 can use the same implementations through `ibex2::host`.
 
-A native production build links SQLite only when the app grants `sqlite.open`
+On Apple, SQLite is the OS library, so its SQL version follows the OS. Other
+native hosts bundle the pinned SQLite. A native production build links SQLite
+only when the app grants `sqlite.open`
 or names `"sqlite"` in the manifest's `link` list. Naming it without the grant
 links unused code: adding `sqlite.open` changes the compatibility identity and
 requires a new binary, even when SQLite was linked. Development builds and

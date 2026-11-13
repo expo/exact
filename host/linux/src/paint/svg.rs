@@ -123,7 +123,7 @@ pub(crate) fn view_box(text: &str) -> [f32; 4] {
 
 impl Painter {
     /// A portable symbol role (LLP 1035.004 D1) as the web draws it: the
-    /// role's path in a 24-unit box at the image's font size (the bar's
+    /// role's path in its look's font-relative box (LLP 1011 §3; the bar's
     /// symbol size on a lone bar item's face), placed by
     /// `object-fit`, stroked `1.1 + (weight − 100) / 400` units with round
     /// caps and joins (a `-fill` role filled even-odd), in `ink` (its
@@ -146,7 +146,7 @@ impl Painter {
             return;
         };
         let style = node.style;
-        let size = node.bar_symbol_size().unwrap_or(style.font_size).max(1.0);
+        let size = super::look::symbol_size(node).max(1.0);
         let natural = (size.round().max(1.0) as u32, size.round().max(1.0) as u32);
         // `fill` keeps a symbol's aspect, as the web's `contain` and Apple do.
         let fit = match style.object_fit {

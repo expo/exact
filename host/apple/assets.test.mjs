@@ -3,8 +3,26 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { iosAssets, plistFile } from './assets.mjs';
+import { iosAssets, iosExecutableRefusal, nativeResourceMappings, plistFile } from './assets.mjs';
 import { useXcode } from './devices.mjs';
+
+test('iOS and App Clip executable names cannot replace the privacy manifest, ignoring case', () => {
+  for (const name of ['PrivacyInfo.xcprivacy', 'privacyinfo.xcprivacy', 'PRIVACYINFO.XCPRIVACY']) {
+    for (const key of ['app.name', 'host.ios.appClip.name']) {
+      assert.throws(() => iosExecutableRefusal({ host: {} }, name, key), error => {
+        assert.ok(error.message.includes(`${key} "${name}"`));
+        assert.ok(error.message.includes('"PrivacyInfo.xcprivacy"'));
+        return true;
+      });
+    }
+  }
+});
+
+test('Mac resource trees cannot replace the generated privacy manifest', () => {
+  for (const to of ['Resources/PrivacyInfo.xcprivacy', 'Resources/PrivacyInfo.xcprivacy/data']) {
+    assert.throws(() => nativeResourceMappings({ host: { macos: { resources: [{ from: 'shipped', to }] } } }), /host\.macos\.resources\.to/);
+  }
+});
 
 test.skipIf(process.platform !== 'darwin')('the host receives the catalogue launch components without resolving an asset', () => {
   useXcode();
