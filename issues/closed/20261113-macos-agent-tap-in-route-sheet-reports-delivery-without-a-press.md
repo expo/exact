@@ -1,6 +1,7 @@
 # A macOS agent tap on a button in a modal route's sheet replies `delivery: platform` but the button's action does not run
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Does not reproduce at dd6e1c38a: a tap on a third header button in a modal route's sheet presses it (with and without a focused field in the sheet), and since 22dbbdc37 a platform tap whose point would reach something other than its target is aimed at a point that reaches it or refused naming what it lands on, never replied as delivered.
 **Systems:** host/apple/Sources/ExactKit/Mac/AgentMac.swift (`tap`), host/apple/Sources/ExactKit/Mac/RouteSheetMac.swift
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

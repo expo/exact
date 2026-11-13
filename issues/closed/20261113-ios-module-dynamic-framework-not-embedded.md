@@ -1,6 +1,7 @@
 # An iOS app's module links a dynamic framework from modules/apple/*.xcframework but the bundle does not carry it
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Already fixed by 2bf3a9b89, which embeds and signs each dynamic slice of `modules/apple/*.xcframework` under the bundle's `Frameworks/` with the run path, and gives roster probes the slices' directories; `scripts/apple-frameworks.test.mjs` covers iOS and tvOS simulator and device, macOS, development and production.
 **Systems:** host/apple/build.mjs (`frameworkSlice`, module arms, roster probe), host/apple/assets.mjs, scripts/app.schema.json
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

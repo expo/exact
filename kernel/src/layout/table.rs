@@ -5,10 +5,11 @@
 //! cell's column is the table's, whatever row holds it. A row or row group
 //! keeps no engine children; its box spans its rows, and publication places
 //! what it holds from the grid's origin, moved as the engine moved the row or
-//! group from where the grid placed it ([`Tables::flat`], [`displacement`]). A table whose author said a `display` is
-//! that box, holding an anonymous table, a node of the engine's own, as the
-//! grid (CSS 2.2 §17.2.1). The columns are `auto` tracks, the deviation
-//! `style/table.rs` declares.
+//! group from where the grid placed it ([`Tables::flat`], [`displacement`]).
+//! An authored block table holds an anonymous table for each run of table
+//! parts (CSS 2.2 §17.2.1). Flex and grid tables keep their direct items: each
+//! blockified row group or row holds its own anonymous table. The columns
+//! are `auto` tracks, the deviation `style/table.rs` declares.
 //!
 //! A change to a table's rows or cells marks it stale; its grid is made
 //! again once, before the next layout ([`LayoutTree::refresh_tables`]).
@@ -18,7 +19,7 @@ use crate::arena::NodeArena;
 use crate::generated::{Display, PropId};
 use crate::id::{IdMap, IdSet};
 use crate::props::PropValue;
-use crate::style::table::{lays_out, table_of, Part};
+use crate::style::table::{context, grid_spacing, table_of, Context, Part};
 use taffy::prelude::{
     auto, length, line, span, GridPlacement, GridTemplateComponent, Line, NodeId,
 };
@@ -41,20 +42,34 @@ struct Placed {
     spans: (u32, u32),
     /// A row group or row: the table lays out what it holds.
     flat: bool,
+    /// Which anonymous grid holds the part, when its owner is a block.
+    grid: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 struct Formed {
     columns: u32,
+    context: Option<Context>,
+    direction: Option<taffy::style::Direction>,
+    spacing: Option<(f32, f32)>,
     /// Its parts in grid order: captions, then each group and its rows, each
     /// row followed by its cells.
     parts: Vec<u32>,
     /// The table's engine padding, which its captions' margins follow; none
     /// for a table that is another box.
     padding: Option<taffy::geometry::Rect<taffy::style::LengthPercentage>>,
-    /// The anonymous table that holds the parts of a table whose author said
-    /// a `display`.
-    anon: Option<NodeId>,
+    /// The anonymous tables inside a block table or blockified table part.
+    anon: Vec<Anonymous>,
+    /// A block owner's shown children that are not its parts: each ends a
+    /// run of parts, and so an anonymous table.
+    boxes: Vec<u32>,
+}
+
+#[derive(Clone, Debug)]
+struct Anonymous {
+    columns: u32,
+    parts: Vec<u32>,
+    node: Option<NodeId>,
 }
 
 /// The highest line a table's grid places a part at (Taffy's
@@ -103,17 +118,19 @@ pub(crate) struct Tables {
 }
 
 impl Tables {
-    /// Whether `slot`'s children are its table's to lay out, marking that
-    /// table to be made again: a table, or a row group or row in one. Its
-    /// engine node holds none of them itself.
+    /// Whether table formation owns `slot`'s engine children, marking its
+    /// grid owner to be made again before layout.
     pub(super) fn holds(&mut self, arena: &NodeArena, slot: u32) -> bool {
-        let table = match Part::of(arena, slot) {
-            Some(Part::Table) => slot,
-            Some(Part::Group | Part::Row) => match table_of(arena, slot) {
-                Some(table) => table,
-                None => return false,
-            },
-            _ => return false,
+        let table = if context(arena, slot).is_some() {
+            slot
+        } else {
+            match Part::of(arena, slot) {
+                Some(Part::Group | Part::Row) => match table_of(arena, slot) {
+                    Some(table) => table,
+                    None => return false,
+                },
+                _ => return false,
+            }
         };
         self.stale.insert(table);
         true
@@ -127,44 +144,60 @@ impl Tables {
 
     /// The tables among `slots` (a rebuilt or trial tree's), to be made.
     pub(super) fn find(&mut self, arena: &NodeArena, slots: &[u32]) {
-        let tables = slots
-            .iter()
-            .filter(|s| Part::of(arena, **s) == Some(Part::Table));
+        let tables = slots.iter().filter(|s| context(arena, **s).is_some());
         self.stale.extend(tables);
     }
 
-    /// The anonymous table holding `slot`'s parts, when it has one.
+    /// The first anonymous table holding `slot`'s parts, when it has one.
     pub(super) fn anon(&self, slot: u32) -> Option<NodeId> {
-        self.formed.get(&slot).and_then(|f| f.anon)
+        self.formed.get(&slot)?.anon.first()?.node
     }
 
-    /// The table whose anonymous table `node` is.
+    /// The anonymous grid placing a direct child of `owner`.
+    pub(super) fn grid_for(&self, owner: u32, child: u32) -> Option<NodeId> {
+        let placed = self.placed.get(&child).filter(|p| p.table == owner)?;
+        self.formed.get(&owner)?.anon.get(placed.grid)?.node
+    }
+
+    /// The table or blockified part whose anonymous table `node` is.
     pub(super) fn holding(&self, node: NodeId) -> Option<u32> {
         let mut tables = self.formed.iter();
-        tables.find(|(_, f)| f.anon == Some(node)).map(|(t, _)| *t)
+        tables
+            .find(|(_, f)| f.anon.iter().any(|g| g.node == Some(node)))
+            .map(|(t, _)| *t)
     }
 
     /// A removed node's records, and the anonymous table it had.
-    pub(super) fn forget(&mut self, slot: u32) -> Option<NodeId> {
+    pub(super) fn forget(&mut self, slot: u32) -> Vec<NodeId> {
         self.stale.remove(&slot);
         self.placed.remove(&slot);
-        let formed = self.formed.remove(&slot)?;
+        let formed = self.formed.remove(&slot);
         self.placed.retain(|_, p| p.table != slot);
-        formed.anon
+        formed
+            .into_iter()
+            .flat_map(|f| f.anon)
+            .filter_map(|g| g.node)
+            .collect()
     }
 
     /// `slot`'s engine style with its grid placement, or its table's
     /// columns. A change that moves the grid (a span, a part shown or
-    /// hidden, a table's `display`) marks the table to be made again.
+    /// hidden, a table's or a part's `display`, a box shown or hidden
+    /// between a block's parts) marks the table to be made again.
     pub(super) fn style(&mut self, arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
-        let Some(part) = Part::of(arena, slot) else {
-            return;
-        };
-        if part == Part::Table {
-            let laid = lays_out(arena, slot);
+        if let Some(parent) = arena.parent(slot) {
+            let owner = self.formed.get(&parent);
+            if let Some(f) = owner.filter(|f| f.context == Some(Context::Block)) {
+                if f.boxes.contains(&slot) != is_box(arena, parent, slot) {
+                    self.stale.insert(parent);
+                }
+            }
+        }
+        let ctx = context(arena, slot);
+        if ctx.is_some() || self.formed.contains_key(&slot) {
             match self.formed.get(&slot) {
-                Some(formed) if formed.anon.is_none() == laid => {
-                    if laid {
+                Some(formed) if formed.context == ctx => {
+                    if ctx == Some(Context::Table) {
                         let track = GridTemplateComponent::Single(auto());
                         s.rare.grid_template_columns = vec![track; formed.columns as usize];
                         s.rare.grid_line_limit = LINES;
@@ -172,13 +205,25 @@ impl Tables {
                             self.stale.insert(slot);
                         }
                     }
+                    if (!formed.anon.is_empty() && formed.direction != Some(s.direction))
+                        || formed.spacing != Some(grid_spacing(arena, slot))
+                    {
+                        self.stale.insert(slot);
+                    }
                 }
                 _ => {
                     self.stale.insert(slot);
                 }
             }
-            return;
         }
+        // Not a part placed in a grid (any more): the grid that placed it is
+        // made again.
+        let Some(part) = Part::of(arena, slot).filter(|_| ctx.is_none()) else {
+            if let Some(p) = self.placed.get(&slot) {
+                self.stale.insert(p.table);
+            }
+            return;
+        };
         match (self.placed.get(&slot), shown_in(arena, slot)) {
             (Some(p), Some(table)) if p.table == table && p.spans == spans(arena, slot, part) => {
                 place(p.area, s)
@@ -214,6 +259,14 @@ pub(super) fn displacement(arena: &NodeArena, tree: &LayoutTree, slot: u32) -> (
     };
     let at = tree.layout(node).location;
     (at.x - origin.x, at.y - origin.y)
+}
+
+/// Whether `child` of a block owner is a shown box rather than one of its
+/// parts.
+fn is_box(arena: &NodeArena, owner: u32, child: u32) -> bool {
+    arena.style(child).display != Display::None
+        && !arena.blocks.holds(child)
+        && table_of(arena, child) != Some(owner)
 }
 
 /// The table `slot` is placed in: `slot` and each part between it and the
@@ -280,7 +333,23 @@ fn place(area: Area, s: &mut taffy::style::Style) {
 }
 
 /// One placed part: its slot, its area, and a cell's spans as read.
-type Item = (u32, Area, (u32, u32));
+struct Item {
+    slot: u32,
+    area: Area,
+    spans: (u32, u32),
+    grid: usize,
+}
+
+impl Item {
+    fn new(slot: u32, area: Area, spans: (u32, u32)) -> Self {
+        Self {
+            slot,
+            area,
+            spans,
+            grid: 0,
+        }
+    }
+}
 
 /// HTML's table-forming algorithm (HTML §4.9.12.1) over `table`'s shown
 /// parts, as the browser lays it out: the captions first, each in a row of
@@ -289,9 +358,67 @@ type Item = (u32, Area, (u32, u32));
 /// header and footer groups; a later one is a row group where it stands); a
 /// cell's rows end with its row group's, where CSS's rendering ends them.
 fn form(arena: &NodeArena, table: u32) -> (Formed, Vec<Item>) {
+    let ctx = context(arena, table);
+    if ctx.is_none() || ctx == Some(Context::Items) {
+        return (
+            Formed {
+                context: ctx,
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+    }
+    if ctx == Some(Context::Table) {
+        return form_grid(arena, table, arena.children(table), ctx);
+    }
+    let mut formed = Formed {
+        context: ctx,
+        ..Default::default()
+    };
+    let mut placed = Vec::new();
+    // Each run of misparented table parts gets its own anonymous table
+    // (CSS 2.2 §17.2.1); ordinary boxes keep their place between runs.
+    let children: Vec<u32> = arena
+        .children(table)
+        .iter()
+        .copied()
+        .filter(|s| arena.style(*s).display != Display::None && !arena.blocks.holds(*s))
+        .collect();
+    formed.boxes = (children.iter().copied())
+        .filter(|s| is_box(arena, table, *s))
+        .collect();
+    for run in children.chunk_by(|a, b| {
+        (table_of(arena, *a) == Some(table)) == (table_of(arena, *b) == Some(table))
+    }) {
+        if table_of(arena, run[0]) != Some(table) {
+            continue;
+        }
+        let (grid, mut items) = form_grid(arena, table, run, ctx);
+        if grid.parts.is_empty() {
+            continue;
+        }
+        for item in &mut items {
+            item.grid = formed.anon.len();
+        }
+        formed.parts.extend(&grid.parts);
+        formed.anon.push(Anonymous {
+            columns: grid.columns,
+            parts: grid.parts,
+            node: None,
+        });
+        placed.extend(items);
+    }
+    (formed, placed)
+}
+
+fn form_grid(
+    arena: &NodeArena,
+    table: u32,
+    children: &[u32],
+    ctx: Option<Context>,
+) -> (Formed, Vec<Item>) {
     let of =
         |s: u32, part| Part::of(arena, s) == Some(part) && arena.style(s).display != Display::None;
-    let children = arena.children(table);
     let mut out: Vec<Item> = Vec::new();
     let whole = |row, rows| Area {
         row,
@@ -301,7 +428,7 @@ fn form(arena: &NodeArena, table: u32) -> (Formed, Vec<Item>) {
     };
     let mut y = 0;
     for &c in children.iter().filter(|c| of(**c, Part::Caption)) {
-        out.push((c, whole(y, 1), (1, 1)));
+        out.push(Item::new(c, whole(y, 1), (1, 1)));
         y += 1;
     }
     // Each group: its node, if it is one, and its rows; a run of rows the
@@ -309,7 +436,10 @@ fn form(arena: &NodeArena, table: u32) -> (Formed, Vec<Item>) {
     let mut groups: Vec<(Option<u32>, Vec<u32>)> = Vec::new();
     let (mut head, mut foot) = (None, None);
     let mut run = Vec::new();
-    for &c in children {
+    for &c in children
+        .iter()
+        .filter(|_| Part::of(arena, table) == Some(Part::Table))
+    {
         if of(c, Part::Row) {
             run.push(c);
             continue;
@@ -330,18 +460,38 @@ fn form(arena: &NodeArena, table: u32) -> (Formed, Vec<Item>) {
     if !run.is_empty() {
         groups.push((None, run));
     }
+    match Part::of(arena, table) {
+        Some(Part::Group) => groups.push((
+            None,
+            children
+                .iter()
+                .copied()
+                .filter(|s| of(*s, Part::Row))
+                .collect(),
+        )),
+        Some(Part::Row) => groups.push((None, vec![table])),
+        _ => {}
+    }
     let groups = head.into_iter().chain(groups).chain(foot);
     let mut columns = 0;
     for (group, rows) in groups {
         if let Some(g) = group {
-            out.push((g, whole(y, rows.len() as u32), (1, 1)));
+            out.push(Item::new(g, whole(y, rows.len() as u32), (1, 1)));
         }
         // Which of the group's slots a cell covers, by row from its first.
         let mut taken: Vec<Vec<bool>> = vec![Vec::new(); rows.len()];
         for (r, &row) in rows.iter().enumerate() {
-            out.push((row, whole(y, 1), (1, 1)));
+            if row != table {
+                out.push(Item::new(row, whole(y, 1), (1, 1)));
+            }
             let mut x = 0u32;
-            for &cell in arena.children(row).iter().filter(|c| of(**c, Part::Cell)) {
+            // A block row's run of cells, or a row's cells.
+            let cells = if row == table {
+                children
+            } else {
+                arena.children(row)
+            };
+            for &cell in cells.iter().filter(|c| of(**c, Part::Cell)) {
                 while taken[r].get(x as usize).copied().unwrap_or(false) {
                     x += 1;
                 }
@@ -365,17 +515,18 @@ fn form(arena: &NodeArena, table: u32) -> (Formed, Vec<Item>) {
                     column: x,
                     columns: colspan,
                 };
-                out.push((cell, area, (colspan, rowspan)));
+                out.push(Item::new(cell, area, (colspan, rowspan)));
                 x += colspan;
                 columns = columns.max(x);
             }
             y += 1;
         }
     }
-    let parts = out.iter().map(|(s, _, _)| *s).collect();
+    let parts = out.iter().map(|item| item.slot).collect();
     let formed = Formed {
         columns,
         parts,
+        context: ctx,
         ..Formed::default()
     };
     (formed, out)
@@ -393,17 +544,23 @@ impl LayoutTree {
     ) {
         // A part restored from one table can stand in another, which its
         // restyle marks: that one is made in the next round.
+        // A construction failure waits for the next refresh, retaining its
+        // ownership and staleness rather than exhausting this round's bound.
+        let mut failed = IdSet::default();
         for _ in 0..4 {
             if self.tables.stale.is_empty() {
-                return;
+                break;
             }
             let mut stale: Vec<u32> = self.tables.stale.drain().collect();
             stale.sort_unstable();
             for table in stale {
-                self.make_table(arena, table, node_for);
+                if !self.make_table(arena, table, node_for) {
+                    failed.insert(table);
+                }
             }
+            self.tables.stale.retain(|s| !failed.contains(s));
         }
-        self.tables.stale.clear();
+        self.tables.stale.extend(failed);
     }
 
     fn make_table(
@@ -411,7 +568,62 @@ impl LayoutTree {
         arena: &NodeArena,
         table: u32,
         node_for: &dyn Fn(u32) -> Option<NodeId>,
-    ) {
+    ) -> bool {
+        if !arena.is_live(table) {
+            for anon in self.tables.forget(table) {
+                self.remove(anon);
+            }
+            return true;
+        }
+        // Resolve and allocate before changing ownership: a missing handle
+        // or engine refusal must leave the old grid available for retry.
+        let Some(node) = node_for(table) else {
+            return false;
+        };
+        let (mut formed, placed) = form(arena, table);
+        let style = crate::style::taffy_style(arena, table);
+        let laid = formed.context == Some(Context::Table);
+        formed.padding = laid.then_some(style.padding);
+        let spacing = grid_spacing(arena, table);
+        formed.spacing = Some(spacing);
+        let prior: Vec<NodeId> = self
+            .tables
+            .formed
+            .get(&table)
+            .into_iter()
+            .flat_map(|f| &f.anon)
+            .filter_map(|g| g.node)
+            .collect();
+        let mut allocated = Vec::new();
+        for (i, grid) in formed.anon.iter_mut().enumerate() {
+            grid.node = Some(if let Some(&node) = prior.get(i) {
+                node
+            } else {
+                let style = self.share(anonymous(grid.columns, style.direction, spacing));
+                match self.taffy.new_leaf(style) {
+                    Ok(node) => {
+                        self.made(node);
+                        self.taffy.track_layout_input(node, false);
+                        allocated.push(node);
+                        node
+                    }
+                    Err(e) => {
+                        for node in allocated {
+                            self.remove(node);
+                        }
+                        self.fault.get_or_insert_with(|| format!("table: {e:?}"));
+                        return false;
+                    }
+                }
+            });
+        }
+        for grid in &formed.anon {
+            self.write_style(
+                grid.node.unwrap(),
+                anonymous(grid.columns, style.direction, spacing),
+            );
+        }
+        formed.direction = Some(style.direction);
         let before = self.tables.formed.remove(&table);
         let first = before.is_none();
         let before = before.unwrap_or_default();
@@ -421,23 +633,20 @@ impl LayoutTree {
             .map(|(s, p)| (*s, *p))
             .collect();
         self.tables.placed.retain(|_, p| p.table != table);
-        if !arena.is_live(table) || Part::of(arena, table) != Some(Part::Table) {
-            if let Some(anon) = before.anon {
-                self.remove(anon);
-            }
-            return;
-        }
-        let (mut formed, placed) = form(arena, table);
-        let laid = lays_out(arena, table);
-        let style = crate::style::taffy_style(arena, table);
-        formed.padding = laid.then_some(style.padding);
-        for &(slot, area, spans) in &placed {
+        for &Item {
+            slot,
+            area,
+            spans,
+            grid,
+        } in &placed
+        {
             let flat = matches!(Part::of(arena, slot), Some(Part::Group | Part::Row));
             let placed = Placed {
                 table,
                 area,
                 spans,
                 flat,
+                grid,
             };
             self.tables.placed.insert(slot, placed);
         }
@@ -455,66 +664,72 @@ impl LayoutTree {
                 self.restyle_with(arena, slot, node);
             }
         }
-        for &(slot, _, _) in &placed {
+        for &Item { slot, .. } in &placed {
             if self.tables.flat(slot) {
                 if let Some(node) = node_for(slot) {
                     self.set_children(node, &[]);
                 }
             }
         }
-        let Some(node) = node_for(table) else {
-            return;
-        };
-        // A table whose author said a `display` is that box, and its parts
-        // are an anonymous table inside it (CSS 2.2 §17.2.1): the grid is a
-        // node of the engine's own, the box's only child.
         let items: Vec<NodeId> = formed.parts.iter().filter_map(|s| node_for(*s)).collect();
-        formed.anon = match (laid, before.anon) {
-            (true, anon) => {
-                self.set_children(node, &items);
-                if let Some(anon) = anon {
-                    self.remove(anon);
+        if !formed.anon.is_empty() {
+            for grid in &formed.anon {
+                let items: Vec<NodeId> = grid.parts.iter().filter_map(|s| node_for(*s)).collect();
+                self.set_children(grid.node.unwrap(), &items);
+            }
+            let mut ids = Vec::new();
+            let mut last_grid = None;
+            for &child in arena.children(table) {
+                if arena.blocks.holds(child) || arena.style(child).display == Display::None {
+                    continue;
                 }
-                None
-            }
-            (false, anon) => {
-                let grid = anonymous(
-                    formed.columns,
-                    style.direction,
-                    crate::style::table::spacing(arena.style(table), &arena.env_of(table)),
-                );
-                let anon = match anon {
-                    Some(anon) => {
-                        self.write_style(anon, grid);
-                        anon
+                if let Some(p) = self.tables.placed.get(&child).filter(|p| p.table == table) {
+                    let grid = &formed.anon[p.grid];
+                    if last_grid != grid.node {
+                        ids.push(grid.node.unwrap());
+                        last_grid = grid.node;
                     }
-                    None => {
-                        let grid = self.share(grid);
-                        match self.taffy.new_leaf(grid) {
-                            Ok(anon) => {
-                                self.made(anon);
-                                self.taffy.track_layout_input(anon, false);
-                                anon
-                            }
-                            Err(e) => {
-                                self.fault.get_or_insert_with(|| format!("table: {e:?}"));
-                                return;
-                            }
-                        }
-                    }
-                };
-                self.set_children(anon, &items);
-                self.set_children(node, &[anon]);
-                Some(anon)
+                } else if let Some(child) = node_for(child) {
+                    ids.push(child);
+                    last_grid = None;
+                }
             }
-        };
+            self.set_children(node, &ids);
+        } else if laid {
+            self.set_children(node, &items);
+        } else if self.tables.flat(table) {
+            self.set_children(node, &[]);
+        } else {
+            let ids = order::laid_out(arena, table, None, node_for);
+            self.set_children(node, &ids);
+        }
+        for anon in before.anon.iter().filter_map(|g| g.node) {
+            if !formed.anon.iter().any(|g| g.node == Some(anon)) {
+                self.remove(anon);
+            }
+        }
+        // New and reparented items can need grids even when the parent's
+        // context stays the same. Cell spacing comes from that parent.
+        let children = arena.children(table).iter().copied().filter(|s| {
+            let ctx = context(arena, *s);
+            let child = self.tables.formed.get(s);
+            (ctx.is_some() || child.is_some())
+                && (before.context != formed.context
+                    || child.is_none_or(|f| {
+                        f.context != ctx || f.spacing != Some(grid_spacing(arena, *s))
+                    }))
+        });
+        self.tables.stale.extend(children);
         let restyle = first
             || before.columns != formed.columns
-            || before.anon.is_some() != formed.anon.is_some();
-        // A caption's margins and width follow the table's padding.
-        let padded = before.padding != formed.padding;
+            || before.anon.is_empty() != formed.anon.is_empty()
+            || before.context != formed.context;
+        // Caption corrections depend on both padding and cell spacing.
+        let padded = before.padding != formed.padding || before.spacing != formed.spacing;
         let parts = formed.parts.clone();
-        self.tables.formed.insert(table, formed);
+        if formed.context.is_some() {
+            self.tables.formed.insert(table, formed);
+        }
         if restyle {
             self.restyle_with(arena, table, node);
         }
@@ -525,6 +740,13 @@ impl LayoutTree {
                 self.restyle_with(arena, slot, node);
             }
         }
+        true
+    }
+
+    /// Whether table formation has a record of `slot`: a grid it owns or
+    /// one it is placed in.
+    pub(crate) fn in_table(&self, slot: u32) -> bool {
+        self.tables.formed.contains_key(&slot) || self.tables.placed.contains_key(&slot)
     }
 
     /// `slot`'s engine style as `restyle` derives it.
@@ -532,5 +754,87 @@ impl LayoutTree {
         let mut style = crate::style::taffy_style(arena, slot);
         self.tables.style(arena, slot, &mut style);
         self.set_style(node, style);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Kernel, NodeType, Offer, Op, StyleId, StyleProps, StyleValue};
+
+    #[test]
+    fn a_missing_table_node_preserves_ownership_and_retries() {
+        let mut k = Kernel::with_monospace();
+        let mut patch = StyleProps::default();
+        patch
+            .set_dynamic(StyleId::Display, &StyleValue::Text("block".into()))
+            .unwrap();
+        k.apply(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+                Op::CreateView {
+                    id: 2,
+                    node_type: NodeType::View,
+                },
+                Op::CreateView {
+                    id: 3,
+                    node_type: NodeType::View,
+                },
+                Op::SetProp {
+                    id: 1,
+                    prop: PropId::SemanticTag,
+                    value: "table".into(),
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: PropId::SemanticTag,
+                    value: "tr".into(),
+                },
+                Op::SetProp {
+                    id: 3,
+                    prop: PropId::SemanticTag,
+                    value: "td".into(),
+                },
+                Op::SetStyle {
+                    id: 1,
+                    patch: Box::new(patch),
+                },
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2],
+                },
+                Op::SetChildren {
+                    id: 2,
+                    children: vec![3],
+                },
+                Op::AttachRoot { id: 1 },
+            ],
+        )
+        .unwrap();
+        k.compute_layout(1, Offer::definite(400.0, 400.0)).unwrap();
+        let arena = k.arena().clone();
+        let table = arena.resolve(k.node(1).unwrap().key).unwrap();
+        let row = arena.resolve(k.node(2).unwrap().key).unwrap();
+        let mut tree = k.tree().clone();
+        let anon = tree.tables.anon(table).unwrap();
+        let placed = tree.tables.placed.clone();
+        tree.tables.stale.insert(table);
+        tree.refresh_tables(&arena, &|s| (s != table).then(|| arena.taffy(s)).flatten());
+        assert_eq!(tree.tables.anon(table), Some(anon));
+        assert_eq!(tree.tables.placed, placed);
+        assert!(tree.tables.stale.contains(&table));
+        tree.refresh_tables(&arena, &|s| arena.taffy(s));
+        assert_eq!(tree.tables.anon(table), Some(anon));
+        assert!(tree.tables.flat(row));
+        assert!(tree.tables.stale.is_empty());
+        assert_eq!(
+            tree.taffy.total_node_count(),
+            k.tree().taffy.total_node_count()
+        );
     }
 }

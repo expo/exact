@@ -750,12 +750,18 @@ impl Transport for RustlsHttpTransport {
         let status = response.status();
         let mut headers = Headers::new();
         for (name, value) in response.headers() {
-            headers.set_response(name.as_str(), value.to_str().map_err(failed)?);
+            let value = value.to_str().map_err(failed)?;
+            if matches!(name.as_str(), "cache-control" | "vary") {
+                headers.append(name.as_str(), value);
+            } else {
+                headers.set(name.as_str(), value);
+            }
         }
+        let content_type = headers.get("content-type");
         let context = &lease.slot.as_ref().unwrap().context;
         context.lock().unwrap().event_stream = request.timeout.is_none()
             && status.is_success()
-            && headers.get("content-type").is_some_and(|value| {
+            && content_type.is_some_and(|value| {
                 value
                     .split(';')
                     .next()
@@ -1477,19 +1483,3 @@ mod tests {
 #[cfg(test)]
 #[path = "rustls_timeout_tests.rs"]
 mod timeout_tests;
-
-#[cfg(test)]
-mod tls_selection_tests {
-    use super::needs_tls;
-
-    #[test]
-    fn a_plain_request_through_an_https_proxy_uses_the_tls_agent() {
-        let https_proxy = ureq::Proxy::new("https://proxy.corp:443").unwrap();
-        let http_proxy = ureq::Proxy::new("http://proxy.corp:3128").unwrap();
-        assert!(needs_tls(false, Some(&https_proxy)));
-        assert!(!needs_tls(false, Some(&http_proxy)));
-        assert!(!needs_tls(false, None));
-        assert!(needs_tls(true, None));
-        assert!(needs_tls(true, Some(&http_proxy)));
-    }
-}

@@ -50,6 +50,9 @@ function withModel(destination, directory) {
       '/// The world every test here starts from, with art/ baked in memory (tests/model.rs).\nfn start(options: Options) -> Sim<SmallGame> {\n    exact_game::sim_with_art!(options).unwrap()\n}'],
   ]);
 }
+/** The line a new game's success text ends with when Cargo's cache lacks the SDK's crates; `exact new` moves it
+ * below what it prints after the game, so it is the last thing said. */
+export const UNCACHED_CRATES = "Cargo's cache lacks the game SDK's crates.";
 /** Cargo's words for a crate an offline cache lacks: an index never fetched has no match for the package, a cached
  * index without the .crate stopped the download. */
 const MISSING_CRATE = /no matching package named|attempting to make an HTTP request|in the offline mode|--offline was specified|failed to download/;
@@ -157,7 +160,7 @@ function writeGame(destination, directory, options, {name, local}) {
   try { prepareGame(destination, gameDefaults(destination).game, directory); }
   catch (error) {
     if (!uncachedCrates(error?.message, () => sdkFetch({offline:true, source:directory}))) throw error;
-    uncached = `Cargo's cache lacks the game SDK's crates. A build service fetches its own; to build or test here first, run:\n  cargo fetch --manifest-path ${quote(resolve(destination, '.shells/Cargo.toml'))}`;
+    uncached = `${UNCACHED_CRATES} A build service fetches its own; to build or test here first, run:\n  cargo fetch --manifest-path ${quote(resolve(destination, '.shells/Cargo.toml'))}`;
   }
 
   const argument = local ? quote(destination === process.cwd() ? '.' : destination) : name;

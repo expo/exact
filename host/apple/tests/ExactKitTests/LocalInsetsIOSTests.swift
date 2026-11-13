@@ -54,6 +54,30 @@ final class LocalInsetsIOSTests: XCTestCase {
 
     private func onScreen(_ view: UIView) -> CGRect { view.convert(view.bounds, to: nil) }
 
+    func testATransparentBarsContentReadsItsLocalInsetWhileTheDocumentInsetIsZero() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a transparent bar requires UIKit containment") }
+        let (session, _) = try fixture(scene, "TRANSPARENT_BAR")
+        let p = session.presenter
+        waitFor("the transparent route appears") {
+            guard let route = self.node(session, "route-home"), let c = p.navigation.controllers[route.id] else { return false }
+            return c.viewIfLoaded?.window != nil && c.view.safeAreaInsets.top > 0 && !p.navigation.inTransition
+        }
+        let route = try XCTUnwrap(node(session, "route-home"))
+        let controller = try XCTUnwrap(p.navigation.controllers[route.id])
+        let scroll = try XCTUnwrap(node(session, "home-scroll")?.scrollView)
+        XCTAssertEqual(scroll.contentInsetAdjustmentBehavior, .never)
+        waitFor("the hero's control clears the bar using the route's inset", facts: {
+            "control=\(self.node(session, "hero-control").map(self.onScreen) ?? .zero), hero=\(self.node(session, "hero").map(self.onScreen) ?? .zero), safe=\(controller.view.safeAreaInsets), local=\(p.navigation.localInsets.wanted[route.id] ?? []), offset=\(scroll.contentOffset)"
+        }) {
+            guard let control = self.node(session, "hero-control") else { return false }
+            return abs(self.onScreen(control).minY - controller.view.safeAreaInsets.top) < 0.5
+        }
+        XCTAssertGreaterThan(controller.view.safeAreaInsets.top, try XCTUnwrap(window).safeAreaInsets.top)
+        XCTAssertEqual(onScreen(try XCTUnwrap(node(session, "hero"))).minY, 0, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(node(session, "document-inset")).bounds.height, 0)
+        XCTAssertEqual(p.insets.top, 0, "env() remains the document's inset under auto")
+    }
+
     func testARoutesContentReadsItsBarsAndABackgroundReachesUnderThem() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the bars and the safe area are a scene window's")
@@ -76,6 +100,8 @@ final class LocalInsetsIOSTests: XCTestCase {
         let first = try XCTUnwrap(node(session, "sidebar-first"))
         XCTAssertEqual(onScreen(first).minY, bars.top, accuracy: 0.5, "its content starts below the bar: \(bars.top) points, read, not written")
         XCTAssertEqual(onScreen(list).minY, bars.top, accuracy: 0.5, "the list beside it already cleared the bar and stays")
+        let absolute = try XCTUnwrap(node(session, "absolute-probe"))
+        XCTAssertEqual(onScreen(absolute).minY, bars.top, accuracy: 0.5, "the absolute child's local inset clears the route's cover once")
         let probe = try XCTUnwrap(node(session, "root-probe"))
         XCTAssertEqual(probe.bounds.height, view.safeAreaInsets.top, accuracy: 0.5, "outside every route, the screen's top inset, though env() is 0")
         XCTAssertEqual(session.presenter.insets.top, 0, "env() stays the document's")

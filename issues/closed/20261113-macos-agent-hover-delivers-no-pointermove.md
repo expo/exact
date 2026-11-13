@@ -1,6 +1,7 @@
 # A macOS agent `tap <target> hover` delivers no `pointermove` to the target or its ancestors
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Does not reproduce at 036b4141e: under `agent macos`, `tap child hover` on a child of a box with `pointermove` runs the box's handler with the pointer's `clientX` (74, the child's middle), and `tap parent hover` then moves it (174), with or without a `pointerdown` on the box and after a plain tap; the reply says `delivery platform`.
 **Systems:** host/apple/Sources/ExactKit/Mac/AgentMac.swift (`tap`, hover branch), host/apple/Sources/ExactKit/Mac/MouseChainMac.swift
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

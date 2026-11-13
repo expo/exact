@@ -1,6 +1,7 @@
 # On macOS, under `navigationHistory="none"`, Go ▸ Back and Forward show the app's ⌘[ ⌘] chords but stay disabled
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Does not reproduce at 461760130: under `navigationHistory="none"` the Go menu lists the app's own two buttons with ⌘[ and ⌘] in the host items' place, and the chords press them, with and without `window-controls-overlay` and `navigationBar="none"`; a driven window is never key, so `ShortcutHost.validateMenuItem` shows those items disabled to anyone looking at a driven app's menu.
 **Systems:** host/apple/Sources/ExactKit/Mac/ShortcutsMac.swift, host/apple/Sources/ExactKit/Mac/BackMac.swift, host/apple/Sources/ExactKit/Mac/DevMenuMac.swift
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

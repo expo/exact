@@ -43,7 +43,7 @@ for (const [name, manifest, files, lang, dir, text] of CASES) test(`a JavaScript
   await renderedPages(Object.keys(files).length ? SOURCE : SOURCE.replace('t("hello")', '"plain"'), files, manifest, async dist => {
     const built = readFileSync(resolve(dist, 'index.html'), 'utf8');
     expect([opening(built), said(built)]).toEqual([`<html lang="${lang}" dir="${dir}">`, text]);
-    // `render.mjs --serve` composes its heads alike: a navigation's head, flushed before the render, and a whole page.
+    // The page renderer composes its heads alike: a navigation's head, flushed before the render, and a whole page.
     const page = pageServer(dist, undefined, () => {});
     const streamed = await page('/', h => ({ 'sec-fetch-dest': 'document' })[h]);
     expect(streamed.body).toBeInstanceOf(ReadableStream);

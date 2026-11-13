@@ -373,6 +373,99 @@ fn work_is_recorded_once_per_frame_against_its_deadline() {
 }
 
 #[test]
+fn late_pending_work_has_history_without_an_apply() {
+    let id = create();
+    let start = 1_000_000_000;
+    capture(id, 1, start);
+    record(id, start, start + P, P, start + 1_000_000, PENDING, 0);
+    worked(id, start, start + P, start + 10_000_000);
+    assert_eq!((snapshot(id).worked, snapshot(id).late), (1, 1));
+    let status = history_status(id);
+    assert_eq!(
+        (status.total, status.retained, status.apply_deadlines),
+        (1, 1, 0)
+    );
+    let event = hitch(id, 0);
+    assert_eq!(event.at_ns, start + 10_000_000);
+    assert_eq!(event.target_us, -1_667);
+    assert_eq!(event.frame_start_us, -10_000);
+    assert_eq!(event.flags, history::WORK_DEADLINE);
+    worked(id, start + P, start + 2 * P, start + 2 * P);
+    assert_eq!(history_status(id).total, 1, "on-time work adds no event");
+    assert_eq!((snapshot(id).worked, snapshot(id).late), (2, 1));
+    destroy(id);
+}
+
+#[test]
+fn pending_work_evidence_is_separate_from_callback_and_apply_events() {
+    let id = create();
+    let start = 1_000_000_000;
+    capture(id, 1, start);
+    record(id, start, start + P, P, start + 10_000_000, COMPLETE, 0);
+    assert_eq!(
+        history_status(id).total,
+        1,
+        "synchronous work has its callback event"
+    );
+    assert_eq!(hitch(id, 0).flags, history::CALLBACK_DEADLINE);
+    assert_eq!(hitch(id, 0).frame_start_us, history::ABSENT);
+    applied(
+        id,
+        Work {
+            capture: history_status(id).capture,
+            began_ns: start + 12_000_000,
+            finished_ns: start + 20_000_000,
+            target_ns: start + 16_000_000,
+            ..Work::default()
+        },
+        0,
+    );
+    worked(
+        id,
+        start + 8_000_000,
+        start + 16_000_000,
+        start + 20_000_000,
+    );
+    assert_eq!((snapshot(id).worked, snapshot(id).late), (2, 2));
+    assert_eq!(
+        (history_status(id).total, history_status(id).apply_deadlines),
+        (3, 1)
+    );
+    assert_eq!(hitch(id, 2).flags, history::WORK_DEADLINE);
+    capture(id, 0, start + 21_000_000);
+    worked(
+        id,
+        start + 24_000_000,
+        start + 32_000_000,
+        start + 40_000_000,
+    );
+    capture(id, 1, start + 41_000_000);
+    worked(
+        id,
+        start + 40_000_000,
+        start + 48_000_000,
+        start + 56_000_000,
+    );
+    assert_eq!(
+        history_status(id).total,
+        3,
+        "paused and previous-segment work adds no detail"
+    );
+    for i in 0..20 {
+        let at = start + 64_000_000 + i * 16_000_000;
+        worked(id, at, at + 8_000_000, at + 10_000_000);
+    }
+    let status = history_status(id);
+    assert_eq!(
+        (status.total, status.retained, status.overwritten),
+        (23, 16, 7)
+    );
+    assert_eq!(hitch(id, 0).sequence, 8);
+    assert_eq!(hitch(id, 15).sequence, 23);
+    destroy(id);
+}
+
+#[test]
 fn maxima_are_exact_and_taken_only_by_their_reader() {
     let id = create();
     let frame = 1_000_000_000;
@@ -422,8 +515,8 @@ fn capacity_lifetime_and_generation_are_bounded() {
     for id in ids.into_iter().skip(1) {
         destroy(id);
     }
-    assert_eq!(std::mem::size_of::<history::Hitch>(), 104);
-    assert_eq!(std::mem::size_of::<Collector>(), 3040);
+    assert_eq!(std::mem::size_of::<history::Hitch>(), 112);
+    assert_eq!(std::mem::size_of::<Collector>(), 3168);
 }
 
 #[test]

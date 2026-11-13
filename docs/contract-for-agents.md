@@ -2205,10 +2205,13 @@ forward"`, the default, `"back"`, `"forward"` or `"none"`): on the Mac a way wit
 no swipe, menu item or mouse button (`contract vocab navigationHistory`). A route whose scroller opens
 with a full-bleed picture says `navigationBar="transparent"`: iOS draws its bar clear at
 the scroller's top and insets nothing, so the picture sits under the bar as under a fixed
-transparent header on the web, and the bar's material comes as the content scrolls. A route
-that does not scroll (a game's canvas at `inset=0`, `width="100%" height="100%"`) is
+transparent header on the web, and the bar's material comes as the content scrolls.
+Place foreground controls below it with `top="var(--exact-safe-area-inset-top)"`
+or that value as padding on the hero's content. This reads the route's safe area,
+including its bar; `env(safe-area-inset-top)` stays 0 under `viewport-fit="auto"`.
+A route that does not scroll (a game's canvas at `inset=0`, `width="100%" height="100%"`) is
 likewise drawn from the screen's top edge, its bar items floating over it. On a pushed iOS
-route under the platform bar, that control's text becomes the bar's back button title
+route under the platform bar, the declared Back control's text becomes the bar's back button title
 beside the bar's own chevron (no text shows the chevron alone), so label it `Recipes`,
 not `‹ Recipes`. With no such control the back button is UIKit's default, which since
 iOS 26 is the chevron alone, the previous title unshown, as in a hand-built app; a title
@@ -4785,16 +4788,24 @@ offsets (35 minutes either way) and durations (71 minutes).
 | Row fields | Meaning |
 |---|---|
 | `sequence`, `capture`, `generation` | Event sequence since clear, capture ID, and reload/clock generation. Identity names the installed binary, not the source of every hot reload |
-| `age_us` | Age at the export snapshot, measured from callback arrival or late apply end |
+| `age_us` | Age at the export snapshot, measured from callback arrival, late apply end or late pending-work finish |
 | `flags` | Evidence, workload and power bits below |
 | `target_offset_us` | This callback/tick's platform prediction relative to the event; it is not intended content presentation |
 | `period_us`, `requested_period_us` | Scheduled callback interval and this session's preferred host interval at the event; zero is unknown/default. Other owners may request a higher rate |
-| `gap_us`, `callback_us` | Callback-arrival gap and synchronous callback duration. Gap requires a stable predecessor; zero means no comparable evidence. Apply-only events have no callback duration |
+| `gap_us`, `callback_us` | Callback-arrival gap and synchronous callback duration. Gap requires a stable predecessor; zero means no comparable evidence. Apply and pending-work events have no callback duration |
 | `before_gap_us`, `before_callback_us` | Previous callback's observed gap/duration in the same segment; zero without evidence |
 | `after_offset_us`, `after_gap_us`, `after_callback_us` | First observed following callback's arrival offset, gap and duration; null if unavailable. At most two pending events receive this context |
 | `owner_queued_offset_us`, `owner_began_offset_us`, `owner_finished_offset_us` | Matching asynchronous frame-update submission, owner start and owner completion, including decoding and host callbacks |
 | `main_landed_offset_us`, `apply_began_offset_us`, `apply_finished_offset_us` | Main arrival and outermost presenter-apply boundaries. Apply excludes legacy sampler bookkeeping |
 | `work_target_offset_us`, `operations` | Captured frame update's target and batch operation count; an apply without a frame target has no work target |
+| `frame_start_offset_us` | Pending frame's start relative to its finish; null for callback and apply events. Its deadline is `target_offset_us` |
+
+A pending frame that finishes after its deadline records a work event even when its
+owner batch changes nothing and is skipped. Its origin is the frame's finish: the
+latest of callback return, owner landing and any deferred canvas draw. The row has
+no apply boundaries or workload/power flags. A late apply may also have an apply
+event; these are separate observations, and the core late-frame count counts the
+frame once. Synchronous work already has its callback event.
 
 A report whose `source` is `ui-update`, the card's measure of the screen's UI updates on
 iOS 18 and later, has no frame times and none of Exact's owner or apply boundaries, so
@@ -4830,8 +4841,9 @@ presentation, input latency or native-only animations. Zero counts or an empty r
 outside an agent run for production behavior.
 
 `flags` bits: 0 callback gap >1.5 stable periods, 1 synchronous callback past target, 2
-captured tick apply past its target, 3 following callback known, 4 work known, 5 largest
-apply in the callback interval; 16 motion, 17 spatial, 18 canvas, 19 frame tasks, 20
+captured tick apply past its target, 3 following callback known, 4 apply context known,
+5 largest apply in the callback interval, 6 packed value clamped, 7 pending frame work
+past its deadline; 16 motion, 17 spatial, 18 canvas, 19 frame tasks, 20
 fill pending, 21 tick pending, 22 hatch frames, 23 workload flags known (otherwise bits
 16–22 are unavailable); bits 32–33 thermal state (0 nominal, 1 fair, 2 serious, 3
 critical), 34 Low Power Mode, 35 card shown, 36 card dragging. A `ui-update` row's bits

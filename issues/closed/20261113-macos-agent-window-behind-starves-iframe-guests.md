@@ -1,6 +1,7 @@
 # Under the macOS agent an iframe guest runs no animation frames and throttles its timers, because the driven window sits behind every other window
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** While a driven session holds an iframe guest, its window stands at the normal level in front (`WebViews.keepGuestsSeen`), as a live frame recording lifts it, and goes back to `NSWindow.Level.agentBehind` when the last guest goes.
 **Systems:** host/apple/Sources/ExactKit/Mac/AgentMac.swift (`NSWindow.Level.agentBehind`, `Agent.windowsBehind`), host/apple/Sources/ExactMac/main.swift, host/apple/Sources/ExactKit/WebModule.swift
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

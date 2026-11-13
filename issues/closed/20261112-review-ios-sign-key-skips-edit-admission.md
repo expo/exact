@@ -1,6 +1,7 @@
 # The iOS sign key bypasses beforeinput and maxlength
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The ± key checks `maxlength` and asks a cancelable `beforeinput` (`insertText` adding the sign, `deleteContent` removing it) before it changes the field, as the field's own edits do.
 **Systems:** host/apple/Sources/ExactKit/IOS/PadBarIOS.swift, host/apple/Sources/ExactKit/FieldInput.swift
 **Author:** Codex
 **Date:** 2026-11-12

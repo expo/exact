@@ -17,7 +17,7 @@ A full-bleed product photo at the top of a route cannot start under the navigati
 
 ## Fix
 
-Admit `navigationBar="transparent"`: the bar's background is clear at the top (UIKit's scroll-edge appearance) and the content is not inset, as the web lays a scroller under a fixed transparent header; the author pads with `env(safe-area-inset-top)` where content must clear it.
+Admit `navigationBar="transparent"`: the bar's background is clear at the top (UIKit's scroll-edge appearance) and the content is not inset, as the web lays a scroller under a fixed transparent header. Foreground content clears the route's bar with `var(--exact-safe-area-inset-top)` (LLP 1123 D9); `env(safe-area-inset-top)` is the document's inset and remains 0 under `viewport-fit="auto"`.
 
 ## Fixed (2026-10-19)
 

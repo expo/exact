@@ -242,12 +242,10 @@ pub(super) fn publish(
         // A table's row group or row holds its children only in the arena:
         // the engine laid them out in the table's grid (`table.rs`), from
         // the grid's origin, moved with the row or group as it is moved
-        // relatively. A table that is another box holds its grid.
+        // relatively. A block's direct parts also take their own anonymous
+        // grid's offset; its ordinary children stay in the block's space.
         let (fx, fy) = if let Some((dx, dy)) = displacement {
             (ox + dx, oy + dy)
-        } else if let Some(grid) = tree.tables.anon(slot) {
-            let l = tree.layout(grid);
-            (fx + l.location.x, fy + l.location.y)
         } else {
             (fx, fy)
         };
@@ -257,10 +255,16 @@ pub(super) fn publish(
                     continue; // its own layout's, in its own space
                 }
                 let full = full || arena.flags(child).has(NodeFlags::ATTACHED);
+                let (cx, cy) = if let Some(grid) = tree.tables.grid_for(slot, child) {
+                    let l = tree.layout(grid);
+                    (fx + l.location.x, fy + l.location.y)
+                } else {
+                    (fx, fy)
+                };
                 stack.push((
                     child,
-                    fx,
-                    fy,
+                    cx,
+                    cy,
                     hidden,
                     full,
                     origin_moved || displaced,

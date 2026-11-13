@@ -2,7 +2,7 @@ import { capturePrivacyManifest } from '../host/apple/privacy.mjs';
 import { appleImplementations } from '../js/bake/src/typescript.mjs';
 import { webHostFiles, hostModuleSources, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
-import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames } from './cargo-dep-info.mjs';
+import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames, buildInputCollector, watchOutput } from './cargo-dep-info.mjs';
 export { compilerPaths, unitDepInfo } from './cargo-dep-info.mjs';
 import { LIBRARY_CACHE, directDependencies, prepareLibrary } from './package-libraries.mjs';
 import { ensureBun } from './bun.mjs';
@@ -25,7 +25,7 @@ import { nativeResourceMappings, nativeResourceInventory, appleAssetCatalogInven
 // validator small enough to live beside the reader; an app without one gets
 // the derived defaults it had before the manifest existed.
 import { spawnSync } from '../host/apple/toolchain.mjs';
-import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
 import { within } from './paths.mjs';
 import { constants, homedir, tmpdir } from 'node:os';
@@ -553,6 +553,13 @@ export function authoredTests(dir) {
   return [...(existsSync(resolve(dir, 'app.test.contract')) ? ['app.test.contract'] : []), ...others].map((n) => resolve(dir, n));
 }
 
+/** app.json's text as JSON. A byte-order mark, which some Windows editors write and JSON does not allow, is named
+ * with its fix rather than left to the parser's "Unrecognized token" (expo/exact-build#190). app-cli.mjs, which
+ * copied SDKs carry alone, keeps its own copy. */
+export function parseManifest(text) {
+  if (text.charCodeAt(0) === 0xfeff) throw new Error('starts with a byte-order mark (U+FEFF), which JSON does not allow; save it as UTF-8 without a BOM');
+  return JSON.parse(text);
+}
 /** `app.json` from `dir`, validated — or the defaults an app had before the manifest: `com.exact.<name>`, the name capitalized. */
 export function readManifest(dir, name) {
   const path = resolve(dir, 'app.json');
@@ -560,7 +567,7 @@ export function readManifest(dir, name) {
   const game = gameDefaults(dir);
   if (!existsSync(path) && !game) return fallback;
   let parsed;
-  try { parsed = game ?? JSON.parse(readFileSync(path, 'utf8')); } catch (e) { throw new Error(`${path}: ${e.message}`); }
+  try { parsed = game ?? parseManifest(readFileSync(path, 'utf8')); } catch (e) { throw new Error(`${path}: ${e.message}`); }
   // LLP 1069.008 D4: a device's usage text is derived from its grant, never hand-written.
   const problems = validate(parsed, schema(), '', schema()).map((p) => /^host\.(ios|macos)\.permissions: /.test(p)
     ? `${p.split(':')[0]}: deleted (LLP 1069.008); declare the device in the source's grants as \`device.<name> <strings key>\` (e.g. \`device.microphone purpose.microphone\`) and put the text in strings/<locale>.json`
@@ -965,6 +972,10 @@ function buildGraph(app, target, kind, env, gpu) {
   }
   return { metadata, packages, root, surface, modules, roles };
 }
+/** What a build writes, known before Cargo runs. A directory watch excludes these from every inventory. */
+const buildOutputs = (app, graph, env) => [app.target, graph.metadata.target_directory, graph.metadata.build_directory,
+  env.CARGO_BUILD_BUILD_DIR, env.EXACT_BAKE_OUTPUT, env.EXACT_WEB_DIST ?? webDist(app),
+  ...['dist', 'web-dist', 'dist-windows', 'artifacts'].map(name => resolve(app.dir, name))].filter(Boolean).map(path => resolve(path));
 function completeBuild(app, platform, target, graph, messages, roots, env, prepared = new Map(), generatedInputs = {products:[], watchedDirectories:[]}, privacyManifests = []) {
   const scripts = messages.filter((m) => m.reason === 'build-script-executed' && graph.roles.has(m.package_id));
   const targetDirs = [app.target, graph.metadata.build_directory].map(dir => resolve(dir, target));
@@ -1015,19 +1026,10 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     if (declarer) return outsideName(path, declarer);
     throw new Error(`compiler input has no captured source identity: ${path}`);
   };
-  const inputs = new Map(), absent = new Map(), directories = new Map(), hashes = inputHashes(app, env), optionalInputs = new Set();
+  const hashes = inputHashes(app, env), optionalInputs = new Set();
+  const watchOutputs = [...buildOutputs(app, graph, env), env.OUT_DIR, baked, ...scripts.map(script => script.out_dir)].filter(Boolean).map(path => resolve(path));
+  const {inputs, absent, directories, links, add} = buildInputCollector({outputs:watchOutputs, nameOf, hashes, replaced});
   const sourceInputs = new Set(['assets', 'deck'].map(path => resolve(app.dir, path)).concat(shaderRoots(app)));
-  const add = (path, optional = false, declarer = null) => {
-    path = resolve(path); if (replaced.has(path)) return;
-    if (!existsSync(path)) { if (optional) { absent.set(nameOf(path, declarer), path); return; } throw new Error(`stale compiler dependency names missing input ${path}; rebuild that Cargo unit`); }
-    const name = nameOf(path, declarer);
-    if (inputs.get(name)?.path === path) return;
-    const info = statSync(path);
-    if (info.isDirectory() && declarer && !rootOf(locatedAt, path) && name === outsideName(path, declarer)) throw new Error(`${declarer.name} ${declarer.version}'s build script watches ${path}, a directory outside its package and outside the app, its workspace and exact2, which a build cannot record. A build script may watch files outside its package and directories inside it: have it print \`cargo:rerun-if-changed=<file>\` for each file it reads there.`);
-    if (info.isDirectory()) { const names = directoryInputNames(path); directories.set(name, {path,names}); for (const entry of names) add(resolve(path,entry), false, declarer); }
-    else if (info.isFile()) inputs.set(name, {name,path,sha256:hashes.of(path, info)});
-    else throw new Error(`unsupported compiler input ${path}`);
-  };
   const normalizeEnv = ([key,value]) => [key, value == null ? null : ['OUT_DIR','CARGO_MANIFEST_DIR'].includes(key) ? nameOf(value) : buildHash(value)];
   const units = [], usedPackages = new Set();
   for (const m of messages.filter((m) => m.reason === 'compiler-artifact' && !m.target.kind.includes('custom-build') && graph.roles.has(m.package_id))) {
@@ -1125,7 +1127,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   const assetCatalogApp = ['macos', 'ios'].includes(platform) ? { dir: app.dir, platform: target.includes('-tvos') ? 'tvos' : platform, manifest: { host: app.manifest.host } } : null;
   const appleAssetCatalogs = assetCatalogApp ? appleAssetCatalogInventory(assetCatalogApp, assetCatalogApp.platform) : [];
   if (assetCatalogApp) for (const path of [resolve(app.dir, platform, 'modules'), resolve(app.dir, 'modules/apple')]) {
-    if (existsSync(path)) directories.set(nameOf(path), {path, names: readdirSync(path).sort()});
+    if (existsSync(path)) directories.set(nameOf(path), {path, names: directoryInputNames(path, watchOutput(watchOutputs))});
     else absent.set(nameOf(path), path);
   }
   for (const entry of appleAssetCatalogs) add(resolve(app.dir, entry.path));
@@ -1139,14 +1141,17 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     if (captured.bytes === null) absent.set(name, captured.path); else inputs.set(name, { name, path: captured.path, sha256: buildHash(Buffer.from(captured.bytes, 'base64')) });
   }
   const files=[...inputs.values()].sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
-  const fingerprint={files:files.map(({name,sha256})=>({name,sha256})),absent:[...absent.keys()].sort(),configuration,metadata};
+  const fingerprint = {
+    directories:orderedBuild([...directories].map(([name, {names}]) => ({name, names}))),
+    links:orderedBuild([...links.values()].map(({name, target}) => ({name, target}))),
+    files:files.map(({name, sha256}) => ({name, sha256})),
+    absent:[...absent.keys()].sort(), configuration, metadata,
+  };
   const products=roots.flatMap((r)=>messages.filter((m)=>m.reason==='compiler-artifact'&&m.package_id===r.package&&m.target.name===r.name).flatMap((m)=>m.filenames)).filter((p)=>!p.endsWith('.d')&&!p.endsWith('.dSYM')).map((path)=>prepared.get(path)??path).map((path)=>{const info=statSync(path);return {path,bytes:info.size,sha256:hashes.of(path,info)};})
     .concat(generatedInputs.products);
   hashes.save();
-  const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, [
-    app.target, graph.metadata.build_directory, env.EXACT_BAKE_OUTPUT, env.OUT_DIR, ...scripts.map(script => script.out_dir),
-  ])} : {};
-  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs]), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
+  const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, watchOutputs)} : {};
+  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
 }
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.
 let buildLock;
@@ -1283,7 +1288,7 @@ export function buildBake(app, platform, target, options = {}) {
     if (archive && options.link && !env.EXACT_RUST_BUNDLE && linkable(app,pkg)) {
       env.EXACT_BAKED = bakeOutside(app,platform,target,env,dir => {
         buildCommand('cargo',['build',...args.slice(3)],app,{...env,EXACT_BAKED:dir},'inherit');
-      },{cargoArgs:[...whole,'--profile',profile]});
+      },{cargoArgs:[...whole,'--profile',profile],outputs:buildOutputs(app,graph,env)});
     } else delete env.EXACT_BAKED;
     const recordInputs = pkg.id === graph.root.id ? cargoBakeInputs(pkg,target,profile,env,platform === 'windows' ? app : null) : () => {};
     // Cargo compiles a TypeScript app's linked bake from a content-addressed copy (linked-plan.mjs compiledBakeDir), so an identity, grants or Canvas roster change leaves its archive fresh; a Rust data crate's bake registers its build script in its own directory and keeps it.
@@ -1291,13 +1296,13 @@ export function buildBake(app, platform, target, options = {}) {
     const result=buildCommand('cargo',args,app,shared?{...env,EXACT_BAKED:shared}:env,'inherit');
     const output=result.stdout.split('\n').filter(Boolean).map((line)=>JSON.parse(line));messages.push(...output);roots.push({package:pkg.id,name:unit.name});
     recordInputs(output);
-    if (archive && env.EXACT_BAKED) recordRustBake(env);
+    if (archive && env.EXACT_BAKED) recordRustBake(env, buildOutputs(app,graph,env));
     // Generated host inputs can postdate the build's start; bind their bytes before host compilation.
     if (apple && app.manifest.game && pkg.id === graph.surface?.id) generatedInputs = inputProducts([
       graph.root.manifest_path, ...graph.root.targets.map(t => t.src_path),
       ...['app.json', 'keys.json', 'surfaces.json'].map(file => resolve(app.dir, '.shells', file)),
       ...generatedInputFiles(app.dir),
-    ], app.dir);
+    ], app.dir, buildOutputs(app,graph,env));
     if (gpuPackage(pkg) && platform !== 'web') {
       const product = output.filter(m => m.reason === 'compiler-artifact' && m.package_id === pkg.id)
         .flatMap(m => m.filenames).find(path => /\.(so|dylib|dll)$/.test(path));
@@ -1394,9 +1399,13 @@ export function pendingBuildInputs(build, { includeSources = false } = {}) {
   }
   for(const path of [...build.binary.missing, ...(build.optionalInputs ?? [])])if(existsSync(path))changed.push(path);
   for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4)
+  const output = watchOutput(build.binary.watchOutputs, build.binary.directories.map(({path}) => path));
   for(const {path,names} of build.binary.directories) {
-    try {if(!statSync(path).isDirectory()||canonicalBuild(directoryInputNames(path))!==canonicalBuild(names))changed.push(path);}
+    try {if(!statSync(path).isDirectory()||canonicalBuild(directoryInputNames(path,output))!==canonicalBuild(names))changed.push(path);}
     catch {changed.push(path);}
+  }
+  for (const link of build.binary.links ?? []) {
+    try { if (readlinkSync(link.path) !== link.target) changed.push(link.path); } catch { changed.push(link.path); }
   }
   if (includeSources) changed.push(...pendingSourceInputs(build.sourceInputs));
   return changed;

@@ -1,6 +1,7 @@
 # On iOS a route under `navigationBar="transparent"` has no top inset it can read: `env(safe-area-inset-top)` is 0
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Absolute offsets credit same-edge inset references while preserving the cover minimum; transparent-route UIKit tests and a simulator app drive pass.
 **Systems:** host/apple/Sources/ExactKit/IOS/ExactViewIOS.swift, host/apple/Sources/ExactKit/IOS/NavigationBarIOS.swift, LLP 1123 D9, docs/contract-for-agents.md
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -53,3 +54,23 @@ nothing and the author must. Until then, say in the guide's
 `navigationBar="transparent"` paragraph and in `contract vocab navigationBar`
 that the route's top inset is not readable under `viewport-fit="auto"`, and
 correct the closed issue's line.
+
+## Diagnosis and fix
+
+The host already publishes the route's local insets through
+`NavigationHost.reportLocalInsets` (`NavigationCoversIOS.swift`), and
+`style::top_layer::apply` already resolves offsets in the box's own environment.
+`cover::apply` added the parent's cover onto an absolute offset that already read
+that edge's inset. It now checks for that reference and uses the larger of the
+resolved offset and the cover; an offset without that reference still adds the
+cover.
+
+The regression checks all four edges with and without a parent cover, owner and cover updates, plain offsets, another edge's
+reference, a matching reference inside `calc()`, zero-valued `env()` offsets
+and local-inset expressions shorter than the cover. `LocalInsetsIOSTests`
+checks a direct absolute child of a covered route and a full-screen transparent
+route under `auto`:
+the hero still begins at y=0, `env(safe-area-inset-top)` remains 0, and the
+foreground control's `top="var(--exact-safe-area-inset-top)"` clears the route's
+bar.
+The guide and the older closed issue now name the route-local value.

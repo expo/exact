@@ -1,6 +1,7 @@
 # `agent ios` drives an app whose module artifact failed to load, and its rebuild drops what the builder added to the bundle
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** An Apple app's ready line carries the loader's refusal of its module artifact as its boot error, so `agent ios` and `agent macos` refuse the launch quoting `dlopen`'s reason (a skewed artifact still runs, LLP 1024 D8.3); the rebuild's missing frameworks were fixed by 2bf3a9b89.
 **Systems:** scripts/agent-build.mjs (`buildFirst`), scripts/agent.mjs (simulator carrier), host/apple/Sources/ExactKit/NativeModule.swift
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

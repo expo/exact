@@ -1407,6 +1407,14 @@ function checkPeers(stage, files) {
  * stage (a package's declarations are in it: `stagePackages`) and the
  * configured libraries. An external declaration must not influence an
  * accepted app artifact. */
+/** The checker runs before the bundle refuses a Node built-in, and says only "Cannot find module 'node:fs'… Try
+ * `npm i --save-dev @types/node`", which changes nothing (expo/exact-build#183). Said here as the bundle says it. */
+export function nodeNote(diagnostics) {
+  const modules=[...new Set([...diagnostics.matchAll(/Cannot find module '([^']+)'/g)].map(match=>match[1]).filter(builtin))];
+  const names=/Cannot find name '(?:require|process|Buffer|__dirname|__filename)'/.test(diagnostics);
+  if (!modules.length && !names) return '';
+  return `\nnote: ${modules.length ? `${modules.map(m=>`'${m}'`).join(', ')} ${modules.length>1 ? "are Node's built-ins" : "is Node's built-in"}` : "Node's globals are"}: a data module runs on Hermes and in the browser, which have no Node modules, so @types/node does not help; import a part of the package that needs none, or another package\n`;
+}
 export function check(stage, tsc, libraries) {
   // TypeScript expands Windows short paths; compare the same physical names
   // for the capture, libraries and files, including directory junctions.
@@ -1429,7 +1437,7 @@ export function check(stage, tsc, libraries) {
         const mutationFailure=/Type '(?:false|boolean)' is not assignable to type 'true'|SnapbackMutationSuccess/.test(diagnostics)
           && readFileSync(resolve(stage,'app.contract.d.ts'),'utf8').includes('type SnapbackMutationSuccess<');
         const refusal=mutationFailure ? "\nnote: a Snapback mutation returning {ok:false} leaves failure(slot) empty; throw refused({code: 'YOUR_CODE', message: 'Explain the refusal'}) instead. Annotate successful helpers with Result<'source'>, or keep ok:true literal with `as const`.\n" : '';
-        return fail(new Error(diagnostics+sourceNames(stage,diagnostics)+refusal+String(stderr??'') || String(error.message)));
+        return fail(new Error(diagnostics+sourceNames(stage,diagnostics)+refusal+nodeNote(diagnostics)+String(stderr??'') || String(error.message)));
       }
       try { checkFiles(stage, libraries, stdout.trim().split(/\r?\n/)); }
       catch (error) { return fail(error); }

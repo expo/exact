@@ -1,6 +1,7 @@
 # On Apple, the agent's `type` and `tap` into an iframe guest are script events that do not type or click as a person does
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The guest `type` and `tap` scripts (`WebGuestInput.swift`) insert text at the caret with `execCommand('insertText')` in an editable (setting `value` only on a field), choose the first shown editable, put a chord's modifiers in the KeyboardEvent's fields, and place focus and the caret at a press's point.
 **Systems:** host/apple/Sources/ExactKit/WebModule.swift (`tap`, `type`), host/apple/webarm/FrameAutomation.swift
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

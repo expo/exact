@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+mod crawl;
+
 const SRC: &str = r#"
 routes nav
   tab home "/" render=build
@@ -493,36 +495,6 @@ fn cached_pages_reuse_public_answers_and_honor_request_cache_controls() {
     assert_eq!(get(addr, "/post/cache-probe").2, refreshed);
     assert!(get(addr, "/live/cache-probe").2.contains("Read 4"));
     assert!(get(addr, "/live/cache-probe").2.contains("Read 5"));
-}
-
-#[test]
-fn the_sitemap_lists_each_rendered_route_and_its_listed_pages() {
-    let served = start("sitemap", 1, 8, 300);
-    let addr = served.addr;
-    let (status, headers, body) = get(addr, "/sitemap.xml");
-    assert_eq!(status, 200);
-    assert_eq!(
-        header(&headers, "content-type"),
-        Some("application/xml; charset=utf-8")
-    );
-    for url in [
-        "https://blog.test/",
-        "https://blog.test/post/7",
-        "https://blog.test/post/an%20idea",
-    ] {
-        assert!(body.contains(&format!("<loc>{url}</loc>")), "{url}\n{body}");
-    }
-    // A route without a pages source isn't in it; neither is the shell's,
-    // nor a page that says `noindex`, as the build's sitemap leaves them.
-    assert!(!body.contains("/live/") && !body.contains("/app"), "{body}");
-    assert!(!body.contains("/draft/"), "{body}");
-    assert_eq!(get(addr, "/draft/d1").0, 200);
-    let (status, _, body) = get(addr, "/robots.txt");
-    assert_eq!(status, 200);
-    assert_eq!(
-        body,
-        "User-agent: *\nAllow: /\nSitemap: https://blog.test/sitemap.xml\n"
-    );
 }
 
 /// A list that answers a moment after it is asked, before a sibling: the

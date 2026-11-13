@@ -10,6 +10,12 @@ import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
 
 /** The hosts a `test`, `agent` or `verify` may name first. */
 const APP_HOSTS = ['web', 'ios', 'macos', 'mac', 'linux', 'windows', 'android'];
+/** app.json's text as JSON, a leading byte-order mark named with its fix (scripts/app.mjs `parseManifest`; this
+ * module keeps its own copy, since copied SDKs carry it alone). */
+export function parseManifest(text) {
+  if (text.charCodeAt(0) === 0xfeff) throw new Error('starts with a byte-order mark (U+FEFF), which JSON does not allow; save it as UTF-8 without a BOM');
+  return JSON.parse(text);
+}
 /** The host `verb` runs on, taken off `rest` when its first word names one (help's optional `[web|ios|…]`): a test
  *  file or an op written first stays where it is, and the run is on a host the app ships (`shippedHost`; null when
  *  none drives here). */
@@ -233,10 +239,10 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   // arguments after the verb. A game's app.json is optional.
   const manifest = resolve(dir, 'app.json');
   let declared = {};
-  try { if (existsSync(manifest)) declared = JSON.parse(readFileSync(manifest, 'utf8')); }
+  try { if (existsSync(manifest)) declared = parseManifest(readFileSync(manifest, 'utf8')); }
   catch (error) {
-    if (!reply) throw error;
     const message = `${manifest}: ${error.message}`;
+    if (!reply) throw new Error(message);
     console.error(message);
     reply({ code: 'app_json', error: message });
     return 1;
