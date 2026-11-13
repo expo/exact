@@ -188,6 +188,22 @@ test("payments' callbacks service is exported only to Play services' binder, wit
   refuses({ metadata: [{ name: 'com.google.android.geo.API_KEY', value: 'k' }] }, 'API_KEY');
 });
 
+test('a meta-data is only a listed name with its value, both strings', () => {
+  const pay = 'com.google.android.gms.wallet.api.enabled';
+  const refuses = (metadata, what) => assert.throws(() => manifestFragment(impl({ metadata })), (e) => e.message.includes(what) && e.message.includes("alarms's Android implementation"));
+  refuses([{ name: 'review.unknown' }], 'without a string name and value');
+  refuses([{ name: 'review.unknown', value: 'true' }], 'review.unknown');
+  refuses([{ value: 'true' }], 'without a string name and value');
+  refuses([{ name: pay }], 'without a string name and value');
+  refuses([{ name: pay, value: true }], 'without a string name and value');
+  refuses([{ name: pay, value: 'false' }], 'not on the list');
+  refuses([{ name: 'a"/><provider android:name="x', value: 'true' }], 'not on the list');
+  refuses([{ name: '__proto__', value: 'true' }], 'not on the list');
+  refuses([null], 'without a string name and value');
+  refuses([7], 'without a string name and value');
+  assert.match(manifestFragment(impl({ metadata: [{ name: pay, value: 'true' }] })), /<meta-data android:name="com\.google\.android\.gms\.wallet\.api\.enabled" android:value="true" \/>/);
+});
+
 test('app and package Maven coordinates share validation and refuse conflicting versions by owner', async () => {
   const { mavenCoordinates } = await import('./agent-android.mjs');
   const dir = resolve(tmpdir(), 'maps');
@@ -226,4 +242,27 @@ test('the Android package reader preserves Maven declarations and names their so
       else assert.throws(() => mavenCoordinates(app, bound), error => error.message.includes(path));
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Android auth filters schemes but retains complete callback endpoints', async () => {
+  const { withAuthCallbacks } = await import('./android-manifest.mjs');
+  const xml = withAuthCallbacks('', ['app.test:/oauth', 'app.test:/other', 'second.test://host/cb',
+    'https://app.test/.exact/auth/callback', 'http://127.0.0.1/cb']);
+  assert.equal((xml.match(/<intent-filter>/g) ?? []).length, 2);
+  assert.match(xml, /android:scheme="app.test"/);
+  assert.match(xml, /android:scheme="second.test"/);
+  const endpoints = xml.match(/dev.exact.auth.callbacks" android:value="([^"]+)"/);
+  assert.deepEqual(JSON.parse(endpoints?.[1].replaceAll('&quot;', '"')), ['app.test:/oauth', 'app.test:/other', 'second.test://host/cb']);
+  assert.match(xml, /android.intent.category.BROWSABLE/);
+  assert.match(xml, /android:launchMode="singleTask"/);
+  assert.match(xml, /android.support.customtabs.action.CustomTabsService/);
+  assert.doesNotMatch(xml, /autoVerify|android:path|android:host|127.0.0.1/);
+  assert.equal(withAuthCallbacks('unchanged', ['https://app.test/cb']), 'unchanged');
+  const { androidShareActivity } = await import('./share-target.mjs');
+  const { withMetaData } = await import('./android-manifest.mjs');
+  const shared = withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } }));
+  const withShare = withAuthCallbacks(shared, ['app.test:/cb']);
+  assert.match(withShare, /dev.exact.auth.callbacks/);
+  assert.match(withShare, /android.intent.action.SEND/);
+  assert.equal((withShare.match(/<activity /g) ?? []).length, 1);
 });

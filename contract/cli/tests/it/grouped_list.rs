@@ -8,7 +8,7 @@ use exact_kernel::{
 };
 use exact_runner::{DataError, DataSource, Runner, Value};
 
-struct NoData;
+pub(super) struct NoData;
 impl DataSource for NoData {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
@@ -30,7 +30,7 @@ fn boot(body: &str) -> Runner<NoData> {
     boot_source(&app(body))
 }
 
-fn boot_source(source: &str) -> Runner<NoData> {
+pub(super) fn boot_source(source: &str) -> Runner<NoData> {
     let plan = contract::bake(
         contract::compile(source).unwrap_or_else(|e| panic!("{e}")),
         NoData,
@@ -51,7 +51,7 @@ fn boot_source(source: &str) -> Runner<NoData> {
     r
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+pub(super) fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }

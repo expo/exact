@@ -1,5 +1,5 @@
 //! Compile and bake `app.contract` into `OUT_DIR/app.plan` at build time, with
-//! the compatibility id beside it, for `exact_linux::canvas_jni!` to embed.
+//! the compatibility id beside it, for `exact_painted::canvas_jni!` to embed.
 
 use contract::DataSource;
 

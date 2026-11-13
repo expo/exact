@@ -17,7 +17,7 @@ what to write for a name Contract lacks. The web's methods are called on their v
   `sin(rad)` · `cos(rad)` · `+ - * / %`.
 - **Formatting:** `formatNumber(n, "decimal" | "percent" | "compact")` ·
   `formatNumber(n, "currency", "USD")` · `n.toFixed(digits)` · `formatDecimal(cents, 2)` ·
-  `formatDate(ms, offset, "medium" | "month-year" | "iso")` · `formatTime(ms, offset, "short")` ·
+  `formatDate(msOrDayKey, offset, "medium" | "month-year" | "iso")` · `formatTime(ms, offset, "short")` ·
   `formatDay(then, now, offset, "day" | "list")` ·
   `calendarDiff(from, to, "years" | "months")` · `t("key", name=value)`.
 - **Time:** `performanceNow()`, ms since launch; the date is

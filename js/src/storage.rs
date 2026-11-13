@@ -263,7 +263,7 @@ pub(crate) fn kept(owner: Option<u64>, ask: &str) -> Result<Option<String>, Stri
         if let Some(token) = ask.strip_prefix(how) {
             let held = token.parse().ok().and_then(|t: u64| replacing().remove(&t));
             if let Some((owner, _, replaced)) = held.filter(|_| carry) {
-                kept::carry(owner, replaced);
+                kept::carry(owner, replaced)?;
             }
             return Ok(None);
         }

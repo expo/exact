@@ -184,7 +184,17 @@ fn a_leader_that_exits_first_leaves_no_group_behind() {
 }
 
 #[test]
+fn a_group_gone_after_its_signal_ends_the_stream() {
+    group_gone_ends_stream(false);
+}
+
+#[test]
+#[ignore = "async lane: measures stream completion before the ten-second signal grace"]
 fn a_group_gone_after_its_signal_ends_the_stream_before_the_grace() {
+    group_gone_ends_stream(true);
+}
+
+fn group_gone_ends_stream(check_latency: bool) {
     let (core, woke, _) = core("process.spawn /bin/sh");
     // The leader exits and its member holds no pipe, so the signal that
     // ends the group is the last thing the supervisor sees of it.
@@ -196,10 +206,12 @@ fn a_group_gone_after_its_signal_ends_the_stream_before_the_grace() {
     let took = start.elapsed();
     let leader = spawned_pid(&out);
     assert!(!os::group_alive(leader), "the group outlived the stream");
-    assert!(
-        took < Duration::from_secs(5),
-        "the stream waited out the grace: {took:?}"
-    );
+    if check_latency {
+        assert!(
+            took < Duration::from_secs(5),
+            "the stream waited out the grace: {took:?}"
+        );
+    }
 }
 
 /// Rewrite every entry of the record at `path` with `change`.
@@ -313,18 +325,39 @@ fn a_stale_record_ends_no_group_that_is_not_the_apps() {
 
 #[test]
 fn a_quit_ends_every_group() {
+    quit_ends_every_group("a_quit_ends_every_group", false);
+}
+
+#[test]
+#[ignore = "async lane: measures the five-second quit grace on the wall clock"]
+fn a_quit_keeps_its_five_second_grace() {
+    quit_ends_every_group("a_quit_keeps_its_five_second_grace", true);
+}
+
+/// The escalation waits on the caller when its thread cannot start.
+#[test]
+fn a_quit_without_its_escalation_thread_ends_every_group() {
+    quit_ends_every_group(
+        "a_quit_without_its_escalation_thread_ends_every_group",
+        false,
+    );
+}
+
+fn quit_ends_every_group(test: &str, check_latency: bool) {
     use std::io::{BufRead, Read, Write};
     use std::process::{Command, Stdio};
 
     const CHILD: &str = "EXACT_PROCESS_QUIT_TEST";
     if std::env::var_os(CHILD).is_none() {
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "process::real::tests::a_quit_ends_every_group",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "--include-ignored", "--nocapture"])
+            .arg(format!("process::real::tests::{test}"))
+            .env(CHILD, "1");
+        if test.contains("without_its_escalation_thread") {
+            command.env("EXACT_TEST_FAIL_QUIT_THREAD", "1");
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -339,8 +372,8 @@ fn a_quit_ends_every_group() {
                 break serde_json::from_str(pids).unwrap();
             }
         };
-        // Setup is outside the measurement. The interval includes quit and
-        // every atexit callback, with 2 s for scheduling beyond the 5 s grace.
+        // The ordinary case waits for exit. Only the latency qualification
+        // measures the grace, including every atexit callback.
         let started = Instant::now();
         child.stdin.take().unwrap().write_all(b"quit\n").unwrap();
         let status = loop {
@@ -356,9 +389,7 @@ fn a_quit_ends_every_group() {
         };
         let took = started.elapsed();
         stdout.read_to_string(&mut output).unwrap();
-        while groups.iter().any(|g| os::group_alive(*g))
-            && started.elapsed() < Duration::from_secs(7)
-        {
+        while groups.iter().any(|g| os::group_alive(*g)) && started.elapsed() < BOUND {
             std::thread::sleep(Duration::from_millis(50));
         }
         let alive: Vec<_> = groups.into_iter().filter(|g| os::group_alive(*g)).collect();
@@ -367,10 +398,12 @@ fn a_quit_ends_every_group() {
         }
         assert!(status.is_some_and(|s| s.success()), "{status:?}: {output}");
         assert!(alive.is_empty(), "groups outlived exit: {alive:?}");
-        assert!(
-            (Duration::from_secs(5)..Duration::from_secs(7)).contains(&took),
-            "quit through process exit took {took:?}: {output}"
-        );
+        if check_latency {
+            assert!(
+                (Duration::from_secs(5)..Duration::from_secs(7)).contains(&took),
+                "quit through process exit took {took:?}: {output}"
+            );
+        }
         return;
     }
 
@@ -395,10 +428,18 @@ fn a_quit_ends_every_group() {
     std::io::stdin().read_line(&mut go).unwrap();
     assert_eq!(go, "quit\n");
     drop(core);
-    // The caller's thread does not wait: the escalation runs off it, and
-    // the groups, which ignore the quit's signal, are alive when it returns.
-    assert!(groups.iter().all(|g| os::group_alive(*g)));
+    if check_latency {
+        // Escalation runs off the caller's thread. Only the latency case
+        // requires observing the groups before their grace ends.
+        assert!(groups.iter().all(|g| os::group_alive(*g)));
+    }
     std::process::exit(0);
+}
+
+/// An `execFile` reply's output, which crosses as base64, as text.
+fn text(v: &serde_json::Value) -> String {
+    let bytes = exact_runner::agent::unbase64(v.as_str().unwrap()).unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[test]
@@ -412,7 +453,7 @@ fn exec_file_ends_what_its_child_left_running() {
         panic!("{out:?}")
     };
     let reply: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
-    let grandchild: i32 = reply["stdout"].as_str().unwrap().trim().parse().unwrap();
+    let grandchild: i32 = text(&reply["stdout"]).trim().parse().unwrap();
     assert!(
         os::start_time(grandchild).is_none(),
         "its group ended before the answer"
@@ -444,12 +485,8 @@ fn exec_file_keeps_its_limits() {
     .unwrap();
     let r = body(&collect(&core, &woke, |o| !o.is_empty())[0]);
     assert_eq!(
-        (
-            r["stdout"].as_str(),
-            r["stderr"].as_str(),
-            r["code"].as_i64()
-        ),
-        (Some("in\n"), Some("err\n"), Some(2))
+        (text(&r["stdout"]), text(&r["stderr"]), r["code"].as_i64()),
+        ("in\n".into(), "err\n".into(), Some(2))
     );
     core.run(
         exec(2, "sleep 5", serde_json::json!({ "timeout": 200 })),
@@ -486,7 +523,7 @@ fn exec_file_keeps_its_limits() {
     .unwrap();
     let r = body(&collect(&core, &woke, |o| !o.is_empty())[0]);
     assert_eq!(r["overflow"].as_str(), Some("stdout"));
-    assert_eq!(r["stdout"].as_str().map(str::len), Some(1000));
+    assert_eq!(text(&r["stdout"]).len(), 1000);
     let seen = std::fs::read_to_string(&mark).unwrap_or_default();
     let _ = std::fs::remove_file(&mark);
     // (The shell's failed `printf` may flush its `x` into the redirect.)
@@ -690,4 +727,69 @@ fn writes_to_a_child_that_closed_its_stdin_are_dropped_and_drain() {
     }
     core.forget(|_| false);
     until_gone(leader, "the group outlived its release");
+}
+
+/// A child whose waiter, a pipe's reader or its stdin writer cannot start
+/// fails its call: nothing would reap it or end its output, so the call
+/// would never answer. The child is ended rather than left to run.
+#[test]
+fn a_child_whose_thread_cannot_start_fails_its_call() {
+    let (core, woke, dir) = core("process.spawn /bin/sh");
+    for (ticket, role) in [(1, "pipe"), (2, "stdin"), (3, "wait")] {
+        let mark = dir.join(format!("ran-{role}"));
+        let script = format!("sleep 0.2; touch {}", mark.display());
+        let call = serde_json::json!({ "kind": "execFile", "program": "/bin/sh",
+            "args": ["-c", script], "input": exact_runner::agent::base64(b"in"),
+            "env": [["PATH", "/usr/bin:/bin"], ["EXACT_TEST_FAIL_THREAD", role]] });
+        core.run(request(ticket, call, false), None).unwrap();
+        let out = collect(&core, &woke, |o| !o.is_empty());
+        let Outcome::Failed { message, .. } = &out[0] else {
+            panic!("{role}: {out:?}")
+        };
+        assert!(
+            message.contains("cannot start its thread"),
+            "{role}: {message}"
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!mark.exists(), "{role}: the child ran on");
+    }
+}
+
+/// Under the agent, an `execFile` whose child exited with its output still
+/// open closes that output when the agent's clock reaches the drain, not
+/// when the wall does.
+#[test]
+fn an_exec_files_drain_runs_on_the_agents_clock() {
+    let (wake, woke) = channel();
+    let core = Core::under_agent(&[("/bin/sh", "real")], || {
+        Core::start(
+            None,
+            "process.spawn /bin/sh",
+            Box::new(move || {
+                let _ = wake.send(());
+            }),
+        )
+    });
+    let clock = core.work_clock().expect("under the agent");
+    let call = serde_json::json!({ "kind": "execFile", "program": "/bin/sh",
+        "args": ["-c", "sleep 30 & echo left"], "encoding": "utf8" });
+    core.run(request(1, call, false), None).unwrap();
+    // The shell exits; `sleep` keeps its output open until the drain, 5 s on.
+    let deadline = Instant::now() + BOUND;
+    let due = loop {
+        if let Some(due) = clock.due() {
+            break due;
+        }
+        assert!(Instant::now() < deadline, "the drain is not on the clock");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    core.begin_pump();
+    assert!(core.drain().is_empty(), "answered before the drain");
+    clock.advance(due);
+    let out = collect(&core, &woke, |o| !o.is_empty());
+    let Outcome::Response(r) = &out[0] else {
+        panic!("{out:?}")
+    };
+    let reply: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    assert_eq!(text(&reply["stdout"]), "left\n");
 }

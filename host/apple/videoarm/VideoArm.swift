@@ -187,7 +187,8 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// cross the ABI, as the web glue sends only handled events.
     var listeners: Set<String> = []
     /// AVKit's own Now Playing publication, off while a claimant owns the
-    /// media session (LLP 1098 D7); a controller made later takes it.
+    /// media session (LLP 1098 D7); a controller made later, inline or full
+    /// screen, takes it.
     var avkitPublishes = true
 
     init(context: UnsafeMutableRawPointer?, callback: @escaping VideoCallback) {
@@ -344,6 +345,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         presentation.updatesNowPlayingInfoCenter = on
         #elseif os(iOS)
         controller?.updatesNowPlayingInfoCenter = on
+        fullscreen?.updatesNowPlayingInfoCenter = on
         #endif
     }
     /// `error`'s payload is a stable code, never AVFoundation's text (jukebox
@@ -890,6 +892,10 @@ extension VideoArm {
         guard var host = responder as? UIViewController else { return }
         while let shown = host.presentedViewController { host = shown }
         let full = FullscreenPlayer()
+        #if os(iOS)
+        // AVKit's default publishes Now Playing, which a claimant may own.
+        full.updatesNowPlayingInfoCenter = avkitPublishes
+        #endif
         full.player = player
         full.videoGravity = gravity
         full.modalPresentationStyle = .fullScreen

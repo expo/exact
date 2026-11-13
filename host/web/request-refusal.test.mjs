@@ -103,17 +103,17 @@ test('wasm and JS request executors refuse outside origins and redirects, and ad
   const js = createRequestExecutor('test.app', set, response => response.arrayBuffer());
   try {
     for (const run of [wasm, js]) {
-      const refused = await run({ method: 'GET', url: `${destination.url}outside`, headers: [] });
+      const refused = await run({ method: 'GET', url: `${destination.url}outside`, headers: [], origin: 'app' });
       expect(refused.failed ?? refused.kind).toBe(2);
       expect(refused.message ?? text(refused)).toBe("outside the app's grants (net.fetch)");
-      const admitted = await run({ method: 'GET', url: `${origin.url}ok`, headers: [] });
+      const admitted = await run({ method: 'GET', url: `${origin.url}ok`, headers: [], origin: 'app' });
       expect(admitted.failed ?? admitted.kind ?? 0).toBe(0);
       expect(new TextDecoder().decode(admitted.body)).toBe('ok');
-      const redirected = await run({ method: 'GET', url: `${origin.url}redirect`, headers: [] });
+      const redirected = await run({ method: 'GET', url: `${origin.url}redirect`, headers: [], origin: 'app' });
       expect(redirected.failed ?? redirected.kind).toBe(2);
       // It names where the redirect led (podcast F5), as the native executor does.
       expect(redirected.message ?? text(redirected)).toBe(`outside the app's grants (net.fetch): redirected to ${destination.url.origin}`);
-      const grantedRedirect = await run({ method: 'GET', url: `${origin.url}granted-redirect`, headers: [] });
+      const grantedRedirect = await run({ method: 'GET', url: `${origin.url}granted-redirect`, headers: [], origin: 'app' });
       expect(grantedRedirect.failed ?? grantedRedirect.kind ?? 0).toBe(0);
       expect(new TextDecoder().decode(grantedRedirect.body)).toBe('granted');
     }
@@ -126,7 +126,7 @@ test('wasm and JS accept a POST redirected through an ungranted origin to a gran
   const origin = Bun.serve({ port: 0, fetch() { return new Response(null, { status: 307, headers: { location: `${hop.url}middle` } }); } });
   const set = normalized(`net.fetch ${origin.url.origin}\nnet.fetch ${final.url.origin}`), js = createRequestExecutor('test.app', set, response => response.arrayBuffer());
   try {
-    for (const run of [() => request({ method: 'POST', url: `${origin.url}start`, headers: [], body: btoa('payload') }, { grantSet: set, controllers: new Set(), moduleLoader: null }), () => js({ method: 'POST', url: `${origin.url}start`, headers: [], raw: 'payload' })]) {
+    for (const run of [() => request({ method: 'POST', url: `${origin.url}start`, headers: [], body: btoa('payload') }, { grantSet: set, controllers: new Set(), moduleLoader: null }), () => js({ method: 'POST', url: `${origin.url}start`, headers: [], raw: 'payload', origin: 'app' })]) {
       const result = await run(); expect([result.failed ?? result.kind ?? 0, new TextDecoder().decode(result.body)]).toEqual([0, 'accepted']);
     }
     expect([hops, finals]).toEqual([[['POST', 'payload'], ['POST', 'payload']], [['POST', 'payload'], ['POST', 'payload']]]);
@@ -147,7 +147,7 @@ test('the redirect mode reaches every web executor', async () => {
     expect(manual.status).not.toBe(200);
     const error = await wasm({ method: 'GET', url: `${origin.url}authorize`, headers: [], redirect: 'error' });
     expect(error.failed ?? error.kind).not.toBe(0);
-    const stream = await streamed({ method: 'GET', url: `${origin.url}authorize`, headers: [], redirect: 'manual' }, set, () => {}, new AbortController());
+    const stream = await streamed({ method: 'GET', url: `${origin.url}authorize`, headers: [], redirect: 'manual', origin: 'app' }, set, () => {}, new AbortController());
     expect(stream.status).not.toBe(200);
     const fetched = await fetchWith(set, `${origin.url}authorize`, { redirect: 'manual' });
     expect(fetched.status).not.toBe(200);
@@ -190,7 +190,7 @@ test('a response over its size limit is Refused on every web executor', async ()
     expect([within.kind, within.body.length]).toEqual([0, 4096]);
     const rust = createRequestExecutor('test.app', set, boundedHttpBody);
     for (const at of [url, `${origin.url}open`]) {
-      expect(await rust({ method: 'GET', url: at, headers: [], maxResponseBytes: 64 })).toEqual({ failed: 2, message: 'HTTP response exceeds limit' });
+      expect(await rust({ method: 'GET', url: at, headers: [], maxResponseBytes: 64, origin: 'app' })).toEqual({ failed: 2, message: 'HTTP response exceeds limit' });
       const refused = await fetchWith(set, at, { exactIndependentHttp: { maxResponseBytes: 64 } }).catch(e => e);
       expect([refused.name, refused.kind, refused.message]).toEqual(['FetchError', 'Refused', 'HTTP response exceeds limit']);
     }
@@ -215,7 +215,7 @@ test('a redirect rejected before the browser exposes a Response is the declared 
   ];
   try {
     for (const run of runs) {
-      const result = await run({ method: 'GET', url: origin.url.href, headers: [] });
+      const result = await run({ method: 'GET', url: origin.url.href, headers: [], origin: 'app' });
       expect(result.failed ?? result.kind).toBe(1);
       expect(result.message ?? text(result)).not.toContain("outside the app's grants");
     }
@@ -448,7 +448,7 @@ test('the production file command refuses a source outside the admitted fs.read 
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-files-admission-'));
   writeFileSync(resolve(dir, 'files.js'), readFileSync(resolve(ROOT, 'host/web-js/files.js'), 'utf8')
     .replace("from './rt.js'", "from './rt-stub.js'").replace("from './navigation.js'", "from './navigation-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve();\n`);
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve(),pressFeedback=()=>{};\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
   writeFileSync(resolve(dir, 'navigation-stub.js'), `export { inertAncestor, liveById } from './navigation.js';\nexport const reportPlace=()=> ['en','UTC','1'].join(String.fromCharCode(0));\n`);
   cpSync(resolve(ROOT, 'host/web-js/pointer.js'), resolve(dir, 'pointer.js'));
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
@@ -829,7 +829,7 @@ test("glue.js surface admission uses a valid raw child line even when another I/
 test('rust-data decodes an ABI child scope before the production executor refuses its parent-granted origin', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-data-'));
   const grants = 'net.fetch https://api.example\nnet.fetch https://outside.example\nsecret.keep token', set = normalized(grants);
-  for (const name of ['rust-data.js', 'admission.js']) {
+  for (const name of ['rust-data.js', 'admission.js', 'held.js', 'rt-link.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'");
     writeFileSync(resolve(dir, name), source);
   }
@@ -840,17 +840,17 @@ test('rust-data decodes an ABI child scope before the production executor refuse
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(8); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(11); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
-    memory, exact_logic_abi: () => 8, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 11, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
       if (code === 0) response(w => { w.u8(0); w.string('test.rust'); w.string('  net.fetch https://api.example\n net.fetch https://outside.example\n\n secret.keep token  '); });
       else if (code === 1 || code === 2) response(w => { w.u8(0); w.u8(0); w.u8(3); });
       else if (code === 3) response(w => {
-        w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u8(0); w.string(''); w.u8(1); w.u8(1); w.string('net.fetch https://api.example'); w.string('GET');
+        w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u32(0); w.u32(0); w.u8(0); w.string(''); w.u8(1); w.u8(1); w.string('net.fetch https://api.example'); w.string('GET');
         w.string('https://outside.example/private'); w.u32(0); w.u32(0);
       });
       else throw new Error(`unexpected logic call ${code}`);
@@ -865,7 +865,7 @@ test('rust-data decodes an ABI child scope before the production executor refuse
     await module.install(data, { probe: '' }, async () => new ArrayBuffer(0));
     const answer = data.answer('probe', [], { map: new Map(), set() {} });
     expect(answer.req).toMatchObject({ method: 'GET', url: 'https://outside.example/private', scope: 'net.fetch https://api.example' });
-    expect(await data.fetch(answer.req)).toEqual({ failed: 2, message: "outside the app's grants (net.fetch)" });
+    expect(await data.fetch(answer.req)).toMatchObject({ failed: 2, message: "outside the app's grants (net.fetch)" });
     expect(data.grantSet).toBeUndefined();
   } finally {
     WebAssembly.instantiate = instantiate;
@@ -881,7 +881,7 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'")
     .replace("from './rt.js'", "from './rt-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n`);
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
   writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes={read:[[],'s'],kept:[[],'s']};\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(set)});\n`);
@@ -904,8 +904,8 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   try {
     const ts = await import(`${pathToFileURL(resolve(dir, 'ts-data.js')).href}?ts=${Date.now()}`), data = { q: [] };
     ts.install(data);
-    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true });
-    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false });
+    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true, effects: undefined, watches: new Set() });
+    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false, effects: undefined, watches: new Set() });
     expect(data.grantSet).toBeUndefined();
     await import(`${pathToFileURL(resolve(dir, 'gpu-glue.js')).href}?late=${Date.now()}`);
     expect(shaderFetches.some(url => url.endsWith('/shaders/shader.wgsl'))).toBe(true);
@@ -945,7 +945,7 @@ export function answer(name, args, store, storage) {
 `);
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n`); writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n"); // (and rt-link.js, ts-stream.js's way to them)
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n`); writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n"); // (and rt-link.js, ts-stream.js's way to them)
   const ledger = '{"days":["[",{"id":"s","transactions":["[",{"id":"s","amount":"n"}]}],"note":["?","s"]}';
   writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes={ledger:[["s"],${ledger}],later:[[],${ledger}],read:[[],"s"],stream:[[],"s"]};\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
@@ -1147,7 +1147,7 @@ export function answer(name, args, store, storage) {
 }`);
     writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
       .replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();');
+    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();'); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
     writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes=${JSON.stringify(Object.fromEntries([...methods, 'open', 'work', 'directories', 'document'].map(n => [n, [[], 's']])))};`);
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
     writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(normalized(spec))});`);
@@ -1236,7 +1236,7 @@ self.__exact_host = (op, name) => { if (op === 12 && name === 'listen') return '
 const storage = api.createStorage(self, { appId: 'test', grantSet: null }, () => context.owner, 'k');
 if (typeof api.bindAnswerStorage === 'function') api.bindAnswerStorage(self, storage, () => context.owner);
 eval(readFileSync(${JSON.stringify(resolve(ROOT, 'js/src/binary.js'))}, 'utf8'));
-eval(readFileSync(${JSON.stringify(resolve(ROOT, 'js/src/prelude.js'))}, 'utf8'));
+eval((await import(${JSON.stringify(resolve(ROOT, 'host/web-js/glue.mjs'))})).modulePrelude(${JSON.stringify(ROOT)}));
 self.__exact_storage = storage.capability;
 self.__exact_install_storage();
 self.__exact_main_thread();
@@ -1307,7 +1307,7 @@ try {
 // test says. `body` posts one verdict.
 async function realmVerdict(body) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-letgo-'));
-  const prelude = JSON.stringify(resolve(ROOT, 'js/src/prelude.js'));
+  const prelude = `(await import(${JSON.stringify(resolve(ROOT, 'host/web-js/glue.mjs'))})).modulePrelude(${JSON.stringify(ROOT)})`;
   writeFileSync(resolve(dir, 'worker.mjs'), `
 import { readFileSync } from 'node:fs';
 import * as api from './storage.js';
@@ -1332,7 +1332,7 @@ self.__exact_host = (op, name) => { if (op === 12 && name === 'listen') return '
 const storage = api.createStorage(self, { appId: 'test', grantSet: null }, () => context.owner, 'k');
 if (typeof api.bindAnswerStorage === 'function') api.bindAnswerStorage(self, storage, () => context.owner);
 eval(readFileSync(${JSON.stringify(resolve(ROOT, 'js/src/binary.js'))}, 'utf8'));
-eval(readFileSync(${prelude}, 'utf8'));
+eval(${prelude});
 self.__exact_storage = storage.capability;
 self.__exact_install_storage();
 self.__exact_main_thread();

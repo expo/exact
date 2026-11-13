@@ -51,6 +51,7 @@ pub struct DocTree {
     roots: Vec<ViewId>,
     /// The nodes each `id` prop names, in tree order.
     ids: std::collections::HashMap<String, Vec<ViewId>>,
+    references: exact_kernel::svg::refs::IdIndex<ViewId>,
     /// Its styles' wide colours, kept from the table's sweep.
     kept: exact_kernel::style::wide::Keep,
 }
@@ -86,6 +87,7 @@ impl DocTree {
 
     /// Every node, mutably, for the props the runner adds after the fold.
     pub(crate) fn nodes_mut(&mut self) -> &mut [DocNode] {
+        self.references.clear();
         &mut self.nodes
     }
 
@@ -192,20 +194,17 @@ impl DocTree {
     /// rule (`Kernel::resolve_id`): the one node with that `id`, or of
     /// several the nearest to `from`.
     pub fn resolve_id(&self, from: ViewId, id: &str) -> Option<ViewId> {
-        match self.ids.get(id)?.as_slice() {
-            [] => None,
-            [one] => Some(*one),
-            several => exact_kernel::svg::refs::nearest(
-                several,
-                self.node(from)?.id,
-                |node| self.node(node).and_then(|n| n.parent),
-                |parent, child| {
-                    self.node(parent)
-                        .and_then(|p| p.children.iter().position(|c| *c == child))
-                        .unwrap_or(usize::MAX)
-                },
-            ),
-        }
+        self.references.resolve(
+            id,
+            self.node(from).map(|n| n.id),
+            || self.ids.get(id).into_iter().flatten().copied(),
+            |node| self.node(node).and_then(|n| n.parent),
+            |node| {
+                self.node(node)
+                    .into_iter()
+                    .flat_map(|n| n.children.iter().copied())
+            },
+        )
     }
 }
 

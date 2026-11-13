@@ -56,6 +56,16 @@ impl Drop for Work {
     }
 }
 
+/// Run `f` inside one shared import budget and report the units spent.
+/// A refused charge consumes the remaining units, as [`spend`] does.
+#[doc(hidden)]
+pub fn measured<T>(limit: u64, f: impl FnOnce() -> T) -> (T, u64) {
+    let _work = Work::begin(limit);
+    let before = LEFT.with(Cell::get);
+    let out = f();
+    (out, before - LEFT.with(Cell::get))
+}
+
 /// Spend `n`, or refuse: the document expands past what one import may.
 /// Outside any import's [`Work`], nothing is counted.
 pub fn spend(n: u64) -> Result<(), String> {
@@ -128,5 +138,22 @@ mod spent_tests {
         assert!(super::spent().is_none());
         assert!(super::spend(1).is_err());
         assert!(super::spent().is_some());
+    }
+
+    #[test]
+    fn measured_work_shares_nested_budgets_and_resets_between_imports() {
+        use super::{measured, spend};
+        let ((), used) = measured(10, || {
+            spend(3).unwrap();
+            let ((), inner) = measured(100, || {
+                spend(7).unwrap();
+                assert!(super::spent().is_none());
+            });
+            assert_eq!(inner, 7);
+            assert!(spend(1).is_err());
+            assert!(super::spent().is_some());
+        });
+        assert_eq!(used, 10);
+        assert_eq!(measured(20, || spend(4)).1, 4);
     }
 }

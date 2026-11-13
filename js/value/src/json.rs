@@ -139,12 +139,21 @@ impl Object {
         }
     }
 
-    /// [`Object::insert`] without its answer, out of line: each iterator an
-    /// object is collected from would otherwise carry its own copy of the
-    /// search and the insert.
-    #[inline(never)]
-    fn put(&mut self, key: String, value: Json) {
-        self.insert(key, value);
+    /// An object of `members` in any order; of equal keys, the last value
+    /// stays. One sort, where an insert per member would move every later
+    /// member and make keys arriving in descending order quadratic.
+    pub(crate) fn of(mut members: Vec<(String, Json)>) -> Self {
+        // Stable, so equal keys keep their arrival order and the last of a
+        // run is the value that stays.
+        members.sort_by(|(a, _), (b, _)| a.cmp(b));
+        members.dedup_by(|later, kept| {
+            let equal = later.0 == kept.0;
+            if equal {
+                std::mem::swap(&mut later.1, &mut kept.1);
+            }
+            equal
+        });
+        Object(members)
     }
 
     /// Remove `key`; its value, if it had one.
@@ -176,11 +185,7 @@ impl Object {
 impl FromIterator<(String, Json)> for Object {
     /// Of equal keys, the last value stays.
     fn from_iter<I: IntoIterator<Item = (String, Json)>>(iter: I) -> Self {
-        let mut object = Object::new();
-        for (key, value) in iter {
-            object.put(key, value);
-        }
-        object
+        Object::of(iter.into_iter().collect())
     }
 }
 
@@ -192,11 +197,12 @@ pub fn object<const N: usize>(mut members: [(&str, Json); N]) -> Json {
 /// [`object`]'s one body: its callers pass arrays of many lengths, and a
 /// body per length would be a copy each.
 fn object_of(members: &mut [(&str, Json)]) -> Json {
-    let mut object = Object::new();
-    for (key, value) in members {
-        object.put((*key).to_owned(), std::mem::take(value));
-    }
-    Json::Object(object)
+    Json::Object(Object::of(
+        members
+            .iter_mut()
+            .map(|(key, value)| ((*key).to_owned(), std::mem::take(value)))
+            .collect(),
+    ))
 }
 
 impl Json {

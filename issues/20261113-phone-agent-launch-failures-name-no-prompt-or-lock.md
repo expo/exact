@@ -49,3 +49,12 @@ became ready; `.
 - Longer term, as the reporter asked: a carrier that needs no local-network access, such as
   a connection over the paired device's tunnel, or a documented first step that clears the
   prompt once per bundle id.
+
+## Landed; device verification owed
+
+The driver now preserves launch diagnostics, identifies an explicitly reported
+device lock, gives qualified Local Network guidance for `No route to host` and
+`waiting for foreground`, and says when the app printed nothing. The reference
+documents the first-launch prompt and the need to answer it on the phone.
+Diagnostic tests cover these cases. A signed iPhone run with an unanswered prompt
+and a locked screen is still owed; this Mac lane has no signed phone.

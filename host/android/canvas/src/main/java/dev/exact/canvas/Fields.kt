@@ -87,7 +87,7 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
  * The app's text fields (LLP 1115.001 D8). Each `input` of a text type and each `textarea` is the framework's own
  * [EditText], with no background of its own, over the container exact2 paints for it. The IME and its composition,
  * autofill, the selection handles, the magnifier, the floating toolbar and the spell checker are the platform's,
- * because the field is. `host/linux/src/presenter/hosted.rs` is exact2's side and has the words that cross.
+ * because the field is. `host/painted/src/presenter/hosted.rs` is exact2's side and has the words that cross.
  *
  * **Where a field is.** exact2 lays it out and says, with each stream, where its content box was painted, under
  * which clip, and among which scroller's rows ([told], [Native.fields]). The view is put there for real (its
@@ -337,7 +337,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
         text.selected = { _, _ -> if (!quiet) { f.moved = true; later() } }
         // Any IME call is real input (a backspace in an empty field included, which changes nothing it reports):
         // a held state lets go (LLP 1122 D8).
-        text.asked = { Exact.fieldInput(f.id, f.generation); later() }
+        text.asked = { Exact.fieldInput(f.id, f.generation, 0); later() }
         text.setOnFocusChangeListener { _, has ->
             if (has) {
                 focused = f
@@ -375,7 +375,11 @@ internal class Fields(context: Context) : FrameLayout(context) {
         }
         text.setOnKeyListener { _, code, event ->
             // Any key down is real input, which lets a held state go (LLP 1122 D8).
-            if (event.action == KeyEvent.ACTION_DOWN) Exact.fieldInput(f.id, f.generation)
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val ime = event.flags and (KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE) != 0
+                val kind = if (ime || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) 0 else 2
+                Exact.fieldInput(f.id, f.generation, kind)
+            }
             if (code != KeyEvent.KEYCODE_TAB || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return@setOnKeyListener false
             // Tab is the page's: exact2 moves the focus through its own order, which knows the painted controls.
             if (event.action == KeyEvent.ACTION_DOWN) {
@@ -711,7 +715,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
         val own = f != null && f.id == field && fields[field] === f
         if (own) {
             state = OWNED
-            Exact.fieldInput(f!!.id, f.generation) // a finger down in it: real input, which lets a held state go
+            Exact.fieldInput(f.id, f.generation, 1)
         } else { state = NONE; target = null }
         var scrolled = false
         for ((k, e) in events.withIndex()) {

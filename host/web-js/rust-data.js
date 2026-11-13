@@ -2,13 +2,14 @@ import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclarati
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
 import { rt } from './rt-link.js'; // (rt.js's own, as a lazy chunk takes them)
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 8,
+import { heldReply } from './held.js';
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 11,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
-// runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 8, utf8 = new TextEncoder(), text = new TextDecoder();
+// runtime shows its compiled value or placeholder and asks again at `ready`.
+const ABI = 11, utf8 = new TextEncoder(), text = new TextDecoder(), CALL = Symbol('call');
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -75,16 +76,38 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
 }, e => { throw new Error(`${p.slice(2)} could not be fetched: ${e?.message ?? e}`); })) {
   const [wasm, plan] = await Promise.all([load('./rust/wasm/app.module.wasm'), load('./app.bind.plan')]);
   // Bytes, or a module a renderer compiled once for every render.
-  const made = await WebAssembly.instantiate(wasm, {}), instance = made.instance ?? made;
-  const e = instance.exports;
-  if (e.exact_logic_abi() !== ABI) throw new Error(`Rust module ABI ${e.exact_logic_abi()} is not ${ABI}`);
-  const session = e.exact_logic_create();
+  const made = await WebAssembly.instantiate(wasm, {}), compiled = made.module ?? wasm;
+  // The instance and its session, which a failed call replaces (`call`); `unavailable` once that failed too.
+  let e, session, active = false, unavailable = null;
+  const start = instance => {
+    e = instance.exports;
+    if (e.exact_logic_abi() !== ABI) throw new Error(`Rust module ABI ${e.exact_logic_abi()} is not ${ABI}`);
+    session = e.exact_logic_create();
+  };
+  start(made.instance ?? made);
   const call = bytes => {
-    const p = e.exact_logic_alloc(bytes.length);
-    new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
-    const rc = e.exact_logic_call(session, p, bytes.length);
-    e.exact_logic_dealloc(p, bytes.length);
-    if (rc !== 0) throw new Error('Rust module rejected the call');
+    if (unavailable) throw new Error(`the Rust module is unavailable: ${unavailable}`);
+    let rc;
+    try {
+      const p = e.exact_logic_alloc(bytes.length);
+      new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
+      rc = e.exact_logic_call(session, p, bytes.length);
+      e.exact_logic_dealloc(p, bytes.length);
+    } catch (trap) { rc = trap; }
+    if (rc !== 0) {
+      const error = rc instanceof Error ? rc : new Error('Rust module rejected the call');
+      // A failed call may have run, and changed the module's own state, before it failed: a trap leaves its memory
+      // undefined, and a reply over the seam's bound is refused after its answer ran. The next call runs in a fresh
+      // instance, activated again now, as natively (logic/src/lib.rs `run`; LLP 1029.000 §3).
+      if (active) {
+        active = false;
+        try { start(new WebAssembly.Instance(compiled, {})); activate(); } catch (again) {
+          unavailable = again?.message ?? String(again);
+          throw new Error(`${error.message}; activating the module again failed: ${unavailable}`);
+        }
+      }
+      throw error;
+    }
     const r = reader(new Uint8Array(e.memory.buffer, e.exact_logic_output(session), e.exact_logic_output_len(session)).slice());
     if (r.u32() !== ABI) throw new Error('logic ABI version differs');
     return r;
@@ -92,6 +115,15 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // A result (`read_result`): now, or an HTTP request for the host to run.
   const result = r => {
     let tag = r.u8(), cache;
+    // A held mark (tag 15, LLP 1016.000 D9) wraps the HTTP result and its other markers.
+    const held = tag === 15;
+    if (held) { tag = r.u8(); if (![1, 6, 9, 10, 11, 12, 13, 14].includes(tag)) throw new Error('invalid held HTTP result'); }
+    const prefetch = tag === 14;
+    if (prefetch) { tag = r.u8(); if (![1, 12, 13].includes(tag)) throw new Error('invalid prefetch HTTP result'); }
+    if (tag === 13) {
+      const name = r.str(); tag = r.u8();
+      if (!/^[a-z][a-z0-9-]*$/.test(name) || ![1, 6, 9, 10, 11, 12].includes(tag)) throw new Error('invalid preload HTTP result');
+    }
     if (tag === 12) {
       cache = r.str(); tag = r.u8();
       if (!['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'].includes(cache) || ![1, 6, 9, 10].includes(tag)) throw new Error('invalid cached HTTP result');
@@ -104,6 +136,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     if (tag >= 2 && tag <= 4) throw Object.assign(new Error(r.str()), { unknown: tag === 2, refuse: true });
     // A stream (9), a long poll (10, LLP 1016.000 D8), a two-way socket (11, LLP 1016.003).
     if (tag === 1 || tag === 6 || (tag >= 9 && tag <= 11)) {
+      if (prefetch && tag !== 1) throw new Error('exactPrefetch requires a plain HTTP read');
       const http = tag === 1 ? 'ordered' : `independent:${r.u32()}`;
       const scoped = r.u8() === 1, scope = r.str();
       const method = r.str(), url = r.str(), headers = [];
@@ -116,7 +149,15 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // (refused as the native seam refuses it: before the turn's writes apply)
       const pollRefusal = longPoll && longPollRefusal({ url, longPoll, stream: true }, method, n ? 'x' : '');
       if (pollRefusal) throw new Error(pollRefusal);
-      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, socket: tag === 11, protocols, longPoll } };
+      // `cancel`: a read, which the commit that lets its ticket go aborts (request-send.js); a write runs to its end.
+      // `http` is what resources.js `sameReq` compares beyond the request itself: its scheduling and its held mark, so
+      // an in-flight request is not kept for newer arguments whose request differs only in being held.
+      return { req: { method, url, headers, cache, ...(prefetch ? { prefetch: true } : {}), held, body: text.decode(body), raw: body, http: held ? `${http} held` : http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, cancel: tag < 9 && /^(GET|HEAD)$/i.test(method), socket: tag === 11, protocols, longPoll } };
+    }
+    if (tag === 16) {
+      const surface = r.str(), path = r.str(), scoped = r.u8(), scope = r.str();
+      if (scoped > 1) throw new Error('invalid grant scope tag');
+      return { req: { canvas: { surface, path }, scope: scoped ? scope : null } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
@@ -124,10 +165,18 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     throw new Error(`a Rust answer of kind ${tag} (surface work) is not carried by the JS target`);
   };
   const op = (code, fill) => { const w = writer(); w.u32(ABI); w.u8(code); fill?.(w); return call(w.done()); };
-  let r = op(0); r.u8(); const meta = [r.str(), r.str()];
-  if (!sameGrantDeclaration(rustGrantSet, meta[1])) throw new Error('Rust module grants differ from the admitted build');
-  r = op(1, w => w.bytes(new Uint8Array(plan))); r.u8(); result(r);
-  r = op(2); r.u8(); result(r);
+  let meta;
+  // The module's identity and grants, then its plan's declarations bound and the module activated.
+  const activate = () => {
+    let r = op(0); r.u8(); const said = [r.str(), r.str()];
+    if (!sameGrantDeclaration(rustGrantSet, said[1])) throw new Error('Rust module grants differ from the admitted build');
+    if (meta && said[0] !== meta[0]) throw new Error('Rust module changes its app identity');
+    meta = said;
+    r = op(1, w => w.bytes(new Uint8Array(plan))); r.u8(); result(r);
+    r = op(2); r.u8(); result(r);
+    active = true;
+  };
+  activate();
   // A Rust source's two-way sockets (LLP 1016.003), each open one's transport under a number for the resource that
   // owns it and its stream's ticket, which the module's handles keep: a handle from an earlier ticket is stale.
   const sockets = new Set(), ids = new WeakMap();
@@ -185,11 +234,13 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     return { ops, overload: over === 1 ? why : null };
   };
   // One call (`call_request`): source, arguments by type, admitted secret names, the store's
-  // snapshot, its socket turn; its reply (`call_reply`): a store read, writes, socket operations, the result.
-  // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3).
-  let threwRead = false;
+  // snapshot, its socket turn; its reply (`call_reply`): a store read, the topics it watched, its draws of randomness,
+  // writes, socket operations, the result.
+  // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3);
+  // and what it watched: its resource watches it too, as the runner's failed ask does.
+  let threwRead = false, threwWatches = null;
   const callWith = (code, source, args, store, outcome, turn) => {
-    threwRead = false;
+    threwRead = false; threwWatches = null;
     const r = op(code, w => {
       w.str(source); w.u8(6); w.u32(args.length);
       const t = (sources[source] ?? '').split('|')[0]; let i = 0; for (const a of args) i = encode(w, a, t, i);
@@ -213,18 +264,28 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       socketTurn(w, turn);
     });
     if (r.u8() !== 2) throw new Error('expected a call reply');
-    const observed = r.u8() === 1;
+    const observed = r.u8() === 1, topics = [];
+    for (let n = r.u32(); n--;) topics.push(r.str());
+    r.u32(); // draws of randomness, which only a bake reads (LLP 1069.005 D2)
     const writes = [];
-    for (let n = r.u32(); n--;) { const k = r.str(); const v = r.u8() ? r.str() : null; if (!admitsSecret(rustGrantSet, k)) throw new Error(`secret ${k} is not granted`); writes.push([k, v]); }
+    // A write's tag: bit 0, a value follows; bit 1, written under a lease (the page's store keeps no lease).
+    for (let n = r.u32(); n--;) {
+      const k = r.str(), tag = r.u8();
+      if (tag > 3) throw new Error('invalid write tag');
+      const v = tag & 1 ? r.str() : null;
+      if (!admitsSecret(rustGrantSet, k)) throw new Error(`secret ${k} is not granted`);
+      writes.push([k, v]);
+    }
     const { ops, overload } = socketOps(r);
     let out;
     try { out = result(r); } catch (error) {
-      threwRead = observed; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
+      threwRead = observed; threwWatches = topics.length ? new Set(topics) : null; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
       if (ops.length) said(turn, error.message);
       throw error;
     }
     if (!globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
     if (observed) out.store = true;
+    if (topics.length) out.watches = new Set(topics);
     // A mapper's call past D7's bounds fails its frame, whatever it answered (LLP 1016.003 D4).
     if (overload) { if (ops.length) said(turn, overload); throw new Error(overload); }
     if (!ops.length) return out;
@@ -234,15 +295,36 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     else out.effects = [sending(ops, turn)];
     return out;
   };
-  const rust = (source, args, store, target, mutation) => callWith(3, source, args, store, null, mutation ? { mutation, verb: 'send', name: target } : null);
-  const ts = data.ts, tsThrewRead = data.threwRead;
+  // A held request (`Request::held()`, LLP 1016.000 D9) on the page. Each answer's HTTP request that is not a stream
+  // has a call, as a TypeScript answer has (ts-fetch.js), whose `held` is 1 while its request is held and out: held.js
+  // then leaves the ticket out of every clock and names it, and a store write asks it again at once (resources.js
+  // `openEnded`). A request that a reply's parse asks for goes out on the same ticket, so it takes the same call
+  // (`CALL`, carried on the request and on the outcome that is parsed). A render waits for every request, held or not
+  // (held.js `counted`), so it makes no call.
+  const carry = (req, call) => {
+    if (!call || !req?.method || req.stream) return false;
+    call.held = req.held ? 1 : 0;
+    req[CALL] = call;
+    return true;
+  };
+  const rust = (source, args, store, target, mutation) => {
+    const out = callWith(3, source, args, store, null, mutation ? { mutation, verb: 'send', name: target } : null), call = {};
+    if (!globalThis.__exactRender && carry(out.req, call)) out.call = call;
+    return out;
+  };
+  const ts = data.ts, tsThrewRead = data.threwRead, tsThrewWatches = data.threwWatches;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
+  data.threwWatches = () => { const w = threwWatches ?? tsThrewWatches?.() ?? null; threwWatches = null; return w; };
   data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store, target, mutation); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
   // A stream's messages that arrived together (request-send.js): each parsed in order (LLP 1016.000 D4), the last
   // one's answer theirs; one that answers with a request (the stream asked again) ends them there.
   // A two-way socket's `open` or frame is its own mapper's turn (LLP 1016.003 D4): it may send on that socket.
   data.parse = (source, args, outcome, store) => {
-    if (!outcome.streamed) return callWith(4, source, args, store, outcome);
+    if (!outcome.streamed) {
+      const out = callWith(4, source, args, store, outcome);
+      carry(out.req, outcome[CALL]);
+      return out;
+    }
     let out, read = false;
     const effects = [];
     for (const m of outcome.streamed) {
@@ -287,13 +369,23 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // its messages names its socket for `parse`. A mutation's socket has no mapper to send, and only listens.
   const run = createRequestExecutor(data.appId ?? meta[0], rustGrantSet, boundedHttpBody);
   data.fetch = (req, message, controller) => {
-    if (!req.stream) return run(req);
+    if (!req.stream) {
+      const call = req[CALL];
+      if (!call) return run(req, controller?.signal, controller);
+      // A held request's reply, a failure too, is a held reply for `clock held` (the runner's `held_replies`).
+      return run(req, controller?.signal, controller).then(o => {
+        if (call.held) { call.held = 0; heldReply(call); }
+        o[CALL] = call;
+        return o;
+      });
+    }
     let socket = null;
     const protocol = req.socket && controller.resource ? { socket: transport => {
       socket = { transport, controller, id: idOf(controller.owner), ticket: controller.ticket, name: controller.streamName, unsent: 0 };
       sockets.add(socket); controller.socket = transport;
     } } : undefined;
-    return streamed(req, rustGrantSet, m => message(socket ? { ...m, socket } : m), controller, undefined, protocol).then(o => {
+    // A long poll's reply that is no event (LLP 1016.000 D8) is counted by the reader (`replied`) and lands nothing.
+    return streamed(req, rustGrantSet, m => { if (!req.longPoll || m.event !== 'exact:reply') message(socket ? { ...m, socket } : m); }, controller, undefined, protocol).then(o => {
       sockets.delete(socket);
       if (o.close) rt.journal.push(`t=${rt.clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
       return o.close ? { closed: o.close } : o.kind ? { failed: o.kind, message: text.decode(o.body) }
@@ -301,7 +393,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     });
   };
   // What a loaded capability needs of the module (canvas2d.js's draws).
-  data.logic = { exports: e, session, writer, reader, encode, ABI };
+  data.logic = { get exports() { return e; }, get session() { return session; }, writer, reader, encode, ABI };
   data.appId ??= meta[0];
   data.grants = setAppGrantSet(tsGrantSet, rustGrantSet);
   for (const f of data.q.splice(0)) f();

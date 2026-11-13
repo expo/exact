@@ -135,8 +135,8 @@ test('ordinary Windows host manifests admit only the empty host settings object'
 });
 
 test('storage error numbers retain platform meaning and require an exact typed suffix', () => {
-  const source=readFileSync(new URL('../js/src/prelude.js',import.meta.url),'utf8');
-  const mapping=source.slice(source.indexOf('  var windowsStorage ='),source.indexOf('  function storageError('));
+  const source=readFileSync(new URL('../js/src/storage.js',import.meta.url),'utf8');
+  const mapping=source.slice(source.indexOf('    var windowsStorage ='),source.indexOf('    function storageError('));
   const make=marker=>{
     const global={__exact_windows_storage:marker};
     const code=new Function('global',`${mapping}\nreturn storageCode;`)(global);
@@ -806,7 +806,8 @@ test('setup selects supported pinned Binaryen archives on Windows and Unix', () 
 test('SDK CLI entrypoint executes', () => {
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'exact.mjs'),'--help'],{encoding:'utf8'});
   expect(result.status).toBe(0);
-  expect(result.stdout).toContain('exact setup [--check]');
+  // The verb and its first flag, not the whole usage line, which grows with its options.
+  expect(result.stdout).toMatch(/^\s*exact setup \[--check\b/m);
 });
 
 test('caps command reports the checkout budgets', () => {

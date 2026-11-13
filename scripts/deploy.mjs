@@ -40,8 +40,8 @@ import { requireReleasePins } from '../game/inputs.mjs';
 // the repository. `update/tests/it/publisher.rs` reads a head this script
 // produced and proves the client verifies it.
 import { spawnSync } from 'node:child_process';
-import { randomBytes, verify } from 'node:crypto';
-import { Refusal, refuse, assetIndex, canonicalBytes, canonicalJson, envelopeBytes, fileCard, portableAssetNames, publicKeyFromRaw, loadSigner, keygen, indexCard, readAssetIndex, envelopeReport, validateRawIntegers } from './deploy-signing.mjs';
+import { randomBytes } from 'node:crypto';
+import { Refusal, refuse, assetIndex, canonicalBytes, canonicalJson, envelopeBytes, portableAssetNames, loadSigner, keygen, readAssetIndex, envelopeReport } from './deploy-signing.mjs';
 export { canonicalBytes, portableAssetNames, publicKeyFromRaw, loadSigner, readAssetIndex, sealEnvelope } from './deploy-signing.mjs';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, hostname, tmpdir, userInfo } from 'node:os';
@@ -49,9 +49,12 @@ import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep
 import { fileURLToPath } from 'node:url';
 import { buildRust, publishedSignature, rustBundle, rustPackage, tieredNative } from './rust.mjs';
 import { appleProduction } from '../host/apple/link.mjs';
-import { assertOwnTarget, cargoReproducibilityFlags, readManifest, buildBake, bakeTarget, readBuilds, cohortReceipt, classifyArtifacts, resolveApp, shaderWatchRoots } from './app.mjs';
+import { assertOwnTarget, bakedEntryAssets, cargoReproducibilityFlags, readManifest, buildBake, bakeTarget, readBuilds, cohortReceipt, classifyArtifacts, resolveApp, shaderWatchRoots } from './app.mjs';
 import { gameShells } from "../game/app/shells.mjs";
+import { streamBundle, unbundledTextures } from './texture-families.mjs';
 import { blobPath, channelOrigin, openOrigin, OriginUnavailable, sha256, streamPath, parseWebRoot, webRootPath, webRootStream, webReleasePath, validateChannel } from './origin.mjs';
+import { admitHead, keepRecord, latestRecord, nextSeq } from './deploy-heads.mjs';
+export { admitHead, inspectHead } from './deploy-heads.mjs';
 import { filesystemLock, removePrivateTree } from './filesystem.mjs';
 import { listBuildFiles, listPublicFiles, readStaticCandidate } from '../host/web/serve.mjs';
 import { BESIDE, STAGE } from '../host/web/beside.mjs';
@@ -494,10 +497,10 @@ function keepLiveMtimes(repo, staged) {
   walk(staged);
 }
 
-/** Keep Git discovery and process state inside the private snapshot boundary;
+/** Keep Git discovery and compiler paths inside the private snapshot boundary;
  * shipping bakes ignore a proof profile inherited from the caller's shell. */
 function sealedSourceEnv(sourceRoot, extra = {}) {
-  const env = { ...process.env, ...extra, EXACT_GAME_PROOF_PROFILE: 'release' };
+  const env = { ...process.env, ...extra, EXACT_GAME_PROOF_PROFILE: 'release', EXACT_SOURCE_ROOT: sourceRoot };
   for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
     'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[name];
   env.GIT_CEILING_DIRECTORIES = sourceRoot;
@@ -664,6 +667,23 @@ function readBundle(web, app) {
   return { envelope, plan: { sha256: envelope.plan.sha256, bytes: plan, formatVersion: envelope.plan.formatVersion, kernelSchema: envelope.plan.kernelSchema }, assets };
 }
 
+/** Hold each platform's bake graph to the bundle its stream publishes. A TypeScript app's widget and activity
+ * generation lists its module pair (`typescript/`, bake/src/widgets.rs), which the web bundle carries as its own
+ * module instead: that platform's bundle (`bundle.platforms`) adds the pair its bake made, and leaves out the
+ * texture families its devices do not read (scripts/texture-families.mjs). Any other difference refuses. */
+export function holdBundles(bundle, builds, directory) {
+  const cards = (b) => canonicalJson([{ name: 'app.plan', sha256: b.plan.sha256, bytes: b.plan.bytes.length },
+    ...b.assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length }))].sort((a, c) => a.name.localeCompare(c.name)));
+  const { platforms, ...base } = bundle;
+  for (const [platform, build] of Object.entries(builds)) {
+    const pair = bakedEntryAssets(directory, build, (name) => name.startsWith('typescript/'));
+    const unbundled = unbundledTextures(base.assets.map((a) => a.name), build.compat.inputs?.textureFamily);
+    if (pair.length || unbundled.size) bundle.platforms = { ...bundle.platforms, [platform]: { ...base, assets: [...base.assets.filter((a) => !unbundled.has(a.name)), ...pair], thinned: base.assets.filter((a) => unbundled.has(a.name)) } };
+    const graph = build.graph.artifacts.map(({ name, sha256, bytes }) => ({ name, sha256, bytes })).sort((a, c) => a.name.localeCompare(c.name));
+    if (canonicalJson(graph) !== cards(bundle.platforms?.[platform] ?? base)) refuse(`${platform} bake graph differs from the packaged bundle`);
+  }
+}
+
 /** Compile the actual target/grants producer. Analysis artifacts have no
  * launchable production sequence; publication returns the receipt for a
  * subsequent strict release bake. */
@@ -766,13 +786,6 @@ export function streamHead({ app, bundle, stream, seq, release, sunset = null })
   return head;
 }
 
-function strictBase64(text, length, label) {
-  if (typeof text !== 'string') throw new Error(`${label} is not base64 text`);
-  const decoded = Buffer.from(text, 'base64');
-  if (decoded.length !== length || decoded.toString('base64') !== text) throw new Error(`${label} is not canonical base64 of ${length} bytes`);
-  return decoded;
-}
-
 /** The signed native Rust module of the stream's last published release: its
  * head authenticated, its blob the one the head names. Else null. */
 async function publishedModule(origin, app, stream) {
@@ -783,148 +796,6 @@ async function publishedModule(origin, app, stream) {
     if (!bytes || sha256(bytes) !== card.sha256) return null;
     return card.name.endsWith('.bin') ? tieredNative(bytes) : bytes;
   } catch { return null; }
-}
-
-/** `inspectHead`, then the asset index a usable head names, read from the
- * origin into `head.assets` as its cards; a head whose index is missing or
- * not its bytes is unusable. */
-export async function admitHead(origin, found, app, stream) {
-  const admission = inspectHead(found, app, stream);
-  if (!admission.usable) return admission;
-  try {
-    const card = admission.head.assets;
-    const path = card && new URL(card.url, `https://origin.invalid/${streamPath(stream)}/exact.json`).pathname.slice(1);
-    const assets = card ? readAssetIndex(card, await origin.get(path)) : [];
-    return { ...admission, head: { ...admission.head, assets } };
-  } catch (error) {
-    if (error instanceof OriginUnavailable) throw error;
-    return { usable: false, authenticated: false, head: found?.json ?? null, seq: null, problem: error.message || String(error) };
-  }
-}
-
-/** Parse and authenticate one origin head by the same pre-download rules as
- * exact-update. An unusable head contributes no sequence: even a syntactically
- * valid number is attacker-controlled until its signature has verified. Its
- * asset index is `admitHead`'s to read. */
-export function inspectHead(found, app, stream) {
-  try {
-    if (!Buffer.isBuffer(found?.bytes)) throw new Error('the origin returned no head bytes');
-    if (found.bytes.length > 64 * 1024) throw new Error(`the envelope is ${found.bytes.length} bytes; the most is ${64 * 1024}`);
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(found.bytes);
-    validateRawIntegers(text);
-    const head = JSON.parse(text);
-    if (!head || typeof head !== 'object' || Array.isArray(head)) throw new Error('the envelope is not a JSON object');
-    canonicalBytes(head); // recursively rejects every inexact JSON number
-    if (head.exact !== 1) throw new Error(`the envelope is exact ${head.exact ?? '(missing)'}; this binary reads exact 1`);
-    if (!head.app || typeof head.app !== 'object' || Array.isArray(head.app)) throw new Error('the envelope names no app');
-    if (typeof head.app.id !== 'string' || !head.app.id) throw new Error('the envelope names no nonempty app id');
-    fileCard(head.plan, 'app.plan');
-    if (!head.stream || typeof head.stream !== 'object' || Array.isArray(head.stream)) throw new Error('the envelope names no stream');
-    if (typeof head.stream.channel !== 'string') throw new Error('the stream names no channel');
-    if (typeof head.stream.compatibilityId !== 'string') throw new Error('the stream names no compatibility id');
-    if (!Number.isSafeInteger(head.stream.seq) || head.stream.seq < 0) throw new Error('the stream names no exact nonnegative seq');
-    if (head.assets !== undefined) indexCard(head.assets);
-    if (head.sunset !== undefined) {
-      if (!head.sunset || typeof head.sunset !== 'object' || Array.isArray(head.sunset)) throw new Error('the sunset card is not an object');
-      if (typeof head.sunset.message !== 'string') throw new Error('the sunset card has no message');
-    }
-    let signature = null;
-    if (head.signature !== undefined) {
-      if (!head.signature || typeof head.signature !== 'object' || Array.isArray(head.signature)) throw new Error('the signature is not an object');
-      if (typeof head.signature.keyId !== 'string') throw new Error('the signature names no key id');
-      signature = strictBase64(head.signature.ed25519, 64, 'the signature');
-    }
-    if (head.app.id !== app.id) throw new Error(`the head is for ${head.app.id}; this binary is ${app.id}`);
-    if (head.app.name !== app.displayName) throw new Error(`the head calls ${app.id} ${JSON.stringify(head.app.name)}, not ${JSON.stringify(app.displayName)}`);
-    if (typeof head.stream.app === 'string' && head.stream.app !== app.id) throw new Error(`the head's stream is for ${head.stream.app}; this binary is ${app.id}`);
-    if (head.stream.channel !== stream.channel) throw new Error(`the head is for channel ${head.stream.channel}; this binary is ${stream.channel}`);
-    if (head.stream.compatibilityId !== stream.compatibilityId) throw new Error(`the head is for cohort ${head.stream.compatibilityId}; this binary is ${stream.compatibilityId}`);
-    const keys = app.manifest.deploy?.signing?.keys ?? {};
-    let authenticated = false;
-    if (Object.keys(keys).length) {
-      if (!signature) throw new Error('the head is unsigned and this binary carries keys');
-      if (!Object.hasOwn(keys, head.signature.keyId)) throw new Error(`the head is signed by ${head.signature.keyId}, which this binary does not carry`);
-      const key = strictBase64(keys[head.signature.keyId], 32, `the embedded key ${head.signature.keyId}`);
-      if (!verify(null, canonicalBytes(head), publicKeyFromRaw(key), signature)) throw new Error(`the head's signature by ${head.signature.keyId} does not verify`);
-      authenticated = true;
-    }
-    return { usable: true, authenticated, head, seq: head.stream.seq, problem: null };
-  } catch (error) {
-    return { usable: false, authenticated: false, head: found?.json ?? null, seq: null, problem: error.message || String(error) };
-  }
-}
-
-/** The largest sequence authenticated inside an immutable release record.
- * The record wrapper is audit metadata; only its embedded signed envelope is
- * authority for a client's rollback floor. Malformed, foreign, and unsigned
- * records do not contribute a number. */
-async function authenticatedReleaseFloor(origin, app, stream) {
-  // Hidden names were accepted by older publishers. Include them while
-  // recovering the rollback floor even though new release ids cannot begin
-  // with a dot.
-  const names = await origin.list(`${streamPath(stream)}/releases`, { includeHidden: true });
-  // A missing directory on the writable filesystem origin is authoritative
-  // emptiness. Other adapters use null when they cannot enumerate history;
-  // that is not evidence that no client has observed a higher sequence.
-  if (names === null && origin.kind !== 'directory') return { known: false, empty: false, floor: null };
-  if (names === null || names.length === 0) return { known: true, empty: true, floor: null };
-  let floor = null;
-  for (const name of names.filter((entry) => entry.endsWith('.json'))) {
-    const bytes = await origin.get(`${streamPath(stream)}/releases/${name}`);
-    if (!bytes) throw new OriginUnavailable(`the listed release record ${origin.describe()}/${streamPath(stream)}/releases/${name} disappeared while establishing the authenticated sequence floor`);
-    try {
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      const record = JSON.parse(text);
-      if (!record.envelope || typeof record.envelope !== 'object' || Array.isArray(record.envelope)) continue;
-      const recordApp = { ...app, displayName: record.envelope.app?.name };
-      const envelopeBytes = Buffer.from(JSON.stringify(record.envelope), 'utf8');
-      const admission = inspectHead({ bytes: envelopeBytes, json: record.envelope, sha256: sha256(envelopeBytes) }, recordApp, stream);
-      if (admission.usable && admission.authenticated) floor = Math.max(floor ?? 0, admission.seq);
-    } catch { /* an unauthenticated audit record has no say in the floor */ }
-  }
-  return { known: true, empty: false, floor };
-}
-
-/** Allocate above everything the stream has authenticated: an admitted head
- * and the maximum signed immutable history. A head rolled back on the origin
- * (a restored backup, a stale replica) would otherwise hand out a seq that
- * clients already hold for another bundle. Repairing an unusable head uses
- * the history alone; if none exists, overwriting would guess at the clients'
- * rollback floor and is refused. */
-async function nextSeq(origin, app, stream, admission, at, above = 0) {
-  return Math.max(above + 1, await nextOriginSeq(origin, app, stream, admission, at));
-}
-
-async function nextOriginSeq(origin, app, stream, admission, at) {
-  const history = await authenticatedReleaseFloor(origin, app, stream);
-  let floor;
-  if (admission?.usable) floor = Math.max(admission.seq, history.floor ?? 0);
-  else {
-    if (!history.known) throw new OriginUnavailable(`${at} ${admission ? `is unusable (${admission.problem})` : 'is missing'}, but ${origin.describe()} cannot enumerate its authenticated release history; a rollback-safe sequence cannot be allocated`);
-    floor = history.floor;
-    if (floor === null && !admission && history.empty) return 1;
-    if (floor === null) refuse(`${at} ${admission ? `is unusable (${admission.problem}) and its` : 'is missing, and its nonempty'} release history has no authenticated sequence floor; restore a signed release record before repairing it`);
-  }
-  if (floor === Number.MAX_SAFE_INTEGER) refuse(`${at} is at the largest exact JavaScript seq; a higher repair seq cannot be allocated safely`);
-  return floor + 1;
-}
-
-/** The latest release record under a stream, when the origin has any: it names the platform and carries the cohort's inputs, so two ids that differ are explained field by field. */
-async function latestRecord(origin, app, stream) {
-  const names = await origin.list(`${streamPath(stream)}/releases`, { includeHidden: true });
-  if (!names?.length) return null;
-  const records = [];
-  for (const name of names.filter((n) => n.endsWith('.json'))) {
-    const bytes = await origin.get(`${streamPath(stream)}/releases/${name}`);
-    try {
-      const record = JSON.parse(bytes.toString('utf8'));
-      const recordApp = {...app, displayName:record.envelope?.app?.name};
-      const admission = inspectHead({bytes:Buffer.from(JSON.stringify(record.envelope))}, recordApp, stream);
-      if(admission.usable && admission.authenticated) records.push(record);
-    } catch { /* unauthenticated audit metadata has no capability authority */ }
-  }
-  records.sort((a,b)=>a.envelope.stream.seq-b.envelope.stream.seq);
-  return records.at(-1) ?? null;
 }
 
 /** The table (LLP 1030 D3; 1030.000 D3 item 3): the origin row, a row per stream, a binary row per stream whose cohort this snapshot is not. Nothing is written. */
@@ -1000,7 +871,7 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
     const installed=frozen ?? (!head&&!record&&candidate?cohortReceipt(candidate):null);
     const check=classifyArtifacts(candidate,installed,signingKey);
     const inputs=installed?.compat.inputs ?? compat[platform]?.inputs;
-    const selectedBundle=bundle.platforms?.[platform] ?? bundle;
+    const selectedBundle=streamBundle(bundle,platform,inputs);
     const changes=admission?.usable?changesAgainst(selectedBundle,admission.head,sunsetFor(app,stream)):head?[{name:'exact.json',change:'repair',note:admission.problem}]:changesAgainst(selectedBundle,null,sunsetFor(app,stream));
     let seq=admission?.seq;
     if(changes.length && (check.bundle || item.platform)) {
@@ -1134,6 +1005,7 @@ export async function publishStream({ origin, row, bundle, compat, app, signer, 
       envelope: head, ...(index ? { assets: JSON.parse(index.bytes.toString('utf8')) } : {}),
     };
     await origin.put(recordPath, Buffer.from(JSON.stringify(record, null, 2) + '\n', 'utf8'), { immutable: true });
+    keepRecord(origin, stream, `${release}.json`, seq);
     try {
       await origin.putHead(stream, bytes, { previousDigest });
     } catch (error) {
@@ -1324,11 +1196,9 @@ async function deployCaptured(opts, capsule) {
   if(!webOnly&&!builds.web)refuse('the web build emitted no completed graph receipt');
   for(const platform of platforms)builds[platform]=buildFor(app,platform,sourceRoot,run);
   const compat=Object.fromEntries(Object.entries(builds).map(([p,r])=>[p,r.compat]));
-  for(const [platform,build] of Object.entries(builds)) {
-    const cards=[{name:'app.plan',sha256:bundle.plan.sha256,bytes:bundle.plan.bytes.length},...bundle.assets.map(a=>({name:a.name,sha256:a.sha256,bytes:a.bytes.length}))];
-    if(canonicalJson(build.graph.artifacts.map(({name,sha256,bytes})=>({name,sha256,bytes})).sort((a,b)=>a.name.localeCompare(b.name)))!==canonicalJson(cards.sort((a,b)=>a.name.localeCompare(b.name))))refuse(`${platform} bake graph differs from the packaged bundle`);
-  }
+  if (!webOnly) holdBundles(bundle, builds, resolve(run, 'bake'));
   if (!webOnly && rustPackage(app)) {
+    const held = bundle.platforms ?? {};
     bundle.platforms = {};
     const env = sealedSourceEnv(sourceRoot, {CARGO_TARGET_DIR:app.target,EXACT_UPDATE_TRUST:'production'});
     const nativeTargets = [...new Set(platforms.filter(p=>['native','tiered'].includes(builds[p].compat.inputs.rustMode)).map(p=>builds[p].compat.target))];
@@ -1342,7 +1212,7 @@ async function deployCaptured(opts, capsule) {
       const signed=['native','tiered'].includes(build.compat.inputs.rustMode) && build.compat.target.includes('apple');
       const reused=signed && publishedSignature(produced?.variants.native?.bytes, await publishedModule(origin, app, {channel, compatibilityId:build.compat.id}));
       if (reused) { produced={...produced,variants:{...produced.variants,native:{...produced.variants.native,bytes:reused}}}; log(`  ${platform}: the published Rust module's signature stands (same code, same certificate)`); }
-      const result=rustBundle(app,bundle,build,produced);
+      const result=rustBundle(app,held[platform] ?? bundle,build,produced);
       builds[platform]=result.build; bundle.platforms[platform]=result.bundle;
     }
   }
@@ -1374,7 +1244,7 @@ async function deployCaptured(opts, capsule) {
     if (row.action === 'unavailable') { failed.push({ platform: row.platform, compatibilityId: row.compatibilityId, error: row.reason }); log(`  ${name}: unavailable — ${row.reason}`); continue; }
     if (row.action === 'binary') { refused.push({ platform: row.platform, compatibilityId: row.compatibilityId, reason: row.reason }); log(`  ${name}: refused — ${row.reason}`); continue; }
     try {
-      const result = await publishStream({ origin, row, bundle: bundle.platforms?.[row.platform] ?? bundle, compat: row.receipt?.compat ?? compat[row.platform], app, signer, release, snapshot: table.snapshot, opts, log, build:builds[row.platform] });
+      const result = await publishStream({ origin, row, bundle: streamBundle(bundle, row.platform, (row.receipt?.compat ?? compat[row.platform])?.inputs), compat: row.receipt?.compat ?? compat[row.platform], app, signer, release, snapshot: table.snapshot, opts, log, build:builds[row.platform] });
       published.push(result);
       log(result.action === 'published' ? `  ${name}: head seq ${result.seq} (${result.head.sha256.slice(0, 12)}), previous ${result.previous ? result.previous.slice(0, 12) : 'none'}` : `  ${name}: ${result.note}`);
     } catch (e) {

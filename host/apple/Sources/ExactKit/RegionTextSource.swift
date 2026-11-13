@@ -29,6 +29,9 @@ struct RegionTextRun: Sendable {
     let font: RegionFont
     let lineHeight: CGFloat?
     let letterSpacing: CGFloat
+    /// Its inline boxes' room beside its text (`Run.inlineStart`, `inlineEnd`).
+    let inlineStart: CGFloat
+    let inlineEnd: CGFloat
     let color: CGColor
     /// `Run.fixedInk`: its colour is one its author fixed.
     let fixedInk: Bool
@@ -39,10 +42,14 @@ struct RegionTextRun: Sendable {
     let strikeColor: CGColor?
     let href: String
     let range: NSRange
+    let box: InlineBox?
+    let icon: TextAtomIcon?
+    let background: InlineBackground?
 }
 
 final class RegionTextSource: Sendable {
     let runs: [RegionTextRun]
+    let rasterFormat: (space: CGColorSpace, headroom: Float, deep: Bool)
     let strut: RegionFont?
     let strutExplicit: Bool
     let align: Int
@@ -79,15 +86,19 @@ final class RegionTextSource: Sendable {
         precondition(Thread.isMainThread, "font and appearance resolution belongs to UI")
         let start = ProcessInfo.processInfo.systemUptime
         func font(_ run: Run) -> RegionFont {
-            let f = engine.font(size: run.size, weight: run.weight, family: run.family, italic: run.italic)
+            let f = engine.font(run)
             return RegionFont(owner: RegionFontOwner(f as CTFont), box: TextLineBox(f as CTFont, height: run.lineHeight, scale: engine.lineScale))
         }
         var offset = 0
+        var paints: [NSDictionary] = []
         runs = spec.runs.map { run in
             let count = run.text.utf16.count
             defer { offset += count }
+            var paint: [NSAttributedString.Key: Any] = [.font: engine.font(run)]
+            engine.presentation?.attributes(run, color: spec.color, scale: engine.lineScale, attributes: &paint)
+            paints.append(paint as NSDictionary)
             return RegionTextRun(text: run.text, font: font(run), lineHeight: run.lineHeight,
-                                 letterSpacing: run.letterSpacing,
+                                 letterSpacing: run.letterSpacing, inlineStart: run.inlineStart, inlineEnd: run.inlineEnd,
                                  color: TextEngine.color(run.color ?? spec.color).cgColor,
                                  fixedInk: run.fixedInk && run.color != nil,
                                  underline: run.underlined || run.underlineColor != nil,
@@ -95,12 +106,14 @@ final class RegionTextSource: Sendable {
                                  underlineColor: run.underlined ? nil : run.underlineColor.map { TextEngine.color($0).cgColor },
                                  strikeColor: run.decoration.contains("line-through") ? nil : run.strikeColor.map { TextEngine.color($0).cgColor },
                                  href: run.href,
-                                 range: NSRange(location: offset, length: count))
+                                 range: NSRange(location: offset, length: count), box: run.box,
+                                 icon: paint[.exactAtomIcon] as? TextAtomIcon, background: paint[.exactBackground] as? InlineBackground)
         }
+        rasterFormat = TextRasterJob.format(paints)
         let base = spec.strut ?? spec.runs.first
         strut = base.map(font); strutExplicit = base?.lineHeight != nil
         align = spec.align; direction = spec.direction; lineClamp = spec.lineClamp; overflowWrap = spec.overflowWrap
-        textIndent = spec.textIndent; hyphens = spec.hyphens; language = spec.language
+        textIndent = spec.firstLineIndent; hyphens = spec.hyphens; language = spec.language
         hyphenated = !spec.source.inserted.isEmpty; emergencyBreaks = spec.emergencyBreaks
         textBox = (spec.textBoxTrim, spec.textBoxOver, spec.textBoxUnder)
         balance = spec.balance
@@ -121,6 +134,7 @@ final class RegionTextSource: Sendable {
     var insets: LineInsets {
         var value = LineInsets()
         value.textIndent = textIndent; value.rtl = direction == 1
+        value.edgeStarts = LineInsets.edgeStarts(runs.map { (text: $0.text, start: $0.inlineStart) })
         return value
     }
 
@@ -152,20 +166,25 @@ final class RegionTextSource: Sendable {
     /// from capture are used. No AppKit font manager, resolver or TextEngine.
     func attributed() -> NSAttributedString {
         let value = NSMutableAttributedString()
-        for run in runs {
+        for (index, run) in runs.enumerated() {
             var attributes: [NSAttributedString.Key: Any] = [
                 NSAttributedString.Key(kCTFontAttributeName as String): run.font.value,
                 NSAttributedString.Key(kCTForegroundColorAttributeName as String): run.color,
             ]
+            if let box = run.box { TextEngine.boxAttributes(box, font: run.font.value, index: index, scale: lineScale, into: &attributes) }
+            if let icon = run.icon { attributes[.exactAtomIcon] = icon }
+            if let background = run.background { attributes[.exactBackground] = background }
             if run.letterSpacing != 0 { attributes[.kern] = run.letterSpacing }
             if run.fixedInk { attributes[.exactFixedInk] = true }
-            if run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-            if run.strike { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            if run.icon == nil, run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+            if run.icon == nil, run.strike { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             if let c = run.underlineColor { attributes[NSAttributedString.Key(kCTUnderlineColorAttributeName as String)] = c }
             if let c = run.strikeColor { attributes[.strikethroughColor] = c }
             value.append(NSAttributedString(string: run.text, attributes: attributes))
         }
+        TextEngine.kernInlineEdges(value, runs: runs.map { (text: $0.text, start: $0.inlineStart, end: $0.inlineEnd) })
         TextEngine.setBaseDirection(value, direction: direction)
+        PresentedText().finish(value)
         if let tabInterval { TextEngine.setTabStops(value, interval: tabInterval) }
         return value
     }

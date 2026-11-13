@@ -672,7 +672,7 @@ mod tests {
 
     // Wall time includes scheduler contention, so qualify it separately.
     #[test]
-    #[ignore = "performance qualification: run alone on an idle host with --ignored --nocapture"]
+    #[ignore = "async lane: measures SVG expansion limits on the wall clock"]
     fn expansion_limits_finish_within_five_seconds() {
         check_expansion_limits(Some(std::time::Duration::from_secs(5)));
     }

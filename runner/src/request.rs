@@ -83,13 +83,16 @@ pub enum HttpScheduling {
 pub use http::{CacheMode, Redirect};
 #[path = "request_preload.rs"]
 mod preload;
-pub use preload::{MissingPreloadSecret, Preload, PreloadPart, PreloadWhen};
+pub use preload::{
+    Launch, LaunchContext, LaunchRequest, MissingPreloadSecret, Preload, PreloadPart, PreloadWhen,
+};
 #[path = "request_http.rs"]
 mod http;
-
 /// One host request, with ordered native execution unless explicitly opted in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    /// The producing module generation. Kept in process; never part of the wire request.
+    pub module: Option<crate::ModuleInstance>,
     /// Native HTTP scheduling; storage and continuations must remain ordered.
     pub http: HttpScheduling,
     /// Executor-local continuation token, not an HTTP request. The browser
@@ -167,6 +170,10 @@ pub struct Request {
     pub redirect: Redirect,
     /// Fetch's HTTP cache mode (LLP 1162 D4).
     pub cache: CacheMode,
+    /// A preload to take by name when method and URL agree (LLP 1162.000 D1).
+    pub preload: Option<Box<str>>,
+    /// Checked prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
+    pub prefetch: bool,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,
     /// neither a jump nor `clock settle` nor `clock data`, and each reply
@@ -288,6 +295,7 @@ impl Request {
     /// D3). The answer is an HTTP-shaped outcome: 200 carries the JSON reply.
     pub fn native(body: Vec<u8>) -> Request {
         Request {
+            module: None,
             http: HttpScheduling::Independent {
                 max_response_bytes: 1 << 20,
             },
@@ -311,6 +319,8 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
+            preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -319,7 +329,6 @@ impl Request {
             fetch: None,
         }
     }
-
     /// An auth session (`openAuthSession`, LLP 1069.006 D1): the body is
     /// [`crate::auth::Session`]'s JSON; the independent lane, a 64 KiB reply.
     pub fn auth(body: Vec<u8>) -> Request {
@@ -331,7 +340,6 @@ impl Request {
             ..Request::native(body)
         }
     }
-
     /// An auth session, for the host's auth arm, not the network.
     pub fn is_auth(&self) -> bool {
         self.url == crate::auth::AUTH_URL
@@ -339,7 +347,6 @@ impl Request {
             && self.storage.is_none()
             && self.surface.is_none()
     }
-
     /// A long native call, for the source's native handler, not the network.
     pub fn is_native(&self) -> bool {
         self.url == NATIVE_URL
@@ -347,7 +354,6 @@ impl Request {
             && self.storage.is_none()
             && self.surface.is_none()
     }
-
     /// Whether the request may change something at its server: an `http:`
     /// or `https:` request whose method is not safe (RFC 9110 §9.2.1), and
     /// no stream, socket, long poll or held request. One its answer lets go
@@ -367,7 +373,6 @@ impl Request {
             && self.long_poll.is_none()
             && !self.is_held()
     }
-
     /// Native ordered lane is mandatory for storage and continuations, even
     /// when an invalid HTTP annotation will cause their admission to refuse.
     pub fn is_ordered(&self) -> bool {
@@ -375,7 +380,6 @@ impl Request {
             || self.storage.is_some()
             || self.continuation.is_some()
     }
-
     /// Eligible for read or parallel-send overlap (LLP 1162 D1).
     pub fn is_plain_http(&self) -> bool {
         self.http == HttpScheduling::Ordered
@@ -393,10 +397,10 @@ impl Request {
             && self.body_from.is_none()
             && self.body_to.is_none()
     }
-
     /// A `GET`.
     pub fn get(url: &str) -> Request {
         Request {
+            module: None,
             http: HttpScheduling::Ordered,
             continuation: None,
             storage: None,
@@ -418,6 +422,8 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
+            preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -426,7 +432,6 @@ impl Request {
             fetch: None,
         }
     }
-
     /// A two-way WebSocket to a `ws:` or `wss:` URL (LLP 1016.003 D1): a
     /// stream whose `parse` receives `open`, each frame in order and the
     /// close, and whose mapper and the module's mutations send on it through
@@ -439,10 +444,10 @@ impl Request {
         };
         request.independent_http(1 << 20)
     }
-
     /// A `POST` of a JSON text.
     pub fn post_json(url: &str, json: &str) -> Request {
         Request {
+            module: None,
             http: HttpScheduling::Ordered,
             continuation: None,
             storage: None,
@@ -464,6 +469,8 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
+            preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -472,7 +479,6 @@ impl Request {
             fetch: None,
         }
     }
-
     /// Host storage work as a bounded protocol payload (LLP 1027.001 D2).
     pub fn storage(payload: Vec<u8>) -> Self {
         Self {
@@ -480,7 +486,6 @@ impl Request {
             ..Self::get("")
         }
     }
-
     /// Capture the complete carried state of one named live surface.
     pub fn capture_surface(name: impl Into<String>) -> Self {
         Self {
@@ -518,6 +523,11 @@ impl Request {
         let capability = match surface {
             SurfaceRequest::Capture { name } => format!("surface.read {name}"),
             SurfaceRequest::Restore { name, .. } => format!("surface.write {name}"),
+            // The app's own pixels need no grant; writing them needs
+            // `fs.write`, which the host's write checks (LLP 1133.009 D10).
+            SurfaceRequest::Canvas { path, .. } => {
+                return crate::canvas_capture::path_refusal(path).map_or(Ok(()), Err);
+            }
         };
         let admitted: Vec<_> = admitted
             .lines()
@@ -859,6 +869,16 @@ pub enum SurfaceRequest {
         name: String,
         /// The complete carried state; hosts never project or truncate it.
         bytes: Vec<u8>,
+    },
+    /// Write the kept bitmap of a 2D canvas as a PNG file
+    /// ([`crate::canvas_capture`]).
+    Canvas {
+        /// The authored canvas surface name.
+        name: String,
+        /// The `app:/` file to write.
+        path: String,
+        /// The runner's owned drawing boundary; absent until the requesting commit stands.
+        job: Option<crate::canvas_capture::CaptureJob>,
     },
 }
 
@@ -1367,90 +1387,8 @@ mod summary_tests {
 }
 
 #[cfg(test)]
-mod reply_tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    type Seen = Arc<Mutex<Vec<String>>>;
-
-    fn recorder() -> (Seen, impl FnMut(Outcome) + Send + 'static) {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let into = seen.clone();
-        (seen, move |o: Outcome| {
-            into.lock().unwrap().push(o.summary())
-        })
-    }
-
-    #[test]
-    fn a_stream_reply_sends_many_then_ends_once() {
-        let (seen, deliver) = recorder();
-        let mut reply = Reply::stream(deliver);
-        for data in ["a", "bb"] {
-            reply.message(Message {
-                data: data.into(),
-                ..Message::default()
-            });
-        }
-        reply.send(Outcome::Failed {
-            kind: FailureKind::Network,
-            message: "closed".into(),
-        });
-        assert_eq!(
-            *seen.lock().unwrap(),
-            ["message, 1 bytes", "message, 2 bytes", "network: closed"]
-        );
-    }
-
-    #[test]
-    fn a_stream_reply_dropped_without_an_end_aborts_once() {
-        let (seen, deliver) = recorder();
-        let mut reply = Reply::stream(deliver);
-        reply.message(Message::default());
-        drop(reply);
-        assert_eq!(
-            *seen.lock().unwrap(),
-            [
-                "message, 0 bytes",
-                "aborted: the owner ended without a reply"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_message_on_a_single_reply_is_its_one_answer() {
-        let (seen, deliver) = recorder();
-        let mut reply = Reply::new(deliver);
-        reply.message(Message::default());
-        reply.message(Message::default());
-        drop(reply);
-        assert_eq!(*seen.lock().unwrap(), ["message, 0 bytes"]);
-    }
-
-    #[test]
-    fn a_stream_answer_is_independent_and_marked() {
-        let Answer::Later(request) = Answer::stream(Request::get("https://example.test/e")) else {
-            panic!("a stream is a request")
-        };
-        assert!(request.stream);
-        assert_eq!(
-            request.http,
-            HttpScheduling::Independent {
-                max_response_bytes: 1 << 20
-            }
-        );
-        let Answer::Later(kept) =
-            Answer::stream(Request::get("https://example.test/e").independent_http(4096))
-        else {
-            panic!("a stream is a request")
-        };
-        assert_eq!(
-            kept.http,
-            HttpScheduling::Independent {
-                max_response_bytes: 4096
-            }
-        );
-    }
-}
+#[path = "request_reply_tests.rs"]
+mod reply_tests;
 
 #[cfg(test)]
 mod scheduling_tests {

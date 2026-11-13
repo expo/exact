@@ -141,3 +141,118 @@ fn a_later_read_uses_the_network_beside_a_refresh_and_never_returns_the_old_hit(
         }
     }
 }
+
+#[test]
+fn prefetch_is_answered_as_a_plain_read_and_equal_reads_have_their_own_exchanges() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            for method in ["GET", "POST"] {
+                for inflight in [false, true] {
+                    let server = Server::new();
+                    let (core, woke) = server.core(asynchronous, true);
+                    let (release, held) = channel();
+                    let mut first = Plan::new(503, &[], b"first");
+                    first.held = Some(held);
+                    server.plan("/next", first);
+                    server.plan("/next", Plan::new(200, &[], b"second"));
+                    let mut request = server.request("/next");
+                    request.method = method.into();
+                    let mut ahead = request.clone();
+                    ahead.prefetch = prefetch;
+                    core.run(job(1, ahead), None).unwrap();
+                    server.seen(1);
+                    if inflight {
+                        core.run(job(2, request.clone()), None).unwrap();
+                        server.seen(2);
+                    }
+                    release.send(()).unwrap();
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, 1);
+                    assert!(!timing.cached);
+                    assert!(
+                        matches!(outcome, Outcome::Response(r) if r.status == 503 && r.body == b"first")
+                    );
+                    if !inflight {
+                        core.run(job(2, request), None).unwrap();
+                        server.seen(2);
+                    }
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, 2);
+                    assert!(!timing.cached);
+                    assert!(
+                        matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"second")
+                    );
+                    assert_eq!(server.count(), 2);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn prefetch_uses_the_plain_reads_http_cache_rules() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            server.plan("/next", Plan::new(200, FRESH, b"fresh"));
+            let mut request = server.request("/next");
+            request.prefetch = prefetch;
+            assert!(!ask(&core, &woke, job(1, request.clone())).1);
+            assert!(ask(&core, &woke, job(2, request)).1);
+            let (reply, cached) = read(&core, &woke, &server, 3, "/next");
+            assert!(cached);
+            assert_eq!(reply.body, b"fresh");
+            assert_eq!(server.count(), 1);
+        }
+    }
+}
+
+#[test]
+fn prefetch_is_a_plain_fetch_for_tools_wakes_and_devices() {
+    for asynchronous in [false, true] {
+        for origin in [
+            exact_runner::CallOrigin::Tool,
+            exact_runner::CallOrigin::Wake,
+            exact_runner::CallOrigin::Device,
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            for (index, prefetch) in [false, true].into_iter().enumerate() {
+                server.plan("/next", Plan::new(503, &[], b"answer"));
+                let mut request = server.request("/next");
+                request.reach.origin = origin;
+                request.prefetch = prefetch;
+                let (reply, cached) = ask(&core, &woke, job(index as u64 + 1, request));
+                assert_eq!(reply.status, 503);
+                assert_eq!(reply.body, b"answer");
+                assert!(!cached);
+            }
+            assert_eq!(server.count(), 2);
+        }
+    }
+}
+
+#[test]
+fn prefetch_refuses_sends_streams_files_and_independent_requests() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        for kind in 0..6 {
+            let (core, _) = server.core(asynchronous, true);
+            let mut r = job(1, server.request("/refused").prefetch());
+            match kind {
+                0 => r.class = RequestClass::Ordered,
+                1 => r.request.stream = true,
+                2 => r.request = r.request.body_from("app:/data/file"),
+                3 => r.request = r.request.body_to("app:/data/file"),
+                4 => r.request = r.request.independent_http(1024),
+                _ => r.class = RequestClass::Parallel(0),
+            }
+            assert_eq!(
+                core.run(r, None),
+                Err("exactPrefetch requires a plain HTTP read")
+            );
+        }
+        assert_eq!(server.count(), 0);
+    }
+}

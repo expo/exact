@@ -43,7 +43,7 @@ pub(super) fn stack_of_lines(node: &Node, sheet: Vec<Attr>) -> Node {
 /// A title over a subtitle: the platform's subtitle cell (UIKit's has 15
 /// above and below), the second line the subheadline in the secondary
 /// colour.
-pub(super) fn subtitle(node: &Node) -> Node {
+pub(super) fn subtitle(node: &Node, padding: Expr) -> Node {
     let Node::Element {
         tag,
         positional,
@@ -60,10 +60,11 @@ pub(super) fn subtitle(node: &Node) -> Node {
     let mut rows = vec![
         n("flex-grow", 1.0, at),
         n("min-width", 0.0, at),
-        m("padding-top", "lines-padding-block", at),
-        m("padding-bottom", "lines-padding-block", at),
+        attr("padding-top", padding.clone(), at),
+        attr("padding-bottom", padding, at),
         m("row-gap", "subtitle-gap", at),
     ];
+    rows.retain(|a| !matches!(a.value, Expr::None(_)));
     rows.extend(attrs.iter().cloned());
     Node::Element {
         tag: tag.clone(),

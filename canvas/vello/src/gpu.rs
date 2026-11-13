@@ -303,6 +303,7 @@ impl Canvas {
         let scope = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut outs = Vec::new();
         let mut gpu_ms = 0.0;
+        let mut failed = None;
         for job in &frame.shadows {
             match shadow(g, job) {
                 Ok((out, ms)) => {
@@ -316,38 +317,50 @@ impl Canvas {
                     g.renderer.override_image(&job.image, Some(base));
                     outs.push(out);
                 }
-                Err(e) => return Err(Failed::Gpu(e)),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
             }
         }
-        let (w, h) = (self.replayer.width.max(1), self.replayer.height.max(1));
-        let backdrop = match backdrop_ix {
-            Some(i) if i == target_ix => &self.scratch.as_ref().expect("scratch").1,
-            Some(i) => &self.surfaces[i].view,
-            None => &g.empty,
+        let result = match failed {
+            Some(e) => Err(Failed::Gpu(e)),
+            None => {
+                let (w, h) = (self.replayer.width.max(1), self.replayer.height.max(1));
+                let backdrop = match backdrop_ix {
+                    Some(i) if i == target_ix => &self.scratch.as_ref().expect("scratch").1,
+                    Some(i) => &self.surfaces[i].view,
+                    None => &g.empty,
+                };
+                let params = RenderParams {
+                    base_color: Color::TRANSPARENT,
+                    width: w,
+                    height: h,
+                    antialiasing_method: AaConfig::Area,
+                };
+                g.renderer
+                    .render_exact(
+                        &g.device,
+                        &g.queue,
+                        &frame.scene,
+                        &self.surfaces[target_ix].view,
+                        backdrop,
+                        true,
+                        &params,
+                    )
+                    .map_err(|e| Failed::Gpu(format!("vello: {e}")))
+            }
         };
-        let params = RenderParams {
-            base_color: Color::TRANSPARENT,
-            width: w,
-            height: h,
-            antialiasing_method: AaConfig::Area,
-        };
-        let result = g.renderer.render_exact(
-            &g.device,
-            &g.queue,
-            &frame.scene,
-            &self.surfaces[target_ix].view,
-            backdrop,
-            true,
-            &params,
-        );
-        for job in &frame.shadows {
+        // The renderer is the process's: the shadows this frame installed
+        // leave it whether the frame rendered or a later shadow failed.
+        for job in &frame.shadows[..outs.len()] {
             g.renderer.override_image(&job.image, None);
         }
         for out in outs {
             out.destroy();
         }
         let error = block_on(scope.pop());
-        let stats = result.map_err(|e| Failed::Gpu(format!("vello: {e}")))?;
+        let stats = result?;
         if let Some(e) = error {
             return Err(Failed::Gpu(format!("wgpu: {e}")));
         }

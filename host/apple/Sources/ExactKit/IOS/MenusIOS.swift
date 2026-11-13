@@ -1102,6 +1102,8 @@ final class MenuHost {
         }) else { return nil }
         // The close button of a dialog in its sheet takes the ordinary tap.
         if sheets.owns(pop), !opens(node, pop) { return nil }
+        // A bar item's button, hidden in the page while the bar shows it: pressed as its item is (`activateChrome`).
+        if !eligible(node), eligible(node, inBar: true) { return nil }
         guard opens(node, pop) else { return false }
         return openConfirmation(from: node, popover: pop, modal: showsModal(node))
     }

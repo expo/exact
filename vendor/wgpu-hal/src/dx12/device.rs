@@ -53,13 +53,6 @@ impl super::Device {
         compiler_container: Arc<shader_compilation::CompilerContainer>,
         backend_options: wgt::Dx12BackendOptions,
     ) -> Result<Self, crate::DeviceError> {
-        if private_caps
-            .instance_flags
-            .contains(wgt::InstanceFlags::VALIDATION)
-        {
-            auxil::dxgi::exception::register_exception_handler();
-        }
-
         let mem_allocator =
             suballocation::Allocator::new(&raw, memory_hints, memory_budget_thresholds)?;
 
@@ -202,6 +195,15 @@ impl super::Device {
                 null_rtv_handle.raw,
             )
         };
+
+        // EXACT (EXACT-PATCHES.md, 17): registered once nothing can fail, so
+        // the device's drop, which unregisters, always follows.
+        if private_caps
+            .instance_flags
+            .contains(wgt::InstanceFlags::VALIDATION)
+        {
+            auxil::dxgi::exception::register_exception_handler();
+        }
 
         Ok(super::Device {
             raw: raw.clone(),

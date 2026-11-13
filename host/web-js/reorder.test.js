@@ -53,8 +53,8 @@ test('a pending drop with unchanged order does not scan keys', () => {
   let scans = 0;
   order.indexOf = function (key) { scans++; return Array.prototype.indexOf.call(this, key); };
   c.index = { order, pos:new Map(order.map((key, i) => [key, i])) };
-  c.preview = {source:'s:9990', before:'s:9991', dropped:true, holding:true};
-  const ordinary = {}, drop = {source:'s:9990', before:'s:9991', anchor:{order}};
+  c.pendingDrops = new Map([[1, {source:'s:9990', before:'s:9991'}]]);
+  const ordinary = {}, drop = {drops:[['s:9990', 's:9991']], anchors:[{order}]};
   expect(c.committedAnchor(ordinary, drop)).toBe(ordinary);
   expect(scans).toBe(0);
 });

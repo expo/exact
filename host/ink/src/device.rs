@@ -4,6 +4,8 @@
 use crate::instance::{Frame, TextureId};
 use std::fmt;
 
+#[cfg(any(windows, test))]
+mod composing;
 #[cfg(windows)]
 pub mod d3d11;
 #[cfg(windows)]

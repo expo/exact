@@ -247,7 +247,11 @@ padding, border and radius, a ring while the selection is exactly it
 image source, so T3 Code's chips match their original's. Take: waived (Daehyeon
 Mun, 2026-11-02): the paint goes through the rows a kind already had, and the
 three outline rows are an atom's alone. Still out: the Apple reader's border,
-ring, hover paint and icon. **Expanded (Daehyeon Mun, 2026-10-29, waived;
+ring and hover paint. **Expanded (maintainers, 2026-11-11, #130; LLP
+1045.000 D4, §6):** the Apple reader draws SF Symbol and image-source icons
+inside its pills on iOS and macOS. This unblocks icon badges in wrapping
+prose, matching the editor. Take: the maintainers' ruling admits this scope;
+border, ring and hover paint stay deferred. **Expanded (Daehyeon Mun, 2026-10-29, waived;
 LLP 1045 D11):** the app gives each source line of the editor its base
 direction, `paragraphDirs` in HTML's `dir` words, drawn on the web and Apple.
 Unblocks T3 Code's composer, whose original gives each block the direction of
@@ -964,7 +968,7 @@ reading. Nothing that isn't HTML is added by it.
   app-owned audio thread. Take: none offered; waived by that instruction.
   Still out: on-demand decoding, web pictures of an element, QR in exact2,
   SysEx, Bluetooth MIDI pairing, MIDI 2.0, Continue and Song Position out,
-  clock thru (sending clock while following one), Ableton Link, swing, Linux, Windows and Android output, synthesis (LLP 1125
+  clock thru (sending clock while following one), Ableton Link, swing, Linux and Windows output, synthesis (LLP 1125
   §8).
 - **Expanded (LLP 1096 D14; expo/exact#347, assigned for Charlie in the
   2026-11-12 issue session):** changing what plays, by Web Audio's names:
@@ -976,6 +980,16 @@ reading. Nothing that isn't HTML is added by it.
   fades. Take: none offered; waived by that assignment. Still out: loops, a
   change at a future time (`at=`), curves other than a straight line, and a
   handle to one voice (a group names it).
+- **Expanded (Charlie, 2026-11-12, #356; LLP 1096/1125):** Android
+  Contract sound output through an on-demand AAudio arm sharing Apple's mixer,
+  with scheduled gain, rate, pan and cancellation, and the host's
+  existing audio-focus owner. Consumer: Cameron Chisholm's React Native port,
+  whose short cues need to play on Android as on iOS. Take: none named; Charlie's
+  ruling to build Android output waives it. This lifts Android sound output
+  from LLP 1125's deferred set. Built and tested on the JVM and by cross-compile;
+  hearing it on an Android device remains unqualified under this waiver, so
+  the change lands as `Part of #356`. Linux and Windows output, Android MIDI output,
+  timed haptics and background sound playback stay out.
 - **Expanded (LLP 1098; admitted by the orchestrator under Charlie's
   2026-10-04 delegation, "make decisions without me"):** the media session,
   by the Media Session API's names, on HTML's media element:
@@ -1075,6 +1089,20 @@ reading. Nothing that isn't HTML is added by it.
   LLP 1133.027's record below), constraint dictionaries, zoom on the
   web, `input capture` and the system camera UI, and the Windows, Linux,
   tvOS, visionOS and watchOS cells.
+  **Expanded (2026-11-12, expo/exact#381; LLP 1133.008 D1 as amended):**
+  the system camera UI, `takePhotoWithCameraApp` from `@exact/camera`:
+  Android's camera app (`MediaStore.ACTION_IMAGE_CAPTURE`), iOS's
+  `UIImagePickerController` with `.camera`, and the web's file input with
+  `accept="image/*"` and `capture` opened inside the press, the photo the
+  person keeps written to an `app:/` path and answered as `takePhoto`'s.
+  It needs no grant line; iOS needs the `device.camera` line's usage key,
+  and Android's `CAMERA` comes from a use of `getUserMedia` under that
+  line, not the line alone. Consumer: an access-control app whose guards photograph a visitor's
+  identity card with the phone's own camera app (its shutter, flash and
+  review). Unblocks that without app Kotlin or Swift. Take: none offered;
+  waived by Charlie's ask (2026-11-12: work the open issues through to the
+  ideal end state). Still out: the macOS, Windows, Linux, tvOS, visionOS
+  and watchOS cells, and `capture` on the HTML `input` tag.
 - **Expanded (Charlie, 2026-10-23, "Expand, no take", on LLP 1133.009 §15
   question 6):** recording the microphone to a file and reading its level,
   by Media Capture's and MediaStream Recording's names (`getUserMedia(audio=)`
@@ -1324,9 +1352,14 @@ reading. Nothing that isn't HTML is added by it.
   1133.019 §9): videos in the library and a Live Photo's movie; albums as
   shared words; editing a photo in place, reverting it and deleting;
   download progress for an iCloud photo; a change-details protocol for a
-  large grid; the picker's Android arm (LLP 1069.002's); filters and
+  large grid; filters and
   adjustments, metadata read as values, and RAW; and the tvOS, visionOS,
   Windows and Linux cells.
+  **Expanded (maintainers' #377 implementation request, 2026-11-12):**
+  Android file inputs use the system Photo Picker or document picker and import
+  copies, through LLP 1115.001 D5's existing request channel. This unblocks
+  gallery attachments. Take waived by the scoped implementation request;
+  document handles and export remain unavailable on Android.
 - **Expanded (Charlie, 2026-10-25, "Waive both (Recommended)", on LLP
   1133.026 §16 question 8):** the person's health store, read
   (`healthStatus`, `requestHealthAuthorization`, `healthStatistics` and
@@ -1772,6 +1805,12 @@ it is redrawn as a Canvas 2D surface in Caltrain's data crate, so one fewer GPU
 path exists after than before. Still refused: a drawing language in Contract
 (SVG is the declarative one), readback (`getImageData`, `toDataURL`,
 `toBlob`), `ctx.filter`, and an app-visible `OffscreenCanvas`.
+  - **Expanded (Charlie, 2026-11-12, expo/exact#188; take waived):**
+    `captureCanvas(surface, path)`, the asynchronous form: the host writes the
+    canvas's kept bitmap as a PNG to an `app:/` file and answers its path and
+    size (LLP 1056 D9). Unblocks
+    a screenshot annotation tool that exports what its canvas shows. Synchronous
+    readback stays refused.
 **Expanded (Seth Webster, 2026-09-26, for grnl; LLP 1061–1064):** paint motion
 on boxes — `transition` and keyframes on `background-color`, `color`, borders,
 `-exact-tint-color` and `box-shadow`, `light-dark()` pairs moving with the appearance —

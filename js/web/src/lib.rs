@@ -6,7 +6,8 @@ use exact_js_value::Shape;
 use exact_plan::{Plan, Value};
 pub use exact_runner::Placement;
 use exact_runner::{
-    Answer, DataError, DataSource, Dispatch, InFlight, Outcome, Request, Store, Target,
+    Answer, CacheMode, DataError, DataSource, Dispatch, InFlight, LongPoll, Outcome, Redirect,
+    Request, Store, Target,
 };
 use sha2::{Digest, Sha256};
 
@@ -447,6 +448,24 @@ impl Module {
                     "exactIdleTimeout is unavailable on the web's wasm host",
                 ));
             }
+            // `redirect`, `cache` and `exactLongPoll`, which the page runs
+            // (`host/web/src/batch.rs`): a value no host runs is refused.
+            request.redirect = Redirect::parse(r["redirect"].as_str()).map_err(unavailable)?;
+            request.cache = CacheMode::parse(r["cache"].as_str()).map_err(unavailable)?;
+            let poll = &r["long_poll"];
+            if !poll.is_null() {
+                let name = |k: &str| {
+                    poll[k]
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| unavailable(format!("exactLongPoll.{k} must be a name")))
+                };
+                request.long_poll = Some(Box::new(LongPoll {
+                    cursor: name("cursor")?,
+                    from: name("from")?,
+                    same_cursor_event: poll["same_cursor_event"] == true,
+                }));
+            }
             // `exactHeld` (LLP 1016.000 D9): no clock waits on it.
             request.held = r["held"] == true;
             // `exactUploadProgress`: the page sends it with XMLHttpRequest.
@@ -479,6 +498,9 @@ impl Module {
                 // What an app's abort names it by (`take_aborted`).
                 request.fetch = response["ticket"].as_u64();
                 self.waiting.insert(key, false);
+            }
+            if let Some(why) = request.long_poll_refusal() {
+                return Err(unavailable(why));
             }
             Answer::Later(request)
         } else if response["tag"] == 0 {
@@ -573,7 +595,7 @@ impl DataSource for Module {
                 | DataError::BadArguments(e)
                 | DataError::UnknownSource(e)
                 | DataError::Interface(e)
-                | DataError::DeferredAtBake(e)
+                | DataError::DeferredAtBake { message: e, .. }
                 | DataError::Overrun(e)
                 | DataError::Failed(_, e, _),
             ) => exact_runner::DrawReply {
@@ -746,6 +768,9 @@ impl DataSource for Module {
         let mut next = Self::new(&self.app, &self.grants, revision);
         next.id = id;
         next.placement = self.placement;
+        // The roster comes from the binary's bake, which a swap does not
+        // change; `Placed` snapshots it from this module.
+        next.canvas_surfaces.clone_from(&self.canvas_surfaces);
         Ok(next)
     }
 
@@ -994,6 +1019,20 @@ mod tests {
         );
     }
 
+    /// A live swap keeps the Canvas 2D roster: a canvas named in it is still
+    /// drawn in 2D, not sent to the GPU path.
+    #[test]
+    fn a_replacement_keeps_the_canvas_2d_roster() {
+        let module = Module::new("test", "", "revision").with_canvas_surfaces(&[("chart", 1)]);
+        let plan = b"plan";
+        let receipt = format!(
+            r#"{{"version":1,"abi":1,"appId":"test","grants":"","plan":{{"bytes":4,"sha256":"{:x}"}},"module":{{"sha256":"next"}}}}"#,
+            Sha256::digest(plan)
+        );
+        let next = module.replacement(plan, &receipt, b"7".to_vec()).unwrap();
+        assert_eq!(next.canvas_surfaces(), vec![("chart".to_string(), 1)]);
+    }
+
     #[test]
     fn two_targets_asking_one_source_with_equal_arguments_keep_their_own_turns() {
         let mut module = Module::new("test", "", "revision");
@@ -1177,6 +1216,53 @@ mod tests {
     }
 
     /// LLP 1016.000: a turn that ends at a stream's `fetch` answers a stream
+    /// A fetch's `redirect`, `cache` and `exactLongPoll` reach the request
+    /// the page runs (`host/web/src/batch.rs`); a value no host runs is
+    /// refused, not dropped.
+    #[test]
+    fn a_fetch_keeps_its_redirect_cache_and_long_poll() {
+        let mut module = Module::new("test", "", "revision");
+        module.ready = true;
+        module
+            .signatures
+            .insert("feed".into(), (vec![], Shape::String));
+        let mut store = Store::new("", []);
+        let key = || call_key(&target_json(Some(Target::Resource(0))), "feed", &[]);
+        let turn =
+            |request: &str| format!(r#"{{"tag":1,"call":3,"ticket":1,"request":{request}}}"#);
+        let plain = turn(
+            r#"{"method":"GET","url":"https://example.test/r","headers":[],"body":"","redirect":"manual","cache":"no-store"}"#,
+        );
+        let Ok(Answer::Later(request)) = module.step(&mut store, "feed", key(), plain.as_bytes())
+        else {
+            panic!("a request")
+        };
+        assert_eq!(request.redirect, exact_runner::Redirect::Manual);
+        assert_eq!(request.cache, exact_runner::CacheMode::NoStore);
+        let poll = turn(
+            r#"{"method":"GET","url":"https://example.test/p","headers":[],"body":"","stream":true,"long_poll":{"cursor":"since","from":"seq","same_cursor_event":true}}"#,
+        );
+        let Ok(Answer::Later(request)) = module.step(&mut store, "feed", key(), poll.as_bytes())
+        else {
+            panic!("a long poll")
+        };
+        let terms = request.long_poll.as_deref().expect("its terms");
+        assert_eq!(
+            (
+                terms.cursor.as_str(),
+                terms.from.as_str(),
+                terms.same_cursor_event
+            ),
+            ("since", "seq", true)
+        );
+        let wrong = turn(
+            r#"{"method":"GET","url":"https://example.test/r","headers":[],"body":"","redirect":"sideways"}"#,
+        );
+        assert!(module
+            .step(&mut store, "feed", key(), wrong.as_bytes())
+            .is_err());
+    }
+
     /// request; its messages go to the realm's mapper, never back as turns.
     #[test]
     fn a_stream_answer_maps_its_messages_in_the_realm_until_it_ends() {

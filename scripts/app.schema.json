@@ -643,7 +643,7 @@
       "description": "The Web App Manifest's share target: this app in other apps' share sheets (LLP 1133.024 D1). A share arrives as one location, `action` with the shared members under the names `params` gives them; files by a token that `sharedFiles(entry, name)` reads. The Apple bake derives a share extension, Android intent filters; the published web member is always GET with the text members only.",
       "required": ["action", "params"],
       "properties": {
-        "action": { "type": "string", "pattern": "^/", "description": "A path one of the app's routes matches." },
+        "action": { "type": "string", "pattern": "^/", "description": "A path one of the app's routes matches, as the router matches a location: `/share/` matches no route `/share`." },
         "method": { "enum": ["GET", "POST"] },
         "enctype": { "enum": ["application/x-www-form-urlencoded", "multipart/form-data"] },
         "params": {
@@ -1425,7 +1425,7 @@
         "playback",
         "playback-mix"
       ],
-      "description": "The audio session the app's sounds, media and canvas audio share (LLP 1096 D8). On iOS and tvOS: ambient (default) mixes with other apps' audio and obeys the ring/silent switch; playback ignores the switch and interrupts other audio; playback-mix ignores the switch and mixes without ducking, for sound played over another app's audio, and is never Now Playing. On the web the sound output sets the Audio Session API's type where the browser has it: playback-mix as ambient, the other values as written; an app with no sound output keeps the browser's auto. The Mac has no session."
+      "description": "The audio session the app's sounds, media and canvas audio share (LLP 1096 D8). On iOS and tvOS: ambient (default) mixes with other apps' audio and obeys the ring/silent switch; playback ignores the switch and interrupts other audio; playback-mix ignores the switch and mixes without ducking, for sound played over another app's audio, and is never Now Playing. On the web page initialization sets the Audio Session API's type where the browser has it: playback-mix as ambient, the other values as written, without requiring sound output. An omitted setting keeps the browser's auto. The Mac has no session."
     },
     "dev": {
       "type": "object",

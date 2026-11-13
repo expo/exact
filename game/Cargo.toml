@@ -27,6 +27,7 @@ serde_json = "1.0"
 exact-web = { path = "../host/web" }
 exact-web-capabilities = { path = "../host/web-capabilities" }
 exact-linux = { path = "../host/linux" }
+exact-painted = { path = "../host/painted" }
 exact-windows = { path = "../host/windows" }
 exact-apple = { path = "../host/apple" }
 exact-runner = { path = "../runner" }

@@ -170,10 +170,11 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
           continue;
         }
         if (kind === 'metadata') {
-          if (METADATA.get(c.name) !== c.value) refuse(`gives the meta-data ${JSON.stringify(c.name)} = ${JSON.stringify(c.value)}, which is not on the list`);
+          if (c == null || typeof c !== 'object' || Array.isArray(c) || typeof c.name !== 'string' || typeof c.value !== 'string') refuse('gives a meta-data without a string name and value');
+          if (!METADATA.has(c.name) || METADATA.get(c.name) !== c.value) refuse(`gives the meta-data ${JSON.stringify(c.name)} = ${JSON.stringify(c.value)}, which is not on the list`);
           if (names.has(c.name)) refuse(`declares ${c.name} twice`);
           names.add(c.name);
-          lines.push(`        <meta-data android:name="${c.name}" android:value="${c.value}" />`);
+          lines.push(`        <meta-data android:name="${escape(c.name)}" android:value="${escape(c.value)}" />`);
           continue;
         }
         component(kind, c);
@@ -226,4 +227,28 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
     ...(queries.size ? ['    <queries>', ...queries, '    </queries>'] : []),
     ...(lines.length ? ['    <application>', ...lines, '    </application>'] : []),
   ].join('\n');
+}
+
+/** Auth callbacks are custom schemes on Android. HTTPS grants remain available to the web and Apple;
+ * Android does not register App Links or loopback callbacks. The runner checks the full endpoint and state. */
+export function withAuthCallbacks(fragment, callbacks = []) {
+  const endpoints = [...new Set(callbacks.filter(callback => !['http:', 'https:'].includes(new URL(callback).protocol)))];
+  const schemes = [...new Set(endpoints.map(callback => new URL(callback).protocol.slice(0, -1)))];
+  if (!schemes.length) return fragment;
+  const filters = schemes.flatMap(scheme => [
+    '            <intent-filter>',
+    '                <action android:name="android.intent.action.VIEW" />',
+    '                <category android:name="android.intent.category.DEFAULT" />',
+    '                <category android:name="android.intent.category.BROWSABLE" />',
+    `                <data android:scheme="${escape(scheme)}" />`,
+    '            </intent-filter>',
+  ]);
+  // A hostless scheme:/path cannot be narrowed by android:path: Android ignores paths without a host.
+  const activity = '        <activity android:name="dev.exact.app.MainActivity" android:launchMode="singleTask" tools:replace="android:launchMode">';
+  const meta = [`        <meta-data android:name="dev.exact.auth.callbacks" android:value="${escape(JSON.stringify(endpoints))}" />`];
+  // A share target already declared this activity; extend it instead of duplicating the manifest element.
+  if (fragment.includes(activity)) fragment = fragment.replace(activity, [activity, ...filters].join('\n'));
+  else meta.push(activity, ...filters, '        </activity>');
+  const app = withMetaData(fragment, meta);
+  return `${app}\n    <queries>\n        <intent><action android:name="android.support.customtabs.action.CustomTabsService" /></intent>\n        <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="https" /></intent>\n    </queries>`;
 }

@@ -92,7 +92,7 @@ enum Source {
     Bytes(Vec<u8>),
 }
 
-/// A source as the Linux host resolves it (`host/linux/src/image/assets.rs`):
+/// A source as the Linux host resolves it (`host/painted/src/image/assets.rs`):
 /// a `data:` URL to its bound, a relative path beneath the app's directory
 /// and through no `..`, and an absolute path or `file://` URL, which the
 /// harness's `/image` names. The terminal downloads nothing and has no app

@@ -8,7 +8,7 @@ import { copyFileSync, cpSync, statSync, existsSync, lstatSync, mkdirSync, mkdte
 import { tmpdir } from 'node:os';
 import { basename, relative, resolve } from 'node:path';
 import { outsideWorkspaceProblems, pathFrom, readManifest, resolveApp } from '../scripts/app.mjs';
-import { bringPlatform, ensureShells, namePlatform, platformOf, shellCrates, withoutPlatformKeys } from '../scripts/app-shells.mjs';
+import { appCrateName, bringPlatform, ensureShells, namePlatform, platformOf, shellCrates, withoutPlatformKeys } from '../scripts/app-shells.mjs';
 import { authoredWorkspace } from '../scripts/cargo-check.mjs';
 import { appVerbs, beforeBuild } from '../scripts/app-cli.mjs';
 import { namesNative, nativePlatforms } from '../scripts/deploy.mjs';
@@ -662,12 +662,6 @@ test('a new app refuses a name no host crate can carry, and a directory that is 
   try {
     assert.throws(() => createApp(resolve(parent, 'Field_Log')), /lowercase-hyphenated/);
     assert.throws(() => createApp(resolve(parent, 'field-web')), /no host suffix/);
-    // A folder named after the SDK would write exact-apple, exact-linux and exact-web beside exact2's own.
-    assert.throws(() => createApp(resolve(parent, 'exact')), {
-      message: `exact new ${resolve(parent, 'exact')}: the folder's name exact would make the crate exact-apple, which is one of exact2's own; name the app directory something else, e.g. exact new ${resolve(parent, 'exact-app')}`,
-    });
-    assert.throws(() => createApp(resolve(parent, 'exact-js')), /would make the crate exact-js-web/);
-    assert.ok(!existsSync(resolve(parent, 'exact')) && !existsSync(resolve(parent, 'exact-js')), 'a refused name writes nothing');
     mkdirSync(resolve(parent, 'field-log'));
     writeFileSync(resolve(parent, 'field-log/stray'), '');
     assert.throws(() => createApp(resolve(parent, 'field-log')), /not empty/);
@@ -731,7 +725,7 @@ test('a sibling app\'s generated workspace resolves every host dependency from e
     if (result.status !== 0) return assert.deepEqual(readFileSync(resolve(workspace, 'Cargo.lock')), readFileSync(resolve(root, 'Cargo.lock')));
     const packages = JSON.parse(result.stdout).packages;
     assert.deepEqual(packages.map(p => p.name).sort(), [`${basename(dir)}-apple`, `${basename(dir)}-linux`, `${basename(dir)}-web`]);
-    const paths = { 'ibex2-sqlite': 'vendor/ibex/crates/ibex2-sqlite', 'exact-logic': 'logic', 'exact-apple': 'host/apple', 'exact-apple-update': 'host/apple-update', 'exact-linux': 'host/linux', 'exact-web': 'host/web', 'exact-web-capabilities': 'host/web-capabilities', 'exact-js': 'js', 'exact-js-web': 'js/web', 'exact-js-bake': 'js/bake' };
+    const paths = { 'ibex2-sqlite': 'vendor/ibex/crates/ibex2-sqlite', 'exact-logic': 'logic', 'exact-apple': 'host/apple', 'exact-apple-update': 'host/apple-update', 'exact-linux': 'host/linux', 'exact-painted': 'host/painted', 'exact-web': 'host/web', 'exact-web-capabilities': 'host/web-capabilities', 'exact-js': 'js', 'exact-js-web': 'js/web', 'exact-js-bake': 'js/bake' };
     for (const pkg of packages) for (const dep of pkg.dependencies) {
       assert.equal(realpathSync(dep.path), realpathSync(resolve(root, paths[dep.name])), `${pkg.name}: ${dep.name}`);
     }
@@ -753,6 +747,26 @@ test('offline, with none of exact2\'s crates in Cargo\'s cache, the generated wo
     for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     rmSync(parent, { recursive: true, force: true });
   }
+});
+
+test('--with tvos is refused before anything is written, since an Apple TV build takes host.ios', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-'));
+  try {
+    const fresh = resolve(parent, 'tv-new');
+    assert.throws(() => createApp(fresh, { with: ['tvos'] }), /--with tvos: .*an Apple TV build takes host\.ios/);
+    assert.equal(existsSync(fresh), false);
+    const dir = resolve(parent, 'tv-update');
+    createApp(dir);
+    const before = readFileSync(resolve(dir, 'app.json'), 'utf8');
+    assert.throws(() => createApp(dir, { update: true, with: ['ios', 'tvos'] }), /update --with tvos/);
+    assert.equal(readFileSync(resolve(dir, 'app.json'), 'utf8'), before, 'a refused update leaves the manifest as it was');
+    createApp(dir, { update: true, with: ['ios'] });
+    assert.ok(readManifest(dir, 'tv-update').host.ios, 'the platform an Apple TV build takes is one the reader accepts');
+    // An authored tvOS crate still names the app's crates, though tvOS is no platform --with takes.
+    mkdirSync(resolve(dir, 'tvos'));
+    writeFileSync(resolve(dir, 'tvos/Cargo.toml'), '[package]\nname = "set-top-tvos"\n');
+    assert.equal(appCrateName(dir), 'set-top');
+  } finally { rmSync(parent, { recursive: true, force: true }); }
 });
 
 test('failed creation removes the half-written app', () => {
@@ -843,7 +857,7 @@ test('a native verb names its platform, and the generated workspace follows app.
     assert.match(android, /^crate-type = \["cdylib"\]$/m);
     assert.match(android, /^\[target\.'cfg\(target_os = "android"\)'\.dependencies\]\nibex2-sqlite = [^\n]+\nexact-logic = /m);
     assert.match(readFileSync(resolve(first.workspace, 'android/build.rs'), 'utf8'), /exact_js_bake::build_android\(std::path::Path::new\("\.\.\/\.\.\/\.\."\)\)/);
-    assert.match(readFileSync(resolve(first.workspace, 'android/src/lib.rs'), 'utf8'), /exact_linux::canvas_jni!\(super::AppData, hatches = crate::android::exact_hatches\(\)\);/);
+    assert.match(readFileSync(resolve(first.workspace, 'android/src/lib.rs'), 'utf8'), /exact_painted::canvas_jni!\(super::AppData, hatches = crate::android::exact_hatches\(\)\);/);
     assert.ok(!existsSync(resolve(dir, 'Cargo.toml')) && !existsSync(resolve(dir, 'linux')), 'nothing Rust in the author\'s tree');
     // resolveApp takes the generated workspace, with the target at the app, when nothing authored one (and no
     // CARGO_TARGET_DIR names another, as a run with its own target directory does).
@@ -904,7 +918,7 @@ test('an authored app gains a Linux crate on update and loses it with --without 
     assert.equal(members(readFileSync(manifest, 'utf8')), members(copied));
     const linux = readFileSync(resolve(dir, 'linux/Cargo.toml'), 'utf8');
     assert.match(linux, /^name = "field-log-linux"$/m);
-    assert.match(linux, /^exact-linux = \{ path = "[^"]*host\/linux" \}$/m);
+    assert.match(linux, /^exact-painted = \{ path = "[^"]*host\/painted" \}$/m);
     assert.match(readFileSync(resolve(dir, 'linux/build.rs'), 'utf8'), /Path::new\("\.\."\)/);
     assert.match(readFileSync(manifest, 'utf8'), /^members = \["apple", "linux", "web"\]$/m);
     assert.doesNotMatch(createApp(dir, { update: true }), /linux\/ host crate/, 'a second update leaves it');
@@ -984,7 +998,7 @@ test('update --without edits any spelling of the workspace member, and a refusal
 
 // Authoring bench (LLP 1087): an app copied into a folder of another name kept its `todo-list-*` crates,
 // and `update` wrote an exact.mjs that asked Cargo for `todo-apple`.
-test('update names an authored app by its crates, and a generated one by its folder', () => {
+test('update preserves authored and generated crate names after a directory rename', () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-'));
   try {
     const made = resolve(parent, 'todo-list'), moved = resolve(parent, 'todo');
@@ -998,22 +1012,21 @@ test('update names an authored app by its crates, and a generated one by its fol
     const commands = readFileSync(resolve(moved, 'exact.mjs'), 'utf8');
     assert.match(commands, /name: "todo-list",/);
     assert.doesNotMatch(commands, /name: "todo",/);
-    // A generated workspace is named by the folder, and follows a rename.
+    // A generated workspace keeps the prefix recorded in package.json.
     const plain = resolve(parent, 'note-list'), renamed = resolve(parent, 'notes');
     createApp(plain, { with: ['ios'] });
     assert.match(readFileSync(resolve(ensureShells(plain).workspace, 'apple/Cargo.toml'), 'utf8'), /^name = "note-list-apple"$/m);
     spawnSync('mv', [plain, renamed]);
     createApp(renamed, { update: true });
-    assert.match(readFileSync(resolve(renamed, 'exact.mjs'), 'utf8'), /name: "notes",/);
-    assert.match(readFileSync(resolve(ensureShells(renamed).workspace, 'apple/Cargo.toml'), 'utf8'), /^name = "notes-apple"$/m);
+    assert.match(readFileSync(resolve(renamed, 'exact.mjs'), 'utf8'), /name: "note-list",/);
+    assert.match(readFileSync(resolve(ensureShells(renamed).workspace, 'apple/Cargo.toml'), 'utf8'), /^name = "note-list-apple"$/m);
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }
 }, 60_000);
 
-// Another checkout of an app in a folder of another name (a git worktree) builds the crates its exact.mjs names: the
-// native verb's workspace (app-cli.mjs, bringPlatform) and the build's (resolveApp) both take the launcher's name.
-test('a generated workspace is named by the app\'s exact.mjs, not its folder', () => {
+// A copied app shares its package identity with its launcher, the native verb's hook and the build's resolver.
+test('a generated workspace shares the app\'s crate identity with its launcher', () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-')), root = resolve(import.meta.dir, '..');
   try {
     const made = resolve(parent, 'note-list'), other = resolve(parent, 'note-list-feature'), sdk = resolve(parent, 'sdk');
@@ -1147,6 +1160,22 @@ test.skipIf(hasSnapback)('exact new --snapback in a checkout without the client 
       assert.throws(() => createApp(resolve(parent, 'guest'), { snapback }), /^Error: this checkout has no Snapback client \(snapback4\/\)/);
       assert.deepEqual(readdirSync(parent), []);
     }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
+// Without the client, update still rewrites the schema path, leaves a Snapback app's mount as it was and says why.
+test.skipIf(hasSnapback)('update of a Snapback app in a checkout without the client keeps its mount and finishes', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-')), dir = resolve(parent, 'guest');
+  try {
+    createApp(dir);
+    const path = resolve(dir, 'app.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
+    manifest.$schema = '../old/scripts/app.schema.json';
+    manifest.typescript = { ...manifest.typescript, sources: { ...manifest.typescript?.sources, snapback4: '../old/snapback4/ts' } };
+    writeFileSync(path, JSON.stringify(manifest, null, 2));
+    assert.match(createApp(dir, { update: true }), /snapback4 mount left as it was: this checkout has no Snapback client/);
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(after.$schema, pathFrom(dir, resolve(import.meta.dir, '../scripts/app.schema.json')));
+    assert.equal(after.typescript.sources.snapback4, '../old/snapback4/ts');
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });
 

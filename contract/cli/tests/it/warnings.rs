@@ -87,6 +87,8 @@ fn what_the_bar_places_or_the_compiler_cannot_see_is_not_warned() {
         "  text \"List\" role=\"heading\" aria-level=1\n  text \"sub\"\n  text \"hidden\" display=\"none\"\n  button popovertarget=\"m\"\n    text \"More\"\n  column id=\"m\" popover=\"auto\" role=\"menu\"\n    text \"Sort\"\n    button press=go popovertarget=\"m\" popovertargetaction=\"hide\" role=\"menuitem\"\n      text \"Go\"",
         // A heading under an `if` may be the one: the benefit.
         "  if q != \"\"\n    text q role=\"heading\"\n  text \"sub\"",
+        // A button that shows its alert with `commandfor` alone (#387).
+        "  text \"History\" role=\"heading\" aria-level=2\n  button commandfor=\"clear\" command=\"show-modal\" aria-label=\"Clear History\"\n    image \"symbol:delete\"\n  dialog id=\"clear\" role=\"alertdialog\" aria-label=\"Clear History?\"\n    button press=go commandfor=\"clear\" command=\"close\"\n      text \"Clear\"\n    button commandfor=\"clear\" command=\"close\"\n      text \"Cancel\"",
     ] {
         assert_eq!(warned(&route(header)), [], "{header}");
     }

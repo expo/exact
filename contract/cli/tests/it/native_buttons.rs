@@ -138,6 +138,7 @@ fn its_face_is_its_children_read_live() {
             leading: true,
             label: None,
             fits: true,
+            badge: None,
         }
     );
     r.dispatch(b, Event::Press).unwrap();
@@ -458,6 +459,7 @@ fn every_button_has_a_face_custom_or_native() {
             leading: true,
             label: Some("Save it".into()),
             fits: true,
+            badge: None,
         })
     );
     let raster = face("raster").unwrap();
@@ -1017,5 +1019,73 @@ fn a_radio_group_whose_radios_paint_is_the_authors_once() {
         group("border-radius=8", " appearance=\"auto\""),
         (Auto, true),
         "the group's own word stands"
+    );
+}
+
+/// LLP 1075.003 §9.9, LLP 1069.011.001 D3 (amended, expo/exact#391): a tab
+/// that names its panel holds its badge beside its face and stays the
+/// platform's tab; the badge is no part of the face. Elsewhere a box is not a
+/// face, and a tab shows one badge.
+#[test]
+fn a_tab_that_names_its_panel_keeps_its_badge_beside_its_face() {
+    let tab = |attrs: &str, badge: &str| {
+        format!(
+            "row role=\"tablist\"\n  button role=\"tab\" aria-controls=\"panel\" aria-selected=true press=go testId=\"tab\"{attrs}\n    image \"symbol:bookmark\"\n    text \"Saved\"\n{badge}column role=\"tabpanel\" id=\"panel\"\n  text \"Panel\""
+        )
+    };
+    let boot_tab = |attrs: &str, badge: &str| boot(&app(&tab(attrs, badge)));
+    let badge = "    if n > 0\n      row background-color=\"-exact-system-red\" border-radius=12 testId=\"badge\"\n        text `${n}`\n";
+    let mut r = boot_tab("", badge);
+    let at = view_of(&r, "tab");
+    assert_eq!(
+        r.kernel().press_face(at).unwrap().badge,
+        None,
+        "no box, no badge"
+    );
+    assert_eq!(
+        r.kernel().node(at).unwrap().node_type,
+        NodeType::Control,
+        "the platform's tab"
+    );
+    r.dispatch(at, Event::Press).unwrap();
+    let face = r.kernel().press_face(view_of(&r, "tab")).unwrap();
+    assert_eq!(
+        (
+            face.title.as_deref(),
+            face.symbol.as_deref(),
+            face.fits,
+            face.badge.as_deref()
+        ),
+        (Some("Saved"), Some("bookmark"), true, Some("1")),
+        "its badge beside its face, a tab bar item's badge"
+    );
+    // Written native, it is admitted too; two badges on one arm are not.
+    boot_tab(" appearance=\"auto\"", badge);
+    let two = format!("{badge}    row background-color=\"-exact-system-red\"\n      text \"!\"\n");
+    let (id, says) = refused(&tab(" appearance=\"auto\"", &two));
+    assert_eq!(
+        (id.as_str(), says.contains("one badge")),
+        ("lower-button-style-attr", true),
+        "{says}"
+    );
+    let r = boot_tab("", &two);
+    assert_eq!(
+        r.kernel().node(view_of(&r, "tab")).unwrap().node_type,
+        NodeType::Pressable,
+        "the bare box under the default"
+    );
+    // A tab of a segmented control (no panel) and a plain button have no badge.
+    let r = boot(&app(&tab("", badge).replace(" aria-controls=\"panel\"", "")));
+    assert_eq!(
+        r.kernel().node(view_of(&r, "tab")).unwrap().node_type,
+        NodeType::Pressable
+    );
+    let r = boot(&app(&tab("", badge).replace(
+        " role=\"tab\" aria-controls=\"panel\" aria-selected=true",
+        "",
+    )));
+    assert_eq!(
+        r.kernel().node(view_of(&r, "tab")).unwrap().node_type,
+        NodeType::Pressable
     );
 }

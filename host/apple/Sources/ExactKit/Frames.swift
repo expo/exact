@@ -126,6 +126,7 @@ package final class Frames: NSObject {
                 held: held, ran: ran, sent: sent, flags: healthFlags)
             // The frame-health card's charts draw what the hook stored, after the hook returns
             s.frameHealth.chart?.present()
+            s.frameHealth.maintain()
         }
         ticking = false
         run(motion || canvas2d || timerSoon || more || s.canvases.wantsFrames || s.canvases.lifecycleNeedsRetry)
@@ -133,8 +134,10 @@ package final class Frames: NSObject {
 
     /// Every canvas render that waited on its drawable has drawn.
     package func canvasDrawn() {
+        session?.frameHealth.expireCapture(at: CACurrentMediaTime())
         session?.frameHealth.landed(FrameHealth.canvas)
         session?.frameHealth.chart?.present()
+        session?.frameHealth.maintain()
     }
     /// A canvas whose render waited on its drawable left before it drew.
     package func canvasLost() { session?.frameHealth.abandon(FrameHealth.canvas) }

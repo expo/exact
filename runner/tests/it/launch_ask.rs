@@ -21,6 +21,46 @@ struct Feed {
     overruns: usize,
 }
 
+#[test]
+fn changing_only_prefetch_keeps_the_request_but_changing_its_body_replaces_it() {
+    struct Source;
+    impl DataSource for Source {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
+            let mut request = Request::post_json("https://example.test/feed", "{}");
+            request.prefetch = args[0] == Value::Number(1.);
+            if args[0] == Value::Number(2.) {
+                request.body = b"{\"changed\":true}".to_vec();
+            }
+            Ok(Answer::Later(request))
+        }
+    }
+    let plan = contract::compile("component App\n  state n = 0\n  resource feed = feed(n) as shape string\n  action next\n    n = n + 1\n  view\n    text feed\n").unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Source,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let first = r.take_requests();
+    assert_eq!(first.len(), 1);
+    let ticket = first[0].ticket;
+    r.act("next", vec![]).unwrap();
+    assert!(r.take_requests().is_empty());
+    assert_eq!(r.pending(), [("feed".into(), ticket)]);
+    assert!(r.holds(ticket));
+    r.act("next", vec![]).unwrap();
+    let replaced = r.take_requests();
+    assert_eq!(replaced.len(), 1);
+    assert_ne!(replaced[0].ticket, ticket);
+    assert_eq!(replaced[0].request.body, b"{\"changed\":true}");
+    assert!(!r.holds(ticket));
+}
+
 impl DataSource for Feed {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))

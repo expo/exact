@@ -178,16 +178,17 @@ export function implementation({ changed, emit, foreground }) {
     },
     async scan(args, told = {}) {
       if (!has) return { error: 'NotSupportedError' };
-      try {
-        await started();
-      } catch (e) {
-        return failure(e, 'NotReadableError');
-      }
-      return new Promise(resolve => {
-        scans.set(told.request ?? `s${++last}`, { once: args?.once === true, resolve });
+      // The claim is the session's before the reader has started, so a cancel or `abortScan` meanwhile ends it at
+      // once, and the last claim ending aborts the start.
+      const id = told.request ?? `s${++last}`, claim = { once: args?.once === true };
+      const answer = new Promise(resolve => { claim.resolve = resolve; });
+      scans.set(id, claim);
+      started().then(
         // A reader that fails after it started ends every scan.
-        reader.addEventListener?.('error', () => { for (const id of [...scans.keys()]) end(id, { reason: 'interrupted', reading: null, message: null }); }, { once: true });
-      });
+        () => { if (scans.get(id) === claim) reader.addEventListener?.('error', () => { for (const id of [...scans.keys()]) end(id, { reason: 'interrupted', reading: null, message: null }); }, { once: true }); },
+        e => { if (scans.get(id) === claim) { scans.delete(id); claim.resolve(failure(e, 'NotReadableError')); } },
+      );
+      return answer;
     },
     async abortScan() {
       for (const id of [...scans.keys()]) end(id, { reason: 'stopped', reading: null, message: null });

@@ -51,3 +51,19 @@ Let `app.json` declare, under `host.ios`, entitlements (checked against the sign
 `widgets.mjs` checks the App Group and push ones), extra Info.plist keys, and files placed at the
 bundle root (`PrivacyInfo.xcprivacy`), each merged into what Exact derives and refused where they
 conflict.
+
+## Verified and still open
+
+Upstream 40377f008 supports an app's `PrivacyInfo.xcprivacy` beside `app.json`,
+merged before signing (`host/apple/privacy.mjs`, `host/apple/bundle.mjs`). The
+report's push, Sign in with Apple and photo-add cases have grant-derived or
+named-switch paths (`host/apple/build.mjs`, `host/apple/presence.mjs`,
+`runner/src/device.rs`). Package plist declarations compose through
+`host/apple/plist.mjs`.
+
+The remaining app metadata requests need a design decision. LLP 1069.008 D3-D4
+excludes arbitrary entitlement dictionaries; the notification service extension
+is outside the visible-push admission (`rules/DEFERRED.md`, notifications).
+Those boundaries do not resolve the reported need for native code that has no
+admitted grant or switch. No generic dictionary is added here. The issue stays
+open for a concrete capability admission or an amendment to that boundary.

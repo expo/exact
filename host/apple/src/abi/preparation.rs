@@ -42,10 +42,12 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
     let Carried {
         router,
         data_revision,
+        picked_count,
         keeps_answers,
         slots,
         panels,
         resources,
+        streams,
         store_readers,
         read_contents,
         now_ms,
@@ -57,7 +59,9 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
     } = a;
     router == &b.router
         && data_revision == &b.data_revision
+        && picked_count == &b.picked_count
         && keeps_answers == &b.keeps_answers
+        && streams == &b.streams
         && store_readers == &b.store_readers
         && read_contents == &b.read_contents
         && now_ms.to_bits() == b.now_ms.to_bits()

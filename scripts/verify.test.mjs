@@ -11,7 +11,8 @@ import { resolve, toNamespacedPath } from 'node:path';
 import { applyPattern, createApp } from '../game/new.mjs';
 import { findings } from '../host/apple/feel/analyze.mjs';
 import { chromium } from './agent-launch.mjs';
-import { ago, appServer, buildWarnings, draftFields, fixedType, groups, judgeRelaunch, judgeReload, movedClock, persistedStates, pinnedLaunch, recordedServerAddress, refusalsOf, relaunchFacts, relaunchStore, reloadLine, reloadNote, report, reusable, savedChanges, screenTexts, serverUrl, shotName, storedTexts, warningsOfBuild } from './verify.mjs';
+import { ancestors, parentsOf } from './processes.mjs';
+import { ago, appServer, buildProgress, buildWarnings, draftFields, fixedType, groups, judgeRelaunch, judgeReload, movedClock, persistedStates, pinnedLaunch, refusalsOf, relaunchFacts, relaunchStore, reloadLine, reloadNote, report, reusable, savedChanges, screenTexts, serverChoice, serverUrl, shotName, storedTexts, warningsOfBuild } from './verify.mjs';
 import { semanticsSummary } from './verify-semantics.mjs';
 
 const SIZES = [[390, 844], [1280, 900]];
@@ -390,7 +391,7 @@ test('the report: each test end reloaded; a saved value lost is a finding once a
   const stuck = report({ ...base, tested: { passed: 1, failed: 0, results: [] },
     reloads: [{ test: 'saves', ran: true, error: 'reload: the app\'s storage did not finish before the restart: x\nmore' }] });
   assert.deepEqual(stuck.lines.slice(2, 4), ['reload 1 test end: 1 finding', '  reload   "saves": could not reload the end screen: reload: the app\'s storage did not finish before the restart: x']);
-  // The iOS report has no reload: a native host's cold launch is `/` (LLP 1038 §7).
+  // The iOS report has no end-route reload: relaunch uses its launch location, defaulting to the manifest's `start_url`.
   assert.ok(!report({ ...base, host: 'ios', reloads: [{ test: 'a', ran: false }] }).lines.some((l) => l.startsWith('reload')));
 });
 
@@ -487,6 +488,16 @@ test('the app\'s server: its entry, the URL app.ts calls, and why it cannot be r
     put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n', '.env.local': 'API_BASE_URL=http://localhost:9000\n' });
     assert.equal(serverUrl(dir, {}), 'http://localhost:9000');
     assert.equal(serverUrl(dir, { API_BASE_URL: 'http://127.0.0.1:7000' }), 'http://127.0.0.1:7000');
+    // A comment naming another local URL is not code, and a setting's value wins over a constant before it; the
+    // server's line says which origin it took and why.
+    put({ ...setting, 'app.ts': "// The server listens on http://127.0.0.1:8787 by default.\nconst API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8787';\nexport function load() { return fetch(`${API}/items`); }\n" });
+    assert.deepEqual([serverUrl(dir, { API_BASE_URL: 'http://127.0.0.1:9100' }), appServer(dir, { API_BASE_URL: 'http://127.0.0.1:9100' }).note], ['http://127.0.0.1:9100', undefined]);
+    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8787');
+    put({ ...setting, 'app.ts': "const FALLBACK = 'http://127.0.0.1:8787'; /* or http://localhost:1 */\nconst API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8787';\nexport const grants = `net.fetch ${API} ${FALLBACK}`;\n" });
+    assert.deepEqual([serverChoice(dir, { API_BASE_URL: 'http://127.0.0.1:9100' })], [{ url: 'http://127.0.0.1:9100', note: "the app's code names http://127.0.0.1:9100, http://127.0.0.1:8787: the server is started at http://127.0.0.1:9100, the value of API_BASE_URL" }]);
+    put({ ...setting, 'app.ts': "const API = 'http://127.0.0.1:8080'; // not http://localhost:1\nconst OTHER = 'http://localhost:9000';\nexport const grants = `net.fetch ${API} ${OTHER}`;\n" });
+    assert.deepEqual(serverChoice(dir, {}), { url: 'http://127.0.0.1:8080', note: "the app's code names http://127.0.0.1:8080, http://localhost:9000: the server is started at http://127.0.0.1:8080, the first in app.ts's code" });
+    put(setting);
     assert.equal(appServer(dir, { API_BASE_URL: 'https://api.example.com' }).url, null);
     assert.match(appServer(dir, { API_BASE_URL: 'https://api.example.com' }).why, /^server\.ts is left alone: app\.ts calls no local URL/);
     // The spellings of reading DB, and a root shim that only imports the backend that reads it (book-club, polls, event-rsvp).
@@ -673,27 +684,6 @@ test('an agent drive passes server arguments without DB or a scratch database', 
     assert.equal(readFileSync(old, 'utf8'), 'untouched');
     assert.deepEqual(readdirSync(lease), ['db.sqlite']);
   `);
-});
-
-test('recorded server addresses preserve accepted default ports and paths, refusing credentials and queries', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-server-address-'));
-  try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ server: { database: false } }));
-    writeFileSync(resolve(dir, 'server.ts'), 'Bun.serve({});\n');
-    for (const [url, port] of [
-      ['http://127.0.0.1:80', 80], ['http://127.0.0.1:080', 80], ['https://localhost:443', 443],
-      ['https://[::1]:0443/api', 443], ['http://localhost:80/health', 80], ['http://127.0.0.1:8080/api/v1/', 8080],
-    ]) {
-      writeFileSync(resolve(dir, 'app.ts'), `export const API = ${JSON.stringify(url)};\n`);
-      const accepted = appServer(dir, {});
-      assert.equal(accepted.url, url.replace(/\/$/, ''));
-      assert.equal(accepted.port, port);
-      assert.deepEqual(recordedServerAddress(accepted.url), { url: accepted.url, port });
-    }
-    for (const url of [null, {}, 'file:///tmp/server', 'ftp://localhost:80', 'http://user:pw@localhost:80',
-      'http://@localhost:80', 'http://localhost:80/?', 'http://localhost:80/?q=x', 'http://localhost:80/#',
-      'http://localhost:80/#x', 'http://:80', 'http://localhost:65536']) assert.equal(recordedServerAddress(url), null);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('fixture drives isolate checkouts, refuse foreign servers and clean overlapping ports', async () => {
@@ -938,14 +928,16 @@ test('agent\'s server: started on a database of its own, shared by overlapping d
     assert.match(await c.said(), /^agent: started server\.ts at \S+ for this drive \(an empty database\); stopped after\n$/);
     assert.deepEqual([await up(), existsSync(resolve(dir, '.exact/agent-server'))], [false, false]);
 
-    // The builder's own server answers: used, said nothing of, and still running after.
+    // The builder's own server answers: used, said in one line naming it, and still running after.
     const theirs = Bun.spawn([process.execPath, 'server.ts'], { cwd: dir, env: { ...process.env, DB: resolve(dir, 'theirs.db') }, stdout: 'ignore', stderr: 'ignore' });
     try {
       for (let i = 0; !(await up()); i++) { assert.ok(i < 100, 'their server answers'); await Bun.sleep(100); }
       const d = drive('three');
       assert.equal(await d.next(), 'up');
       assert.equal(await d.end(), 'stopped');
-      assert.equal(await d.said(), '');
+      const named = await d.said();
+      assert.ok(named.startsWith(`agent: ${url} already answers (pid ${theirs.pid}: `), named);
+      assert.ok(named.endsWith('), a server no drive started: this drive uses it and its data, not a database of its own; stop it to have the drive start server.ts itself\n'), named);
       assert.deepEqual([await up(), theirs.exitCode], [true, null]);
       // Asked empty, a drive is refused rather than writing into theirs.
       assert.match(await drive('three', 'fresh').next(), /but something already answers at /);
@@ -978,13 +970,13 @@ test.skipIf(!!chromium().unavailable)('agent on a server app: its server for the
       const other = agent(...flags, 'clock data', 'state lib.items');
       assert.match(other.stdout, /^\[\]$/m, other.stdout + other.stderr);
     }
-    // A server the builder runs is used, and runs on.
+    // A server the builder runs is used, said so, and runs on.
     const theirs = Bun.spawn([process.execPath, 'server.ts'], { cwd: dir, stdout: 'ignore', stderr: 'ignore' });
     try {
       for (let i = 0; !(await fetch(`${url}/health`).then((r) => r.ok, () => false)); i++) { assert.ok(i < 100, 'their server answers'); await Bun.sleep(100); }
       const used = agent('--storage', 's3', 'clock data', 'state lib.items');
       assert.equal(used.status, 0, used.stdout + used.stderr);
-      assert.doesNotMatch(used.stderr, /^agent: /m);
+      assert.deepEqual(used.stderr.match(/^agent: .*$/gm), [`agent: ${url} already answers (pid ${theirs.pid}: ${used.stderr.match(/\(pid \d+: ([^)]*)\)/)?.[1]}), a server no drive started: this drive uses it and its data, not a database of its own; stop it to have the drive start server.ts itself`]);
       assert.equal(theirs.exitCode, null, 'their server runs on');
     } finally { theirs.kill(); await theirs.exited; rmSync(resolve(dir, 'data.db'), { force: true }); }
   } finally { rmSync(parent, { recursive: true, force: true }); }
@@ -1474,3 +1466,19 @@ test('every drive after the build, and the run recorded, select the app the call
     for (const [, name, at, gpu] of lines) assert.deepEqual([name, at, gpu], ['original', realpathSync(dir), 'original-gpu']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
+
+test('verify shows a drive build as it starts and as it runs, not its other lines', () => {
+  const lines = ['building for ios: app.contract changed', 'waiting for the build in another drive', '  still building (60 s): Compiling exact-kernel', 'kept the plan', 'warning: x'];
+  assert.deepEqual(lines.filter(buildProgress), lines.slice(0, 3));
+});
+
+test('a server owner two processes up is found on every platform: the parent table, then the walk up it', () => {
+  // `ps -A -o pid=,ppid=` pads its columns; Win32_Process's lines are as written.
+  const posix = parentsOf('    1     0\n  420     1\n  500   420\n  612   500\n');
+  assert.deepEqual(ancestors(612, posix), ['612', '500', '420']);
+  const windows = parentsOf('0 0\r\n4 0\r\n7100 4\r\n7200 7100\r\n7300 7200\r\n');
+  assert.deepEqual(ancestors(7300, windows), ['7300', '7200', '7100', '4']);
+  assert.deepEqual(ancestors(7300, new Map()), ['7300'], 'a parent table that could not be read');
+  assert.deepEqual(ancestors(10, new Map([[10, 11], [11, 10]])), ['10', '11'], 'a reused pid makes no loop');
+  assert.ok(ancestors().includes(String(process.ppid)));
+});

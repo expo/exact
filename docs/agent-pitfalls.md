@@ -230,6 +230,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Lists and scrolling
 
+- **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
+  order.** A whole document in one `text` (an article, a long Markdown note) is
+  one string to Core Text, and Core Text does not shape a string longer than a
+  length it does not document: Arabic is unjoined and runs left to right, and
+  Latin text is not kerned, so a line can break at another word. The length was
+  10,240 UTF-16 units on iOS 27.1 and macOS 27.2, and can change in any release.
+  Give each paragraph or block its own `text`, and never split inside a
+  paragraph ([long text](recipes/long-text.md)). (Duo Lab, 2026-11-12.)
+  **Candidate diagnostic:** `check` could name a text whose string is that long.
+
 - **A frame's cell count is not its stretched layout width.** Giving the
   harness's animation rows a width of `animCols` cells changed fullscreen layout in
   a window narrower than the animation's minimum 20 cells. `width="100%"`
@@ -326,6 +336,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   on which tab shows; run a jump the reader asks for (a Now button) from its
   press. (Bake-off r25, timetable: Saved and back took the board from 07:34 to
   05:00.)
+
+- **A mixed native bake alone does not include its Rust source in the JS web build.**
+  A source composed with `exact_js_bake::build_mixed_with` still needs a module
+  crate exporting that source through `exact_logic_abi::export!`, named by
+  `rust.module.package` in app.json. Without it, the JS target calls TypeScript
+  for the Rust source and gets `UnknownSource`. The canvas gallery's `logic/`
+  crate and manifest show the declaration. (Web capture smoke, 2026-11-12.)
 
 - **A data answer past 16 MiB fails only on the JS target.** A 64 MiB string from
   a Rust source loaded on the wasm web host and on Linux, and on the JS target
@@ -434,6 +451,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   by the root's `navigationBack`, and a route that declares one that is disabled
   refuses it (the log says "back gesture refused" and why). A route with no such
   control always goes back (LLP 1115 D5). Fix: enable the control, or leave it out.
+- **Browser Back restores a screen, but its Back returns to the screen just left.**
+  Cause: an in-app transition used `open`, which replaced the current visit with
+  the destination's declared chain. Browser Back then pushed the discarded URL
+  above that destination. Fix: use `push` to keep the caller. `open` also keeps
+  every current visit when the selected stack is a prefix of the declared chain;
+  use it then to include an intermediate parent, or for a deliberate return such
+  as Home (LLP 1038 §3, D7).
 - **A `link` to a route does nothing on iOS or the Mac.** On the web the browser's
   Back and Forward and a `link` to a declared route work with no `navigate` handler:
   the runner pops or goes there itself (LLP 1115 D5, LLP 1115.000 D4.3). A native host
@@ -621,7 +645,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`apps/shelf`'s Progress and Yearly Goal rows), which the sheet keeps 15 from the
   card and the separator, or make the row itself a `column`, which stacks its children
   (LLP 1116 D2); to choose that space write the row's `padding-top`/`padding-bottom`
-  only, which replaces the column's. (Shelf recipe, 2026-10-10.)
+  only, which replaces the column's. A plain column of one or two texts becomes
+  a standard subtitle cell on iOS. An authored height, background colour or
+  corner radius on the row or column keeps its views; a subtitle column's
+  `min-height` does too, as does `align-items` or `justify-content` on either
+  a nested column or a row laid out as a column. Such nested columns get no
+  subtitle block padding for a literal box value or a ternary arm that writes
+  one; a `none` arm keeps the platform padding. Other expressions keep that
+  padding because they may evaluate to `none`; write explicit padding to control it.
+  The platform's interline gap stays. A column with `height=300` and no authored
+  padding or border has a 300 pt border box. Classes count too. (Shelf recipe; grouped tile, #327.)
 - **On iOS, a custom grouped row's leading symbol and line differ from a standard row's
   right to left or at an accessibility size.** Cause: a row the platform's cell can't
   express (a badge before its chevron) is its own views carried into the cell; iOS draws
@@ -1030,10 +1063,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   session is `ambient`. An app whose purpose includes media playback should
   set `"audio_session": "playback"` in `app.json`, as Recorder does. For sound
   over another app's audio, `"playback-mix"` also ignores the switch on iOS and
-  tvOS while mixing without ducking. On the web only sound output applies the
-  setting, mapping it to `ambient`, which obeys the switch in WebKit; media or
-  GPU audio alone leaves the browser's `auto`. Raising the media volume alone
-  does not override Silent mode. (LLP 1096 D8.)
+  tvOS while mixing without ducking. On the web, page initialization applies
+  `ambient` and `playback` as given and maps `playback-mix` to `ambient`, which
+  obeys the switch in WebKit. This also applies to pages with only `video`,
+  `audio` or GPU audio, where the Audio Session API exists. Raising the media
+  volume alone does not override Silent mode. (LLP 1096 D8.)
 
 - **A scheduled sound plays after Stop.** A sequencer that schedules each step
   ahead (`playSounds(…)` with a future `at=`) keeps sounding the hits already
@@ -1163,6 +1197,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   left button. iOS refuses `mouse`; macOS and Linux drag with the mouse anyway
   ([authored tests](contract-grammar.md#authored-tests)). (Stocks diary: the chart
   readout unmounted, about 10 minutes, 2026-10-04.)
+  A finger on a box with its own pointer handlers also needs
+  `touch-action="none"` when that box should own the drag: otherwise the browser
+  may scroll and send `pointercancel`, ending its moves. The web drag reply names
+  observed cancellation and scrolling, with the named node’s `touch-action` and
+  the effective intersection through its ancestors at contact start. Changing
+  `touch-action` during a contact does not change the browser's decision for it.
+  `drag … mouse` exercises the mouse path.
 
 - **A `pan` hears nothing from a finger on the web.** A drag with
   `tap <id> drag dx dy` (or a real touch) moves nothing and logs nothing. Cause:
@@ -1846,15 +1887,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `shared.js` runs a view transition. A Back or Forward flies too, unless the browser
   animated it itself (`hasUAVisualTransition`: a phone browser's swipe back can).
 
-- **`pages=` on a `render=build` route renders no pages in an app without a Rust render
-  entry.** A route `product "/product/:id" render=build pages=productPages()` compiles, and
-  `web-build --out dist` writes `/`, `/about` and `404.html` with no word about the product
-  pages: the JS target lists only unparameterised build routes (`host/web-js/src/emit.rs`,
-  `build_pages`), and the `pages=` source is asked only by the Rust render entry
-  (`exact_render::pages`), which an app `exact new` made has none of. A static host then
-  serves the shell for every product page. Until the JS build asks the source (QUEUE), make
-  the route `render=request`, which `serve` renders per request with its data, as the site
-  pattern's planet page is. (A web store from `pattern site`, 2026-11-01.)
+- **A parameterized page is absent from a static build unless its route lists its
+  pages.** Declare it with `render=build pages=productPages()`. The source returns
+  `string[]`: the values of the route's one parameter. Both renderers ask it once in the
+  render environment and render each returned value, encoding it as a path segment. An
+  app `exact new` made needs no Rust render entry. A source that fails or misses its
+  deadline fails the build; an empty list renders no pages. A static build contains only
+  the returned values.
 
 - **A link to the same route with a new query pushes a second entry.** A filter written as
   `link href=(path("shop") + "?cat=" + c)` on the shop page reached `follow`, whose
@@ -1864,6 +1903,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`.at(-1)`), or `replace` when the top is that route and the URL is its own:
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
+
+- **A route that says `activate=interaction` offers a browser's agent no tools at load.** Its page
+  registers its faced tools with `document.modelContext` only when its script starts: at the
+  person's first use of a control, on a page with an `intersect` handler at a scroll or when that
+  element shows, or when the viewport differs from one the page's comparisons were rendered for.
+  Until then `getTools()` is empty. Leave `activate` unsaid on such a route: in an app with a faced
+  tool on the web door, an undeclared route whose page would wait for the reader activates `idle`
+  instead, and registers its tools once the page has loaded and is idle. (Exact Bistro, a WebMCP
+  demo site, 2026-11-12.)
 
 ## Working on Exact itself
 

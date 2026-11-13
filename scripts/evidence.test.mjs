@@ -80,8 +80,9 @@ test.each([
   ['host/apple-painted/src/lib.rs', ['macos']],
   ['host/web-capabilities/src/lib.rs', ['web']],
   ['host/web-geometry/src/lib.rs', ['web']],
+  ['host/linux/src/display.rs', ['linux']],
   ['host/linux-update/src/lib.rs', ['linux']],
-  ['host/linux/src/presenter.rs', ['linux', 'windows', 'android']],
+  ['host/painted/src/presenter.rs', ['linux', 'windows', 'android']],
   ['host/ink/src/lib.rs', ['linux', 'windows', 'android']],
   ['host/listen/src/lib.rs', ['macos', 'linux', 'android']],
   ['host/raster/src/lib.rs', ['macos', 'ios', 'tvos', 'linux', 'windows', 'android']],
@@ -94,7 +95,7 @@ test.each([
 test('Mac coverage follows the selected app\'s dependencies', () => {
   const heavy = appAt('bench/heavy-list/exact-heavylist'), caltrain = appAt('apps/caltrain');
   expect(heavy.manifest.host.macos.presenter).toBeUndefined();
-  for (const path of ['host/ink/src/device/apple.rs', 'host/linux/src/presenter.rs']) {
+  for (const path of ['host/ink/src/device/apple.rs', 'host/painted/src/presenter.rs']) {
     expect(hostsTouched([path], heavy)).toEqual(['macos', 'linux', 'windows', 'android']);
     expect(hostsTouched([path], caltrain)).toEqual(['linux', 'windows', 'android']);
     expect(hostsTouched([path], { ...caltrain, manifest: { host: { macos: { presenter: 'painted' } } } }))
@@ -117,7 +118,7 @@ name = "app-apple"
 [dependencies]
 feed = { path = "../data" }
 [target.'cfg(all(unix, any(target_os = "linux", target_os = "windows")))'.dependencies]
-exact-linux = { path = ${JSON.stringify(resolve(ROOT, 'host/linux'))} }
+exact-painted = { path = ${JSON.stringify(resolve(ROOT, 'host/painted'))} }
 `);
     const data = (target) => `[package]
 name = "app-data"
@@ -128,7 +129,7 @@ probe.workspace = true
     for (const target of ['cfg(all(target_vendor = "apple", not(target_os = "ios")))', 'x86_64-apple-darwin']) {
       writeFileSync(resolve(dir, 'data/Cargo.toml'), data(target));
       expect(hostsTouched(['host/ink/src/lib.rs'], app)).toEqual(['macos', 'linux', 'windows', 'android']);
-      expect(hostsTouched(['host/linux/src/presenter.rs'], app)).toEqual(['linux', 'windows', 'android']);
+      expect(hostsTouched(['host/painted/src/presenter.rs'], app)).toEqual(['linux', 'windows', 'android']);
     }
     writeFileSync(resolve(dir, 'data/Cargo.toml'), data('cfg(not(unix))'));
     expect(hostsTouched(['host/ink/src/lib.rs'], app)).toEqual(['linux', 'windows', 'android']);
@@ -220,7 +221,7 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
     git('init', '-q');
     write('runner/src/lib.rs', 'runner\n');
     write('host/apple/old.swift', 'apple\n');
-    write('host/linux/src/lib.rs', 'linux\n');
+    write('host/painted/src/lib.rs', 'linux\n');
     git('add', '.');
     git('commit', '-qm', 'Fixture');
     const base = git('rev-parse', 'HEAD');
@@ -228,10 +229,10 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
     expect(changedPaths(base, root)).toEqual(['runner/src/lib.rs']);
     expect(hostsTouched(changedPaths(base, root))).toEqual(allHosts);
 
-    write('host/linux/src/lib.rs', 'linux staged\n');
-    git('add', 'host/linux/src/lib.rs');
-    write('host/linux/src/lib.rs', 'linux\n');
-    expect(changedPaths(base, root).sort()).toEqual(['host/linux/src/lib.rs', 'runner/src/lib.rs']);
+    write('host/painted/src/lib.rs', 'linux staged\n');
+    git('add', 'host/painted/src/lib.rs');
+    write('host/painted/src/lib.rs', 'linux\n');
+    expect(changedPaths(base, root).sort()).toEqual(['host/painted/src/lib.rs', 'runner/src/lib.rs']);
 
     git('add', '.');
     git('commit', '-qm', 'Changed runner');

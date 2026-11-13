@@ -37,7 +37,7 @@ final class Canvas2DGpuStressTests: XCTestCase {
 
     private func payload(_ lifetime: UInt64, generation: UInt32, fresh: Bool, lists: [Data]) -> [String: Any] {
         ["lifetime": lifetime, "generation": generation, "fresh": fresh, "w": 180, "h": 120, "scale": 3.0,
-         "lists": lists, "animating": true]
+         "lists": lists, "seq": 1, "animating": true]
     }
 
     private func corner(_ surface: IOSurface) -> [UInt8] {
@@ -46,6 +46,25 @@ final class Canvas2DGpuStressTests: XCTestCase {
         let row = surface.bytesPerRow, base = surface.baseAddress.assumingMemoryBound(to: UInt8.self)
         let at = (surface.height - 1) * row + (surface.width - 1) * 4
         return [base[at + 2], base[at + 1], base[at], base[at + 3]] // BGRA → RGBA
+    }
+
+    /// A capture (LLP 1056 D9, as amended for expo/exact#188) of a canvas
+    /// the module draws is its IOSurface's pixels, with the kept ones under
+    /// the later list.
+    func testACaptureIsTheSurfaceShown() throws {
+        guard Canvas2DGpuModule.shared != nil else { throw XCTSkip("the Canvas 2D GPU module is not built") }
+        let host = Canvas2DHost(), parent = CALayer()
+        host.apply(7, payload(1, generation: 0, fresh: true, lists: [frame((20, 60, 200), 0)]), layer: parent)
+        host.apply(7, payload(1, generation: 0, fresh: false, lists: [list([(.fillColor, [0, 200, 0, 1]), (.fillRect, [40, 0, 20, 10])])]), layer: parent)
+        let png = try Canvas2DCaptureTests.capture(host, w: 180, h: 120, test: self)
+        host.waitForReplays(timeout: 5)
+        let surface = try XCTUnwrap(parent.sublayers?.first?.contents as? IOSurface, "the GPU draws it")
+        let shown = try XCTUnwrap(canvas2DImage(of: surface, p3: false))
+        let (a, b) = (Canvas2DCaptureTests.rgba(png, 180, 120), Canvas2DCaptureTests.rgba(shown, 180, 120))
+        XCTAssertEqual(a, b, "the PNG is the surface shown")
+        XCTAssertEqual(Array(a[(119 * 180 + 179) * 4..<(119 * 180 + 180) * 4]), [20, 60, 200, 255], "the first list's cover, kept")
+        XCTAssertEqual(Array(a[(5 * 180 + 150) * 4..<(5 * 180 + 151) * 4]), [0, 200, 0, 255], "the second list over it")
+        host.forget(7)
     }
 
     func testCurrentAndSavedFontsDrawInLaterJobs() throws {

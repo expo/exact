@@ -173,10 +173,11 @@ final class TextPaintTests: XCTestCase {
         // One glyph for characters of two boxes (a ligature across them) is
         // cut where the caret would stand: both boxes paint.
         let four = Array(repeating: InlineRadius(px: 4), count: 4)
-        let table = InlineBoxes([.init(extent: NSRange(location: 0, length: 1), radii: four),
-                                 .init(extent: NSRange(location: 1, length: 1), radii: four)], rtl: false)
+        let mint = CGColor(red: 0, green: 0.8, blue: 0.7, alpha: 1)
+        let table = InlineBoxes([.init(extent: NSRange(location: 0, length: 1), radii: four, color: mint, depth: 0),
+                                 .init(extent: NSRange(location: 1, length: 1), radii: four, color: mint, depth: 0)], rtl: false)
         let times = CTFontCreateWithName("Times-Roman" as CFString, 32, nil)
-        let fill = InlineBackground(color: CGColor(red: 0, green: 0.8, blue: 0.7, alpha: 1), ascent: 30, descent: 8, boxes: table)
+        let fill = InlineBackground(color: mint, ascent: 30, descent: 8, boxes: table)
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: "fi", attributes: [.font: times, .exactBackground: fill]))
         let halves = TextLinePaint.backgrounds(line, at: .zero)
         XCTAssertEqual(halves.count, 2, "each box its own piece")

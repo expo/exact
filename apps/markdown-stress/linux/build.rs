@@ -51,11 +51,11 @@ fn main() {
                 std::process::exit(2);
             }}
         }};
-        let region = exact_linux::content_region::ContentRegionRegistration {{
+        let region = exact_painted::content_region::ContentRegionRegistration {{
             activate: Some(activate), owner: \"markdown-region-owner\",
             content: \"markdown-region-content\", pending: \"markdown-region-pending\",
         }};
-        std::process::exit(exact_linux::app::run_with_content_region::<markdown_stress_data::NativeMarkdownStress>(PLAN, COMPAT, region));
+        std::process::exit(exact_linux::run_with_content_region::<markdown_stress_data::NativeMarkdownStress>(PLAN, COMPAT, region));
     }}
     std::process::exit({host}::{run});
 }}\n",

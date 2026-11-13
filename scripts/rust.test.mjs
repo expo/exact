@@ -1,11 +1,60 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
-import { buildRust, rustArtifact, prepareRustBundle, publishedSignature, rustAbi, rustBundle, rustCard, rustCards, rustFiles, rustReceipt, tieredBytes, tieredNative } from './rust.mjs';
+import { basename, dirname, posix, relative, resolve, win32 } from 'node:path';
+import { classify, publishRoot } from './deploy.mjs';
+import { DirectoryOrigin } from './origin.mjs';
+import { filesystemHelper } from './filesystem.mjs';
+import { buildRust, rustArtifact, localBlob, prepareRustBundle, publishedSignature, rustAbi, rustBundle, rustCard, rustCards, rustFiles, rustReceipt, tieredBytes, tieredNative } from './rust.mjs';
 import { rustRuntime } from '../host/web/rust-glue.js';
+
+test('the resident Rust baker builds and runs host-dev once for repeated requests', () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import { EventEmitter } from 'node:events';
+    import { resolve } from 'node:path';
+    import { PassThrough, Writable } from 'node:stream';
+    import * as processes from 'node:child_process';
+    let builds = 0, starts = 0, requests = 0;
+    const appTarget = resolve('fixture target'), target = resolve(appTarget, 'rust-tools');
+    mock.module('node:child_process', () => ({ ...processes,
+      spawnSync(command, args, options) {
+        assert.equal(command, 'cargo');
+        assert.ok(args.includes('exact-logic-bake'));
+        assert.equal(args[args.indexOf('--profile') + 1], 'host-dev');
+        assert.ok(!args.includes('--release'));
+        assert.equal(options.env.CARGO_TARGET_DIR, target);
+        builds++;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      spawn(command, args, options) {
+        assert.equal(command, resolve(target, 'host-dev/exact-logic-bake'));
+        assert.deepEqual(args, ['--serve']);
+        assert.equal(options.env.CARGO_TARGET_DIR, target);
+        starts++;
+        const child = new EventEmitter();
+        child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        child.stdin = new Writable({ write(bytes, encoding, done) {
+          assert.deepEqual(JSON.parse(String(bytes)), ['candidate', String(++requests)]);
+          queueMicrotask(() => child.stdout.write('{"ok":true}\\n')); done();
+        } });
+        child.kill = () => { child.stdout.end(); child.stderr.end(); };
+        queueMicrotask(() => child.stdout.write('{"ready":true,"pid":42}\\n'));
+        return child;
+      },
+    }));
+    const { RustBaker } = await import('./scripts/rust.mjs');
+    const baker = new RustBaker({ target: appTarget, workspace: process.cwd() }, {});
+    try { await baker.bake(['candidate', '1']); await baker.bake(['candidate', '2']); }
+    finally { baker.close(); }
+    assert.deepEqual([builds, starts, requests], [1, 1, 2]);
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 10_000 });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
 
 test('trapping module cleanup cannot throw through the resident Wasm import', () => {
   const original=globalThis.WebAssembly, log=console.error;
@@ -85,6 +134,15 @@ test('publisher companion acquisition binds exact local bytes and isolates concu
     writeFileSync(resolve(blobs,assets[1].sha256),'bad');
     assert.throws(()=>prepareRustBundle(app,'ios','aarch64-apple-ios',env),/differ from signed receipt/);
   } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test('a release record finds its local blobs under either platform separator', () => {
+  const sha='a'.repeat(64);
+  assert.equal(localBlob('/p/.exact/streams/s/releases/1.json',sha,posix),`/p/.exact/blobs/${sha}`);
+  assert.equal(localBlob('C:\\p\\.exact\\streams\\s\\releases\\1.json',sha,win32),`C:\\p\\.exact\\blobs\\${sha}`);
+  assert.equal(localBlob('C:/p/.exact/streams/s/releases/1.json',sha,win32),`C:\\p\\.exact\\blobs\\${sha}`);
+  assert.equal(localBlob('/p/receipts/1.json',sha,posix),null);
+  assert.equal(localBlob('C:\\p\\receipts\\1.json',sha,win32),null);
 });
 
 test('tiered publication binds both executors to one target, plan and module digest', () => {
@@ -175,6 +233,75 @@ test('Rust artifact discovery accepts Cargo paths from Windows and Unix', () => 
   assert.equal(rustArtifact([dll, unix], 'wasm32-unknown-unknown'), unix);
   assert.equal(rustArtifact([unix.replace('/wasm32-', '/not-wasm32-')], 'wasm32-unknown-unknown'), undefined);
 });
+
+test('external Rust modules have identical bytes in relocated cold source captures', async () => {
+  const root = resolve(import.meta.dir, '..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/rust-reproducible-'));
+  const write = (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
+  const previousHelper = process.env.EXACT_FILESYSTEM_HELPER;
+  try {
+    const helper = filesystemHelper();
+    // Copy the builder's imports too: each capture must resolve its own Exact checkout and path dependencies.
+    const pending = ['scripts/rust.mjs'], sources = new Map(), parser = new Bun.Transpiler({ loader: 'js' });
+    while (pending.length) {
+      const path = pending.pop();
+      if (sources.has(path)) continue;
+      const text = readFileSync(resolve(root, path), 'utf8');
+      sources.set(path, text);
+      for (const request of parser.scanImports(text.replace(/^#![^\n]*/, ''))) if (request.kind === 'import-statement' && request.path.startsWith('.')) {
+        pending.push(relative(root, resolve(root, dirname(path), request.path)));
+      }
+    }
+    const builds = [];
+    for (const name of ['left', 'right']) {
+      const sourceRoot = resolve(dir, name), sdk = resolve(sourceRoot, 'exact2'), workspace = resolve(sourceRoot, 'app');
+      for (const [path, text] of sources) write(resolve(sdk, path), text);
+      for (const path of ['rust-toolchain.toml', 'scripts/rustc/exact-rustc', 'logic/abi/src/lib.rs']) write(resolve(sdk, path), readFileSync(resolve(root, path)));
+      chmodSync(resolve(sdk, 'scripts/rustc/exact-rustc'), 0o755);
+      const capturedHelper = resolve(sdk, 'target/exact-filesystem-tool', basename(helper));
+      mkdirSync(dirname(capturedHelper), { recursive: true }); copyFileSync(helper, capturedHelper);
+      process.env.EXACT_FILESYSTEM_HELPER = capturedHelper;
+      write(resolve(sdk, 'Cargo.toml'), '[workspace]\nmembers=["dep"]\n');
+      write(resolve(sdk, 'dep/Cargo.toml'), '[package]\nname="capture-dep"\nversion="0.1.0"\nedition="2021"\n');
+      write(resolve(sdk, 'dep/src/lib.rs'), 'pub fn path() -> &\'static str { file!() }\n');
+      write(resolve(sourceRoot, 'shared/Cargo.toml'), '[workspace]\n[package]\nname="outside-dep"\nversion="0.1.0"\nedition="2021"\n');
+      write(resolve(sourceRoot, 'shared/src/lib.rs'), 'pub fn path() -> &\'static str { file!() }\n');
+      write(resolve(workspace, 'Cargo.toml'), '[workspace]\n[package]\nname="capture-module"\nversion="0.1.0"\nedition="2021"\n[lib]\ncrate-type=["cdylib"]\n[dependencies]\ncapture-dep={path="../exact2/dep"}\noutside-dep={path="../shared"}\n');
+      write(resolve(workspace, 'src/lib.rs'), '#[no_mangle] pub extern "C" fn path_byte(at: usize) -> u8 { capture_dep::path().as_bytes()[at] }\n#[no_mangle] pub extern "C" fn outside_path_byte(at: usize) -> u8 { outside_dep::path().as_bytes()[at] }\n');
+      write(resolve(workspace, 'app.contract'), 'component App\n  view\n');
+      write(resolve(workspace, 'app.json'), '{}');
+      const app = { id: 'test.capture', dir: workspace, workspace, target: resolve(dir, name, 'target'), manifest: { rust: { module: { package: 'capture-module' } } } };
+      const { buildRust: build } = await import(resolve(sdk, 'scripts/rust.mjs'));
+      // The plan stays fixed while this test checks compilation and publication.
+      const compile = () => build(app, { profile: 'release', env: { ...process.env, CARGO_NET_OFFLINE: 'true', EXACT_SOURCE_ROOT: sourceRoot }, compat: { inputs: { rustGrants: '', grantCeiling: '' } },
+        baker: { bake: async args => writeFileSync(args[3], 'plan') } });
+      const first = await compile();
+      builds.push({ app, compile, first, sourceRoot });
+    }
+    const bytes = builds.map(b => b.first.variants.wasm.bytes);
+    for (let i = 0; i < builds.length; i++) assert.ok(!bytes[i].includes(Buffer.from(builds[i].sourceRoot)), 'module contains no capture path');
+    assert.ok(bytes[0].equals(bytes[1]), 'relocated SDK and external path dependencies must produce identical module bytes');
+    assert.deepEqual(builds[0].first.variants.wasm.receipt, builds[1].first.variants.wasm.receipt);
+    const origin = new DirectoryOrigin(resolve(dir, 'origin'));
+    const web = (name, module) => {
+      const out = resolve(dir, name);
+      write(resolve(out, 'app.js'), 'export const ready = true;\n');
+      write(resolve(out, 'app.module.wasm'), module);
+      return out;
+    };
+    await publishRoot({ origin, row: {}, web: web('first', bytes[0]) });
+    const row = async module => (await classify({ app: builds[1].app, opts: {}, origin, channel: 'prod',
+      snapshot: { commit: 'fixture', dirty: false, changes: [] }, release: 'fixture', web: web('next', module), compat: {}, platforms: [], wantOrigin: true })).rows[0];
+    assert.equal((await row(bytes[1])).action, 'current');
+    write(resolve(builds[1].sourceRoot, 'shared/src/lib.rs'), 'pub fn path() -> &\'static str { "changed" }\n');
+    const changed = await builds[1].compile();
+    assert.equal((await row(changed.variants.wasm.bytes)).action, 'publish');
+  } finally {
+    if (previousHelper === undefined) delete process.env.EXACT_FILESYSTEM_HELPER; else process.env.EXACT_FILESYSTEM_HELPER = previousHelper;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
 
 for (const configuration of ['string', 'array', 'cfg', 'build', 'forced-encoded']) for (const encoded of [true, false]) test(`Rust modules build with spaces, ${encoded ? 'encoded' : 'configured'} flags and ${configuration} target flags`, async () => {
   const root = resolve(import.meta.dir, '../target');

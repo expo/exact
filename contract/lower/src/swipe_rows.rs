@@ -508,11 +508,22 @@ impl At {
         self == Self::Row || (self == Self::Section && !matches!(tag, "header" | "footer"))
     }
 
-    fn expand(self, node: &Node) -> Cow<'_, Node> {
+    fn expand<'a>(self, node: &'a Node, styles: &[StyleDecl]) -> Cow<'a, Node> {
         match node {
             Node::Element { tag, .. } if self == Self::Section && self.row(tag) => {
                 Cow::Owned(grouped(node, &|n, swiped| {
-                    crate::grouped::row(n, false, swiped)
+                    crate::grouped::row(n, false, swiped, &|attrs| {
+                        crate::class::rows(
+                            attrs,
+                            &|name| {
+                                styles
+                                    .iter()
+                                    .find(|s| s.name == name)
+                                    .map(|s| s.attrs.as_slice())
+                            },
+                            &[],
+                        )
+                    })
                 }))
             }
             Node::Element { attrs, .. }
@@ -550,7 +561,7 @@ pub fn expand_row_deletes(view: &[Node], styles: &[StyleDecl]) -> Vec<Node> {
     fn node(n: &Node, at: At, styles: &[StyleDecl]) -> Node {
         match n {
             Node::Element { .. } => {
-                let expanded = at.expand(n);
+                let expanded = at.expand(n, styles);
                 let Node::Element {
                     tag,
                     positional,
@@ -699,7 +710,7 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                         w.advise && !holds_actions
                     };
                     // Grouped-row layout precedes admission of any lists it contains.
-                    let expanded = at.expand(node);
+                    let expanded = at.expand(node, styles);
                     let Node::Element {
                         tag,
                         attrs,

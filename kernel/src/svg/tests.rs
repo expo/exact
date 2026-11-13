@@ -239,6 +239,21 @@ fn paint_and_dasharray_grammar() {
         DashArray::parse("0 0").unwrap().pattern(1.0).is_empty(),
         "a zero sum is solid"
     );
+    assert_eq!(
+        DashArray::parse("1 2").unwrap().pattern(0.0),
+        vec![0.0, 0.0],
+        "a zero scale does not establish zero-length geometry"
+    );
+    assert_eq!(
+        DashArray::parse("1e-30").unwrap().pattern(1e-30),
+        vec![0.0, 0.0],
+        "underflow must retain the pattern for dash budgeting"
+    );
+    assert_eq!(
+        DashArray::parse("0 2").unwrap().pattern(0.5),
+        vec![0.0, 1.0],
+        "an individual zero dash does not make a pattern solid"
+    );
     assert_eq!(DashArray::parse("1").unwrap().css(), "1");
 }
 
@@ -427,6 +442,17 @@ fn a_boxs_css_filter_is_the_functions_chain_over_a_box_of_no_size() {
     let current = FilterList::parse("drop-shadow(0 2px 4px)").unwrap();
     let text = crate::style::ColorValue::parse_light_dark("light-dark(#ff0000, #0000ff)").unwrap();
     assert_eq!(shade(&current, text, true), [0.0, 0.0, 1.0, 1.0]);
+    // Each function spreads the previous one's result (Filter Effects 1 §5).
+    for (css, region) in [
+        (
+            "drop-shadow(10px 0 0) drop-shadow(10px 0 0)",
+            (0.0, 0.0, 20.0, 0.0),
+        ),
+        ("drop-shadow(10px 0 0) blur(2px)", (-6.0, -6.0, 22.0, 12.0)),
+    ] {
+        let f = crate::svg::scene::box_filter(&FilterList::parse(css).unwrap(), black, false);
+        assert_eq!(f.unwrap().region, region, "{css}");
+    }
     assert!(
         crate::svg::scene::box_filter(&FilterList::parse("url(#f)").unwrap(), black, false)
             .is_none()

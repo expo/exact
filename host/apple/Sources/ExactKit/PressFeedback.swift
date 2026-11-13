@@ -384,7 +384,9 @@ extension NodeView {
         t = t.translatedBy(x: o.x, y: o.y).rotated(by: rotate * .pi / 180).scaledBy(x: s, y: s).translatedBy(x: -o.x, y: -o.y)
         // Outermost, a layout transition's offset; its size is the surface's
         // alone (`Surface.swift`, LLP 1063).
-        layer?.setAffineTransform(t.concatenating(CGAffineTransform(translationX: layoutOffset.x, y: layoutOffset.y)))
+        // Written when it differs: this runs at every display of the view, and at every rebinding of a list's row.
+        let placed = t.concatenating(CGAffineTransform(translationX: layoutOffset.x, y: layoutOffset.y))
+        if let layer, !CATransform3DIsAffine(layer.transform) || layer.affineTransform() != placed { layer.setAffineTransform(placed) }
     }
     /// Whether a window point is inside the box as it stands unpressed.
     /// `local` reaches a transformed box through its plane, the press

@@ -15,18 +15,20 @@ use exact_kernel::{CommitReceipt, Kernel, NodeKey, NodeType, PropId, ViewId};
 use exact_motion::{EngineError, HoldEnd, HoldStart, Property, Value as MotionValue};
 use exact_plan::{EventKind, Plan};
 use exact_runner::{
-    Carried, DataSource, Dispatch, Event, FailureKind, Outcome, RequestOut, Response, Runner,
-    RunnerError, SurfaceOutcome, Timed, Work,
+    Carried, DataSource, Event, FailureKind, Outcome, RequestOut, Runner, RunnerError, Timed,
 };
 use mode::mirror::Mirror;
 
 #[path = "auth.rs"]
 mod auth;
+mod boot;
 #[path = "canvas2d.rs"]
 mod canvas2d;
 mod complete;
 pub mod fonts;
 mod mode;
+mod outcome;
+pub use outcome::outcome_from;
 mod scale;
 pub(crate) use fonts::{decode_plan, plan_font_catalog};
 use fonts::{font_catalog, font_faces, font_names, font_names_for_runner};
@@ -54,82 +56,6 @@ mod own;
 mod reorder_drag;
 #[path = "transform_drag.rs"]
 mod transform_drag;
-/// A reply as the ABI carries it, as the runner's `Outcome`. Kind 8 is a
-/// stream's messages that arrived together (LLP 1016.000 D4): a block of
-/// header lines each (`event`, `id`, `coalesced`, `protocol`, and with more
-/// than one, `length`, its data's bytes), blocks apart by an empty line, and
-/// their data one after another as the body. One block is one message.
-pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Outcome {
-    match kind {
-        8 => {
-            let mut at = 0usize;
-            let mut messages: Vec<_> = (headers.split("\n\n"))
-                .map(|block| {
-                    let field = |name: &str| {
-                        (block.lines())
-                            .find_map(|l| l.strip_prefix(name)?.strip_prefix(": "))
-                            .unwrap_or("")
-                            .to_string()
-                    };
-                    let end = field("length")
-                        .parse()
-                        .map_or(body.len(), |n: usize| at.saturating_add(n).min(body.len()));
-                    let data = String::from_utf8_lossy(&body[at.min(end)..end]).into_owned();
-                    at = end;
-                    exact_runner::Message {
-                        event: field("event"),
-                        protocol: field("protocol").into(),
-                        id: field("id"),
-                        coalesced: field("coalesced").parse().unwrap_or(0),
-                        data,
-                        binary: None,
-                    }
-                })
-                .collect();
-            match messages.len() {
-                1 => Outcome::Message(messages.remove(0)),
-                _ => Outcome::Messages(messages),
-            }
-        }
-        5 => Outcome::Storage(body),
-        6 if body.len() <= exact_runner::MAX_HOST_WORK_BYTES => {
-            Outcome::Surface(SurfaceOutcome::Captured(body))
-        }
-        6 => Outcome::Failed {
-            kind: FailureKind::Refused,
-            message: "surface capture exceeds 16 MiB".into(),
-        },
-        7 => Outcome::Surface(SurfaceOutcome::Restored),
-        0 => Outcome::Response(Response {
-            status: status as u16,
-            // A line that starts with a colon is a pseudo-header the page
-            // names (`:exact-body-to`, exactBodyTo's size): no browser header
-            // name has a colon, so it keeps its leading one.
-            headers: headers
-                .lines()
-                .filter_map(|l| {
-                    let (pseudo, l) = l.strip_prefix(':').map_or((false, l), |l| (true, l));
-                    l.split_once(':').map(|(k, v)| {
-                        let k = k.trim();
-                        let k = if pseudo { format!(":{k}") } else { k.into() };
-                        (k, v.trim().to_string())
-                    })
-                })
-                .collect(),
-            body,
-        }),
-        k => Outcome::Failed {
-            kind: match k {
-                2 => FailureKind::Refused,
-                3 => FailureKind::Unsupported,
-                4 => FailureKind::Aborted,
-                10 => FailureKind::Timeout,
-                _ => FailureKind::Network,
-            },
-            message: String::from_utf8_lossy(&body).into_owned(),
-        },
-    }
-}
 use exact_kernel::id::IdMap;
 use exact_kernel::{SortedMap, SortedSet};
 use std::fmt::Write as _;
@@ -336,6 +262,8 @@ pub struct Host<D: DataSource> {
     collections: String,
     /// Head nodes (LLP 1048.003 D1): the page's `<head>`, never an element.
     heads: SortedSet<ViewId>,
+    /// The boundaries that do not set their own colour (LLP 1121 D7, D8).
+    boundaries: SortedSet<ViewId>,
     /// The head the page was last told, and whether a commit may move it.
     head: exact_runner::Head,
     language: Option<String>,
@@ -353,117 +281,11 @@ pub struct Host<D: DataSource> {
 }
 
 impl<D: DataSource> Host<D> {
-    /// Boot from plan bytes: decode (a validation pass), boot the runner, and
-    /// produce the first batch, which creates the whole tree.
-    pub fn boot(
-        plan_bytes: &[u8],
-        data: D,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(plan_bytes, data, None, Vec::new(), None, viewport, launch)
-    }
-
     /// Whether `location` names a pattern the plan's route table declares —
     /// never only its notfound fallback. The page follows a same-origin link
     /// to one in place (LLP 1038 §7) instead of loading a document.
     pub fn route_matches(&self, location: &str) -> bool {
         self.runner.route_matches(location)
-    }
-
-    /// Boot with the page's snapshot of the app's kept secrets (LLP 1018
-    /// D6): what `localStorage` holds under `exact.secret.<name>`, read by
-    /// the glue before boot; the runner keeps the granted names.
-    pub fn boot_stored(
-        plan_bytes: &[u8],
-        data: D,
-        snapshot: Vec<(String, Vec<u8>)>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(plan_bytes, data, None, snapshot, None, viewport, launch)
-    }
-
-    /// Boot carrying an earlier host's state (the dev loop's reload, LLP
-    /// 1007 §6): slots by name where their types still fit, settled
-    /// resources where their arguments still match, the clock. Carried state
-    /// is never why a boot fails — what no longer fits starts fresh.
-    pub fn boot_with(
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(
-            plan_bytes,
-            data,
-            carried,
-            Vec::new(),
-            None,
-            viewport,
-            launch,
-        )
-    }
-
-    /// Boot knowing what this wasm was built as (LLP 1030 D7): `compat` is
-    /// the archive's `compat.json`, which the `delivery` resource answers
-    /// from. The other three boots are this one with nothing to say.
-    pub fn boot_delivered(
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        snapshot: Vec<(String, Vec<u8>)>,
-        compat: Option<&str>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_linked(
-            HostLinks::ALL,
-            plan_bytes,
-            data,
-            carried,
-            snapshot,
-            compat,
-            viewport,
-            launch,
-        )
-    }
-
-    /// [`Host::boot_delivered`], with what the artifact links (LLP 1047 D3).
-    #[allow(clippy::too_many_arguments)]
-    pub fn boot_linked(
-        links: HostLinks<D>,
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        snapshot: Vec<(String, Vec<u8>)>,
-        compat: Option<&str>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        let plan = decode_plan(plan_bytes).map_err(HostError::Plan)?;
-        crate::link::admit(&plan)?;
-        let kernel = browser_kernel();
-        // @ref LLP 1039 D3 — both host facts precede the first settlement.
-        let delivery = compat.map_or_else(Default::default, |json| {
-            exact_runner::Delivery::default().with_compat(json)
-        });
-        let mut runner = Runner::boot_with_delivery_linked(
-            crate::link::runner_links(),
-            plan,
-            data,
-            kernel,
-            carried,
-            snapshot,
-            delivery,
-            viewport,
-            launch,
-        )
-        .map_err(HostError::Runner)?;
-        runner.measure_unless_production(compat, false); // LLP 1079 D1: the browser lays out
-        runner.admit_live(compat);
-        Host::open(links, runner, launch, Batch::new(), Default::default())
     }
 
     /// The host over a booted runner, and its first batch — `batch`'s ops,
@@ -508,6 +330,7 @@ impl<D: DataSource> Host<D> {
             exclusions: Default::default(),
             textflow: String::new(),
             heads: Default::default(),
+            boundaries: Default::default(),
             head: Default::default(),
             language: None,
             large_title_size: None,
@@ -963,9 +786,7 @@ impl<D: DataSource> Host<D> {
                         self.head_dirty = true;
                         continue;
                     }
-                    if self.mirror.remove(&id).is_some_and(|m| !m.looks.is_empty()) {
-                        batch.looks(id, "");
-                    }
+                    self.forget_looks(id, batch);
                     self.layers.forget(id);
                     self.exclusions.remove(&id);
                     if let Some(drag) = self.drag {
@@ -993,6 +814,7 @@ impl<D: DataSource> Host<D> {
                     self.update(id, batch);
                 }
             }
+            self.reveal_animations(r, batch);
             // This commit's springs, at its own time: the style (the target)
             // is in the page before the frames that approach it start playing.
             // Adopt this receipt's time/targets/transitions while the hold is
@@ -1033,9 +855,9 @@ impl<D: DataSource> Host<D> {
         }
         if !receipts.is_empty() {
             self.emit_textflow(batch);
+            self.emit_boundaries(batch);
         }
-        // A canvas's inputs (LLP 1009 D2): the runner's side-output, only
-        // from commits that applied.
+        // Canvas inputs come only from applied commits (LLP 1009 D2).
         for s in self.runner.take_surface_updates() {
             batch.surface(&s);
         }
@@ -1052,64 +874,6 @@ impl<D: DataSource> Host<D> {
         // What the commit kept or forgot (LLP 1018 D1), for the page to persist.
         for w in self.runner.take_store_writes() {
             batch.store(&w);
-        }
-    }
-
-    fn emit_request(
-        &mut self,
-        r: RequestOut,
-        batch: &mut Batch,
-        immediate: &mut Vec<(u64, Outcome)>,
-    ) {
-        if let Some(message) = crate::batch::request_refusal(&r.request) {
-            batch.refuse(r.ticket, message);
-            return;
-        }
-        if r.request.is_auth() {
-            return self.emit_auth(r, batch);
-        }
-        let Some(token) = r.request.continuation else {
-            batch.request(&r);
-            return;
-        };
-        let dispatch = self.runner.dispatch_work(token);
-        self.emit_dispatch(r, dispatch, batch, immediate);
-    }
-
-    fn emit_dispatch(
-        &mut self,
-        mut r: RequestOut,
-        dispatch: Dispatch,
-        batch: &mut Batch,
-        immediate: &mut Vec<(u64, Outcome)>,
-    ) {
-        match dispatch {
-            Dispatch::Host(registry) => {
-                r.request.continuation = Some(registry);
-                batch.request(&r);
-            }
-            Dispatch::Run(Work::Now(work)) => immediate.push((r.ticket, work())),
-            // A re-ask settles at once, as the no-op it replaces did.
-            Dispatch::Again => immediate.push((r.ticket, Dispatch::again_outcome())),
-            Dispatch::Run(Work::Later(_)) => immediate.push((
-                r.ticket,
-                Outcome::Failed {
-                    kind: FailureKind::Unsupported,
-                    message: "an owner thread is unavailable on this host".into(),
-                },
-            )),
-            Dispatch::Held => {
-                if let Some(token) = r.request.continuation {
-                    self.parked.insert(token, r);
-                }
-            }
-            Dispatch::Missing => immediate.push((
-                r.ticket,
-                Outcome::Failed {
-                    kind: FailureKind::Unsupported,
-                    message: "missing or consumed browser continuation".into(),
-                },
-            )),
         }
     }
 
@@ -1387,10 +1151,9 @@ impl<D: DataSource> Host<D> {
             Mirror {
                 props,
                 css,
-                children: Vec::new(),
                 in_button,
                 handled: !kinds.is_empty(),
-                looks: String::new(),
+                ..Default::default()
             },
         );
         self.emit_looks(id, batch);

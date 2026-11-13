@@ -1,7 +1,9 @@
 //! A stream stays pending until its mapper commits the first value (LLP 1016.000 D1).
 use exact_kernel::{Kernel, PropId};
 use exact_plan::Value;
-use exact_runner::{Answer, DataError, DataSource, Message, Outcome, Request, Runner, Store};
+use exact_runner::{
+    Answer, DataError, DataSource, Message, Outcome, Request, Runner, Store, Target,
+};
 
 const APP: &str = r#"
 component App
@@ -28,7 +30,11 @@ impl DataSource for Source {
 
     fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
         match source {
-            "feed" => Ok(Answer::stream(Request::get("https://example.test/feed"))),
+            "feed" => {
+                let mut request = Request::get("https://example.test/feed");
+                request.fetch = Some(23);
+                Ok(Answer::stream(request))
+            }
             _ => self.query(source, args).map(Answer::Now),
         }
     }
@@ -52,6 +58,20 @@ impl DataSource for Source {
                 data.split_whitespace().map(Value::str).collect(),
             ))),
         }
+    }
+
+    fn parse_fetch_for(
+        &mut self,
+        _: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let expected = matches!(outcome, Outcome::Message(_)).then_some(23);
+        assert_eq!(fetch, expected, "a mapper reply names its own request");
+        self.parse(store, source, args, outcome).map(Some)
     }
 }
 

@@ -155,7 +155,8 @@ fn a_boot_document_goes_before_the_answers_and_the_settled_page_replaces_it() {
         "<style>#exact-root[data-boot]{display:none}</style>",
         "<div id=\"exact-root\">",
         ">first<",
-        &format!("</div><script>{}</script>", exact_render::boot_swap_js()),
+        "</div><script data-to=\"",
+        &format!("\">{}</script>", exact_render::boot_swap_js()),
         "application/vnd.exact.checkpoint",
     ];
     let mut from = 0;

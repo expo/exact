@@ -26,7 +26,7 @@ mod hoist;
 mod inline_images;
 #[cfg(test)]
 mod memo_tests;
-mod order;
+pub(crate) mod order;
 mod publication;
 mod rebuild;
 pub mod size_cache;
@@ -515,7 +515,7 @@ impl LayoutTree {
         self.deferred.remove(&node);
         self.walks.remove(&node);
         if let Some(slot) = self.slots.remove(&node) {
-            if let Some(anon) = self.tables.forget(slot) {
+            for anon in self.tables.forget(slot) {
                 self.remove(anon);
             }
             self.flowing.remove(&slot);
@@ -1124,7 +1124,7 @@ impl LayoutTree {
                     if let Some(record) = buttons.get(&slot).and_then(|n| button_records.get_mut(n))
                     {
                         if let Some(answer) =
-                            buttons::measure(record, arena, measurer, known, space, inset)
+                            buttons::measure(record, slot, arena, measurer, known, space, inset)
                         {
                             if !answer.is_valid() {
                                 invalid_button.get_or_insert_with(|| arena.local_id(slot));

@@ -515,6 +515,8 @@ fn svg_geometry_attributes_preserve_css_lengths() {
         ("0", "0"),
         ("12px", "12"),
         ("25%", "25%"),
+        ("2em", "2em"),
+        ("0.5rem", "0.5rem"),
         ("50vh", "50vh"),
         ("10vw", "10vw"),
         ("5vmin", "5vmin"),

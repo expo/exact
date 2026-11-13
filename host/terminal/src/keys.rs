@@ -125,7 +125,7 @@ impl<D: DataSource> Host<D> {
                 // leave the field.
                 let up = *dir == "ArrowUp";
                 let width = self.kernel().node(f).map_or(1, |n| {
-                    crate::paint::content_cells(self.kernel(), &self.kernel().env(), &n, 0.0, 0.0)
+                    crate::paint::content_cells(self.kernel(), &n, 0.0, 0.0)
                         .w
                         .max(1) as usize
                 });
@@ -198,7 +198,10 @@ impl<D: DataSource> Host<D> {
         if std::mem::take(&mut self.prevented) {
             return After::Continue;
         }
-        if let Some(f) = focus.filter(|f| self.is_field(*f)) {
+        // The handler may have moved the focus, or covered the field.
+        let field =
+            |h: &Self, f: ViewId| h.focus == Some(f) && h.input_eligible(f) && h.is_field(f);
+        if let Some(f) = focus.filter(|f| field(self, *f)) {
             if self.field_key(f, &key) {
                 return After::Continue;
             }

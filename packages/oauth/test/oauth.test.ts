@@ -1324,7 +1324,7 @@ describe('what an app hears and sends', () => {
     let release = (): void => undefined, sent = (): void => undefined;
     const held = new Promise<void>((done) => { release = done; }), going = new Promise<void>((done) => { sent = done; });
     const tokens: string[] = [];
-    // The read with that token is refused once the person has signed in again; one with the new token is answered
+    // The read with that token is refused once another caller has refreshed it; one with the new token is answered
     const answer = (url: string, init: RequestInit | undefined): Promise<Response> | undefined => {
       if (url !== forbidden) return undefined;
       tokens.push(new Headers(init?.headers).get('authorization') ?? '');
@@ -1335,13 +1335,13 @@ describe('what an app hears and sends', () => {
     await withFetch(answer, async () => {
       const read = p.fetch(store, forbidden);
       await going;
-      await p.signIn(store);
+      expect((await p.refresh(store)).ok).toBe(true);
       release();
       expect((await read).status).toBe(200);
     });
     expect(tokens).toHaveLength(2);
     expect(tokens[1]).not.toBe(tokens[0]);
-    expect((await counts('forgerock')).refresh ?? 0).toBe(before);
+    expect((await counts('forgerock')).refresh ?? 0).toBe(before + 1);
   });
 
   test('a token whose expiry is unknown, refused right after its refresh, refreshes again a minute after that refusal', async () => {

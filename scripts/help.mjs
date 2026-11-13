@@ -29,13 +29,13 @@ export const missingValue = (arg) => arg === undefined || /^-[^\d.]/.test(arg);
 // which the repository's smokes and pixel fixtures are written against.
 const DRIVE = [
   ['--port <n>', 'web: the page’s port (or EXACT_PORT); backend origins remain those app.ts grants'],
-  ['--backend <url>', 'web: select the backend origin for this build'],
+  ['--backend <url>', "select the backend for this build: app.ts needs one top-level const origin, a literal or import.meta.env.NAME ?? '<literal>', used in net.fetch ${origin}"],
   ['--storage <name>', 'a scratch store, kept on native hosts; Chrome\'s starts empty'],
   ['--keep-storage · --reset-storage', 'reopen a named store (Chrome, or a compare) · empty a named store first, on any host'],
   ['--size <w>x<h>', 'the viewport (default 420x900; a simulator\'s own)'],
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
-  ['--timing platform · --bind <extension>', 'Apple: UIKit\'s transitions keep their own timing (default: frozen) · Apple, Android: a module answered by its implementation, not the substitute'],
+  ['--live · --timing platform · --bind <extension>', 'Mac: normal scheduling and input · Apple: native transitions · use a module implementation'],
   ['--touch platform', 'iOS simulator: every tap a real touch, through the XCTest runner'],
   ['--epoch <ISO|ms|now> · --login [hidden]', 'the date at the clock\'s zero (default 2026-01-01) · a launch the login item made, hidden: with no window'],
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
@@ -49,7 +49,7 @@ const DRIVE = [
   ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--live', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;
@@ -121,7 +121,7 @@ export const HELP = {
       ['--render rust|js|none', 'pre-rendered pages: rust (the app\'s <app>-render entry; the default where it has one), js (Bun; the default otherwise), none'],
       jsonBuilt(),
     ],
-    internal: ['--js', '--wasm', '--bake'],
+    internal: ['--js', '--wasm', '--bake', '--check'],
     body: `Builds the JS target (a game: wasm) into the app's target/web-dist; about a second when
 nothing changed. A capability the JS runtime lacks fails the build, named. Beside the pages
 are shell.html and routes.json, the route table a static host serves them by (serve).
@@ -142,13 +142,14 @@ file at its path; else, for a browser's navigation to a path a route in routes.j
 shell.html with 200, or for a render=request or cached route its page rendered under Bun
 (curl's request too); else 404.html with 404. A static host serves the directory so, with
 those routes' shell. A request preferring text/markdown (its Accept header) for a page whose
-.md file is beside it gets that file, with Vary: Accept. Beside the app's sources, a page asked for after a source changed
+.md file is beside it gets that file, with Vary: Accept; for a path nothing answers, 404.md
+with 404 where the build has one. Beside the app's sources, a page asked for after a source changed
 builds the site again first (no restart); a build that fails is the answer, with its errors.
 Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreground until ^C.`,
     example: 'bun exact.mjs serve dist --port 3000',
   },
   test: {
-    line: 'run *.test.contract (or the files named) on a host: web by default',
+    line: 'run *.test.contract (or the files named) on a host app.json ships',
     usage: 'bun exact.mjs test [web|ios|macos|linux|windows|android] [<file.test.contract>|<glob>]… [flags]',
     common: ['test [web|ios] [<file>…] [--size <w>x<h>] [--sim <name>]'],
     flags: DRIVE.filter(naming(['--size', '--sim'], true)),
@@ -161,8 +162,8 @@ Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreg
     body: `Compiles first, a compile error said as contract build says it, so no contract build before
 it: web builds the app (web-build); ios, macos and windows build when the build is missing or
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
-store, after its first data has landed; its leading lines (size, epoch, fail fetch …)
-override flags.
+store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags.
+Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
 Server   runs server.ts on DB=.exact/test/db.sqlite; refuses a live server or an entry ignoring DB.
 Runs     to completion, exit 1 when a test fails; nothing is left running.
 Backend  test web never starts a Snapback backend: start snapback4 dev on app.ts’s selected origin’s port
@@ -193,7 +194,7 @@ Ops      a target is a testId, else a view's exact text or label
   clock data|settle|held|+<ms> [real]    replies · transitions · push
   check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>`,
-    bodyAll: `Builds if stale, launches, runs each quoted op on the agent's clock and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down" "screenshot <png>" "tap up". clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
+    bodyAll: `Unnamed, the host is one app.json ships, as test's. Builds if stale, launches, runs each quoted op on the agent's clock and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down" "screenshot <png>" "tap up". clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
 Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else free. ${NATIVE_PORTS}`,
     example: 'bun exact.mjs agent web --storage s1 tree "tap add" "screenshot .exact/a.png"',
   },
@@ -202,19 +203,21 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
     usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
+      DRIVE.find(([flag]) => flag === '--backend <url>'),
       ['--sim <udid|name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro)'],
       ['--shots <dir>', 'also copy every screenshot it captured there, named as in .exact/verify/ (a test\'s own `screenshot` steps too)'],
       ['--rescroll · --strict', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI)'],
       ['--json', 'the report as one JSON object (ios: `scrolling`, each finding\'s metric, value, UIKit\'s and remedy)'],
     ],
     internal: ['--app <name>'],
-    body: `web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
+    body: `Host     unnamed: one app.json ships (host, deploy.store, deploy.binaries): web when they name it or nothing, else the
+         first of ios, windows and android that drives here; with none of those, the semantics check alone, saying why.
+web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
 beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
-both widths; ios runs the tests with UIKit's bars). Then the app relaunches once, on real time, on the store a
-passing test left, and says whether its first screen shows what that test stored. One short report: the build if
-it built, the compiler's warnings (as contract build says them, built or not), the tests, check's findings (each
+both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
+One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
 once, naming the screens it was on), the relaunch, then "verify: clean" or "verify: N problems". A clean verify
 is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
 test's named by the test, the relaunch's): look at them when the features work.
@@ -222,20 +225,18 @@ Large    each of those screens again at the largest text size (ios: the simulato
          after; web: a 53 px root, iOS's body there, at 390x844, and the tests run again there
          to read up to 12 screens they pass through). Reports spills past an edge, squeezing and
          overlap, with remedies that give text room. The web comparison leaves out content iOS
-         projects into its navigation bar. A smaller or fixed font is the tell, as is a line-clamp
+         projects into its navigation bar and its tab bar. A smaller or fixed font is the tell, as is a line-clamp
          in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
          than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.
-Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the
-         findings (check's, the relaunch's, the largest text size's, scrolling's) and the compiler's
-         warnings are counted, never fail it but under --strict. A screen no test ends on is not checked: end a test there.
-         Its first line says about how long it takes (its last run's time): wait that once.
-Server   an app with its own (server.ts, the rest pattern's): verify runs it where app.ts calls
-         it, on an empty database (DB=.exact/verify/db.sqlite), through the relaunch, then stops
-         it; one already answering there (a dev server) is refused, named, never written to; so is
-         a server entry that does not read DB (process.env.DB), with the fix.
+Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the findings (check's, the relaunch's,
+         the largest text size's, scrolling's) and the compiler's warnings are counted, never fail it but under --strict. A
+         screen no test ends on is not checked: end a test there. Its first line says about how long it takes (its last run's time): wait that once.
+Server   an app with its own (server.ts, the rest pattern's): verify runs it where app.ts calls it, on an empty database
+         (DB=.exact/verify/db.sqlite), through the relaunch, then stops it; one already answering there (a dev server) is
+         refused, named, never written to; so is a server entry that does not read DB (process.env.DB), with the fix.
 Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simulator's socket).`,
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
   },
@@ -327,11 +328,11 @@ Ports    none. Runs to completion.`,
       ['--release', 'optimize the APK for speed; set EXACT_UPDATE_TRUST=production for distribution'],
       ['--bundle', 'build a production .aab with an upload key; implies --release and no install'],
       ['--headless', 'build the Linux host for Android instead (agent android --headless runs it under adb shell)'],
+      ['--write-locks', 'regenerate gradle.lockfile and gradle-verification.xml after graph changes; review and commit both'],
       jsonBuilt(', installed (the device\'s serial, or null with none ready)', '; printed after the install; not with --run'),
     ],
-    // `--apk --install` are the verb's own; --release builds the release profile, for measuring; --write-locks writes
-    // the Gradle lock and verification files of an app whose modules name Maven libraries.
-    internal: ['--apk', '--install', '--write-locks'],
+    // `--apk --install` are the verb's own.
+    internal: ['--apk', '--install'],
     body: `Builds android/ for aarch64-linux-android, packages it with exact2's Canvas reader
 (host/android) into an APK under target/android/, prints its path and installs it on the
 device: ANDROID_SERIAL, else the one adb lists (with several and none named, it refuses).
@@ -585,8 +586,8 @@ in app.json the first time it runs and builds in a workspace generated under .ex
 --name and --bundle-id here, before the first build: a later change to the id makes the next build cold
 and leaves the old app installed. Then cd there: its exact.mjs runs everything, and bun exact.mjs help
 lists its verbs. Read docs/start-here-site.md first for a website, else docs/start-here.md.
-A game uses --game without --name or --bundle-id. Set app.name and app.id in its generated app.json
-before the first build.
+A game uses --game without --name or --bundle-id; its id is com.exact.<name> until app.json says
+otherwise. Before the first build, set "app": {"name", "id"} in its app.json (create it if absent).
 Ports    none. Runs to completion.`,
     example: 'bun scripts/exact.mjs new ~/notes --name Notes --bundle-id com.yourcompany.notes && cd ~/notes && bun exact.mjs test web',
   },

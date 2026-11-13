@@ -13,8 +13,15 @@ final class ButtonMeasureCache: @unchecked Sendable {
     private let lock = NSLock()
     private var traits = UITraitCollection.current
     private weak var surface: UIView?
-    private var entries: [Key: ExactButtonMeasure] = [:]
+    /// Each title, offer and kind at the current traits, within a budget: a
+    /// session's history of faces is not kept.
+    private var entries = RecentMeasures<Key, ExactButtonMeasure>(entries: 256, bytes: 128 << 10) { key, _ in key.face.count }
     private(set) var misses = 0
+    var retained: (entries: Int, bytes: Int) {
+        lock.lock(); defer { lock.unlock() }
+        let (a, b) = (entries.retained, numerals.retained)
+        return (a.entries + b.entries, a.bytes + b.bytes)
+    }
     @discardableResult
     func configure(_ next: UITraitCollection, in surface: UIView) -> Bool {
         precondition(Thread.isMainThread)
@@ -22,6 +29,8 @@ final class ButtonMeasureCache: @unchecked Sendable {
         let changed = FieldChromeCache.Traits(next) != FieldChromeCache.Traits(traits)
         traits = next
         self.surface = surface
+        // Measurements at the old traits answer no key from now on.
+        if changed { entries.removeAll(); numerals.removeAll() }
         return changed
     }
     /// Read UIKit's configured title font, including buttonSize and current traits.
@@ -45,14 +54,16 @@ final class ButtonMeasureCache: @unchecked Sendable {
     func answer(face data: Data, widthKind: UInt8, width: Float) -> ExactButtonMeasure {
         lock.lock()
         let key = Key(face: data, widthKind: widthKind, width: width, traits: .init(traits))
-        if let exact = entries[key] { lock.unlock(); return exact }
+        if let exact = entries.value(key) { lock.unlock(); return exact }
         let numeral = Self.numeral(data).map { (key: Key(face: $0.face, widthKind: widthKind, width: width, traits: key.traits), title: $0.title) }
-        if let numeral, let known = numerals[numeral.key], let measured = known.answer(numeral.title, widthKind: widthKind, width: width) {
-            entries[key] = measured
+        let known = numeral.flatMap { numerals.value($0.key) }
+        // A count's answer comes from its face's reference each time, so
+        // the counts a feed shows are not each kept.
+        if let numeral, let known, let measured = known.answer(numeral.title, widthKind: widthKind, width: width) {
             lock.unlock()
             return measured
         }
-        let needsNumeral = numeral.map { numerals[$0.key] == nil } ?? false
+        let needsNumeral = numeral != nil && known == nil
         misses += 1
         lock.unlock()
         return Owner.shared.callMain {
@@ -72,8 +83,8 @@ final class ButtonMeasureCache: @unchecked Sendable {
                 if let title { reference = Numeral(unwrapped, title: title, scale: max(1, current.displayScale)) }
             }
             lock.lock()
-            entries[now] = measured
-            if let numeral, let reference { numerals[numeral.key] = reference }
+            entries.insert(now, measured)
+            if let numeral, let reference { numerals.insert(numeral.key, reference) }
             lock.unlock()
             measured.provisional = now == key ? 0 : 1
             return measured
@@ -111,7 +122,9 @@ final class ButtonMeasureCache: @unchecked Sendable {
             return result
         }
     }
-    private var numerals: [Key: Numeral] = [:]
+    private var numerals = RecentMeasures<Key, Numeral>(entries: 64, bytes: 32 << 10) { key, numeral in
+        key.face.count + numeral.title.length * 2
+    }
     /// A face whose title is a count (digits, with `,` or `.`), keyed
     /// without its title or its label, which measures nothing.
     static func numeral(_ data: Data) -> (face: Data, title: String)? {

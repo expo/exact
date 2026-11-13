@@ -464,11 +464,14 @@ pub(crate) fn eligibility(
             )
         };
         // A `light-dark()` keyframe plays the appearance its animation
-        // started under (LLP 1062 D9), which a lowered track cannot say.
-        let paired = animations
-            .0
-            .iter()
-            .any(|a| a.keyframes.0.iter().any(|f| !f.dark.is_empty()));
+        // started under (LLP 1062 D9), and a modern colour's moves in Oklab
+        // (CSS Color 4 §12.1), neither of which a lowered track can say.
+        let paired = animations.0.iter().any(|a| {
+            a.keyframes
+                .0
+                .iter()
+                .any(|f| !f.dark.is_empty() || f.values.iter().any(|(_, v)| v.oklab))
+        });
         let svg = n.node_type.is_svg_element() || n.node_type == NodeType::Svg;
         let boxed = box_motion && props.iter().any(|p| super::svg::BOX_LOWERED.contains(p));
         // A drag timeline's consumer (LLP 1057.003 D2) runs on the drag,

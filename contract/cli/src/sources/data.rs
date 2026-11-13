@@ -204,8 +204,18 @@ enum Token<'a> {
     Other,
 }
 
-fn word_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$') || b >= 0x80
+fn space_at(text: &str, at: usize) -> Option<char> {
+    text.get(at..)?
+        .chars()
+        .next()
+        .filter(|&c| c.is_whitespace() || c == '\u{feff}')
+}
+
+fn word_byte(text: &str, at: usize) -> bool {
+    let b = text.as_bytes()[at];
+    b.is_ascii_alphanumeric()
+        || matches!(b, b'_' | b'$')
+        || (b >= 0x80 && space_at(text, at).is_none())
 }
 
 /// After `prev`, whether a `/` begins a regular expression rather than a
@@ -265,12 +275,11 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
     while at < code.len() {
         let c = code[at];
         let next = code.get(at + 1).copied();
-        if c.is_ascii_whitespace() {
-            at += 1;
+        if let Some(space) = space_at(text, at) {
+            at += space.len_utf8();
         } else if c == b'/' && next == Some(b'/') {
-            at = code[at..]
-                .iter()
-                .position(|&b| b == b'\n')
+            at = text[at..]
+                .find(['\n', '\r', '\u{2028}', '\u{2029}'])
                 .map_or(code.len(), |n| at + n);
         } else if c == b'/' && next == Some(b'*') {
             at = text[at + 2..].find("*/").map_or(code.len(), |n| at + n + 4);
@@ -279,7 +288,11 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
             let start = at + 1;
             at = start;
             while at < code.len() && code[at] != c && code[at] != b'\n' {
-                at += if code[at] == b'\\' { 2 } else { 1 };
+                at += match &code[at..] {
+                    [b'\\', b'\r', b'\n', ..] => 3,
+                    [b'\\', ..] => 2,
+                    _ => 1,
+                };
             }
             at = at.min(code.len());
             out.push(Token::Str(&text[start..at]));
@@ -304,18 +317,18 @@ fn tokens(text: &str) -> Vec<Token<'_>> {
                 at += 1;
             }
             at += 1;
-            while at < code.len() && word_byte(code[at]) {
+            while at < code.len() && word_byte(text, at) {
                 at += 1;
             }
             out.push(Token::Other);
         } else if c.is_ascii_digit() {
-            while at < code.len() && (word_byte(code[at]) || code[at] == b'.') {
+            while at < code.len() && (word_byte(text, at) || code[at] == b'.') {
                 at += 1;
             }
             out.push(Token::Other);
-        } else if word_byte(c) {
+        } else if word_byte(text, at) {
             let start = at;
-            while at < code.len() && word_byte(code[at]) {
+            while at < code.len() && word_byte(text, at) {
                 at += 1;
             }
             out.push(Token::Word(&text[start..at]));
@@ -446,6 +459,14 @@ mod tests {
         assert_eq!(
             read("// a plain list, not the exact-camera view\n"),
             Vec::<String>::new()
+        );
+        assert_eq!(
+            read("const s = \"\\\r\nimport { open } from '@exact/hid'\";\n"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            read("\u{feff}// notes\u{2028}import\u{a0}{ open } from \"@exact/hid\";\n"),
+            ["@exact/hid"]
         );
     }
 }

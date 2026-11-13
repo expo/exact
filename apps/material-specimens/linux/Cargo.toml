@@ -20,5 +20,6 @@ bench = false
 contract = { path = "../../../contract/cli" }
 exact-kernel = { path = "../../../kernel" }
 exact-linux = { path = "../../../host/linux" }
+exact-painted = { path = "../../../host/painted" }
 serde_json = "1.0"
 tiny-skia = "0.12"

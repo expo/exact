@@ -22,6 +22,7 @@
 // and Azure all have) is owed, and `--yes` against https refuses by name.
 import { createHash } from 'node:crypto';
 import { extname, resolve } from 'node:path';
+import { within } from './paths.mjs';
 import { canonical, matchPattern } from '../host/web-js/route-pattern.js';
 import { filesystem, filesystemLock } from './filesystem.mjs';
 
@@ -215,7 +216,7 @@ export class DirectoryOrigin {
   /** The absolute path of `rel`, refused when it would leave the origin. */
   path(rel) {
     const abs = resolve(this.dir, safeRelative(rel));
-    if (abs !== this.dir && !abs.startsWith(this.dir + '/')) throw new Error(`${rel} leaves the origin`);
+    if (!within(this.dir, abs)) throw new Error(`${rel} leaves the origin`);
     return abs;
   }
 

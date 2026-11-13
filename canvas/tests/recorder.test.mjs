@@ -78,6 +78,23 @@ test('a display-p3 canvas records Display P3 bytes, as the Rust recorder does', 
   expect([pixel >>> 24, (pixel >>> 16) & 255, (pixel >>> 8) & 255, pixel & 255]).toEqual([234, 51, 35, 255]);
 });
 
+test('a font-relative spacing follows a later font, as the Rust recorder does', () => {
+  // canvas/tests/cases.rs `a_font_relative_spacing_follows_a_later_font`.
+  const width = (ctx) => ctx.measureText('Hello World').width;
+  const ctx = new Recorder(), plain = width(ctx);
+  ctx.letterSpacing = '1em';
+  const atTen = width(ctx) - plain;
+  ctx.font = '20px serif';
+  const other = new Recorder();
+  other.font = '20px serif';
+  expect(width(ctx) - width(other)).toBe(2 * atTen);
+  expect(ctx.letterSpacing).toBe('1em');
+  ctx.wordSpacing = '1ex';
+  ctx.fillText('Hello World', 0, 0);
+  const font = records(ctx._.take()[0]).find(([c]) => c === 60)[1];
+  expect(font.slice(7, 9)).toEqual([20, 10]);
+});
+
 test('a number after Z ends the path there, as Chrome does', () => {
   // `Z` takes no numbers (SVG 2 §9.5.4); repeating it for the number never ended.
   const drawn = (d) => { const ctx = new Recorder(); ctx.stroke(new Path2D(d)); return ctx._.take(); };

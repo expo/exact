@@ -71,11 +71,10 @@ open class ExactActivity : Activity() {
         // adopts the one that runs ([Owner.boot], [Native.start]). The environment below is read once, as the library
         // loads and the host boots, and other threads read it from then on, so it is written only the first time.
         val again = Exact.live
+        // A history launch carries no new callback, and a new process has no auth session to resume.
+        if (!again || intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) intent.data?.takeIf { Auth.claims(this, it) }?.let { intent.data = null }
         Exact.live = true
-        // An activity this one replaces that is not destroyed yet (it finished; its onDestroy comes late) lets go of
-        // the host now, before this one's view takes it.
-        Exact.reader?.get()?.takeIf { it !== this }?.release()
-        Exact.reader = java.lang.ref.WeakReference(this)
+        take()
         // Before anything loads exact2's library: mimalloc reads its options as it loads. Freed memory goes back at
         // once (decoded pictures otherwise stay held).
         if (!again) android.system.Os.setenv("MIMALLOC_PURGE_DELAY", "0", false)
@@ -85,7 +84,11 @@ open class ExactActivity : Activity() {
         // platform's fade, to compare): the first frame is what shows.
         if (Build.VERSION.SDK_INT >= 31 && intent.getStringExtra("splashfade") != "1") Splash.quick(this)
         val arrived = Shares.arrived(intent, state != null)
-        if (!again) environment(arrived)
+        if (!again) {
+            environment(arrived)
+            try { FilePicker.start(applicationContext) }
+            catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
+        }
         edgeToEdge()
         // exact2's thread, made before the assets are checked: it loads exact2's library meanwhile.
         owner()
@@ -108,10 +111,8 @@ open class ExactActivity : Activity() {
         }
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
-        // A launch with a URL (a shortcut, a link) or a share into a process whose host runs goes where it says; an
-        // intent the system starts again ([Shares.arrived]) keeps where the app was. The first launch's is the host's
-        // launch location ([environment]).
-        if (again && arrived) received(intent)
+        // A restored share keeps its route; an auth callback can recreate a destroyed activity with saved state.
+        if (again && (arrived || intent.data?.let { Auth.claims(this, it) } == true)) received(intent)
     }
 
     /** A URL or a share given to the running activity: its location, as a link's (LLP 1133.023 D15 item 3), or the
@@ -123,6 +124,7 @@ open class ExactActivity : Activity() {
     }
 
     private fun received(intent: android.content.Intent) {
+        if (Auth.receive(this, intent)) return
         if (Shares.isShare(intent)) Shares.request(this, intent)?.let { Exact.share(it) }
         else intent.data?.let { Exact.open(it.toString()) }
     }
@@ -503,14 +505,16 @@ open class ExactActivity : Activity() {
      * stop makes the reader again ([read]). */
     override fun onStart() {
         super.onStart()
-        if (stopped) { stopped = false; read() }
+        if (stopped) { stopped = false; take(); read() }
         contentResolver.registerContentObserver(android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ANIMATOR_DURATION_SCALE), false, settings)
         contentResolver.registerContentObserver(android.provider.Settings.System.getUriFor(android.provider.Settings.System.TIME_12_24), false, settings)
         // What changed while the activity was stopped and is no configuration change.
         configure()
         view.running(true)
         Exact.hidden(false)
+        requests.foreground(true)
         if (measured) Exact.owner?.windowFrames?.attach(window)
+        Extensions.started()
     }
 
     /** A driver's launch: the window's frames are measured for `perf frames` while it shows (LLP 1079.000 §6.2). */
@@ -535,9 +539,13 @@ open class ExactActivity : Activity() {
 
     override fun onStop() {
         stopped = true
-        Exact.owner?.windowFrames?.detach()
-        Exact.hidden(true)
+        Exact.owner?.windowFrames?.detach(window)
+        requests.foreground(false)
+        if (reads()) Auth.stopped()
+        // A replaced activity's stop can come after its successor's start: the page is the successor's to hide.
+        if (reads()) Exact.hidden(true)
         if (reads()) pads.background()
+        if (reads()) Extensions.stopped(isChangingConfigurations)
         view.running(false, reads())
         // Behind the hide, the pads' release and the stop of the turns (none queued after it), what they and anything
         // since the pause committed is on disk before Android may kill it.
@@ -550,6 +558,7 @@ open class ExactActivity : Activity() {
      * reads again what the person may have changed in Settings ([Extensions.resumed]). */
     override fun onResume() {
         super.onResume()
+        Auth.resumed()
         requests.resumed()
         Extensions.resumed()
     }
@@ -582,6 +591,14 @@ open class ExactActivity : Activity() {
         super.onDestroy()
     }
 
+    /** This activity's view reads the host from now on. One that read it before and is not destroyed yet (it
+     * finished: its stop and onDestroy come after this activity's create or start) lets go of the host now, before
+     * this one's view takes it, and from then on tells the host nothing. */
+    private fun take() {
+        Exact.reader?.get()?.takeIf { it !== this }?.release()
+        Exact.reader = java.lang.ref.WeakReference(this)
+    }
+
     /** Whether this activity's view is the one that reads the host. An activity that was replaced before it stopped
      * (Android starts its successor first) is not, and must tell the host nothing: its window, its settings and its
      * stop are no longer the app's. */
@@ -598,7 +615,7 @@ open class ExactActivity : Activity() {
         if (Fields.context === this) Fields.context = null
         if (!reads()) return
         Exact.reader = null
-        Exact.owner?.let { it.published = {}; it.asked = {}; it.chrome = {} }
+        Exact.owner?.let { it.published = {}; it.asked = null; it.chrome = {} }
         Exact.answered = {}
         Exact.turned = {}
     }
@@ -608,12 +625,12 @@ open class ExactActivity : Activity() {
     private fun environment(arrived: Boolean) {
         android.system.Os.setenv("XDG_CACHE_HOME", cacheDir.absolutePath, true)
         // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
-        // drive with no scratch store keeps its `app:/` files under it (`exact_linux::picker`).
+        // drive with no scratch store keeps its `app:/` files under it (`exact_painted::picker`).
         android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, false)
         // The launching intent's URL is the launch location (LLP 1133.023 D15 item 3): the activity is exported, so
         // any app may start it with one, which reaches only what the navigation root routes, as a link does.
         if (arrived) {
-            intent.data?.takeUnless { Shares.isShare(intent) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
+            intent.data?.takeUnless { Shares.isShare(intent) || Auth.claims(this, it) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
             // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
             Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
         }
@@ -623,6 +640,8 @@ open class ExactActivity : Activity() {
         val development = packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.GET_META_DATA)
             .metaData?.getBoolean("dev.exact.development", false) == true
         if (!development) return
+        // The data module's `console` lines to logcat under `exact-app` (`host/painted/src/canvas/journal.rs`).
+        android.system.Os.setenv("EXACT_LOG_CONSOLE", "1", true)
         // rows=0: no kept rows, every frame walks every row (exact2's EXACT_ROWS), to compare.
         if (intent.getStringExtra("rows") == "0") android.system.Os.setenv("EXACT_ROWS", "0", true)
         // imgvp=N: keep N viewports of decoded pictures (exact2's EXACT_IMAGE_VIEWPORTS; 12 by default).
@@ -644,7 +663,7 @@ open class ExactActivity : Activity() {
             "x_agent_fail_fetch", "x_agent_process", "x_agent_home", "x_agent_login_env",
             "x_agent_share", "x_agent_bind", "x_agent_pads", "x_agent_timing", "x_agent_presentation", "x_agent_chrome",
             "x_rows", "x_moves", "x_idle_frames", "x_slots", "x_lower", "x_row_reuse",
-            "x_image_viewports", "x_defer_collections").forEach { k ->
+            "x_image_viewports", "x_defer_collections", "x_log_journal").forEach { k ->
             intent.getStringExtra(k)?.let { android.system.Os.setenv("EXACT_" + k.removePrefix("x_").uppercase(), it, true) }
         }
         // A move may carry layers' tracks ([applyMove]), so a row coming into view starts its animations without a

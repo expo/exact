@@ -258,3 +258,79 @@ fn display_none_cancels_and_restarts_animations() {
     assert_eq!(plays.len(), 1);
     assert_eq!(plays[0].start, 2.0);
 }
+
+/// LLP 1055.000 D15: a geometry row that becomes a percentage has no motion
+/// target, so the commit retires what the engine held for it, while it
+/// moved or after it settled, and the shape draws the percentage.
+#[test]
+fn geometry_that_becomes_a_percentage_is_retired_from_motion() {
+    use exact_kernel::motion_node;
+    use exact_kernel::svg::scene::{self, Kind};
+    let text = |id: u32, rows: &[(StyleId, &str)]| {
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|(r, v)| (*r, StyleValue::Text((*v).into())))
+            .collect();
+        style(id, &rows)
+    };
+    for settled in [false, true] {
+        let mut k = Kernel::with_monospace();
+        let create = |id, node_type| Op::CreateView { id, node_type };
+        let ops = vec![
+            create(1, NodeType::Svg),
+            create(2, NodeType::SvgCircle),
+            create(3, NodeType::SvgRect),
+            text(1, &[(StyleId::Width, "100px"), (StyleId::Height, "100px")]),
+            text(2, &[(StyleId::Transition, "all 1s linear")]),
+            text(2, &[(StyleId::Cx, "50px"), (StyleId::R, "10px")]),
+            text(3, &[(StyleId::Transition, "all 1s linear")]),
+            text(3, &[(StyleId::Width, "20px"), (StyleId::Height, "20px")]),
+            text(3, &[(StyleId::X, "10px")]),
+            Op::SetChildren {
+                id: 1,
+                children: vec![2, 3],
+            },
+            Op::AttachRoot { id: 1 },
+        ];
+        let mut e = Engine::new();
+        let receipt = k.apply(0, 1, &ops).unwrap();
+        k.motion_sync(&receipt).apply(&mut e).unwrap();
+        let moved = [(StyleId::Cx, "60px"), (StyleId::R, "20px")];
+        let receipt = k
+            .apply(0, 2, &[text(2, &moved), text(3, &[(StyleId::X, "30px")])])
+            .unwrap();
+        k.motion_sync(&receipt).apply(&mut e).unwrap();
+        e.advance(if settled { 2.0 } else { 0.25 }).unwrap();
+        let percent = [(StyleId::Cx, "30%"), (StyleId::R, "50%")];
+        let receipt = k
+            .apply(0, 3, &[text(2, &percent), text(3, &[(StyleId::X, "40%")])])
+            .unwrap();
+        let sync = k.motion_sync(&receipt);
+        let [circle, rect] = [2, 3].map(|id| motion_node(k.node(id).unwrap().key));
+        for (node, p) in [
+            (circle, Property::Cx),
+            (circle, Property::R),
+            (rect, Property::X),
+        ] {
+            assert!(
+                sync.retired.contains(&(node, p)),
+                "{p:?}, settled {settled}"
+            );
+        }
+        assert!(!sync.retired.contains(&(circle, Property::Cy)), "a length");
+        sync.apply(&mut e).unwrap();
+        e.advance(3.0).unwrap();
+        k.compute_layout(1, Offer::definite(100., 100.)).unwrap();
+        let root = k.node(1).unwrap();
+        let shown = |key, p| e.value(motion_node(key), p);
+        let s = scene::resolve(&k, &root, (0., 0., 100., 100.), &shown, false);
+        let Kind::Shape(c) = &s.items[0].kind else {
+            panic!("a circle")
+        };
+        assert_eq!(c.circle.map(|c| (c.0, c.2)), Some((30.0, 50.0)));
+        let Kind::Shape(r) = &s.items[1].kind else {
+            panic!("a rect")
+        };
+        assert_eq!(r.path.bounds().map(|b| b.0), Some(40.0));
+    }
+}

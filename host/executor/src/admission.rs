@@ -17,9 +17,11 @@ impl Core {
         state.dispatched = true;
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
-        let checked = r
-            .request
-            .long_poll_refusal()
+        let checked = (r.request.prefetch && r.class != RequestClass::Read)
+            .then_some("exactPrefetch requires a plain HTTP read")
+            .or(r.request.prefetch_refusal())
+            .or(r.request.preload_refusal())
+            .or(r.request.long_poll_refusal())
             .or(r.request.timeout_refusal())
             .or(r.request.protocols_refusal())
             .or(r.request.body_from_refusal())
@@ -142,7 +144,10 @@ impl Core {
                 return Err((reason, work));
             }
         };
-        let queued_deadline = if lane == 1 && !r.request.stream && work.is_none() {
+        // Only a request that waits in its lane's queue has one: a stream or
+        // a one-shot starts on a thread of its own at once.
+        let queues = !r.request.stream && !one_shot;
+        let queued_deadline = if lane == 1 && queues && work.is_none() {
             match r
                 .request
                 .timeout_ms

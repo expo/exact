@@ -342,7 +342,7 @@ export function syncMarkup(el) {
     });
   }).catch((error) => console.error("exact: Markdown editor:", error));
 }
-export function applyProps(el, set, clear) {
+export function applyProps(el, set, clear, adopting = false) {
   syncMedia(el, set, clear);
   if (set && "data-scrolldocument" in set) {
     scrollDocs.add(el);
@@ -423,7 +423,7 @@ export function applyProps(el, set, clear) {
         el.textContent = value;
       }
     } else if (name === "markupPieces") {
-      renderMarkup(el, value);
+      if (!renderMarkup(el, value, adopting)) continue;
       if (el.hasAttribute("data-atoms") && !globalThis.exact.atoms) {
         loadAfterPaint("./atoms.js", "atoms").then(() => {
           if (el.isConnected) {

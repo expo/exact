@@ -279,6 +279,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
     fn app_id(&self) -> &str {
         self.source.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.source.launch()
+    }
     fn preloads(&self) -> &[exact_runner::request::Preload] {
         self.source.preloads()
     }
@@ -543,6 +546,23 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         let mut lines = std::mem::take(&mut self.logs);
         lines.extend(self.source.take_logs());
         lines
+    }
+
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.source
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.source.module_identity(source)
     }
 
     fn take_aborted(&mut self) -> Vec<u64> {

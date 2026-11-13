@@ -19,7 +19,7 @@ pub(super) fn laid_out(
 ) -> Vec<NodeId> {
     // A child a host gave a containing block is out of this layout, the
     // root of its own (LLP 1115.002 D8.2).
-    let mut items: Vec<(i32, NodeId)> = before
+    let items = before
         .into_iter()
         .map(|node| (0, node))
         .chain(
@@ -30,6 +30,16 @@ pub(super) fn laid_out(
                 .filter_map(|&c| Some((arena.style(c).order, handle(c)?))),
         )
         .collect();
+    ordered(arena, parent, items)
+}
+
+/// `items`, each child's `order` and engine handle in document order, in
+/// the order `parent`'s layout takes them.
+pub(crate) fn ordered(
+    arena: &NodeArena,
+    parent: u32,
+    mut items: Vec<(i32, NodeId)>,
+) -> Vec<NodeId> {
     // A newly mounted parent's engine style may not have been derived yet.
     let orders = matches!(
         arena.computed_source(parent, StyleId::Display).display,

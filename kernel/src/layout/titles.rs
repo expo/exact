@@ -51,6 +51,7 @@ impl LayoutTree {
                         let run = TextRun {
                             text: "M".into(),
                             style: text,
+                            edges: Default::default(),
                             inline: None,
                         };
                         let mut paragraph =

@@ -24,7 +24,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, relative, resolve } from 'node:path';
+import nodePath, { basename, dirname, relative, resolve } from 'node:path';
+import { within } from './paths.mjs';
 
 /** Entries kept per group, and groups kept: at 5 MB an entry, under 1 GB. */
 const KEPT = 6, GROUPS = 24;
@@ -43,6 +44,15 @@ function under(path, name = '') {
 }
 const digest = (path) => { const all = under(path); return all && sha(all.map(([name, , file]) => `${name}\0${sha(readFileSync(file))}`).join('\n')); };
 const seen = (path) => under(path)?.map(([name, s]) => `${name}:${s.mtimeMs}:${s.size}`).join('\n') ?? null;
+
+/** A dep-info entry `file` (absolute) of a kept product: its path relative
+ * to the checkout `root`; `undefined` under a `skip` directory, which is no
+ * input; `null` outside the checkout, where nothing is kept. `path` is the
+ * platform's path module, a parameter so Windows paths can be tested here. */
+export function keptInput(file, root, skip = [], path = nodePath) {
+  if (skip.some(dir => within(dir, file, path))) return undefined;
+  return within(root, file, path) ? path.relative(root, file) : null;
+}
 
 /**
  * The kept products of one cache. `kept(spec)` is `{ find(), keep(started) }`
@@ -101,11 +111,11 @@ export function keptProducts({ root, cache: name, env, tools = [], skip = [], la
     if (!line) return null;
     const files = new Set();
     for (const raw of line.slice(line.indexOf(': ') + 2).split(/(?<!\\) /)) {
-      const file = resolve(raw.replace(/\\ /g, ' '));
-      if (skip.some(dir => file.startsWith(dir + '/'))) continue;
-      if (relative(root, file).startsWith('..')) return null;
-      files.add(relative(root, file));
-      for (let dir = dirname(file); dir !== root && dir.startsWith(root); dir = dirname(dir)) if (existsSync(resolve(dir, 'Cargo.toml'))) { files.add(relative(root, resolve(dir, 'Cargo.toml'))); break; }
+      const file = resolve(raw.replace(/\\ /g, ' ')), input = keptInput(file, root, skip);
+      if (input === undefined) continue;
+      if (input === null) return null;
+      files.add(input);
+      for (let dir = dirname(file); dir !== root && within(root, dir); dir = dirname(dir)) if (existsSync(resolve(dir, 'Cargo.toml'))) { files.add(relative(root, resolve(dir, 'Cargo.toml'))); break; }
     }
     return [...files].sort();
   };

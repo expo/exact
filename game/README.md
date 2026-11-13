@@ -984,7 +984,7 @@ accessibility and controls; the world owns the canvas contents. A HUD button wit
 `action="jump"` holds that `Actions` action while pressed; its `aria-keyshortcuts`
 takes its chord (the key with exactly its modifiers) before the focused world hears
 it and presses the action once per keydown, never on its repeats, moving no focus,
-on every host (the rule `host/linux/src/presenter/shortcuts.rs` states). The bake warns
+on every host (the rule `host/painted/src/presenter/shortcuts.rs` states). The bake warns
 when `Actions` bind the same key. Show touch controls under
 `exactViewport().pointer == "coarse"` ([recipe](recipes/touch-controls.md)). Hosts consume
 declaration data without a build dependency on the engine or gameplay. The GPU
@@ -1084,7 +1084,8 @@ six core checks.
 
 Put models, sprite PNGs and WAV or Ogg Vorbis sounds under `art/`;
 [the baker](bake/README.md) produces validated `.model`, `.tex` and `.sound` assets,
-each texture as RGBA8, BC and ASTC files of which a device fetches one
+each texture as RGBA8, BC and ASTC files of which a device fetches one, and an
+Apple bundle holds only its devices' family
 ([texture payloads](bake/README.md#texture-payloads)). Name the authored `x.tex`
 everywhere. Declare simulation dependencies in `Game::ASSETS`; setup waits for them.
 Put everything else the game shows in `Game::STREAMED`: those are fetched from the

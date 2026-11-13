@@ -356,6 +356,8 @@ impl Lowerer<'_> {
     /// the evaluator that will sample it.
     pub(crate) fn declare_keyframes(&mut self, file: &File) -> Vec<LowerError> {
         let mut errors = Vec::new();
+        // A keyframe takes any colour a row does (`values.rs` links them for rows).
+        exact_kernel::style::link_wide_colors();
         for decl in &file.keyframes {
             if self.keyframes.contains_key(&decl.name) {
                 errors.push(LowerError {
@@ -532,46 +534,37 @@ impl Lowerer<'_> {
     }
 
     fn check_animation_names(&self, tag: &str, value: &Expr) -> Result<(), LowerError> {
-        match value {
-            Expr::Str(text, span) => {
-                let Ok(list) = Animations::parse(text) else {
-                    return Ok(()); // the row's own check names the grammar
+        each_literal(value, &mut |text, span| {
+            let Ok(list) = Animations::parse(text) else {
+                return Ok(()); // the row's own check names the grammar
+            };
+            for a in &list.0 {
+                let Some(properties) = self.keyframes.get(&a.name) else {
+                    return err(
+                        "lower-animation-name",
+                        format!(
+                            "`animation` names `{}`, and no `keyframes {}` is declared",
+                            a.name, a.name
+                        ),
+                        span,
+                    );
                 };
-                for a in &list.0 {
-                    let Some(properties) = self.keyframes.get(&a.name) else {
-                        return err(
-                            "lower-animation-name",
-                            format!(
-                                "`animation` names `{}`, and no `keyframes {}` is declared",
-                                a.name, a.name
-                            ),
-                            *span,
-                        );
-                    };
-                    // An SVG element's transform animates as CSS says (LLP
-                    // 1055.000 D5); `r` is a circle's alone.
-                    if properties.contains(&Property::R)
-                        && !matches!(tag, "circle")
-                        && is_element(tag)
-                    {
-                        return err(
-                            "lower-animation-target",
-                            format!(
-                                "`keyframes {}` animates `r`, which only a `circle` has",
-                                a.name
-                            ),
-                            *span,
-                        );
-                    }
+                // An SVG element's transform animates as CSS says (LLP
+                // 1055.000 D5); `r` is a circle's alone.
+                if properties.contains(&Property::R) && !matches!(tag, "circle") && is_element(tag)
+                {
+                    return err(
+                        "lower-animation-target",
+                        format!(
+                            "`keyframes {}` animates `r`, which only a `circle` has",
+                            a.name
+                        ),
+                        span,
+                    );
                 }
-                Ok(())
             }
-            Expr::Ternary(_, yes, no, _) => {
-                self.check_animation_names(tag, yes)?;
-                self.check_animation_names(tag, no)
-            }
-            _ => Ok(()),
-        }
+            Ok(())
+        })
     }
 
     /// A timeline-bound animation animates paint rows only (LLP 1057.003
@@ -582,53 +575,46 @@ impl Lowerer<'_> {
     /// animation, so an endless one is refused too: CSS would show its end
     /// at every position, and the hosts hold its start.
     fn check_timeline_rows(&self, value: &Expr) -> Result<(), LowerError> {
-        match value {
-            Expr::Str(text, span) => {
-                let Ok(list) = Animations::parse(text) else {
-                    return Ok(());
-                };
-                for a in &list.0 {
-                    if a.iterations.is_infinite() {
-                        return err(
-                            "lower-timeline-endless",
-                            format!(
-                                "`{}` repeats forever, and this `animation` follows an `animation-timeline`: a timeline spans an animation's whole length, so it must end (LLP 1057.003)",
-                                a.name
-                            ),
-                            *span,
-                        );
-                    }
-                    let unpainted = self.keyframes.get(&a.name).and_then(|properties| {
-                        properties.iter().copied().find(|p| {
-                            !matches!(
-                                p,
-                                Property::Opacity
-                                    | Property::Translate
-                                    | Property::Scale
-                                    | Property::Rotate
-                            ) && !Property::PAINT.contains(p)
-                        })
-                    });
-                    if let Some(p) = unpainted {
-                        return err(
-                            "lower-timeline-row",
-                            format!(
-                                "`keyframes {}` animates `{}`, and this `animation` follows an `animation-timeline`: a timeline drives paint rows only (opacity, translate, scale, rotate, the colours, box-shadow), never layout or geometry (LLP 1057.003 Q1)",
-                                a.name,
-                                p.name()
-                            ),
-                            *span,
-                        );
-                    }
+        each_literal(value, &mut |text, span| {
+            let Ok(list) = Animations::parse(text) else {
+                return Ok(());
+            };
+            for a in &list.0 {
+                if a.iterations.is_infinite() {
+                    return err(
+                        "lower-timeline-endless",
+                        format!(
+                            "`{}` repeats forever, and this `animation` follows an `animation-timeline`: a timeline spans an animation's whole length, so it must end (LLP 1057.003)",
+                            a.name
+                        ),
+                        span,
+                    );
                 }
-                Ok(())
+                let unpainted = self.keyframes.get(&a.name).and_then(|properties| {
+                    properties.iter().copied().find(|p| {
+                        !matches!(
+                            p,
+                            Property::Opacity
+                                | Property::Translate
+                                | Property::Scale
+                                | Property::Rotate
+                        ) && !Property::PAINT.contains(p)
+                    })
+                });
+                if let Some(p) = unpainted {
+                    return err(
+                        "lower-timeline-row",
+                        format!(
+                            "`keyframes {}` animates `{}`, and this `animation` follows an `animation-timeline`: a timeline drives paint rows only (opacity, translate, scale, rotate, the colours, box-shadow), never layout or geometry (LLP 1057.003 Q1)",
+                            a.name,
+                            p.name()
+                        ),
+                        span,
+                    );
+                }
             }
-            Expr::Ternary(_, yes, no, _) => {
-                self.check_timeline_rows(yes)?;
-                self.check_timeline_rows(no)
-            }
-            _ => Ok(()),
-        }
+            Ok(())
+        })
     }
 
     /// `animation` and its longhands as one `animation` attribute (LLP 1055
@@ -963,21 +949,79 @@ fn timeline_bound(attrs: &[Attr]) -> bool {
 /// An `-exact-exit-animation` must end (LLP 1063 D2): its node is removed when it
 /// does, so an `infinite` or `paused` literal is refused here.
 fn exit_ends(value: &Expr) -> Result<(), LowerError> {
-    match value {
-        Expr::Str(text, span) => match Animations::parse(text) {
-            Ok(list) if list.validate_ending().is_err() => err(
-                "lower-exit-endless",
-                "an `-exact-exit-animation` must end: its node is removed when it does, so it cannot be `infinite` or `paused`",
-                *span,
-            ),
-            _ => Ok(()),
-        },
-        Expr::Ternary(_, yes, no, _) => {
-            exit_ends(yes)?;
-            exit_ends(no)
-        }
+    each_literal(value, &mut |text, span| {
+        match Animations::parse(text) {
+        Ok(list) if list.validate_ending().is_err() => err(
+            "lower-exit-endless",
+            "an `-exact-exit-animation` must end: its node is removed when it does, so it cannot be `infinite` or `paused`",
+            span,
+        ),
         _ => Ok(()),
     }
+    })
+}
+
+/// Each string literal `value` can be: through a ternary's or a `match`'s
+/// arms, a type ascription, and a `let`'s body, where a read of the bound
+/// name is its value. Like the length checks, the visits are bounded, as
+/// shared derives can expand exponentially; past the bound the rest is the
+/// runtime's.
+fn each_literal(
+    value: &Expr,
+    check: &mut dyn FnMut(&str, Span) -> Result<(), LowerError>,
+) -> Result<(), LowerError> {
+    /// `bindings`: each `let` name in scope with its value; `None` for a
+    /// `match` arm's binding, which shadows it.
+    fn visit<'a>(
+        value: &'a Expr,
+        bindings: &mut Vec<(&'a str, Option<&'a Expr>)>,
+        budget: &mut usize,
+        check: &mut dyn FnMut(&str, Span) -> Result<(), LowerError>,
+    ) -> Result<(), LowerError> {
+        if *budget == 0 {
+            return Ok(());
+        }
+        *budget -= 1;
+        match value {
+            Expr::Str(text, span) => check(text, *span),
+            Expr::Ternary(_, yes, no, _) => {
+                visit(yes, bindings, budget, check)?;
+                visit(no, bindings, budget, check)
+            }
+            Expr::Match {
+                var, some, none, ..
+            } => {
+                bindings.push((var, None));
+                let some = visit(some, bindings, budget, check);
+                bindings.pop();
+                some?;
+                visit(none, bindings, budget, check)
+            }
+            Expr::Typed(inner, ..) => visit(inner, bindings, budget, check),
+            Expr::Let {
+                name,
+                value: bound,
+                body,
+                ..
+            } => {
+                bindings.push((name, Some(bound)));
+                let body = visit(body, bindings, budget, check);
+                bindings.pop();
+                body
+            }
+            Expr::Ident(name, _) => {
+                let Some(i) = bindings.iter().rposition(|(bound, _)| bound == name) else {
+                    return Ok(());
+                };
+                let Some(bound) = bindings[i].1 else {
+                    return Ok(());
+                };
+                visit(bound, &mut bindings[..i].to_vec(), budget, check)
+            }
+            _ => Ok(()),
+        }
+    }
+    visit(value, &mut Vec::new(), &mut 4096, check)
 }
 
 // These props bypass CSS length resolution. NUL represents only unknown text;

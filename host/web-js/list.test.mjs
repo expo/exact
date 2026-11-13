@@ -36,6 +36,32 @@ afterAll(async () => {
   server?.stop(true);
 }, 60_000);
 
+test('adopted prefetched rows hold from their live mount, preserving insertion-triggered plays', async () => {
+  const result = await evaluate(`(async () => {
+    const style = document.head.appendChild(document.createElement('style'));
+    style.textContent = '@keyframes adopted-draw {from {opacity:0.2} to {opacity:1}}';
+    const port = document.createElement('div');
+    port.style.cssText = 'width:200px;height:40px;overflow:auto';
+    document.getElementById('exact-root').append(port);
+    const rows = Array.from({length:8}, (_, i) => i);
+    port.innerHTML = rows.map(i => '<div role="listitem" data-listitemkey="n:'+i+'"><div style="height:20px;animation:adopted-draw 60s linear both"'+(i===4?' data-exact-animation-trigger="none"':'')+'></div></div>').join('');
+    const original = [...port.children].map(w => w.firstElementChild);
+    original.forEach(el => { el.getAnimations()[0].currentTime = 500; });
+    const own = rt.scope(() => rt.adoptRow(port, () => list.vl(port, () => rows, i => i(), (wrapper, item) => {
+      rt.h(wrapper, 'div', 0, item() === 4 ? {'data-exact-animation-trigger':'none'} : {}, 0);
+    }, {est:20, pw:[200], ph:[40], animations:true})));
+    const mounted = [0,3,4].map(i => ({same:port.$list.mounted.find(m => m.key === 'n:'+i)?.wrapper.firstElementChild === original[i],
+      time:original[i].getAnimations()[0].currentTime, state:original[i].getAnimations()[0].playState}));
+    rt.settled(); await exact.lists.pending(); await exact.lists.settle();
+    const held = original[3].getAnimations()[0].currentTime;
+    rt.end(own); port.remove(); style.remove(); rt.settled();
+    return {mounted, held};
+  })()`);
+  expect(result).toEqual({mounted:[
+    {same:true,time:0,state:'paused'}, {same:true,time:0,state:'paused'}, {same:true,time:500,state:'running'},
+  ],held:0});
+}, 60_000);
+
 test('paging keeps unchanged keyed row measurements and defers new overscan', async () => {
   const result = await evaluate(`(async () => {
     const el = document.createElement('div');

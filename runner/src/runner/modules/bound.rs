@@ -406,7 +406,9 @@ impl<D: DataSource> Runner<D> {
             }
             let resources = &self.resources;
             let readers = self.extensions.readers.entry(key.clone()).or_default();
-            readers.retain(|i, _| resources.get(*i).is_some_and(|row| row.state.is_some()));
+            readers.retain(|i, _| {
+                (resources.get(*i)).is_some_and(|row| row.state.as_ref().is_some_and(|s| !s.asleep))
+            });
             let current: BTreeSet<String> = readers.values().cloned().collect();
             let told = self.extensions.groups.entry(key.clone()).or_default();
             let gone: Vec<String> = told.difference(&current).cloned().collect();
@@ -455,15 +457,19 @@ impl<D: DataSource> Runner<D> {
     /// Whether any resource reads `key`: its source's own reader, an answer
     /// whose data code read it, or one asked again that is reading it now.
     /// A fresh answer's topics replace the last one's before its module
-    /// request lands (`settlement.rs`), so that request is a reader too.
+    /// request lands (`settlement.rs`), so that request is a reader too. A
+    /// resource whose gate closed is idle and reads nothing; it keeps its
+    /// value, not its source (LLP 1161.002 D2).
     fn read_by_any(&self, key: &str) -> bool {
         let Some(row) = self.plan.modules.iter().find(|m| self.key(m) == key) else {
             return false;
         };
         let source = self.plan.sources[row.source.0 as usize].name;
         (0..self.resources.len()).any(|i| {
-            self.resource_row(i).source == source
-                || self.resources[i].watching.iter().any(|t| t == key)
+            let asleep = (self.resources[i].state.as_ref()).is_some_and(|s| s.asleep);
+            !asleep
+                && (self.resource_row(i).source == source
+                    || self.resources[i].watching.iter().any(|t| t == key))
         }) || self.pending.iter().any(|p| {
             (p.keepable.as_ref())
                 .and_then(|r| self.module_topic(&r.body))

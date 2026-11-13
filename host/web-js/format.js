@@ -14,6 +14,27 @@ export const wall = (ms, off) => {
   const w = Math.trunc(ms) + off * 60000;
   return w >= -62135596800000 && w <= 253402300799999 ? w : null;
 };
+/** A strict `YYYY-MM-DD` Gregorian date (years 0–9999), or null. */
+export const isoDate = s => {
+  if (s.length !== 10) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3], leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  return mo >= 1 && mo <= 12 && d >= 1 && d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1] ? [y, mo, d] : null;
+};
+/** A timestamp's shifted wall time, or a day key's midnight without a zone shift; the same offset and year bounds. */
+export function dateWall(input, off) {
+  if (typeof input !== "string") return wall(input, off);
+  if (wall(0, off) === null) return null;
+  const parts = isoDate(input);
+  if (!parts || parts[0] === 0) return null;
+  let [year, month, day] = parts;
+  year -= month <= 2 ? 1 : 0;
+  const era = Math.floor(year / 400), yoe = year - era * 400;
+  month = month > 2 ? month - 3 : month + 9;
+  const doy = Math.floor((153 * month + 2) / 5) + day - 1;
+  return (era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468) * 864e5;
+}
 /** `h:mm AM` of (epoch ms, UTC offset minutes east), U+0020 before the period. */
 export function x_formatTime(ms, off, style, loc) {
   if (loc) return other("formatTime", [ms, off, style], loc);
@@ -43,7 +64,7 @@ function date(w, style) {
 /** `Sep 26, 2026` ("medium"), `September 2026` ("month-year") or `2026-09-26` ("iso"). */
 export function x_formatDate(ms, off, style, loc) {
   if (loc) return other("formatDate", [ms, off, style], loc);
-  const w = wall(ms, off);
+  const w = dateWall(ms, off);
   return w === null ? "" : date(w, style);
 }
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

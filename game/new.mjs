@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
-import { capturedLockDrift, gameDefaults, gameShells, prepareGame } from './app/shells.mjs';
+import { capturedLockDrift, gameDefaults, gameShells, prepareGame, sdkFetch } from './app/shells.mjs';
 import { cargoEnvironment, lockedMetadata, pathFrom, patchLines } from '../scripts/app.mjs';
-import { PLATFORMS, authoredCrate, copiedBuildScripts, namePlatform, withoutPlatformKeys } from '../scripts/app-shells.mjs';
+import { PLATFORMS, SDK_CRATES, appCrateName, authoredCrate, copiedBuildScripts, namePlatform, withoutPlatformKeys } from '../scripts/app-shells.mjs';
 import { updateManifests } from './update-manifests.mjs';
 export { exact2Placeholders } from './update-manifests.mjs';
 import { APP_CRATES, NO_WORKSPACE } from '../scripts/cargo-check.mjs';
@@ -50,6 +50,21 @@ function withModel(destination, directory) {
       '/// The world every test here starts from, with art/ baked in memory (tests/model.rs).\nfn start(options: Options) -> Sim<SmallGame> {\n    exact_game::sim_with_art!(options).unwrap()\n}'],
   ]);
 }
+/** The line a new game's success text ends with when Cargo's cache lacks the SDK's crates; `exact new` moves it
+ * below what it prints after the game, so it is the last thing said. */
+export const UNCACHED_CRATES = "Cargo's cache lacks the game SDK's crates.";
+/** Cargo's words for a crate an offline cache lacks: an index never fetched has no match for the package, a cached
+ * index without the .crate stopped the download. */
+const MISSING_CRATE = /no matching package named|attempting to make an HTTP request|in the offline mode|--offline was specified|failed to download/;
+/** Whether a new game's Cargo graph error (`message`) is only a cache without the SDK's crates, so exact new can
+ * make the game and leave the fetch to a build. Both must say so: the error itself, and fetching the SDK lock
+ * offline (`fetch`, sdkFetch, as exact setup --check asks), since that wording is also a stale SDK lock's. No Cargo,
+ * a broken Cargo config (the game's own, which the SDK's fetch does not read) or anything else is not. */
+export function uncachedCrates(message, fetch) {
+  if (!/^game Cargo graph: /.test(message ?? '') || !MISSING_CRATE.test(message)) return false;
+  const cache = fetch();
+  return !cache.ok && MISSING_CRATE.test(cache.message ?? '');
+}
 export function createGame(destination, directory = import.meta.dir, options = {}) {
   const local = destination === '.' || /[\\/]/.test(destination ?? '');
   const name = local ? basename(resolve(destination)) : destination;
@@ -65,6 +80,31 @@ export function createGame(destination, directory = import.meta.dir, options = {
   if (collided) throw new Error(`${name}: its Rust type would collide with an exact_game export or a template item; choose another name, such as ${name}-game`);
   destination = local ? resolve(destination) : resolve(directory, 'games', name);
   if (existsSync(destination) && readdirSync(destination).length) throw new Error(`Game already exists: ${destination}`);
+  // A failure (Cargo cannot fetch the engine's crates offline, say) leaves
+  // nothing of ours behind, so exact new can run again: the directory itself
+  // when we made it, its entries when the author made it empty. Only the
+  // directory we started in is cleared (the same device and inode), and a
+  // cleanup that fails never hides the error.
+  const existed = existsSync(destination);
+  mkdirSync(destination, {recursive:true});
+  const started = statSync(destination);
+  try {
+    return writeGame(destination, directory, options, {name, local});
+  } catch (error) {
+    try {
+      const now = lstatSync(destination);
+      if (now.isDirectory() && now.dev === started.dev && now.ino === started.ino) {
+        if (existed) for (const entry of readdirSync(destination)) rmSync(resolve(destination, entry), {recursive:true, force:true});
+        else rmSync(destination, {recursive:true, force:true});
+      }
+    } catch {}
+    // A Cargo cache without the SDK's crates is not a failure (writeGame), so
+    // a Cargo graph error here is a resolution one: its hints still apply once
+    // exact new has run again.
+    throw error;
+  }
+}
+function writeGame(destination, directory, options, {name, local}) {
   cpSync(resolve(directory, 'new'), destination, {recursive:true});
   if (options.assets === true) withModel(destination, directory);
   destination = realpathSync(destination);
@@ -112,7 +152,16 @@ export function createGame(destination, directory = import.meta.dir, options = {
 
   // Resolve against this SDK now, before the first locked test or proof.
   // No captured lock is needed unless the author adds dependencies.
-  prepareGame(destination, gameDefaults(destination).game, directory);
+  // A new game's crates are the SDK lock's, so a Cargo cache that lacks them
+  // (a fresh machine, an agent's sandbox) does not stop it: the shells are
+  // written, a build service fetches its own, and a local build or test
+  // refuses with the fetch to run, as here.
+  let uncached = null;
+  try { prepareGame(destination, gameDefaults(destination).game, directory); }
+  catch (error) {
+    if (!uncachedCrates(error?.message, () => sdkFetch({offline:true, source:directory}))) throw error;
+    uncached = `${UNCACHED_CRATES} A build service fetches its own; to build or test here first, run:\n  cargo fetch --manifest-path ${quote(resolve(destination, '.shells/Cargo.toml'))}`;
+  }
 
   const argument = local ? quote(destination === process.cwd() ? '.' : destination) : name;
   const proof = quote(relative(process.cwd(), resolve(destination, 'proof.mjs')));
@@ -133,10 +182,10 @@ export function createGame(destination, directory = import.meta.dir, options = {
   bun exact.mjs windows --run build and launch on Windows
   bun exact.mjs prove         take the first development baseline; prove --repin --release before you ship it
   First publication runs seven legs. A warm continuous web leg is reused; Save and FreshGame
-  still compile their own wasm (the mode is compile-time). Hot-swap wasm is not reused.`;
+  still compile their own wasm (the mode is compile-time). Hot-swap wasm is not reused.${uncached ? `\n${uncached}` : ''}`;
   }
   return `Created ${local ? destination : `game/games/${name}`}\n  bun ${script('dev.mjs')} ${argument}\n  bun ${script('prove.mjs')} ${argument}
-  bun ${proof} web --screenshot-only`;
+  bun ${proof} web --screenshot-only${uncached ? `\n${uncached}` : ''}`;
 }
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -151,16 +200,15 @@ const ROOT = resolve(import.meta.dir, '..');
  * `update` rewrites their patches, toolchain and paths as before. */
 export function createApp(destination, options = {}) {
   const dir = resolve(destination ?? '');
-  const name = basename(options.update ? appHome(dir) : dir);
+  if (options.update && destination) return updateApp(dir, appCrateName(dir, basename(appHome(dir))), options);
+  const name = basename(dir);
   if (!destination || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name) || /-(web|apple|linux|gpu)$/.test(name)) {
     throw new Error('Usage: exact new <path> [--update | --snapback [--port <n>]] (the last part names the app: lowercase-hyphenated, no host suffix)');
   }
-  const taken = ['apple', 'linux', 'web'].map(host => `${name}-${host}`).filter(crate => SDK_CRATES.has(crate));
-  if (taken.length) throw new Error(`exact new ${destination}: the folder's name ${name} would make the crate ${taken[0]}, which is one of exact2's own; name the app directory something else, e.g. exact new ${resolve(dir, '..', `${name}-app`)}`);
-  if (options.update) return updateApp(dir, name, options);
   if (options.id !== undefined && !BUNDLE_ID.test(options.id)) throw new Error(`exact new --bundle-id ${options.id}: not a reverse-DNS id; write two or more dot-separated parts of letters, digits and hyphens, each starting with a letter, as com.yourcompany.${name.replaceAll('-', '')}`);
   if (options.title !== undefined && (!options.title.trim() || /[\x00-\x1f\x7f]/.test(options.title))) throw new Error('exact new --name: give the name people see, on one line, as --name "Field Log"');
   if (existsSync(dir) && readdirSync(dir).length) throw new Error(`${dir} already exists and is not empty`);
+  const crateName = appCrateName(dir, name, options.title ?? null);
   // Refused before anything is written: wiring is the last step, after the app and the backend's schema above it.
   if (options.snapback && !snapbackDevice) throw new Error(NO_SNAPBACK);
   const port = options.snapback ? snapbackPort(options.snapback.port) : null;
@@ -176,11 +224,11 @@ export function createApp(destination, options = {}) {
   let created;
   const existingBackend = options.snapback && existsSync(resolve(dir, '..', 'snapback/schema.q'));
   try {
-    for (const platform of options.with ?? []) if (!(platform in PLATFORMS)) throw new Error(`exact new --with ${platform}: the platforms are ios, mac, linux, android, windows`);
-    created = writeApp(dir, name, options);
+    checkPlatforms('exact new', options.with ?? []);
+    created = writeApp(dir, crateName, { ...options, title: options.title ?? titleOf(name) });
     for (const platform of options.with ?? []) namePlatform(dir, platform);
     if (!options.snapback) return created;
-    if (!existingBackend) snapbackStarter(dir, name, port, JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).app);
+    if (!existingBackend) snapbackStarter(dir, crateName, port, JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).app);
     else {
       const source = resolve(dir, 'app.ts');
       const ts = readFileSync(source, 'utf8');
@@ -200,10 +248,6 @@ export function createApp(destination, options = {}) {
     throw error;
   }
 }
-
-/** The crates an app's own depend on by path (`writeApp`, `linuxCrate`): a
- * folder named `exact` would write an `exact-apple` beside the SDK's. */
-const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
 
 const rosterRule = body => {
   const insert = /^[ \t]+insert[ \t]*<-[ \t]*([^\n]*)/m.exec(body);
@@ -450,7 +494,7 @@ function driverMount(dir, online = false) {
 function onlineStarter(dir, generated, port) {
   const source = resolve(dir, 'app.ts'), view = resolve(dir, 'app.contract');
   if (!existsSync(generated)) return false;
-  const name = basename(dir), manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+  const name = appCrateName(dir), manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
   const pristine = appSources(name, manifest.app.name, manifest.app.id);
   const normalized = readFileSync(source, 'utf8')
     .replace(/^const origin = ['"`][^'"`]+['"`];\n/m, '')
@@ -735,9 +779,7 @@ export function applyPattern(dir, pattern, { force = false } = {}) {
   if (!existsSync(manifestPath) || !existsSync(resolve(dir, 'app.contract'))) throw new Error(`pattern: ${dir} is not an app (no app.json and app.contract); run it in the directory exact new made`);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const id = manifest.app?.id ?? manifest.id, title = manifest.app?.name ?? manifest.name;
-  // The template's name is its crates', as `update` reads it: a renamed folder keeps it.
-  const name = ['web', 'apple', 'linux'].map(kind => resolve(dir, kind, 'Cargo.toml')).filter(existsSync)
-    .map(path => String(Bun.TOML.parse(readFileSync(path, 'utf8')).package?.name ?? '').match(/^(.+)-(?:web|apple|linux)$/)?.[1]).find(Boolean) ?? basename(dir);
+  const name = appCrateName(dir);
   // What exact new wrote, under the app's name or under the one its folder gave it.
   const templates = [appSources(name, title, id), appSources(name, titleOf(name), id)];
   const others = known.filter(p => p !== pattern).map(p => patternFiles(p, { id, title }));
@@ -1218,14 +1260,18 @@ function dropPlatform(dir, platform) {
   return removed.length ? `without ${platform} (removed ${removed.join(', ')})` : `without ${platform} (it shipped none already)`;
 }
 
-/** The manifest's paths into the checkout, rewritten after it moved: the schema, and a Snapback app's driver mount. */
+/** The manifest's paths into the checkout, rewritten after it moved: the schema, and a Snapback app's driver mount.
+ * Without the Snapback client the mount is left as it is, and the note returned says so. */
 function refreshManifestPaths(dir) {
   const manifestPath = resolve(dir, 'app.json');
-  if (!existsSync(manifestPath)) return;
+  if (!existsSync(manifestPath)) return null;
   const text = readFileSync(manifestPath, 'utf8');
   let next = text.replace(/("\$schema"\s*:\s*)"[^"]*"/, (_, head) => head + JSON.stringify(pathFrom(appHome(dir), resolve(ROOT, 'scripts/app.schema.json'))));
-  next = next.replace(/("snapback4"\s*:\s*)"[^"]*"/, (line, head) => JSON.parse(next).typescript?.sources?.snapback4 ? head + JSON.stringify(driverMount(dir, onlineMount(JSON.parse(next).typescript.sources.snapback4))) : line);
+  const mount = JSON.parse(next).typescript?.sources?.snapback4;
+  const driver = mount && resolve(ROOT, onlineMount(mount) ? 'snapback4/online' : 'snapback4/ts');
+  if (driver && existsSync(driver)) next = next.replace(/("snapback4"\s*:\s*)"[^"]*"/, (_, head) => head + JSON.stringify(driverMount(dir, onlineMount(mount))));
   if (next !== text) writeFileSync(manifestPath, next);
+  return driver && !existsSync(driver) ? `app.json's snapback4 mount left as it was: ${NO_SNAPBACK}` : null;
 }
 
 /** An older app may predate the generated test command. Preserve authored tests; otherwise start with a boot check
@@ -1238,11 +1284,19 @@ test "the app opens"
 `);
 }
 
+/** Throws, before anything is written, unless each of `--with`'s platforms is one a manifest can name. */
+function checkPlatforms(verb, platforms) {
+  for (const platform of platforms) {
+    if (platform in PLATFORMS) continue;
+    const tv = platform === 'tvos' ? '; an Apple TV build takes host.ios, which --with ios names' : '';
+    throw new Error(`${verb} --with ${platform}: the platforms are ios, mac, linux, android, windows${tv}`);
+  }
+}
+
 /** `--with` and `--without` on the manifest: what each wrote or removed, as one phrase each. */
 function platformEdits(dir, platforms, without, drop = withoutPlatformKeys) {
   const said = [];
   for (const platform of platforms) {
-    if (!(platform in PLATFORMS)) throw new Error(`update --with ${platform}: the platforms are ios, mac, linux, android, windows`);
     const wrote = namePlatform(dir, platform);
     said.push(wrote.length ? `with ${platform} (added ${wrote.join(', ')})` : `with ${platform} (named already)`);
   }
@@ -1279,6 +1333,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
     return `Updated ${dir}: exact.mjs${notes.length ? `, ${notes.join(', ')}` : ''}${drift ? `\n${drift}` : ''}`;
   }
   if (!existsSync(resolve(dir, 'app.contract'))) throw new Error(`${dir}: no app here to update (no app.contract)`);
+  checkPlatforms('update', platforms);
   // An app that authored no workspace (LLP 1153 D1): no Cargo file to rewrite; the platforms it ships are app.json's keys,
   // and the verb that builds one regenerates its workspace from them.
   if (!authoredApp(dir)) {
@@ -1287,9 +1342,9 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
     const edits = platformEdits(dir, platforms, without);
     const notes = updateNotes(dir, name);
     if (editorTasks(dir)) notes.push('.vscode/tasks.json');
-    refreshManifestPaths(dir);
+    const unmounted = refreshManifestPaths(dir);
     defaultTest(dir);
-    return `Updated ${dir}: exact.mjs${edits.length ? `, ${edits.join(', ')}` : ''}${notes.length ? `, ${notes.join(', ')}` : ''}`;
+    return `Updated ${dir}: exact.mjs${edits.length ? `, ${edits.join(', ')}` : ''}${notes.length ? `, ${notes.join(', ')}` : ''}${unmounted ? `\n${unmounted}` : ''}`;
   }
   if (!existsSync(resolve(dir, 'Cargo.toml'))) throw new Error(`${dir}: its crates name no workspace of their own (no Cargo.toml beside app.json). ${NO_WORKSPACE}`);
   // Before anything is written: a host crate update would add needs the root the copied-up workspace has.
@@ -1300,13 +1355,6 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
     const refused = adds && rootRefusal(resolve(dir, 'Cargo.toml'));
     if (refused) throw new Error(`update: ${refused}. ${NO_WORKSPACE}`);
   }
-  // The app's crates name it, not its folder: a renamed folder keeps `<name>-web`, `<name>-apple`
-  // (authoring bench: `exact.mjs ios` asked Cargo for `todo-apple` in a `todo/` holding `todo-list-*`).
-  name = ['web', 'apple', 'linux'].map(kind => resolve(dir, kind, 'Cargo.toml')).filter(existsSync)
-    .map(path => {
-      try { return String(Bun.TOML.parse(readFileSync(path, 'utf8')).package?.name ?? '').match(/^(.+)-(?:web|apple|linux)$/)?.[1]; }
-      catch { return undefined; } // Cargo reports an invalid authored manifest below.
-    }).find(Boolean) ?? name;
   writeFileSync(resolve(dir, 'rust-toolchain.toml'), readFileSync(resolve(ROOT, 'rust-toolchain.toml')));
   mkdirSync(resolve(dir, '.cargo'), { recursive: true });
   writeFileSync(resolve(dir, '.cargo/config.toml'), readFileSync(resolve(ROOT, '.cargo/config.toml')));
@@ -1356,7 +1404,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
   }
   const notes = updateNotes(dir, name);
   if (editorTasks(dir)) notes.push('.vscode/tasks.json');
-  refreshManifestPaths(dir);
+  const unmounted = refreshManifestPaths(dir);
   defaultTest(dir);
   // The Apple entry's plan and compatibility document come with its host.rs (`exact_plan()`, `exact_compat()`): an
   // Apple build links them (`exact_apple::baked`), and the constants an older entry declares read a file it no longer writes.
@@ -1380,7 +1428,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
   const crates = new Map(JSON.parse(metadata.stdout).packages.map(p => [p.name, dirname(p.manifest_path)]));
   crates.set('ibex2-sqlite', resolve(ROOT, 'vendor/ibex/crates/ibex2-sqlite'));
   const { changed, unresolved } = updateManifests(dir, crates, rootText);
-  const said = `Updated ${dir}: patches, toolchain, exact.mjs${addedLinux ? ', a linux/ host crate' : ''}${addedAndroid ? ', an android/ crate (bun exact.mjs android builds the APK)' : ''}${edits.length ? `, ${edits.join(', ')}` : ''}${without && ['linux', 'android'].includes(without) ? ', Cargo.lock' : ''}${notes.length ? `, ${notes.join(', ')}` : ''}${changed.length ? `, exact2 paths in ${changed.join(', ')}` : ''}${unresolved.length ? `\n<exact2> left unresolved in ${unresolved.join(', ')}: a path into exact2 is written \`<exact2>/\` and then forward slashes` : ''}`;
+  const said = `Updated ${dir}: patches, toolchain, exact.mjs${addedLinux ? ', a linux/ host crate' : ''}${addedAndroid ? ', an android/ crate (bun exact.mjs android builds the APK)' : ''}${edits.length ? `, ${edits.join(', ')}` : ''}${without && ['linux', 'android'].includes(without) ? ', Cargo.lock' : ''}${notes.length ? `, ${notes.join(', ')}` : ''}${changed.length ? `, exact2 paths in ${changed.join(', ')}` : ''}${unresolved.length ? `\n<exact2> left unresolved in ${unresolved.join(', ')}: a path into exact2 is written \`<exact2>/\` and then forward slashes` : ''}${unmounted ? `\n${unmounted}` : ''}`;
   // Whether the workspace loads: every member's manifest read, nothing resolved or fetched, so only the app's files can
   // fail it. One that does not load builds nothing, so the update failed, though its files are written.
   const loads = spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: dir, env: cargoEnvironment(), stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });

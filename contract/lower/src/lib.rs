@@ -23,6 +23,7 @@ mod alert_parts;
 pub mod anatomy;
 mod atoms;
 mod box_transform;
+mod bundled;
 mod buttons;
 mod cells;
 mod class;
@@ -536,6 +537,11 @@ fn lower_body(
     if theme::retained::stops_at_retention() {
         return Err(Vec::new());
     }
+    // A literal file outside `assets/` would build and not ship
+    // (expo/exact-build#4); only an app's compile knows its folders.
+    if asset_root.is_some() {
+        l.errors.extend(bundled::outside(&root.view));
+    }
     l.declare_decorations(file)?;
     l.declare_atoms(file)?;
     // Styles: rows only, literal only (the parser holds the second), by name.
@@ -553,11 +559,11 @@ fn lower_body(
             };
             match tags::attr_valued(name, &a.value) {
                 Some(tags::AttrTarget::Styles(_) | tags::AttrTarget::Flex | tags::AttrTarget::Shorthand) => {}
-                Some(tags::AttrTarget::Prop(p)) if p.styleable() => {} // LLP 1069.011 D12
+                Some(tags::AttrTarget::Prop(p)) if p.styleable() => {} // LLP 1069.011 D12, 1081 Q3
                 Some(_) => l.errors.push(LowerError {
                     id: "lower-style-attr",
                     message: format!(
-                        "`{}` cannot be in `style {}`: a style holds style rows (and `buttonStyle`) only — no `testId`, no handlers, no other props",
+                        "`{}` cannot be in `style {}`: a style holds style rows and styleable props (`backgroundMaterial`, `glassGroup`, `buttonStyle`) only — no `testId`, no handlers, no other props",
                         a.name, s.name
                     ),
                     span: a.span,

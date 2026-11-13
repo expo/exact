@@ -1,8 +1,8 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
-import { writeCrawlerFiles } from '../web/crawl.mjs';
-import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
+import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
+import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
-import { webCspFile, webHead } from '../../scripts/web-head.mjs';
+import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { fileIdentity, resourceIdentities } from '../apple/assets.mjs';
 import { launchModules } from '../../scripts/launch-modules.mjs';
 import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
@@ -29,7 +29,7 @@ import { transformSync, parseSync, Visitor } from 'rolldown/utils';
 import { copyGpuCache } from './gpu-cache.mjs';
 import { analyze } from './page-style.mjs';
 import { bundleHostModule, gateAgent, localImports, stageHostGlue } from './glue.mjs';
-import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, fresh, moduleGrants, webCompiler, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
+import { bakedRustSource, buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, fresh, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
 import { developmentStore } from '../../scripts/agent-launch.mjs';
 import { settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, withInterfaceStyle, withLook } from '../web/look.mjs';
@@ -82,6 +82,8 @@ if (production && (process.env.EXACT_UPDATE_TRUST ?? 'production') !== 'producti
 if (production) process.env.EXACT_UPDATE_TRUST = 'production';
 // `--check` (`exact.mjs contract build app.contract`): app.ts's type check alone, saying nothing else.
 const checkOnly = args.includes('--check');
+// The wrapper's --check compiles the plan to select artifacts, without building them or checking TypeScript.
+const prerequisitesOnly = args.includes('--prerequisites');
 // The source revision a development build's install pages name, read while
 // it builds: optional, so no git, no repository, or a git held past 5 s (a
 // held index lock) leaves it unknown rather than failing or hanging the build.
@@ -108,8 +110,8 @@ for (const note of manifestNotes) console.log(note);
 writeFileSync(resolve(out, 'manifest.json'), JSON.stringify(webManifest, null, 2) + '\n');
 // Rust data: the app's own module (`rust.module`), or a module generated
 // from the DataSource its web build bakes with (host/web-js/module.mjs).
-const bakes = existsSync(resolve(appDir, 'web/build.rs')) && /contract::bake\(\s*plan,/.test(readFileSync(resolve(appDir, 'web/build.rs'), 'utf8'));
-const rust = !!manifest.rust?.module || bakes;
+const rustSource = bakedRustSource(appDir);
+const rust = !!manifest.rust?.module || !!rustSource;
 // A TypeScript source (`app.ts`) runs in the page, bundled with it; beside a
 // Rust one (LLP 1027.002), the Rust module answers what it owns and the
 // TypeScript module the rest (ts-data.js, rust-data.js). A synthetic plan
@@ -194,7 +196,11 @@ const containerHatches = pageExports.exports.some(n => ['navigation', 'route', '
 // compiler's diagnostics, and the primary's surfaces stay unknown (null).
 const gpuLib = resolve(appDir, 'gpu/src/lib.rs');
 let gpuSurfaces = existsSync(gpuLib) ? null : [], declaredGpu = [];
-if (existsSync(gpuLib) && !checkOnly) {
+if (existsSync(gpuLib) && prerequisitesOnly) {
+  const { webGpuArtifacts } = await import('../../scripts/app.mjs');
+  webGpuArtifacts(resolveApp(app), null, { check: true });
+}
+if (existsSync(gpuLib) && !checkOnly && !prerequisitesOnly) {
   const { gpuModules, resolveApp, webGpuArtifacts, copyShaders, shaderWatchRoots } = await import('../../scripts/app.mjs');
   const target = resolveApp(app), cache = resolve(target.target, 'web-js-gpu', target.name);
   declaredGpu = gpuModules(target.manifest);
@@ -224,12 +230,18 @@ const compiler = webCompiler();
 const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', input, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : 'inherit', encoding: 'utf8', env: { ...process.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(',') } });
 if (cargo.status !== 0) { if (checkOnly) process.stderr.write(cargo.stderr ?? ''); process.exit(cargo.status ?? 1); }
 compiler.done();
-const runtime = ['rt.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'beat.js', 'regions.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
+const leaves = [['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
+  .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`)));
+if (!checkOnly || prerequisitesOnly) {
+  if (rust || leaves.length) webToolchainEnv(process.env);
+  if (prerequisitesOnly) process.exit(0);
+}
+const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'beat.js', 'regions.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
 for (const f of runtime) cpSync(resolve(here, f === 'timer-observations.js' ? '../web/' + f : f), resolve(gen, f));
 // The live table's runtime is the dev loop's build's alone.
 if (!devReload) writeFileSync(resolve(gen, 'modes.js'), withoutDev(readFileSync(resolve(here, 'modes.js'), 'utf8')));
 // Inspect mode's hooks in the runtime are the dev loop's build's alone (module.mjs `withInspectHooks`).
-if (devReload) writeFileSync(resolve(gen, 'rt.js'), withInspectHooks(readFileSync(resolve(here, 'rt.js'), 'utf8')));
+if (devReload) for (const f of inspectHooked) writeFileSync(resolve(gen, f), withInspectHooks(f, readFileSync(resolve(here, f), 'utf8')));
 // The arms sheet's host stamp (lower.js, LLP 1071.001 part B): a digest of the runtime array above as copied (the mode
 // and inspect transforms included), lower.js's own unstamped source among it; not the files copied after this.
 { const lower = readFileSync(resolve(here, 'lower.js'), 'utf8'); writeFileSync(resolve(gen, 'lower.js'), withRuntimeStamp(lower, runtime.map(f => ({ path: f, text: f === 'lower.js' ? lower : readFileSync(resolve(gen, f), 'utf8') })))); }
@@ -283,15 +295,25 @@ const wakelock = existsSync(resolve(gen, 'wakelock.flag'));
 const orientationlock = existsSync(resolve(gen, 'orientationlock.flag'));
 // A dialog, an alertdialog, a menu or a popover (prompt-glue.js, alert-message.js, menu-rows.js; LLP 1047.002 D1).
 const dialogs = existsSync(resolve(gen, 'dialogs.flag'));
-// App generation may create files imported by app.ts. Run it before reading
-// the declaration, as the wasm build does.
+// App generation may create files imported by app.ts. A mixed app's composer
+// also owns the Rust source roster, so take its declarations from that bake.
 const webScript = resolve(appDir, 'web/build.rs');
-if (ts && existsSync(webScript) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(webScript, 'utf8'))) {
+const composed = mixed && rustSource?.call === 'exact_js_bake::build_mixed_with';
+if (ts && existsSync(webScript) && (composed || !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(webScript, 'utf8')))) {
   // With what its bake watches named, as every baking build is (`bakeWatchEnv`): unset, a check reruns it every time.
   // The workspace's lock is checked first, as every build's is, and `--locked` keeps the check from rewriting it (LLP 1153 D2.1).
   resolveApp(appDir).rust();
-  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', resolve(appDir, 'web/Cargo.toml')], { cwd: root, stdio: 'inherit', env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }) } });
+  const crate = resolve(appDir, 'web/Cargo.toml');
+  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', crate, '--message-format=json-render-diagnostics'], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }) } });
+  const messages = (r.stdout ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  for (const message of messages) if (message.reason === 'compiler-message' && message.message.rendered) process.stderr.write(message.message.rendered);
   if (r.status !== 0) { console.error(`${app}: its web build script failed`); process.exit(1); }
+  if (composed) {
+    const owner = messages.find(m => m.reason === 'compiler-artifact' && resolve(m.manifest_path) === crate)?.package_id;
+    const baked = messages.find(m => m.reason === 'build-script-executed' && m.package_id === owner)?.out_dir;
+    if (!baked) throw new Error(`${app}: Cargo did not report its mixed bake output`);
+    cpSync(resolve(baked, 'app.contract.d.ts'), resolve(gen, 'app.contract.d.ts'));
+  }
 }
 // `app.ts` is captured and type-checked as the native bake does it: the
 // same configuration and check (js/bake/src/typescript.mjs) over the same
@@ -307,7 +329,8 @@ if (ts && existsSync(webScript) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build
 // The check's errors, then its warnings: what `contract build` and a drive's summary read, warnings after refusals.
 const sayWarnings = (warnings) => { for (const warning of warnings ?? []) console.warn(warning); };
 const captured = ts ? await typecheck(!opt('--data')).catch((error) => {
-  console.error(`${error.message ?? error}\nerror: ${app}: app.ts failed the type check every host's build runs`);
+  console.error(error.code === 'backend-selection' ? `error [backend-selection]: ${error.message}`
+    : `${error.message ?? error}\nerror: ${app}: app.ts failed the type check every host's build runs`);
   sayWarnings(error.warnings);
   process.exit(1);
 }) : null;
@@ -372,7 +395,7 @@ async function typecheck(checking) {
   const optional = "import type { Overlay } from './app.contract.d.ts';\ntype Optional<K extends string> = K extends keyof typeof app ? (typeof app)[K] : undefined;\nexport const overlay: Overlay | undefined = (app as { overlay?: unknown }).overlay as Optional<'overlay'>;\nexport const tools = (app as { tools?: unknown }).tools as Optional<'tools'>;\n";
   // The app's id is app.json's; app.ts need not name it, and one it names is checked against it below.
   const id = (await import('../../scripts/app.mjs')).readManifest(appDir, app).app.id;
-  writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from './app';\nimport type { Answer } from './app.contract.d.ts';\nexport const appId: string = (app as unknown as { appId?: string }).appId ?? ${JSON.stringify(id)};\nexport const grants: string = app.grants;\nexport const answer: Answer = app.answer;\n` + optional
+  writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from './app';\nimport type { TypeScriptAnswer } from './app.contract.d.ts';\nexport const appId: string = (app as unknown as { appId?: string }).appId ?? ${JSON.stringify(id)};\nexport const grants: string = app.grants;\nexport const answer: TypeScriptAnswer = app.answer;\n` + optional
     + "export const draw: ((surface: string, args: any, ctx: any, frame: any) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
   writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({ app: realpathSync(appDir), mounts, target: 'web' }));
   writeFileSync(resolve(stage,'__exact_backend_source.json'), JSON.stringify(readFileSync(resolve(stage,'app.ts'),'utf8')));
@@ -480,6 +503,9 @@ if (rust) {
   // The module binds with the plan's declarations, not the bake's answers.
   cpSync(resolve(gen, 'app.bind.plan'), resolve(out, 'app.bind.plan'));
 }
+// The granted secrets: a launch whose store holds one passes over a store reader's build-time answer (store-reader.js).
+// A page whose app grants none ships none of it.
+const secretNames = [...new Set([...tsGrantSet.entries, ...rustGrantSet.entries].filter(([, , grant]) => grant?.[0] === 'secret-keep').map(([, , grant]) => grant[1]))];
 writeFileSync(resolve(gen, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(tsGrantSet)}),rustGrantSet=createGrantSet(${JSON.stringify(rustGrantSet)});\n`);
 // The app's launch modules that have a web service.
 const launchWeb = launchModules(appDir, manifest).filter(m => m.web);
@@ -498,12 +524,15 @@ writeFileSync(resolve(gen, 'main.js'), [
   // A prompt's Return, a grouped alert's message box and a menu row's popover (host/web): glue a plan with a dialog, an
   // alert, a menu or a popover needs on the page; until LLP 1047.002 commands.js carried them for every page.
   ...(dialogs ? ["import './prompt-glue.js'; import './alert-message.js'; import './menu-rows.js'; globalThis.exact?.menuRows?.();"] : []),
+  // Popovers placed as they open (navigation.js `placePopovers`): the plan's, and any a page module draws in the root.
+  ...(dialogs || pageModules ? ["import { placePopovers } from './navigation.js'; placePopovers();"] : []),
   // What this entry names from the runtime is what the bundle keeps (LLP 1047.002 D4). A production page names what
   // its own lines below use and what production glue reads from `globalThis.exact` (`journal`, `clock`: arrange.js;
   // `views`: media-glue.js; `viewId`: navigation.js; `After`: motion.js); the agent adapter, inspect and the dev
   // loop read the rest, so a development page names them too.
-  `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources, agentMode${production ? '' : ', advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
+  `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources${production ? '' : ', agentMode, advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
   `data.keepSurfaceAnswers = ${!tsGrantSet.keepsNoAnswers && !rustGrantSet.keepsNoAnswers};`,
+  ...(secretNames.length ? [`import { install as secrets } from './store-reader.js'; secrets(${JSON.stringify(secretNames)});`] : []),
   ...(production ? [] : ["import { develop } from './perf.js';"]),
   // A data module's answers, watched from before the app asks (seam.js).
   ...(production || !asks ? [] : ["import { seam } from './perf.js';", 'seam();']),
@@ -550,8 +579,10 @@ writeFileSync(resolve(gen, 'main.js'), [
   "const fonts = faces.length ? Promise.race([Promise.all(faces.map(f => f.load().catch(() => {}))), new Promise(r => setTimeout(r, 100))]) : null;",
   "let booted; if (fonts) (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });",
   // What armed itself at module load (sounds' output, a native page module's connection) reads `clock.agent` in a
-  // callback that a font wait lets run before the first render, where `mount` sets it: set it now.
-  "if (fonts) clock.agent = agentMode();",
+  // callback that a font wait lets run before the first render, where `mount` sets it: set it now. A production page
+  // never enters agent mode (LLP 1069.007 D2): its entry leaves `clock.agent` false here and below, and holds no early
+  // animation.
+  ...(production ? [] : ["if (fonts) clock.agent = agentMode();"]),
   // A rendered page's sheet holds only what its document can match (LLP 1048.007 D4): the whole sheet comes first,
   // then the page's goes, before the first render (one that fails to load leaves the page's, and the render goes on).
   "const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
@@ -564,13 +595,13 @@ writeFileSync(resolve(gen, 'main.js'), [
   // the first render waits for the stream's module, which no other page loads before it needs storage.
   ...(ts && !production ? ["const seeded = agentMode() && !globalThis.__exactRender && import('./storage-environment.js').then(env => { const seed = env.agentSeed(); if (seed !== null) answering.entropy = Object.assign(env.agentStream(seed, 'typescript'), { seed }); });"] : ['const seeded = null;']),
   "const waits = [fonts, sheet, answers, seeded].filter(Boolean);",
-  "if ((sheet || answers || seeded) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; }); clock.agent = agentMode(); }",
+  `if ((sheet || answers || seeded) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });${production ? '' : ' clock.agent = agentMode();'} }`,
   "const go = f => waits.length ? Promise.all(waits).then(f) : f();",
   // Under the agent, an animation the first renders start (an indeterminate progress's turn) is held at the clock it
   // began at after each commit, before a frame shows it, until agent.js, which loads after the first render, takes it
   // (its `register`): never left on the browser's clock, nor turned on the compositor first (LLP 1069.001: a spinner
   // follows the agent's clock), as the wasm host holds each commit's at once.
-  "if (agentMode()) { const early = (globalThis.exact ??= {}).early = new WeakMap(); After.push(globalThis.exact.holdEarly = () => { for (const a of document.getAnimations()) if (!early.has(a) && a.playState === 'running' && (!a.timeline || a.timeline instanceof DocumentTimeline)) { early.set(a, clock.now); a.pause(); a.currentTime = 0; } }); }",
+  ...(production ? [] : ["if (agentMode()) { const early = (globalThis.exact ??= {}).early = new WeakMap(); After.push(globalThis.exact.holdEarly = () => { for (const a of document.getAnimations()) if (!early.has(a) && a.playState === 'running' && (!a.timeline || a.timeline instanceof DocumentTimeline)) { early.set(a, clock.now); a.pause(); a.currentTime = 0; } }); }"]),
   ...(rust ? [
     // Rust data: loaded after first pixel, asked synchronously once ready;
     // a plan with a resource that has no compiled value waits for it.
@@ -590,7 +621,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js']) cpSync(resolve(here, f), resolve(gen, f));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js']) cpSync(resolve(here, f), resolve(gen, f));
 writeFileSync(resolve(gen, 'modules.js'), localImports(readFileSync(resolve(here, 'modules.js'), 'utf8')));
 // The web host's own pieces the runtime loads (glue.mjs).
 stageHostGlue(root, gen);
@@ -656,7 +687,7 @@ writeFileSync(resolve(gen, 'grant-admission.js'), admitsNothing ? emptyGrantAdmi
 const admission = readFileSync(resolve(here, 'admission.js'), 'utf8');
 const stubbed = [
   ["import { faultMessage, takeFault } from '../web/faults.js';", "const takeFault = () => false, faultMessage = () => '';"],
-  ["import { redirectFor, reachRefusal } from '../web/address-space.js';", 'const redirectFor = (origin, redirect) => redirect, reachRefusal = () => null;'],
+  ["import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';", "const redirectFor = (origin, redirect) => redirect, reachRefusal = () => null, UNATTRIBUTED = 'unattributed';"],
 ].reduce((text, [line, stub]) => {
   if (!admission.includes(line)) throw new Error(`host/web-js/admission.js: build.mjs replaces a line it no longer has: ${line}`);
   return admitsNothing ? text.replace(line, stub) : text;
@@ -668,11 +699,12 @@ writeFileSync(resolve(gen, 'admission.js'), localImports(stubbed));
 // never linked. The realm it binds (the clock, the timers, the refused globals) stays with the module.
 if (fetchRefused) writeFileSync(resolve(gen, 'ts-fetch-refused.js'), [
   '// Generated: `fetch` for sources with no network grant (LLP 1047.002 D3): the app\'s own assets, else the refusal by name.',
-  "import { fetchWith } from './admission.js'; import { ordinary } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
-  'export const fetch = (input, init) => ordinary(() => fetchWith(tsGrantSet, input, init));', ''].join('\n'));
+  "import { fetchWith } from './admission.js'; import { ordinary, responseFor } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
+  'export const fetch = (input, init) => ordinary(() => fetchWith(tsGrantSet, input, init)).then(responseFor);', ''].join('\n'));
 cpSync(resolve(here, 'ts-fetch.js'), resolve(gen, 'ts-fetch.js'));
 cpSync(resolve(here, 'ts-body-from.js'), resolve(gen, 'ts-body-from.js'));
 cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
+cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
 cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
 cpSync(resolve(here, 'files.js'), resolve(gen, 'files.js'));
 cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
@@ -684,14 +716,15 @@ cpSync(resolve(here, 'midi.js'), resolve(gen, 'midi.js'));
 // The server bundle a JavaScript render runs (render.mjs), one script per VM context.
 writeFileSync(resolve(gen, 'main-server.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
-  `import app${rust ? ', { sources }' : ''} from './app.js';`,
+  `import app${rust || declared ? `, { ${[rust && 'sources', declared && 'prepareSources'].filter(Boolean).join(', ')} }` : ''} from './app.js';`,
   ...(soundTable ? [`import { install as sounds } from './sounds.js'; sounds(${soundTable});`] : []),
-  "import { data, clock, inflight, Resources, Mutations, routeAt, Head, canSetStatus, resolvedLanguage } from './rt.js'; import { answersAtWork, looseOut } from './held.js';",
+  "import { data, clock, inflight, Resources, Mutations, routeAt, Head, canSetStatus, resolvedLanguage, res, commit, refused } from './rt.js'; import { answersAtWork, looseOut } from './held.js';",
   "import { types, sourceTypes, pages, viewportMedia, activation, markdownPaths } from './names.js';",
+  "import { segmentOf } from './router.js';",
   ...(existsSync(resolve(gen, 'markdown.flag')) ? ["import { compileReaders } from './markdown.js';", 'globalThis.__markdown = () => compileReaders(markdownPaths, planResources.map(g => g.r));'] : []),
   "import { viewportFacts } from './facts.js';",
   "import { answers } from './checkpoint.js';",
-  "import { markBars } from './navigation.js';",
+  "import { markBars, routeTitle } from './navigation.js';",
   "import { markRoutes, markDocument } from './document.js';",
   ...(ts ? ["import { install as ts } from './ts-data.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
   ...(rust ? ["import { install } from './rust-data.js';"] : []),
@@ -705,10 +738,33 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   // Two steps, so a server can send the page's head between them
   // (render.mjs): the app starts and names its route, then settles.
   'let t0, route, planResources;',
-  'globalThis.__start = async () => {',
-  '  t0 = performance.now();',
+  'const prepare = async () => {',
   ...(ts ? [`  ts(data, ${mixed});`] : []),
   ...(rust ? ['  await install(data, sources, async p => __files(p));'] : []),
+  ...(declared ? ['  prepareSources();'] : []),
+  '};',
+  // Enumeration asks only its source, through the resource executor, with no app boot (LLP 1048.000 D2).
+  // Its answer is the route's locations, each value a path segment as `path(…)` makes it.
+  'globalThis.__pages = async (pattern, source, args, deadline) => {',
+  '  const end = performance.now() + deadline;',
+  '  await prepare();',
+  // A parse that immediately asks again must meet the bound on every turn (host/render/src/pages.rs).
+  '  const parse = data.parse;',
+  '  if (parse) data.parse = (...args) => { if (performance.now() >= end) throw new Error("it didn\'t answer before the deadline"); return parse(...args); };',
+  '  let listed;',
+  '  if (commit(() => { listed = res("pages", source, () => args, undefined, undefined, "[s", []); listed(); }, "pages") === false) throw refused();',
+  '  const r = listed.r;',
+  '  while (r.settled === undefined && !r.failed) {',
+  '    if (performance.now() >= end) throw new Error("it didn\'t answer before the deadline");',
+  '    if (r.ticket?.refused || r.ticket?.call?.refused || r.ticket?.ctl?.refused) throw new Error(String(r.ticket.refused ?? r.ticket.call?.refused ?? r.ticket.ctl?.refused));',
+  '    await new Promise(resolve => setTimeout(resolve, 1));',
+  '  }',
+  '  if (r.failed) throw new Error(r.error);',
+  "  return r.value.map(value => pattern.split('/').map(s => s[0] === ':' ? segmentOf(value) : s).join('/'));",
+  '};',
+  'globalThis.__start = async () => {',
+  '  t0 = performance.now();',
+  '  await prepare();',
   // Types and Markdown paths index the declared resources. Resources holds list members instead of their aggregate.
   '  planResources = app()[2];',
   '  route = routeAt(location.pathname + location.search);',
@@ -731,17 +787,17 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   '  do await new Promise(r => setTimeout(r, 1)); while (outstanding() && performance.now() < end);',
   '  markBars(document.getElementById("exact-root")); // the bars the glue marks, so their symbols are the size they will be',
   '  markRoutes(document.getElementById("exact-root")); markDocument(); // a hidden route\'s page scroller is off the page',
-  '  return { root: document.rootHTML(), title: Head.headTitle, description: Head.headDescription, image: Head.headImage, canonical: Head.headCanonical, robots: Head.headRobots,',
+  '  return { root: document.rootHTML(), title: Head.headTitle ?? routeTitle(document.getElementById("exact-root")), description: Head.headDescription, image: Head.headImage, canonical: Head.headCanonical, robots: Head.headRobots,',
   // The manifest's origin, against which a crawler's URLs are made absolute (page.rs `page_head`).
-  `    origin: ${JSON.stringify(manifest.app?.origin ?? null)}, status: Head.headStatus ?? null, time: clock.now, answers: answers(planResources, types[2], sourceTypes),`,
+  `    origin: ${JSON.stringify(manifest.app?.origin ?? null)}, status: Head.headStatus ?? null, time: clock.now, ...answers(planResources, types[2], sourceTypes),`,
   // Each resource whose source failed, with its message: the server's log names it (render.mjs), as the page cannot.
   '    failed: Resources.filter(r => r.failed).map(r => `${r.name}: ${r.error}`),',
   // Each pending resource refused storage, by its request (admission.js) or call (ts-data.js), for the log.
   '    refused: Resources.filter(r => r.pending() && (r.ticket?.refused || (r.ticket?.call ?? r.ticket?.ctl)?.refused)).map(r => [r.name, r.ticket.refused ?? (r.ticket.call ?? r.ticket.ctl).refused]),',
-  // `open`: answered resources the client asks again: an open stream, a watch, or a source refused storage in the render;
   // `continuing`: work that outlives the render, whatever it waited for (a page with no status does not wait for an
-  // answered source's I/O): the client asks every answer again (render.mjs `revalidate`).
-  '    pending: Resources.filter(r => r.pending()).map(r => r.name), open: [...new Set(Resources.filter(r => !r.pending() && (r.ticket || data.watchedInRender?.has(r.name) || data.refusedInRender?.has(r.name))).map(r => r.name))], outstanding: outstanding(), continuing: outstanding() || unfinished(), scrollDocument: document.documentElement.hasAttribute("data-scrolldocument"), render: performance.now() - t0,',
+  // answered source's I/O): the client asks every answer again (render.mjs `revalidate`). The answers the client asks
+  // again one at a time are in `answers`' `open` (checkpoint.js).
+  '    pending: Resources.filter(r => r.pending()).map(r => r.name), outstanding: outstanding(), continuing: outstanding() || unfinished(), scrollDocument: document.documentElement.hasAttribute("data-scrolldocument"), render: performance.now() - t0,',
   // What an inferred activation reads (LLP 1048.007 D1): what is still due, the sources read, the viewport's comparisons as the render saw them.
   '    due: clock.timers.length > 0 || Mutations.some(m => m.due < Infinity || m.next < Infinity), activation, zoned: !!globalThis.__exactZone,',
   // Only a TypeScript source is held to no clock and no Math.random (ts-fetch.js): a Rust module's page is never kept.
@@ -790,7 +846,7 @@ const scopedModule = (code, id) => {
   // string, which throws as on Hermes (`eval`, which no import may bind, is imported under a fresh name below).
   const bound = ['fetch', 'Date', 'Math', 'Intl', 'setTimeout', 'setInterval', 'requestAnimationFrame', 'requestIdleCallback',
     'clearTimeout', 'clearInterval', 'cancelAnimationFrame', 'cancelIdleCallback', 'performance', 'scheduler', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'crypto', 'AbortSignal',
-    'Function'];
+    'Function', 'Promise', 'queueMicrotask', 'Response'];
   // The DOM and Node's globals are absent, as on Hermes (js/bake/src/typescript.mjs `packageRefusals`).
   const absent = ['window', 'self', 'frames', 'parent', 'top', 'opener', 'document', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage',
     'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'process', 'Buffer', 'global'];
@@ -916,6 +972,7 @@ writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(analyze(base + css
 // The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
 const cspFile = webCspFile(manifest);
 if (cspFile) writeFileSync(resolve(gen, 'csp.json'), cspFile);
+if (manifest.audio_session) cpSync(resolve(root, 'host/web/audio-session.js'), resolve(out, 'audio-session.js'));
 // app.json's `host.web.head` goes after the sheet, where no search for the shell's places (its sheet, preloads and
 // title) can find a tag in an entry's text; every page composed over the shell keeps it (LLP 1048.000 D3).
 writeFileSync(resolve(out, 'index.html'), `<!doctype html>
@@ -927,7 +984,7 @@ writeFileSync(resolve(out, 'index.html'), `<!doctype html>
 ${colorSchemeMeta(interfaceStyle(manifest))}${icon}
 ${preloads}<style>${base}${css}</style>
 ${webHead(manifest)}<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
-${args.includes('--inline') ? `<script type="module">${readFileSync(resolve(out, 'app.js'), 'utf8').replaceAll('</script', '<\\/script')}</script>` : '<script type="module" src="./app.js"></script>'}
+${webAudioSession(manifest)}${args.includes('--inline') ? `<script type="module">${readFileSync(resolve(out, 'app.js'), 'utf8').replaceAll('</script', '<\\/script')}</script>` : '<script type="module" src="./app.js"></script>'}
 `);
 if (production && !opt('--plan')) {
   // No bake, so no envelope to link: the web manifest written above, as a bake's page links it.
@@ -967,8 +1024,7 @@ if (auth) {
 // motion engine (host/web-js/motion), the Markdown editor's rules
 // (exact-markdown-editor) and the exclusions walker (exact-textflow's
 // `textflow-web`), each beside its chunk.
-await Promise.all([['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
-  .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`))).map(async ([, build, name]) => cpSync(await build(), resolve(out, name))));
+await Promise.all(leaves.map(async ([, build, name]) => cpSync(await build(), resolve(out, name))));
 // The app's GPU module (LLP 1009 D2), built here as the wasm target's build
 // makes it, with the web host's glue: a loaded capability.
 // Built again only when something a module was built from changed (Cargo's
@@ -996,7 +1052,7 @@ async function copyLazyModules(roots) {
     const from = resolve(root, source), code = name.endsWith('.js') || name.endsWith('.mjs') ? readFileSync(from, 'utf8') : null;
     mkdirSync(dirname(resolve(out, name)), { recursive: true });
     // The adapters' own storage-environment.js names the app's development store, as the page's chunk does (above).
-    const scoped = code == null || from.startsWith(gen + '/') ? code
+    const scoped = code == null || within(from, gen) ? code
       : production ? gateAgent(code, name) : developmentStore(code, realpathSync(appDir));
     if (scoped !== code) writeFileSync(resolve(out, name), scoped);
     else cpSync(from, resolve(out, name));
@@ -1012,7 +1068,23 @@ async function copyLazyModules(roots) {
 if (existsSync(gpuLib)) {
   await copyLazyModules(['gpu-glue.js']);
 }
-if (pageModules) cpSync(moduleDirectory(appDir, 'web'), resolve(out, 'modules'), { recursive: true });
+if (pageModules) {
+  const modules = resolve(out, 'modules');
+  cpSync(moduleDirectory(appDir, 'web'), modules, { recursive: true });
+  // The artifact may import helpers or load data at stable URLs. Hash the copied tree the page loads.
+  if (devReload) {
+    const files = [];
+    const visit = dir => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = resolve(dir, entry.name);
+        if (entry.isDirectory()) visit(file);
+        else files.push([relative(modules, file).split(sep).join('/'), createHash('sha256').update(readFileSync(file)).digest('hex')]);
+      }
+    };
+    visit(modules);
+    devLogic.push(['native', createHash('sha256').update(JSON.stringify(files.sort(([a], [b]) => a.localeCompare(b)))).digest('hex')]);
+  }
+}
 // Launch modules' web services, which marks.js imports after startup.
 for (const m of launchWeb) cpSync(m.web, resolve(out, 'launch', m.name, 'service.js'));
 copyStaticTreeIfPresent(resolve(appDir, 'assets'), resolve(out, 'assets'));
@@ -1053,7 +1125,7 @@ if (!production || !opt('--plan')) {
   // whatever the shell's EXACT_UPDATE_TRUST; with no bake receipt its reach is unknown.
   const [source, changes] = await revision ?? [null, null];
   const id = createHash('sha256').update(readFileSync(resolve(out, 'app.plan'))).update(readFileSync(resolve(out, 'app.js'))).digest('hex');
-  writeInstallPages(out, readManifest(appDir, app), { id, source, dirty: changes === null ? null : !!changes, builtAt: new Date().toISOString(),
+  writeInstallPages(out, readManifest(appDir, app), { id, source, dirty: changes === null ? null : !!changes, builtAt: production ? null : new Date().toISOString(),
     mode: production ? 'Release build' : 'Development build' });
 }
 // The type check, which ran while the page bundled: its diagnostics are the
@@ -1104,9 +1176,10 @@ if (pages.length && how === 'rust') {
     { cwd: renderApp.workspace, encoding: 'utf8', maxBuffer: 256 << 20, env: { ...process.env, CARGO_TARGET_DIR: renderApp.target, EXACT_UPDATE_TRUST: 'development' } });
   if (r.status !== 0) { console.error(r.stderr); process.exit(1); }
   const docs = r.stdout.split('\n').filter(Boolean).map(l => JSON.parse(l));
-  for (const doc of docs) {
-    if (doc.error) { console.error(`${bin} ${doc.location}: ${doc.error}`); process.exit(1); }
-    const file = doc.notfound ? '404.html' : `${decodeURIComponent(doc.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
+  for (const doc of docs) if (doc.error) { console.error(`${bin} ${doc.location}: ${doc.error}`); process.exit(1); }
+  const files = buildPageFiles(out, docs, routes);
+  for (const [i, doc] of docs.entries()) {
+    const file = files[i];
     mkdirSync(dirname(resolve(out, file)), { recursive: true });
     writeFileSync(resolve(out, file), doc.page);
   }

@@ -44,6 +44,9 @@ pub struct Oracle {
     pub prerendered: bool,
     /// The fixed date and zone supplied before boot.
     pub launch: exact_runner::time::Launch,
+    /// The app's grant lines, which admit a native module's calls; none
+    /// unless a test sets them.
+    pub grants: String,
 }
 
 impl Oracle {
@@ -69,6 +72,7 @@ impl Oracle {
             stored: Rc::default(),
             prerendered: false,
             launch: Default::default(),
+            grants: String::new(),
         }
     }
 
@@ -134,6 +138,7 @@ impl Oracle {
             stored: self.stored.clone(),
             prerendered: self.prerendered,
             launch: self.launch.clone(),
+            grants: self.grants.clone(),
         }
     }
 
@@ -168,6 +173,15 @@ impl Oracle {
             }
             out.push(' ');
             out.push_str(&text_value(&self.plan, c.answer.0, &c.answer.1));
+            out.push('\n');
+        }
+        // The native modules' names, which the runner answers from the
+        // module's substitute and never asks of this source.
+        for m in &self.plan.modules {
+            out.push_str("module ");
+            out.push_str(&crate::observe::quote(
+                self.plan.str(self.plan.sources[m.source.0 as usize].name),
+            ));
             out.push('\n');
         }
         for (name, t, v) in self.facts.borrow().iter() {
@@ -287,6 +301,10 @@ fn generate(plan: &Plan, ty: TypesId, rng: &mut Rng, depth: u32) -> Value {
 }
 
 impl DataSource for Oracle {
+    fn grants(&self) -> &str {
+        &self.grants
+    }
+
     fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
         let Some((_, params, result)) = self.signatures.iter().find(|(n, _, _)| n == source) else {
             return Err(DataError::UnknownSource(source.into()));

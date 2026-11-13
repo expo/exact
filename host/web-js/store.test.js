@@ -143,3 +143,77 @@ test("a render's source facade reads no secret and refuses writes before calling
     if (saved) Object.defineProperty(globalThis, '__exactRender', saved); else delete globalThis.__exactRender;
   }
 });
+
+// The Rust parser's normalized `secret.keep token user-presence optional` and `secret.keep key user-presence`.
+const presence = { entries: [[1, "secret.keep token user-presence optional", ["secret-keep", "token"], null], [2, "secret.keep key user-presence", ["secret-keep", "key"], null]], error: null, keepsNoAnswers: false, seal: "b130c25d0bbbe8c6", version: 1 };
+
+test("every write to a name that must be locked is refused before either backing store changes (LLP 1133.010 D15)", async () => {
+  const backing = Object.assign(new Map([['key', 'older']]), { exclusive: (_name, work) => work() }), puts = [];
+  const keys = () => Promise.resolve({ put: (handle, pair) => { puts.push([handle, pair]); }, get: () => null });
+  const store = createSecretFacade(backing, presence, keys);
+  const pair = { privateKey: {}, publicKey: {} }, refused = { name: 'NotSupportedError' };
+  expect(() => store.set('key', 's')).toThrow(expect.objectContaining(refused));
+  await expect(store.exclusive('key', () => 'ran')).rejects.toMatchObject(refused);
+  await expect(store.keepKey('key', pair)).rejects.toMatchObject(refused);
+  await expect(store.protect('key')).rejects.toMatchObject(refused);
+  expect([[...backing], puts]).toEqual([[['key', 'older']], []]);
+  // An `optional` name stays plain: each write goes through.
+  store.set('token', 'open');
+  expect(await store.exclusive('token', () => 'ran')).toBe('ran');
+  await store.keepKey('token', pair);
+  expect(backing.get('token')).toMatch(/^exact\.key:/);
+  expect(puts).toEqual([[backing.get('token'), pair]]);
+});
+
+test("a kept key's name holds its new handle only once the pair is kept, and the newest write of the name wins", async () => {
+  const granted = { version: 1, entries: [[1, "secret.keep token", ["secret-keep", "token"], null]], error: null, seal: "b22a759eedfe6bc2" };
+  const backing = new Map(), kept = new Map(), writes = [];
+  let opening = null;
+  // Each put waits until the test settles it: `writes.at(i).ok()` or `.fail(error)`.
+  const service = {
+    put: (handle, pair) => new Promise((resolve, reject) => writes.push({ ok: () => { kept.set(handle, pair); resolve(); }, fail: reject })),
+    get: handle => kept.get(handle) ?? null,
+  };
+  const store = createSecretFacade(backing, granted, () => opening ?? Promise.resolve(service));
+  const settle = () => new Promise(r => setTimeout(r, 0));
+  const first = { privateKey: {}, publicKey: {} }, second = { privateKey: {}, publicKey: {} };
+
+  const keeping = store.keepKey('token', first);
+  await settle();
+  expect(backing.has('token')).toBe(false);
+  writes.at(-1).ok();
+  await keeping;
+  const held = backing.get('token');
+  expect(await store.key('token')).toBe(first);
+
+  // A refused write, and a key service that does not open, leave the key the name held.
+  const quota = Object.assign(new Error('quota'), { name: 'QuotaExceededError' });
+  const refused = store.keepKey('token', second);
+  await settle();
+  writes.at(-1).fail(quota);
+  await expect(refused).rejects.toBe(quota);
+  opening = Promise.reject(new Error('the database did not open'));
+  await expect(store.keepKey('token', second)).rejects.toThrow('the database did not open');
+  opening = null;
+  expect(backing.get('token')).toBe(held);
+  expect(await store.key('token')).toBe(first);
+
+  // A forget while the pair is written is not undone when it lands.
+  const forgotten = store.keepKey('token', second);
+  await settle();
+  store.forget('token');
+  writes.at(-1).ok();
+  await forgotten;
+  expect(backing.get('token')).toBeNull();
+
+  // Two replacements: the later call's pair is the name's, whichever lands first.
+  const older = store.keepKey('token', first);
+  await settle();
+  const newer = store.keepKey('token', second);
+  await settle();
+  writes.at(-1).ok();
+  await newer;
+  writes.at(-2).ok();
+  await older;
+  expect(await store.key('token')).toBe(second);
+});

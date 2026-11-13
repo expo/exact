@@ -20,8 +20,8 @@ const INTERFACE: &str = r#"{
   },
   "views": {
     "pin-board": {
-      "props": { "latitude": "number", "zoomLevel": "option<number>", "pins": "option<Pin[]>", "focus": "option<Pin>", "object-fit": "option<string>", "fontSize": "option<number>" },
-      "events": ["change", { "event": "moveend", "args": ["Camera"] }]
+      "props": { "latitude": "number", "zoomLevel": "option<number>", "pins": "option<Pin[]>", "focus": "option<Pin>", "object-fit": "option<string>", "fontSize": "option<number>", "mode": "option<enum<rent|order>>" },
+      "events": ["change", { "event": "moveend", "args": ["Camera"] }, { "event": "modechange", "args": ["enum<rent|order>"] }]
     }
   },
   "names": []
@@ -321,6 +321,40 @@ fn a_prop_is_held_to_its_declared_type() {
             .iter()
             .any(|e| e.id == "contract-view-prop" && e.message.contains("`pins`")),
         "{refused:?}"
+    );
+}
+
+/// An enum is held to a declared enum by its cases: a prop takes one whose
+/// every case the package names, and an event's handler one that holds
+/// every case the event carries.
+#[test]
+fn an_enum_is_held_to_the_cases_a_view_declares() {
+    let with = |state: &str, param: &str| {
+        APP.replace(
+            "  state picked = \"\"\n",
+            &format!("  state picked = \"\"\n  state mode: {state} = \"rent\"\n  action switched(m: {param})\n    picked = m\n"),
+        )
+        .replace(" change=pick", " change=pick mode=mode modechange=switched")
+    };
+    let refused = |name: &str, src: &str| -> Vec<String> {
+        match App::new(name, src).compile() {
+            Ok(_) => Vec::new(),
+            Err(errors) => errors.iter().map(|e| e.id.to_string()).collect(),
+        }
+    };
+    let rent = "enum<\"rent\">";
+    let wide = "enum<\"rent\", \"order\", \"late\">";
+    assert_eq!(
+        refused("enum-fits", &with(rent, wide)),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        refused("enum-prop", &with(wide, wide)),
+        ["contract-view-prop"]
+    );
+    assert_eq!(
+        refused("enum-event", &with(rent, rent)),
+        ["lower-handler-type"]
     );
 }
 

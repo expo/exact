@@ -42,6 +42,8 @@ struct Reference {
 }
 type Names = BTreeMap<String, usize>;
 type Owners = BTreeMap<String, Names>;
+/// A shape's body, by its name and the source read alone that declares it.
+type Shapes = BTreeMap<(Option<u32>, String), String>;
 #[derive(Default)]
 struct Graph {
     definitions: Vec<Definition>,
@@ -61,7 +63,10 @@ struct Graph {
     /// each definition's `type`, the `shapes` those name, and `elements`.
     editor: bool,
     /// Each shape a definition's type names, with its body.
-    shapes: BTreeMap<String, String>,
+    shapes: Shapes,
+    /// The one source being read, when each is read on its own: two of them
+    /// may declare different shapes of one name.
+    alone: Option<u32>,
 }
 impl Graph {
     fn define(
@@ -203,7 +208,7 @@ impl Graph {
         }
         out.push(b']');
         if self.editor {
-            types::write(&mut out, &self.shapes);
+            types::write(&mut out, sources, &self.shapes);
         }
         close(out, errors)
     }
@@ -313,9 +318,9 @@ fn symbols(path: &Path, name: Option<&str>, editor: bool) -> Result<String, Part
         json: close(
             match (editor, name) {
                 (false, _) => b"{\"definitions\":[],\"references\":[]".to_vec(),
-                (true, Some(_)) => b"{\"definitions\":[],\"references\":[],\"shapes\":{}".to_vec(),
+                (true, Some(_)) => b"{\"definitions\":[],\"references\":[],\"shapes\":[]".to_vec(),
                 (true, None) => {
-                    b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":{}".to_vec()
+                    b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":[]".to_vec()
                 }
             },
             &errors,

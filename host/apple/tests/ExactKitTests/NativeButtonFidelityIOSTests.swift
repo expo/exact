@@ -255,6 +255,36 @@ final class NativeButtonFidelityIOSTests: XCTestCase {
         _ = cache.answer(face: try face("123456789", "heart", style: "plain"), widthKind: 0, width: 60)
         XCTAssertEqual(cache.misses, misses + 1)
     }
+    /// Counts answer from their face's reference and are not each kept;
+    /// other titles are kept within the cache's budget, and a face layouts
+    /// keep asking for stays measured.
+    func testTheCacheKeepsRecentFacesWithinItsBudget() throws {
+        let surface = UIView()
+        surface.traitOverrides.preferredContentSizeCategory = .large
+        surface.updateTraitsIfNeeded()
+        let cache = ButtonMeasureCache()
+        cache.configure(surface.traitCollection, in: surface)
+        func data(_ title: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["title": title, "symbol": "heart", "ios": "plain"], options: [.sortedKeys])
+        }
+        _ = cache.answer(face: try data("7"), widthKind: 2, width: 0)
+        let counted = cache.retained.entries
+        for n in 0..<500 { _ = cache.answer(face: try data("\(n)"), widthKind: 2, width: 0) }
+        XCTAssertEqual(cache.retained.entries, counted, "a count is answered from its face's reference")
+        let live = try data("Live")
+        for n in 0..<1_000 {
+            _ = cache.answer(face: try data("Title \(n)"), widthKind: 2, width: 0)
+            guard n % 50 == 0 else { continue }
+            let misses = cache.misses
+            _ = cache.answer(face: live, widthKind: 2, width: 0)
+            if n > 0 { XCTAssertEqual(cache.misses, misses, "the live face at \(n)") }
+        }
+        XCTAssertLessThanOrEqual(cache.retained.entries, 2 * 257 + counted)
+        surface.traitOverrides.preferredContentSizeCategory = .extraExtraLarge
+        surface.updateTraitsIfNeeded()
+        XCTAssertTrue(cache.configure(surface.traitCollection, in: surface))
+        XCTAssertEqual(cache.retained.entries, 0, "a change of traits releases the old measurements")
+    }
     func testAWrappedCountDoesNotSupplyAnotherCountsHeight() throws {
         let surface = UIView()
         surface.traitOverrides.preferredContentSizeCategory = .large

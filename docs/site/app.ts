@@ -108,10 +108,11 @@ function resolve(url: string): Result<'resolveMoved'> {
 }
 
 const sources: Sources = {
+  // Only a route with no page is missing. A page whose module fails to download rejects, so the
+  // reader is told and can try again.
   loadPage: async ([route]): Promise<Page> => {
     const load = pages[route];
-    const module = await load?.().catch(() => null);
-    return module ? (module.default as Page) : missing;
+    return load ? ((await load()).default as Page) : missing;
   },
   loadNav: async (): Promise<Result<'loadNav'>> => nav,
   resolveMoved: async ([url]): Promise<Result<'resolveMoved'>> => resolve(url),

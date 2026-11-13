@@ -98,6 +98,7 @@ typedef struct ExactFrameHealthHitch {
     int32_t after_at_us;
     uint32_t after_gap_us, after_callback_us;
     ExactFrameHealthHitchWork work;
+    int32_t frame_start_us;
 } ExactFrameHealthHitch;
 typedef struct ExactFrameHealthHistoryStatus {
     uint64_t capture, active, segments, started_ns, changed_ns, callbacks;
@@ -202,6 +203,9 @@ typedef struct ExactTextRun {
     uint8_t inline_box;
     uint8_t box_align;
     float box_width, box_height, box_shift;
+    /* Its inline boxes' padding, border and margin before its first glyph and after
+     * its last, in points, start and end by the paragraph's direction. */
+    float inline_start, inline_end;
 } ExactTextRun;
 
 /* Evidence of the host's local-network fact from @exact/local-network
@@ -547,6 +551,8 @@ uint32_t exact_pump(ExactRuntime rt, double now_ms);
 /* Presenter-owned surface work uses the ordinary runner ticket. Kinds are
  * 2 refused, 3 unsupported, 4 aborted, 6 captured bytes, 7 restored. */
 uint8_t exact_request_active(ExactRuntime rt, uint64_t ticket);
+/* The host owns the pixel copy. Call on the runtime owner before encoding. */
+uint8_t exact_canvas_snapshotted(ExactRuntime rt, uint64_t ticket);
 uint32_t exact_fulfill_surface(ExactRuntime rt, uint64_t ticket, uint32_t kind, size_t len, double now_ms);
 
 /* LLP 1038 D5/D8: input URL -> UTF-8 canonical location in exact_out.
@@ -762,6 +768,12 @@ uint32_t exact_pan_sample(ExactRuntime rt, uint32_t first, double x, double y, d
 /* The velocity along axis (0 x, 1 y) at t seconds, px/s: 0 with fewer than two
  * samples in the window, for a non-finite t, another axis, or a dead runtime. */
 double exact_pan_velocity(ExactRuntime rt, uint32_t axis, double t);
+/* The same tracker over samples the host holds, for a contact outside any
+ * runtime (the frame-health card): count samples, 3 * count values at samples,
+ * each t, x, y, oldest first. Of those finite and in time order it keeps the
+ * newest 16. Writes the velocity at now, units per second, to out[0] (x) and
+ * out[1] (y); 0 as above. No runtime. */
+void exact_velocity(const double *samples, size_t count, double now, double *out);
 /* The runner's clock: timers. Nonzero until_request stops after a timer that
  * sends, the clock at its due time (an agent's jump; the wall clock passes 0). */
 /* Timer waits: mode 0 declares support, 1 admits, 2 runs frame tasks. */
@@ -769,6 +781,11 @@ uint32_t exact_timer_waits(ExactRuntime rt, uint32_t kinds, double cutoff, uint3
 /* Delegate ordinary live timers to per-task native timers. Batches carry
  * nativeTimers with each instance's original deadline, interval and tolerance. */
 uint32_t exact_native_timers(ExactRuntime rt, uint32_t enabled);
+/* Nonzero: a list row that leaves its list's window is rebound to the item
+ * the window needs next (LLP 1078), in this runtime and every later boot.
+ * Each of its views is said `renew` before its props and style: the
+ * presenter drops what it keeps by view, as a new view has none of it. */
+uint32_t exact_row_reuse(ExactRuntime rt, uint32_t on);
 /* Deliver only this timer instance. A cancelled generation cannot fire a replacement. */
 uint32_t exact_fire_native_timer(ExactRuntime rt, uint32_t index, uint64_t generation, double now_ms);
 uint32_t exact_advance(ExactRuntime rt, double now_ms, uint32_t mode);
@@ -883,6 +900,9 @@ uint32_t exact_canvas_display(ExactRuntime rt, double scale, double memory);
  * decoded (ok 1, its size in pixels) or not (ok 0); the handle is the input
  * buffer's first len bytes. Returns the batch length. */
 uint32_t exact_canvas_image(ExactRuntime rt, size_t len, uint32_t width, uint32_t height, uint32_t ok);
+/* LLP 1056 D9: the presenter let a decoded Canvas 2D image handle go (the
+ * input buffer's first len bytes); a canvas that draws it again asks again. */
+void exact_canvas_image_released(ExactRuntime rt, size_t len);
 /* LLP 1056 D5: a 2D canvas's replay is behind (held 1) or caught up (0);
  * while held, its frame request waits (frames drop rather than queue). */
 void exact_canvas_held(ExactRuntime rt, uint32_t view, uint32_t held);

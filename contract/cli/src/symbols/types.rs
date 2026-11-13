@@ -1,13 +1,15 @@
 //! Each definition's type as TypeScript, written by the printer of `app.d.ts`'s
 //! summary, and the shapes those types name.
 
-use super::Resolver;
+use super::{Resolver, Shapes};
+use crate::sources::Sources;
 use crate::typescript::{inline, parameter, record, Node, Noted, Table};
 use contract_syntax::{Component, Param};
-use contract_types::{Shapes, Ty};
+use contract_types::Ty;
+use serde_json::json;
 
 /// The checker's types, as the printer reads a plan's.
-struct Checked<'a>(&'a Shapes);
+struct Checked<'a>(&'a contract_types::Shapes);
 impl Table for Checked<'_> {
     type Id = Ty;
     fn node<'a>(&'a self, ty: &'a Ty) -> Option<Node<'a, Ty>> {
@@ -50,17 +52,19 @@ impl<'a> Resolver<'a> {
         let text = print(&table, &mut named)?;
         self.note(&table, named).then_some(text)
     }
-    /// `ty` as TypeScript, an action as a function of its parameters
-    /// (`names`, when known).
+    /// `ty` as TypeScript. An action is a function of its parameters only
+    /// where it is declared, with `names`: a bare `action` prop or inject is
+    /// `Action([])` whatever it is called with, so it has no type to write.
     pub(super) fn typescript(&mut self, ty: &Ty, names: Option<&[Param]>) -> Option<String> {
         self.printed(|table, named| match ty {
             Ty::Action(params) => {
+                let names = names?;
                 let types = (params.iter())
                     .map(|p| inline(table, p, named))
                     .collect::<Option<Vec<_>>>()?;
-                let names = names
-                    .filter(|names| names.len() == types.len())
-                    .and_then(|names| names.iter().map(|p| parameter(&p.name)).collect());
+                let names = (names.len() == types.len())
+                    .then(|| names.iter().map(|p| parameter(&p.name)).collect())
+                    .flatten();
                 Some(signature(names, &types, "void"))
             }
             _ => inline(table, ty, named),
@@ -93,11 +97,12 @@ impl<'a> Resolver<'a> {
             let ty = named.order[i].clone();
             i += 1;
             let Ty::Record(name) = &ty else { continue };
-            if self.graph.shapes.contains_key(name) {
+            let key = (self.graph.alone, name.clone());
+            if self.graph.shapes.contains_key(&key) {
                 continue;
             }
             match record(table, &ty, &mut named) {
-                Some(body) => bodies.push((name.clone(), body)),
+                Some(body) => bodies.push((key, body)),
                 None => return false,
             }
         }
@@ -151,8 +156,18 @@ fn signature(names: Option<Vec<String>>, types: &[String], result: &str) -> Stri
     }
 }
 
-/// `shapes`: each shape the definitions' types name, with its body.
-pub(super) fn write(out: &mut Vec<u8>, shapes: &std::collections::BTreeMap<String, String>) {
+/// `shapes`: each shape the definitions' types name, with its body, and
+/// the `file` it was read in when files were read on their own.
+pub(super) fn write(out: &mut Vec<u8>, sources: &Sources, shapes: &Shapes) {
+    let shapes: Vec<_> = (shapes.iter())
+        .map(|((alone, name), body)| {
+            let mut shape = json!({ "name": name, "type": body });
+            if let Some(path) = alone.and_then(|id| sources.paths().get(id as usize)) {
+                shape["file"] = path.to_string_lossy().into();
+            }
+            shape
+        })
+        .collect();
     out.extend_from_slice(b",\"shapes\":");
-    serde_json::to_writer(out, shapes).expect("writing JSON into a Vec cannot fail");
+    serde_json::to_writer(out, &shapes).expect("writing JSON into a Vec cannot fail");
 }

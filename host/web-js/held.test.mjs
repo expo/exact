@@ -17,14 +17,14 @@ test('a fetch tied to no answer counts a timed answer while it is out, and not o
   expect(seen).toEqual([0, 1, 0]);
 });
 
-// A request the server holds (`exactHeld`, LLP 1016.000 D9) on the JS target: no clock waits on it, each
+// A request the server holds (`exactHeld` or `Request::held()`, LLP 1016.000 D9) on the JS target: no clock waits on it, each
 // clock reply names it, the answer's work after its reply is waited on again, and the same ask unmarked is
 // waited on before a due timer (calendar F10).
-test('the JS target leaves a held fetch out of every clock, names it, and counts the work after its reply', async () => {
+test.each(['TypeScript', 'Rust'])('the JS target leaves a held %s fetch out of every clock, names it, and counts the work after its reply', async language => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..');
   const server = holdingServer({ detailDelay: 1500, plainAfter: 3000 });
-  const dir = heldApp(root, server.origin);
+  const dir = heldApp(root, server.origin, language);
   let browser, page;
   try {
     const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'held-test', '--out', resolve(dir, 'dist'), '--render', 'none'], {

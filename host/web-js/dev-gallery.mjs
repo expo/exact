@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { buildTreeFileAsync as buildTreeFile, replaceBuild, sendStaticBody, webContentType } from '../web/serve.mjs';
-import { fresh } from './module.mjs';
+import { EXE, depInfoOf, fresh } from './module.mjs';
 
 /** The gallery's build cache: under the app's nearest `node_modules` (which
  * package resolution reaches, and git and describe's files don't), else the
@@ -59,7 +59,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
 
   // The contract compiler as built, while it is fresh by its dep-info (the design server's `cargo run` keeps it so),
   // never another `cargo run` on the app's target and its lock: else Cargo builds it in a target of the gallery's own.
-  const target = env.CARGO_TARGET_DIR ?? resolve(root, 'target'), contractBin = resolve(target, 'debug/contract');
+  const target = env.CARGO_TARGET_DIR ?? resolve(root, 'target'), contractBin = resolve(target, `debug/contract${EXE}`);
 
   /** `cmd args`, its output, in a process group of its own, which the gallery owns (`procs`) until the whole
    * group is gone (the builder's own children, its `git`, outlive it a moment), killed after 5 s more. */
@@ -88,7 +88,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
     // The design it builds on: one kept since is news, this one isn't. A failure before is taken up by this run.
     design = designNow(); failed = null;
     try {
-      const own = fresh(contractBin, `${contractBin}.d`);
+      const own = fresh(contractBin, depInfoOf(contractBin));
       let made = own ? await step(contractBin, ['gallery', app.dir, '-o', source], { env }) : { code: 2 };
       if (mine !== run) return;
       if (made.code === 2) made = await step('cargo', ['run', '-q', '-p', 'contract', '--', 'gallery', app.dir, '-o', source], { env: { ...env, CARGO_TARGET_DIR: resolve(cache, 'cargo') } });

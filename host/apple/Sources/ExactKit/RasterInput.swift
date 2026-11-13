@@ -4,10 +4,11 @@ import Foundation
 
 /// A source-interest lifetime, not a Runtime callback. Cancelling detaches the
 /// task handler under lock and invokes it outside every backend/core lock.
-final class RasterCancellation: @unchecked Sendable {
+package final class RasterCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var handler: (() -> Void)?
+    package init() {}
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
     func install(_ handler: @escaping () -> Void) {
         lock.lock(); let cancel = stopped
@@ -24,7 +25,7 @@ final class RasterCancellation: @unchecked Sendable {
 /// Workers keep a descriptor, never a queued encoded Data closure. Complete
 /// resolvers still verify through their existing bytes/url path. Remote inputs
 /// spool to a bounded temporary file and are reused for metadata and decode.
-final class RasterInput: @unchecked Sendable {
+package final class RasterInput: @unchecked Sendable {
     static var httpCacheUsage: [String: Int] { RasterDownload.cacheUsage }
     /// A `data:` source's bound, in bytes of URL text, on every host (LLP 1011
     /// §2; `exact_raster::MAX_DATA_URL_BYTES`, the web hosts' `DATA_LIMIT`).
@@ -125,7 +126,7 @@ final class RasterInput: @unchecked Sendable {
     /// process's shared connections, as a browser's images do.
     /// An `urgent` one (a picture that fills the screen, asked as it starts)
     /// goes first, with the longer whole-load bound (`RasterRetry`).
-    static func fetch(_ url: URL, urgent: (() -> Bool)? = nil, cancellation: RasterCancellation, done: @escaping (Result<RasterInput, Error>) -> Void) {
+    package static func fetch(_ url: URL, urgent: (() -> Bool)? = nil, cancellation: RasterCancellation, done: @escaping (Result<RasterInput, Error>) -> Void) {
         do {
             try RasterDownload(url: url, urgency: urgent).start(cancellation) { result in
                 done(result.map { RasterInput(url: $0.0, encodedBytes: $0.1, temporary: true, status: $0.2.map { ($0, url) }) })
@@ -175,7 +176,7 @@ final class RasterInput: @unchecked Sendable {
         let prefix = try file.read(upToCount: RasterMetadata.headerLimit) ?? Data()
         return try RasterMetadata.read(prefix: prefix, encodedBytes: encodedBytes)
     }
-    func bytes() throws -> Data {
+    package func bytes() throws -> Data {
         let file = try handle()
         defer { try? file.close() }
         // A changed file cannot make readToEnd allocate an unbounded buffer.

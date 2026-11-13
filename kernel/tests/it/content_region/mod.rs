@@ -1,5 +1,6 @@
 #![allow(clippy::field_reassign_with_default)]
 //! Kernel publication only: manual paragraph completion, no host/worker claim.
+mod alert;
 mod live_time;
 mod support;
 mod top_layer;
@@ -1205,3 +1206,4 @@ mod projection;
 
 // Split-profile acceptance tests; baseline uses a separate existing-API fragment.
 mod split_facts;
+mod table;

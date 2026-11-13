@@ -22,9 +22,19 @@ use std::{
 /// The test's end of one open body: bytes to send, or a drop to close.
 type Feed = Sender<Vec<u8>>;
 
+const HANG: Duration = Duration::from_secs(30);
+
 struct Fed {
     rx: Receiver<Vec<u8>>,
     signal: AbortSignal,
+    read: Arc<(Mutex<usize>, Condvar)>,
+    ended: Arc<(Mutex<usize>, Condvar)>,
+}
+impl Drop for Fed {
+    fn drop(&mut self) {
+        *self.ended.0.lock().unwrap() += 1;
+        self.ended.1.notify_all();
+    }
 }
 impl BodySource for Fed {
     fn read(&mut self, output: &mut [u8]) -> Result<usize, HostError> {
@@ -33,6 +43,9 @@ impl BodySource for Fed {
             match self.rx.recv_timeout(Duration::from_millis(5)) {
                 Ok(bytes) => {
                     output[..bytes.len()].copy_from_slice(&bytes);
+                    let mut read = self.read.0.lock().unwrap();
+                    *read += bytes.len();
+                    self.read.1.notify_all();
                     return Ok(bytes.len());
                 }
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -48,6 +61,9 @@ impl BodySource for Fed {
 #[derive(Default)]
 struct Script {
     feeds: Mutex<Vec<Option<Feed>>>,
+    held: Arc<(Mutex<usize>, Condvar)>,
+    ended: Arc<(Mutex<usize>, Condvar)>,
+    read: Arc<(Mutex<usize>, Condvar)>,
     opened: Condvar,
     /// Hold an upload after its start outcome, before registering its feed.
     opening: Mutex<Option<Sender<Sender<()>>>>,
@@ -90,6 +106,8 @@ impl Transport for Scripted {
                     Box::new(Fed {
                         rx,
                         signal: signal.clone(),
+                        read: self.0.read.clone(),
+                        ended: self.0.ended.clone(),
                     }),
                     request.body_limit(),
                     signal.clone(),
@@ -183,10 +201,26 @@ impl Transport for Scripted {
         }
         // A held reply: until the test ends it (retirement aborts it).
         if request.url.ends_with("/hold") {
-            let end = Instant::now() + Duration::from_secs(5);
-            while !signal.aborted() && Instant::now() < end {
-                std::thread::sleep(Duration::from_millis(2));
-            }
+            let held = self.0.held.clone();
+            let _registration = signal.register(move || {
+                let _guard = held.0.lock().unwrap();
+                held.1.notify_all();
+            });
+            let mut held = self.0.held.0.lock().unwrap();
+            *held += 1;
+            self.0.held.1.notify_all();
+            let (held, timeout) = self
+                .0
+                .held
+                .1
+                .wait_timeout_while(held, HANG, |_| !signal.aborted())
+                .unwrap();
+            assert!(
+                !timeout.timed_out(),
+                "the test never aborted its held reply"
+            );
+            drop(held);
+            signal.check()?;
         }
         let status = if request.url.ends_with("/plain") {
             404
@@ -277,7 +311,7 @@ fn feed(script: &Script, at: usize) -> Feed {
     let feeds = script.feeds.lock().unwrap();
     let (mut feeds, _) = script
         .opened
-        .wait_timeout_while(feeds, Duration::from_secs(5), |feeds| {
+        .wait_timeout_while(feeds, HANG, |feeds| {
             feeds.get(at).is_none_or(Option::is_none)
         })
         .unwrap();
@@ -288,15 +322,28 @@ fn feed(script: &Script, at: usize) -> Feed {
 }
 
 fn next(core: &Core, woke: &Receiver<()>) -> (u64, Outcome) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG;
     loop {
         core.begin_pump();
         if let Some(done) = core.drain().pop() {
             return (done.0, done.1);
         }
         woke.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .expect("an outcome within five seconds");
+            .expect("the stream never delivered an outcome");
     }
+}
+
+fn wait_held(script: &Script, count: usize) {
+    let held = script.held.0.lock().unwrap();
+    let (held, _) = script
+        .held
+        .1
+        .wait_timeout_while(held, HANG, |n| *n < count)
+        .unwrap();
+    assert_eq!(
+        *held, count,
+        "the held requests never reached the transport"
+    );
 }
 
 /// The next outcome but an upload's start (`UPLOAD_SENDING`), which comes
@@ -380,6 +427,47 @@ fn three_messages_then_a_close_and_the_worker_stays_free() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+// URLSession, the Apple transport, joins the repeated fields into one list
+// (`text/plain, text/event-stream`), which names no single media type.
+#[cfg(not(target_vendor = "apple"))]
+#[test]
+fn a_repeated_wire_content_type_delivers_events_before_the_connection_closes() {
+    use crate::cache::tests::{Plan, Server};
+    let server = Server::new();
+    let (release, released) = channel();
+    let mut plan = Plan::new(
+        200,
+        &[
+            ("Content-Type", "text/plain"),
+            ("content-type", "text/event-stream"),
+        ],
+        b"data: live\n\n",
+    );
+    plan.declares = Some(1 << 20);
+    plan.after = Some(released);
+    server.plan("/events", plan);
+    let (core, woke) = server.core(false, false);
+    let exact_runner::Answer::Later(request) =
+        exact_runner::Answer::stream(server.request("/events").independent_http(4096))
+    else {
+        unreachable!()
+    };
+    core.run_owned(
+        RequestOut {
+            class: exact_runner::RequestClass::Ordered,
+            ticket: 1,
+            target: "events".into(),
+            request,
+            forced: false,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(data(&next(&core, &woke).1), ("live", 0));
+    core.forget(|_| false);
+    drop(release);
 }
 
 /// Wait until `ticket` has `n` messages waiting for the runner, or ended.
@@ -544,7 +632,7 @@ fn a_stream_opens_while_every_independent_worker_holds_a_reply() {
         )
         .unwrap();
     }
-    std::thread::sleep(Duration::from_millis(20));
+    wait_held(&script, INDEPENDENT);
     core.run_owned(stream(100, "/events", 4096), None).unwrap();
     let tx = feed(&script, 0);
     tx.send(b"data: moving\n\n".to_vec()).unwrap();
@@ -881,134 +969,8 @@ fn forgetting_a_socket_closes_its_connection() {
     }
 }
 
-/// A TypeScript stream's request: a body that is not events is bytes.
-fn bytes_stream(ticket: u64, path: &str, ceiling: u32) -> RequestOut {
-    let mut out = stream(ticket, path, ceiling);
-    out.request.bytes = true;
-    out
-}
-
-/// Waits until the reader has queued `n` undelivered bytes for `ticket`.
-fn queued(core: &Core, ticket: u64, n: usize) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let waiting: usize = {
-            let state = core.shared.state.lock().unwrap();
-            (state.completed.iter().flatten())
-                .filter(|done| done.ticket == ticket && done.message)
-                .map(|done| match &done.outcome {
-                    Outcome::Message(m) => m.binary.as_ref().map_or(0, Vec::len),
-                    _ => 0,
-                })
-                .sum()
-        };
-        if waiting == n {
-            return;
-        }
-        assert!(Instant::now() < deadline, "{waiting} of {n} bytes queued");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-}
-
-fn binary(outcome: &Outcome) -> &[u8] {
-    match outcome {
-        Outcome::Message(m) => m.binary.as_deref().expect("a binary message"),
-        other => panic!("expected a message, got {other:?}"),
-    }
-}
-
-#[test]
-fn a_byte_stream_joins_reads_until_the_runner_takes_them() {
-    let (core, script, woke) = setup();
-    core.run_owned(bytes_stream(1, "/bytes", 4096), None)
-        .unwrap();
-    let tx = feed(&script, 0);
-    for chunk in [&b"\x00\x01"[..], b"\x02", b"\x03\x04\x05"] {
-        tx.send(chunk.to_vec()).unwrap();
-    }
-    queued(&core, 1, 6);
-    let (ticket, first) = next(&core, &woke);
-    assert_eq!(
-        (ticket, binary(&first)),
-        (1, &[0, 1, 2, 3, 4, 5][..]),
-        "three reads, one message, in order"
-    );
-    tx.send(vec![6, 7]).unwrap();
-    assert_eq!(binary(&next(&core, &woke).1), [6, 7]);
-    drop(tx);
-    let (_, end) = next(&core, &woke);
-    assert!(
-        matches!(&end, Outcome::Failed { kind: FailureKind::Network, message } if message == "the byte stream ended"),
-        "{end:?}"
-    );
-    assert!(settled(&core), "the stream's reservation ends with it");
-}
-
-#[test]
-fn a_byte_stream_past_its_bound_delivers_what_waits_then_ends_refused() {
-    let (core, script, woke) = setup();
-    core.run_owned(bytes_stream(1, "/bytes", 8), None).unwrap();
-    let tx = feed(&script, 0);
-    tx.send(vec![1; 5]).unwrap();
-    queued(&core, 1, 5);
-    tx.send(vec![2; 5]).unwrap();
-    // The reader ends the stream once the second read would pass the bound.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !core.shared.state.lock().unwrap().running.is_empty() {
-        assert!(Instant::now() < deadline, "the stream did not end");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert_eq!(
-        binary(&next(&core, &woke).1),
-        [1; 5],
-        "the queued bytes first"
-    );
-    let (_, end) = next(&core, &woke);
-    assert!(
-        matches!(&end, Outcome::Failed { kind: FailureKind::Refused, message } if message == "byte stream receive queue exceeds the response ceiling"),
-        "{end:?}"
-    );
-}
-
-#[test]
-fn a_byte_stream_that_is_not_2xx_and_a_rust_sources_body_are_one_answer() {
-    let (core, _, woke) = setup();
-    core.run_owned(bytes_stream(1, "/plain", 4096), None)
-        .unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 404),
-        "{outcome:?}"
-    );
-    core.run_owned(stream(2, "/other", 4096), None).unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 200 && r.body == b"done"),
-        "{outcome:?}"
-    );
-    assert!(settled(&core));
-}
-
-#[test]
-fn a_byte_stream_with_no_body_is_one_answer_as_on_the_web() {
-    let (core, _, woke) = setup();
-    core.run_owned(bytes_stream(1, "/empty", 4096), None)
-        .unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 204),
-        "{outcome:?}"
-    );
-    let mut head = bytes_stream(2, "/other", 4096);
-    head.request.method = "HEAD".into();
-    core.run_owned(head, None).unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 200),
-        "{outcome:?}"
-    );
-    assert!(settled(&core));
-}
+#[path = "byte_stream_tests.rs"]
+mod byte_tests;
 
 #[test]
 fn an_upload_tells_its_bytes_sent_then_its_reply_ends_it() {
@@ -1090,7 +1052,7 @@ fn an_uploads_bytes_sent_coalesce_while_the_runner_has_not_taken_them() {
     core.run_owned(upload(1, "/upload-burst", 4000), None)
         .unwrap();
     reported
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(HANG)
         .expect("the bytes sent were reported");
     // The start is a message of its own; the first two counts fold into the newest.
     match next(&core, &woke).1 {
@@ -1357,11 +1319,7 @@ fn an_upload_waiting_for_its_lanes_room_starts_when_a_request_let_go_frees_it() 
         };
         core.run_owned(image, None).unwrap();
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while core.shared.state.lock().unwrap().bytes[1] < 60 << 20 {
-        assert!(Instant::now() < deadline, "the images never started");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_held(&script, 3);
     core.run_owned(upload_within(4, "/upload", 4096, 2 << 20), None)
         .unwrap();
     assert_eq!(core.shared.uploads.waiting().0, 1, "it waits for room");

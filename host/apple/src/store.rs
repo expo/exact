@@ -18,9 +18,9 @@ use ibex2::boundary::HostError;
 use ibex2::host::{Bindings, Host, Kv, Secrets};
 #[path = "store_secrets.rs"]
 mod shared_secrets;
-pub(crate) use shared_secrets::launch_secrets;
+pub(crate) use shared_secrets::{launch_backend, launch_secrets};
 #[cfg(test)]
-pub(crate) use shared_secrets::read_launch_secrets;
+pub(crate) use shared_secrets::{launch_backend_in, read_launch_secrets};
 use shared_secrets::{secret_directory, secret_namespace, SecretBackend};
 
 /// The kv scope the runner's kept answers live in (LLP 1027 D4): beside the
@@ -495,9 +495,6 @@ impl Platform {
             let text = w.value.as_deref().map(String::from_utf8_lossy);
             return self.prefs.write(&self.kv, key, text.as_deref());
         }
-        if !w.name.starts_with(Store::KEPT) {
-            crate::launch_preloads::drop_secret(&w.name);
-        }
         match (w.name.strip_prefix(Store::KEPT), &w.value) {
             (Some(key), value) => {
                 let mut owed = self.failed.2.lock().expect("kept");
@@ -521,8 +518,12 @@ impl Platform {
                 );
                 Ok(())
             }
-            (None, Some(v)) => self.secrets.set(&w.name, &String::from_utf8_lossy(v)),
-            (None, None) => self.secrets.forget(&w.name),
+            (None, value) => crate::launch_preloads::with_secret_write(&w.name, || {
+                let text = value.as_deref().map(String::from_utf8_lossy);
+                SecretBackend(self.secrets.clone(), self.secret_directory.clone())
+                    .persist(&w.name, text.as_deref())
+                    .map_err(HostError::Failed)
+            }),
         }
     }
 

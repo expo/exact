@@ -7,6 +7,46 @@ const MAX_BYTES: usize = 16 * 1024;
 pub(crate) struct Reporting {
     enabled: bool,
     last_ms: Option<f64>,
+    /// The frame submissions this canvas rode since the last snapshot:
+    /// milliseconds summed, how many, and the longest.
+    submits: (f64, u32, f64),
+}
+
+impl Reporting {
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+    /// A frame this canvas rendered into was submitted in `ms`.
+    pub(crate) fn submitted(&mut self, ms: f64) {
+        let (sum, count, max) = &mut self.submits;
+        *sum += ms;
+        *count += 1;
+        *max = max.max(ms);
+    }
+}
+
+/// Run `submit`, and when `timed`, say how long it took in milliseconds.
+pub(crate) fn time<T>(timed: bool, submit: impl FnOnce() -> T) -> (T, Option<f64>) {
+    let start = timed.then(now_ms);
+    let out = submit();
+    (out, start.map(|start| now_ms() - start))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+        * 1000.0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map_or(0.0, |p| p.now())
 }
 
 impl Module {
@@ -18,6 +58,7 @@ impl Module {
         };
         if instance.performance.enabled != enabled {
             instance.performance.enabled = enabled;
+            instance.performance.submits = Default::default();
             instance.surface.set_performance_reporting(enabled);
         }
         true
@@ -38,22 +79,31 @@ impl Module {
             return None;
         }
         reporting.last_ms = Some(now_ms);
+        let (sum, count, max) = std::mem::take(&mut reporting.submits);
+        let submits = (count > 0).then(|| (sum / f64::from(count), max));
         instance
             .surface
             .take_performance(now_ms)
-            .map(with_memory)
+            .map(|record| with_facts(record, submits))
             .filter(|record| record.len() <= MAX_BYTES)
     }
 }
 
-/// `record` with the memory facts the module owns for every surface added:
-/// `processMemoryBytes`, the process's footprint, and `gameHeapBytes`, the
+/// `record` with the facts the module owns for every surface added:
+/// `processMemoryBytes`, the process's footprint; `gameHeapBytes`, the
 /// module's own heap where it has one apart from the process (the web's
-/// linear memory). A fact the platform has no cheap source for is left out.
-fn with_memory(record: String) -> String {
+/// linear memory); and `cpuSubmitMs`, `cpuSubmitMaxMs`, the mean and longest
+/// wall time of the queue submissions of the frames the canvas drew in the
+/// window (`submits`). A fact with no measurement is left out.
+fn with_facts(record: String, submits: Option<(f64, f64)>) -> String {
     let facts = [
-        ("processMemoryBytes", process_footprint()),
-        ("gameHeapBytes", heap_bytes()),
+        (
+            "processMemoryBytes",
+            process_footprint().map(|b| b.to_string()),
+        ),
+        ("gameHeapBytes", heap_bytes().map(|b| b.to_string())),
+        ("cpuSubmitMs", submits.map(|s| s.0.to_string())),
+        ("cpuSubmitMaxMs", submits.map(|s| s.1.to_string())),
     ];
     let mut out = record.trim_end().to_owned();
     if out.pop() != Some('}') {
@@ -171,18 +221,24 @@ mod tests {
     #[test]
     fn memory_facts_join_the_surface_record() {
         let joined: std::collections::BTreeMap<String, f64> =
-            serde_json_lite(&with_memory("{\"frames\":3}".into()));
+            serde_json_lite(&with_facts("{\"frames\":3}".into(), None));
         assert_eq!(joined["frames"], 3.0);
         assert!(
             !joined.contains_key("gameHeapBytes"),
             "native has no heap apart"
         );
-        let empty = with_memory("{}".into());
+        let empty = with_facts("{}".into(), None);
         assert!(
             empty.starts_with('{') && !empty.starts_with("{,"),
             "{empty}"
         );
-        assert_eq!(with_memory("not json".into()), "not json");
+        assert_eq!(with_facts("not json".into(), None), "not json");
+        assert!(
+            !joined.contains_key("cpuSubmitMs"),
+            "no submission, no time"
+        );
+        let timed = serde_json_lite(&with_facts("{}".into(), Some((1.5, 4.0))));
+        assert_eq!((timed["cpuSubmitMs"], timed["cpuSubmitMaxMs"]), (1.5, 4.0));
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let bytes = joined["processMemoryBytes"];
@@ -190,7 +246,7 @@ mod tests {
         }
     }
 
-    /// The flat number record [`with_memory`] makes, as name → value.
+    /// The flat number record [`with_facts`] makes, as name → value.
     fn serde_json_lite(text: &str) -> std::collections::BTreeMap<String, f64> {
         let body = text.strip_prefix('{').unwrap().strip_suffix('}').unwrap();
         body.split(',')
@@ -250,12 +306,32 @@ mod tests {
             serde_json_lite(&module.take_performance(id, 1000.0).unwrap())["clock"],
             1000.0
         );
+        let reporting = &mut module.instances.get_mut(&id).unwrap().performance;
+        reporting.submitted(2.0);
+        reporting.submitted(4.0);
+        let snapshot = serde_json_lite(&module.take_performance(id, 2000.0).unwrap());
+        assert_eq!(
+            (snapshot["cpuSubmitMs"], snapshot["cpuSubmitMaxMs"]),
+            (3.0, 4.0)
+        );
+        module
+            .instances
+            .get_mut(&id)
+            .unwrap()
+            .performance
+            .submitted(9.0);
         assert!(module.set_performance_reporting(id, false));
-        assert_eq!(module.take_performance(id, 2000.0), None);
-        assert_eq!(*calls.lock().unwrap(), (vec![true, false], 2));
         assert!(module.set_performance_reporting(id, true));
-        assert_eq!(module.take_performance(id, 1001.0), None);
-        assert!(module.take_performance(id, 2000.0).is_some());
+        assert!(module.set_performance_reporting(id, false));
+        assert_eq!(module.take_performance(id, 3000.0), None);
+        assert_eq!(*calls.lock().unwrap(), (vec![true, false, true, false], 3));
+        assert!(module.set_performance_reporting(id, true));
+        assert_eq!(module.take_performance(id, 2001.0), None);
+        let snapshot = serde_json_lite(&module.take_performance(id, 3000.0).unwrap());
+        assert!(
+            !snapshot.contains_key("cpuSubmitMs"),
+            "a toggle drops the window"
+        );
         module.destroy(id);
         assert_eq!(module.take_performance(id, 10000.0), None);
     }

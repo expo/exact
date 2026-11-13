@@ -1,5 +1,5 @@
 //! Fieldnotes on Android's Canvas host (LLP 1076 §3.3): the host's JNI
-//! (`exact_linux::canvas_jni!`) over the notes' TypeScript (Hermes bytecode),
+//! (`exact_painted::canvas_jni!`) over the notes' TypeScript (Hermes bytecode),
 //! the Rust backup source and the baked plan, with app storage. The reader
 //! (`host/android`) loads this library as `libexactcanvas.so`.
 
@@ -22,5 +22,5 @@ mod android {
     include!(concat!(env!("OUT_DIR"), "/logic.rs"));
     include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
-    exact_linux::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
+    exact_painted::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
 }

@@ -37,6 +37,7 @@ pub mod rng;
 pub mod script;
 mod settle;
 mod shrink;
+mod state_path;
 mod suggest;
 pub mod types;
 pub mod verify;
@@ -265,24 +266,13 @@ const BOUNDS: [&str; 4] = [
 
 /// Classify the runner's Debug reason, never the semantics' prose. The
 /// names are RunnerError and Trap variants; an unknown variant stays visible.
+/// Evaluation and bound suffixes after the trap token do not change its class.
 pub fn refusal_class(reason: &str) -> &'static str {
-    fn variant(s: &str) -> &str {
-        s.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-            .next()
-            .unwrap_or("")
-    }
-    let reason = reason.strip_prefix("# ").unwrap_or(reason);
-    let tag = variant(reason);
+    let (tag, reason) = refusal_parts(reason);
     if BOUNDS.contains(&tag) {
         return "limit";
     }
     match tag {
-        "HandlerArguments" => refusal_class(
-            reason
-                .split_once(", error: ")
-                .map_or("", |(_, error)| error),
-        ),
-        "Trap" | "Instance" => refusal_class(reason.split_once('(').map_or("", |(_, inner)| inner)),
         "Data"
         | "Shape"
         | "UnknownView"
@@ -316,6 +306,26 @@ pub fn refusal_class(reason: &str) -> &'static str {
         | "Bridge"
         | "Pending" => "unclassified",
         _ => "unclassified",
+    }
+}
+
+/// The unwrapped variant and its Debug text, including any diagnostic suffix.
+fn refusal_parts(reason: &str) -> (&str, &str) {
+    fn variant(s: &str) -> &str {
+        s.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or("")
+    }
+    let reason = reason.strip_prefix("# ").unwrap_or(reason);
+    let tag = variant(reason);
+    match tag {
+        "HandlerArguments" => refusal_parts(
+            reason
+                .split_once(", error: ")
+                .map_or("", |(_, error)| error),
+        ),
+        "Trap" | "Instance" => refusal_parts(reason.split_once('(').map_or("", |(_, inner)| inner)),
+        _ => (tag, reason),
     }
 }
 
@@ -373,7 +383,7 @@ fn compare(rust: Vec<String>, lean: Vec<String>) -> Verdict {
         lines.by_ref().filter(|l| !l.starts_with('#')).nth(at)?;
         lines
             .take_while(|l| l.starts_with('#'))
-            .find(|l| BOUNDS.iter().any(|b| l.contains(b)))
+            .find(|l| BOUNDS.contains(&refusal_parts(l).0))
             .map(|l| format!("{l} (the runner's evaluation bound, LLP 1090 D8)"))
     };
     // A binding past a bound was unset and the runner went on (LLP
@@ -387,7 +397,10 @@ fn compare(rust: Vec<String>, lean: Vec<String>) -> Verdict {
                 if seen > at + 1 {
                     return None;
                 }
-            } else if l.contains(" trapped Trap(") && BOUNDS.iter().any(|b| l.contains(b)) {
+            } else if l
+                .split_once(" trapped ")
+                .is_some_and(|(_, reason)| BOUNDS.contains(&refusal_parts(reason).0))
+            {
                 return Some(format!("{l} (the runner's evaluation bound, LLP 1090 D8)"));
             }
         }
@@ -395,6 +408,15 @@ fn compare(rust: Vec<String>, lean: Vec<String>) -> Verdict {
     };
     let first = rust.iter().zip(&lean).position(|(a, b)| a != b);
     if let Some(at) = first.or((rust.len() != lean.len()).then(|| rust.len().min(lean.len()))) {
+        // A module's answer that moved is the runner's state, however it
+        // moved: a poll's or a re-ask's commit is one the trace leaves out
+        // too, so this comes before the omitted-commit guard. A missing reply
+        // before the step it moved in still diverges.
+        if let Some((from, why)) = module_moved_by(&rust_raw, at) {
+            if missing.is_none_or(|missing| from <= missing) {
+                return Verdict::Unsupported(why);
+            }
+        }
         if missing.is_none_or(|missing| at < missing) && !omitted_at(&rust_raw, at) {
             if let Some(why) = unsupported(at).or_else(|| bound(at)).or_else(|| unset(at)) {
                 return Verdict::Unsupported(why);
@@ -442,6 +464,24 @@ pub fn omitted_at(lines: &[String], at: usize) -> bool {
     false
 }
 
+/// The first [`observe::MODULE_MOVED`] note in the steps up to and including
+/// the one holding compared line `at`, with the compared line its step starts
+/// at: from there on, a module's answer is the runner's state, which the
+/// semantics, holding the boot answer, leaves out.
+fn module_moved_by(lines: &[String], at: usize) -> Option<(usize, String)> {
+    let mut end = 0;
+    for step in chunks(lines) {
+        if let Some(note) = step.iter().find(|l| l.starts_with(observe::MODULE_MOVED)) {
+            return Some((end, note.clone()));
+        }
+        end += step.iter().filter(|l| !l.starts_with('#')).count();
+        if at < end {
+            return None;
+        }
+    }
+    None
+}
+
 /// The runner's observation split into steps: entry 0 is boot, entry `k`
 /// follows the `k`-th event.
 fn chunks(lines: &[String]) -> Vec<&[String]> {
@@ -459,13 +499,17 @@ fn chunks(lines: &[String]) -> Vec<&[String]> {
 pub fn expectations(s: &Scripted) -> Result<(), String> {
     let plan = compile(&s.case)?;
     let oracle = oracle::Oracle::for_case(&plan, &s.case);
-    let (rust, _) = observe::run(plan, oracle, &s.case.events);
-    expectations_on(s, &rust)?;
+    let (rust, _) = observe::run(plan.clone(), oracle, &s.case.events);
+    expectations_on(s, &plan, &rust)?;
     property_corpus::check(&s.case, &rust, true)
 }
 
-/// Check expectations against an observation already produced by the runner.
-pub fn expectations_on(s: &Scripted, rust: &[String]) -> Result<(), String> {
+/// Check expectations against either evaluator's observation using the compiled shapes.
+pub fn expectations_on(
+    s: &Scripted,
+    plan: &exact_plan::Plan,
+    rust: &[String],
+) -> Result<(), String> {
     let steps = chunks(rust);
     let mut k = 0;
     for item in &s.items {
@@ -478,7 +522,11 @@ pub fn expectations_on(s: &Scripted, rust: &[String]) -> Result<(), String> {
             Item::Expect(e, _) => {
                 let step = steps.get(k).copied().unwrap_or(&[]);
                 let ok = match e {
-                    Expect::State(name, v) => script::state_value(step, name) == Some(v.as_str()),
+                    Expect::State(name, comparison, values) => script::state_holds(
+                        crate::state_path::value(plan, step, name),
+                        *comparison,
+                        values,
+                    ),
                     Expect::Text(id, v) => step.contains(&format!(
                         "view {} {}",
                         observe::quote(id),
@@ -711,10 +759,13 @@ mod tests {
     fn a_bound_refusal_is_outside_and_another_refusal_diverges() {
         let lean = lines(&["== boot", "outcome ok", "== tap \"go\"", "outcome ok"]);
         for (reason, outside) in [
-            ("# Trap(IterationLimit { pc: 17 })", true),
+            ("# Trap(IterationLimit { pc: 17 }) in derive \"visible\": past the 65,536 list steps one evaluation may take", true),
             ("# StringTooLong { name: \"text\" }", true),
-            ("# Instance(Trap(ValueTooLarge { pc: 3 }))", true),
+            ("# Instance(Trap(ValueTooLarge { pc: 3 })) in view 3 (site 1) each subject: past the 16,777,216 nodes or 64 MiB a value may hold", true),
+            ("# HandlerArguments { action: \"go\", error: Instance(Trap(ValueTooDeep { pc: 4 })) in view 3 (site 1) press argument 1: past the 32 levels a value may nest }", true),
             ("# Trap(UnwrapNone { pc: 4 })", false),
+            ("# Trap(UnwrapNone { pc: 4 }) in derive \"IterationLimit\"", false),
+            ("# HandlerArguments { action: \"ValueTooLarge\", error: Trap(PathParameter { pc: 4 }) in view 3 (site 1) press argument 1 }", false),
         ] {
             let rust = lines(&[
                 "== boot",
@@ -736,6 +787,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_queue_full_refusal_diverges() {
+        let rust = lines(&["outcome refused", "# QueueFull { mutation: \"save\" }"]);
+        let lean = lines(&["outcome ok"]);
+        assert!(matches!(compare(rust, lean), Verdict::Diverge { .. }));
+    }
+
+    #[test]
+    fn a_timer_fire_limit_refusal_diverges() {
+        let rust = lines(&["outcome refused", "# TimerFireLimit { limit: 10000 }"]);
+        let lean = lines(&["outcome ok"]);
+        assert!(matches!(compare(rust, lean), Verdict::Diverge { .. }));
+    }
+
     #[test]
     fn a_trace_disagreement_or_an_omitted_commit_cannot_be_hidden_as_outside() {
         let rust = lines(&[
@@ -790,7 +856,7 @@ mod tests {
         ]);
         for (note, outside) in [
             (
-                "# view 3 (site 1): text trapped Trap(IterationLimit { pc: 5 }); unset",
+                "# view 3 (site 1): text trapped Trap(IterationLimit { pc: 5 }): past the 65,536 list steps one evaluation may take; unset",
                 true,
             ),
             (
@@ -856,6 +922,50 @@ mod tests {
         assert!(matches!(
             compare(rust, lean),
             Verdict::Diverge { at: 4, .. }
+        ));
+    }
+
+    /// A module's answer that moved off its boot fact by the step where the
+    /// two first differ is the runner's state, outside the semantics; one
+    /// that moves only after a difference does not hide it.
+    #[test]
+    fn a_moved_module_answer_is_outside_only_from_its_step() {
+        let moved = format!(
+            "{}: resource status no longer holds its boot answer",
+            observe::MODULE_MOVED
+        );
+        let rust = |note_at: usize| {
+            let mut v = lines(&[
+                "== boot",
+                "outcome ok",
+                "resource status \"prompt\"",
+                "== tap \"allow\"",
+                "outcome ok",
+                "resource status \"granted\"",
+                "== tap \"go\"",
+                "outcome ok",
+                "resource status \"granted\"",
+            ]);
+            v.insert(note_at, moved.clone());
+            v
+        };
+        let lean = lines(&[
+            "== boot",
+            "outcome ok",
+            "resource status \"prompt\"",
+            "== tap \"allow\"",
+            "outcome ok",
+            "resource status \"prompt\"",
+            "== tap \"go\"",
+            "outcome ok",
+            "resource status \"prompt\"",
+        ]);
+        assert!(
+            matches!(compare(rust(5), lean.clone()), Verdict::Unsupported(why) if why == moved)
+        );
+        assert!(matches!(
+            compare(rust(8), lean),
+            Verdict::Diverge { at: 5, .. }
         ));
     }
 }

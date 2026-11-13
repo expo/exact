@@ -30,16 +30,16 @@ public final class SignInModule: NSObject, ExactPackage {
         #endif
     }
 
-    private func capabilities() -> [String: Any] {
+    static func capabilities(apple: Bool) -> [String: Any] {
         ["available": true, "providers": [
-            "apple": ["active": apple, "passive": apple, "withPublicKey": apple],
-            "google": ["active": true, "passive": false, "withPublicKey": false],
+            "apple": ["active": apple, "passive": apple, "withPublicKey": false],
+            "google": ["active": false, "passive": false, "withPublicKey": false],
         ]]
     }
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
         switch name {
-        case "getIdentityCapabilities": reply(capabilities())
+        case "getIdentityCapabilities": reply(Self.capabilities(apple: apple))
         case "preventSilentAccess": reply([:])
         case "identity": signIn(args, reply)
         default: reply(["error": "NotSupportedError", "message": "\(name) is not built on Apple yet (LLP 1133.014 §11 stage 2)"])
@@ -47,7 +47,7 @@ public final class SignInModule: NSObject, ExactPackage {
     }
 
     public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
-        name == "getIdentityCapabilitiesSync" ? capabilities() : ["error": "NotSupportedError"]
+        name == "getIdentityCapabilitiesSync" ? Self.capabilities(apple: apple) : ["error": "NotSupportedError"]
     }
 
     private func signIn(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {

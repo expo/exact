@@ -3,6 +3,7 @@
 // that gains the curve in the commit that moves it slides from where it was, as presence-glue.js plays a style op that
 // gains the row. Build exact-web-js once before running this test (docs/testing.md).
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -29,6 +30,70 @@ const SOURCE = `component App
       text "Second" testId="second" height=40 -exact-layout-transition=(calm ? "none" : "2000ms linear")
 `;
 
+test.each(['item', 'index', 'match'].flatMap(region => [[region, false], [region, true]]))('a moving %s binding gains its curve from the new region value (computed: %s)', async (region, computed) => {
+  const each = region !== 'match';
+  const value = region === 'item' ? 'row.active' : region === 'index' ? 'index > 0' : 'active';
+  const branch = each ? 'for row, index in rows key=row.id' : 'match first([active])\n        case some(active)';
+  const indent = each ? '        ' : '          ';
+  const app = await exitApp('chromium', `shape Row
+  id: number
+  active: bool
+
+component App
+  state rows = [Row(id=1, active=false), Row(id=2, active=false)]
+  state active = false
+  state ms = 2000
+  state shown = true
+  action move
+    rows = [Row(id=2, active=false), Row(id=1, active=true)]
+    active = true
+    shown = ${each ? 'true' : 'false'}
+  view
+    column
+      button "Move" press=move testId="move"
+      if shown
+        text "Before" height=40
+      ${branch}
+${indent}text "Row" testId=${each ? '`row-${row.id}`' : '"row-1"'} height=40 -exact-layout-transition=(${value} ? ${computed ? '`\${ms}ms  linear`' : '"2000ms linear"'} : "none")
+${each ? '' : '        case none\n          text "Absent"'}
+`);
+  try {
+    const result = await app.page.evaluate(async () => {
+      const row = document.querySelector('[data-testid="row-1"]');
+      const before = row.getBoundingClientRect().top;
+      document.querySelector('[data-testid="move"]').click();
+      const animations = row.getAnimations();
+      for (const animation of animations) { animation.pause(); animation.currentTime = 0; }
+      const start = row.getBoundingClientRect().top;
+      await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
+      return { same: row === document.querySelector('[data-testid="row-1"]'), css: row.style.getPropertyValue('--exact-layout-transition'), animations: animations.length, start, before, end: row.getBoundingClientRect().top };
+    });
+    expect(result.same).toBe(true);
+    expect(result.css).toBe('2000 0 linear');
+    expect(result.animations).toBeGreaterThan(0);
+    expect(result.start).toBeCloseTo(result.before, 1);
+    expect(Math.abs(result.end - result.before)).toBeGreaterThan(1);
+  } finally { await app.close(); }
+}, 30000);
+
+test('constructed layout curves and whitespace variants animate', async () => {
+  const source = SOURCE.replace('state calm = false', 'state calm = false\n  state ms = 2000')
+    .replace('"2000ms linear"', '`\${ms}ms  linear`');
+  const app = await exitApp('chromium', source);
+  try {
+    const result = await app.page.evaluate(async () => {
+      const row = document.querySelector('[data-testid="second"]');
+      document.querySelector('[data-testid="drop"]').click();
+      const animations = row.getAnimations();
+      const css = row.style.getPropertyValue('--exact-layout-transition');
+      await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
+      return { css, animations: animations.length };
+    });
+    expect(result.css).toBe('2000 0 linear');
+    expect(result.animations).toBeGreaterThan(0);
+  } finally { await app.close(); }
+}, 30000);
+
 test('a bound layout transition slides while it holds a curve, jumps at none, and slides from where it was when gained', async () => {
   const root = resolve(import.meta.dir, '../..');
   const target = resolve(root, 'target');
@@ -38,7 +103,7 @@ test('a bound layout transition slides while it holds a curve, jumps at none, an
   let server, browser;
   try {
     writeFileSync(resolve(dir, 'app.contract'), SOURCE);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
       const path = new URL(request.url).pathname.slice(1);
@@ -371,7 +436,7 @@ test('presence binding probes read the committed clock and release their depende
       const signal = rt.sig(0), value = () => { signal(); return rt.x_performanceNow() < 1000 ? 'none' : 'curve'; };
       const own = rt.scope(() => {
         rt.px(exit); rt.S(exit, '--exact-exit-animation', '', value);
-        rt.lt(layout, ['curve'], value);
+        rt.lt(layout, v => ({ css: v === 'curve' ? '20 0 linear' : null }), value);
       });
       const listeners = signal.n.obs.size;
       // Moving the clock alone does not publish a new committed time.
@@ -555,7 +620,7 @@ async function exitApp(engine, source, pageOptions) {
   const close = async () => { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); };
   try {
     writeFileSync(resolve(dir, 'app.contract'), source);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
       const path = new URL(request.url).pathname.slice(1);

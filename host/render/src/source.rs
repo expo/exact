@@ -151,6 +151,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<Answer, DataError> {
         self.inner.parse_for(target, store, source, args, outcome)
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.inner.launch()
+    }
     fn preloads(&self) -> &[exact_runner::request::Preload] {
         &[]
     }
@@ -292,6 +295,23 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     }
     fn take_logs(&mut self) -> Vec<String> {
         self.inner.take_logs()
+    }
+
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.inner
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.inner.module_identity(source)
     }
 
     fn take_aborted(&mut self) -> Vec<u64> {

@@ -147,6 +147,7 @@ package final class PageScrollView: NSScrollView {
     package override func mouseDown(with event: NSEvent) {
         let hit = window?.contentView?.hitTest(event.locationInWindow)
         if let focused = window?.firstResponder as? NodeView, let hit, hit.isDescendant(of: focused) {} else { pressedGround?() }
+        if TitleBarAreaMac.doubleClicked(event, on: hit) { return }
         super.mouseDown(with: event)
     }
     /// AppKit turns automatic titlebar insets back on when this view

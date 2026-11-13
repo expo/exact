@@ -1,5 +1,5 @@
 //! The desktop modules' host services on Windows (LLP 1133.025 D11 item 2,
-//! `exact_linux::desktop`): hot keys by `RegisterHotKey`, attention by
+//! `exact_painted::desktop`): hot keys by `RegisterHotKey`, attention by
 //! `FlashWindowEx`, and the login item as a development build's `Run` value.
 //!
 //! - **Hot keys** are registered with a null window, so `WM_HOTKEY` is
@@ -124,7 +124,7 @@ pub(crate) fn login_launch(args: &[String]) -> Option<bool> {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod imp {
-    use exact_linux::desktop::{Login, Refusal, Services};
+    use exact_painted::desktop::{Login, Refusal, Services};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use windows_sys::Win32::{
@@ -191,7 +191,7 @@ mod imp {
                 launch: super::login_launch(&args),
                 wake: RefCell::new(None),
             });
-            exact_linux::desktop::install(desktop.clone());
+            exact_painted::desktop::install(desktop.clone());
             desktop
         }
 
@@ -219,9 +219,9 @@ mod imp {
                 return;
             };
             for r in &chord.readers {
-                let event = exact_linux::package::json!({ "id": r.id, "keys": chord.keys });
-                let args = exact_linux::package::json!([r.id, event]).to_string();
-                exact_linux::desktop::activate(r.extension, r.event, args);
+                let event = exact_painted::package::json!({ "id": r.id, "keys": chord.keys });
+                let args = exact_painted::package::json!([r.id, event]).to_string();
+                exact_painted::desktop::activate(r.extension, r.event, args);
             }
             drop(chords);
             if let Some(wake) = &*self.wake.borrow() {

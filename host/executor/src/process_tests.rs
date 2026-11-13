@@ -399,7 +399,10 @@ fn one_shots_answer_from_the_script_and_the_drive() {
     let r = body(&next(&core, &woke));
     assert_eq!(
         (r["stdout"].as_str(), r["code"].as_i64()),
-        (Some("1.2.0\n"), Some(0))
+        (
+            Some(exact_runner::agent::base64(b"1.2.0\n").as_str()),
+            Some(0)
+        )
     );
     core.run(
         request(2, r#"{"kind":"execPath","program":"path:t3"}"#, false),
@@ -656,7 +659,7 @@ fn an_exec_files_signal_deadline_ends_it_as_a_timeout() {
     let file = script(r#"{"execFile":{"stdout":"","stderr":"","code":0,"after":5000}}"#);
     let (core, woke) = setup(&[("path:t3", &format!("script:{file}"))]);
     let mut out = request(1, r#"{"kind":"execFile","program":"path:t3"}"#, false);
-    // What `AbortSignal.timeout(100)` gives a request (js/src/prelude.js).
+    // What `AbortSignal.timeout(100)` gives a request (js/src/fetch.js).
     out.request.timeout_ms = Some(100);
     core.run(out, None).unwrap();
     let clock = clock(&core);
@@ -737,6 +740,25 @@ fn one_shots_have_room_of_their_own() {
     ended(&core);
     assert_eq!(lane(&core), (0, 0));
     core.run(request(18, body, false), None).unwrap();
+}
+
+/// A one-shot never waits in its lane's queue, so its `timeout_ms` arms no
+/// queued deadline: failing to arm one cannot refuse it after it has taken
+/// a one-shot's room.
+#[test]
+fn a_one_shot_with_a_timeout_arms_no_queued_deadline() {
+    let file = script(r#"{"execFile":{"stdout":"","stderr":"","code":0,"after":5000}}"#);
+    let (core, _woke) = setup(&[("path:t3", &format!("script:{file}"))]);
+    let body = r#"{"kind":"execFile","program":"path:t3"}"#;
+    for ticket in 1..=16 {
+        let mut out = request(ticket, body, false);
+        out.request.timeout_ms = Some(60_000);
+        core.run(out, None).unwrap();
+        let armed = (core.shared.queued_deadlines).load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(armed, 0, "one-shot {ticket} armed a queued deadline");
+    }
+    core.forget(|_| false);
+    ended(&core);
 }
 
 #[test]

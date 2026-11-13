@@ -119,6 +119,7 @@ enum ResetGate {
         "groupFinish(_:now:)": "a grouped reorder finishing as its list goes",
         "media(_:event:payload:now:)": "an old media view's event as it goes",
         "load(_:now:)": "an old image's or frame's load",
+        "atomIconReady(geometryChanged:)": "an old atom icon's load; the new tree's text loads and measures its own",
         "frameNavigation(_:event:record:now:)": "an old web frame's navigation",
         "message(_:_:now:)": "an old web frame's message",
         "dialogClose(_:now:)": "an old dialog closing as its view goes",

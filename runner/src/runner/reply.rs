@@ -67,6 +67,10 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
         timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.hear_aborted();
+        if let Some(message) = self.failed_tickets.remove(&ticket) {
+            return self.executor_failed(ticket, message);
+        }
         if self.is_background(ticket) {
             // Its own path (LLP 1097 D5): no commit, no `then`, no update.
             self.background_landed(outcome);

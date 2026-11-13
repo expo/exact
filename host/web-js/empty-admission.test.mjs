@@ -29,7 +29,8 @@ test.each([false, true])('a production page with no grants, module or page modul
       writeFileSync(resolve(dir, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
 export const grants = ${JSON.stringify(grants)};
 export const answer: Answer = ${usesFetch ? `async () => {
-  const asset = await (await fetch('/assets/a.txt')).text();
+  // An asset's body is read in the answer's turn, which may draw randomness (LLP 1069.005 D3).
+  const asset = await (await fetch('/assets/a.txt')).text().then(text => text + ' ' + crypto.randomUUID().length);
   try { await fetch('http://127.0.0.1:1/ungranted'); return { text: 'unexpected access' }; }
   catch (error) { return { text: asset + ': ' + String(error) }; }
 }` : "() => ({ text: 'hi' })"};
@@ -86,7 +87,7 @@ export const answer: Answer = ${usesFetch ? `async () => {
     await page.route('**/ungranted', route => { ungranted++; return route.abort(); });
     await page.goto(server.url.href);
     await page.waitForFunction(() => document.querySelector('[data-testid=greeting]')?.textContent.includes('asset loaded'));
-    expect(await page.getByTestId('greeting').textContent()).toBe("asset loaded: FetchError: outside the app's grants (net.fetch)");
+    expect(await page.getByTestId('greeting').textContent()).toBe("asset loaded 36: FetchError: outside the app's grants (net.fetch)");
     expect(ungranted).toBe(0);
   } finally {
     await browser?.close();

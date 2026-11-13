@@ -1,5 +1,5 @@
 // Ibex owns URL, URLSearchParams, Headers, and text. Preserve Exact's base64
-// edge behavior and live URLSearchParams iteration while Ibex's iterator snapshots.
+// edge behavior.
 (function (global) {
   "use strict";
   var host = global.__exact_host;
@@ -28,29 +28,5 @@
       while (text.length % 4) text += "=";
     }
     return call("atob", [text]);
-  };
-  var proto = global.URLSearchParams.prototype;
-  var snapshot = proto.entries;
-  function iterator(instance, field) {
-    snapshot.call(instance); // validate the receiver now
-    var at = 0, done = false;
-    var result = { next: function () {
-      if (done) return { value: undefined, done: true };
-      var pairs = Array.from(snapshot.call(instance));
-      if (at >= pairs.length) { done = true; return { value: undefined, done: true }; }
-      var pair = pairs[at++];
-      return { value: field === undefined ? pair : pair[field], done: false };
-    } };
-    result[Symbol.iterator] = function () { return this; };
-    return result;
-  }
-  proto.entries = function () { return iterator(this); };
-  proto.keys = function () { return iterator(this, 0); };
-  proto.values = function () { return iterator(this, 1); };
-  proto[Symbol.iterator] = proto.entries;
-  proto.forEach = function (callback, receiver) {
-    if (typeof callback !== "function") throw new TypeError("forEach requires a function");
-    var entries = this.entries(), entry;
-    while (!(entry = entries.next()).done) callback.call(receiver, entry.value[1], entry.value[0], this);
   };
 })(globalThis);

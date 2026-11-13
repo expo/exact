@@ -286,7 +286,7 @@ fn refusal_before_readiness_restores_the_seed_and_its_identity_eligibility() {
     let before = r.kernel().export(None).unwrap();
     assert!(matches!(
         r.act("refuse", vec![Value::str("B")]),
-        Err(RunnerError::Trap(_))
+        Err(RunnerError::Evaluation { .. })
     ));
     assert_eq!(r.kernel().export(None).unwrap(), before);
     shows(&r, "kept");
@@ -861,7 +861,7 @@ fn a_refused_commit_does_not_forget_a_kept_answer() {
     r.data.value = Value::str(&"x".repeat(kept::MAX_KEPT_BYTES));
     assert!(matches!(
         r.act("refuse", vec![Value::str("B")]),
-        Err(RunnerError::Trap(_))
+        Err(RunnerError::Evaluation { .. })
     ));
     assert!(
         kept_answer(&r),

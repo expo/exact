@@ -1,6 +1,6 @@
 //! Bake `app.contract` through `app.ts` into `OUT_DIR` at build time: the plan,
 //! the module's Hermes bytecode, its identity and the compatibility id, for
-//! `src/lib.rs` and `exact_linux::canvas_jni!` to embed, and the hatches'
+//! `src/lib.rs` and `exact_painted::canvas_jni!` to embed, and the hatches'
 //! install and the plan's uses (`contract::native::android_entry`). The bake is the Linux
 //! host's (`apps/messages/linux/build.rs`): the Canvas host is that host's
 //! presenter under Android's own Canvas, and has no update store either.

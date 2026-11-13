@@ -171,6 +171,7 @@ impl Ty {
     pub fn matches_roster(&self, spec: &str) -> bool {
         match spec {
             "number" => *self == Ty::Number,
+            "number | string" => matches!(self, Ty::Number | Ty::String | Ty::Enum(_)),
             "string" => matches!(self, Ty::String | Ty::Enum(_)),
             "bool" => *self == Ty::Bool,
             "any" => matches!(

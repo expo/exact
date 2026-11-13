@@ -932,8 +932,10 @@ impl Backend {
             Some(false) => return None,
             None => {}
         }
-        let generation = self.entry(name).generation;
-        if let Err(e) = self.vault.delete_locked(name, generation) {
+        // Every generation goes, not only the current one: an older one a
+        // write failed to delete would otherwise be the newest locked item
+        // at the next boot, which reconciliation keeps over the plain copy.
+        if let Err(e) = self.vault.delete_all_locked(name) {
             return self.wait_move(name, e, env);
         }
         let entry = self.entry(name);

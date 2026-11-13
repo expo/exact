@@ -1,7 +1,7 @@
 //! The Rust host builder (LLP 1133.001 D5's `rust-static`, built by LLP
 //! 1133.022 D10 item 5): the Linux or Windows implementation bound to each
 //! interface the plan's modules name, compiled as a module of the app's own
-//! host crate, and the table the host binds (`exact_linux::package`).
+//! host crate, and the table the host binds (`exact_painted::package`).
 //!
 //! Each implementation is chosen as the other builders choose (LLP 1133.001
 //! D4, `implementationFor` in `js/bake/src/typescript.mjs`): the one
@@ -13,7 +13,7 @@
 //! The root joins the app's crate by a `#[path]` module, as an app's own
 //! hatches join it by `include!` (LLP 1075.003.000.001 §5): its submodules
 //! resolve beside it, and it names exact2's crates the app's crate already
-//! depends on (`exact_linux::package`). No Cargo manifest is generated, so
+//! depends on (`exact_painted::package`). No Cargo manifest is generated, so
 //! a package's Rust takes no crate of its own yet.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ pub struct Bound {
     pub extension: String,
     /// The implementation's root Rust file.
     pub root: PathBuf,
-    /// The type in it that implements `exact_linux::package::Package`.
+    /// The type in it that implements `exact_painted::package::Package`.
     pub class: String,
 }
 
@@ -78,7 +78,7 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
 }
 
 /// The text an app's host crate includes for `target`: each bound root as a
-/// `#[path]` module and `exact_packages()`, the table `exact_linux::Composed`
+/// `#[path]` module and `exact_packages()`, the table `exact_painted::Composed`
 /// takes. With nothing bound the table is empty.
 pub fn rust_packages(app_root: &Path, extensions: &[&str], target: &str) -> Result<String, String> {
     let bound = match target {
@@ -107,11 +107,11 @@ pub fn rust_packages(app_root: &Path, extensions: &[&str], target: &str) -> Resu
             b.root.display().to_string()
         );
         entries += &format!(
-            "        exact_linux::package::Entry::of::<{module}::{}>({:?}),\n",
+            "        exact_painted::package::Entry::of::<{module}::{}>({:?}),\n",
             b.class, b.extension
         );
     }
-    text += "/// The packages this build composes, for `exact_linux::Composed`.\n#[allow(dead_code)]\nfn exact_packages() -> Vec<exact_linux::package::Entry> {\n    vec![\n";
+    text += "/// The packages this build composes, for `exact_painted::Composed`.\n#[allow(dead_code)]\nfn exact_packages() -> Vec<exact_painted::package::Entry> {\n    vec![\n";
     text += &entries;
     text += "    ]\n}\n";
     Ok(text)

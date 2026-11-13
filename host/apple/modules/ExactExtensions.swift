@@ -109,15 +109,19 @@ enum ExactExtensions {
     /// The live modules, in the order they were made: the first is handed
     /// a due wake (LLP 1133.017 D7: the app's first session).
     private static var modules: [WeakModule] = []
+    /// The process's one observer of the host's due wakes, made with the
+    /// first module and kept after the last one ends, so a module made then
+    /// adds no second observer and a wake is handed over once.
+    private static var dueWakes: NSObjectProtocol?
 
-    /// A module was made. The first one hears the host's due wakes
+    /// A module was made. The first live one hears the host's due wakes
     /// (`exact.wakes.due`, ExactKit's Wakes.swift), each handed to its
     /// extension's adapter; then the host is told a module is ready, so it
     /// hands over a wake it holds.
     static func created(_ m: ExactModule) {
         modules.append(WeakModule(m))
-        if modules.count == 1 {
-            NotificationCenter.default.addObserver(forName: Notification.Name("exact.wakes.due"), object: nil, queue: .main) { note in
+        if dueWakes == nil {
+            dueWakes = NotificationCenter.default.addObserver(forName: Notification.Name("exact.wakes.due"), object: nil, queue: .main) { note in
                 guard let offer = note.object as? NSMutableDictionary, let due = offer as? [String: Any],
                       let name = due["package"] as? String, let token = due["token"] as? String,
                       let m = modules.lazy.compactMap({ $0.module }).first, let a = adapter(m, name) else { return }

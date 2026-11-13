@@ -9,7 +9,7 @@ import { useXcode } from './devices.mjs';
 import { spawnSync } from 'node:child_process';
 import { assertActivityRefusals } from './activities.mjs';
 import { resolveApp } from '../../scripts/app.mjs';
-import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs } from './link.mjs';
+import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs, recordMinimumOS } from './link.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
 import { writeDataKeys } from './data-keys.mjs';
 
@@ -521,7 +521,15 @@ test('outside production trust the SDK compiles for iOS 17.0, and the app keeps 
   assert.deepEqual(compiledTargets(app, 'production'), { ios: '18.0', macos: '15.0' });
   assert.deepEqual(compiledTargets({ manifest: {} }, 'development'), deploymentTargets({ manifest: {} }));
   const launching = { manifest: { launch: ['player'], host: { ios: { minimumOS: '18.0' } } } };
-  assert.deepEqual(compiledTargets(launching, 'development'), deploymentTargets(launching), 'launch Swift compiles in the host package at the app minimum');
+  assert.deepEqual(compiledTargets(launching, 'development', 'darwin'), deploymentTargets(launching), 'on a Mac, launch Swift compiles in the host package at the app minimum');
+  // The native build system (the Linux cross build) gives the launch modules and the executable that imports them
+  // the app's own target, so the host keeps the floor.
+  assert.deepEqual(compiledTargets(launching, 'development', 'linux'), { ...deploymentTargets(launching), ios: '17.0' });
+
+  // One spelling per version, so apps that write it differently share one Swift scratch (expo/exact-build#94).
+  for (const minimumOS of ['18', '18.0', '18.0.0', 18]) assert.equal(deploymentTargets({ manifest: { host: { ios: { minimumOS } } } }).ios, '18.0', String(minimumOS));
+  assert.equal(deploymentTargets({ manifest: { host: { ios: { minimumOS: '18.4.1' } } } }).ios, '18.4.1');
+  assert.equal(deploymentTargets({ manifest: { host: { macos: { minimumOS: '15' } } } }).macos, '15.0');
 });
 
 test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsymutil', 'nm'].every(tool => Bun.which(tool))).each([false, true])('production iOS bundles keep symbols and owning privacy declarations (disk-space service: %s)', async diskService => {
@@ -638,3 +646,39 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60_000);
+
+test('the app minimum is written into every slice after a link for the floor, leaving the SDK and the rest as linked (expo/exact-build#176)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-minos-'));
+  const thin = (minos, sdk) => {
+    const b = Buffer.alloc(56);
+    b.writeUInt32LE(0xfeedfacf, 0); b.writeUInt32LE(1, 16); b.writeUInt32LE(24, 20);
+    b.writeUInt32LE(0x32, 32); b.writeUInt32LE(24, 36); b.writeUInt32LE(2, 40);
+    b.writeUInt32LE(minos, 44); b.writeUInt32LE(sdk, 48);
+    return b;
+  };
+  const path = join(dir, 'App');
+  const v = (major, minor, patch = 0) => (major << 16) | (minor << 8) | patch;
+  try {
+    writeFileSync(path, thin(v(17, 0), v(26, 4)));
+    recordMinimumOS(path, '18');
+    const thinOut = readFileSync(path);
+    assert.equal(thinOut.readUInt32LE(44), v(18, 0));
+    assert.equal(thinOut.readUInt32LE(48), v(26, 4));
+    assert.equal(thinOut.readUInt32LE(40), 2);
+    assert.doesNotThrow(() => assertLinkedSdk(path, '26.4'));
+    recordMinimumOS(path, '18.2.1');
+    assert.equal(readFileSync(path).readUInt32LE(44), v(18, 2, 1));
+    // Every slice of a universal file.
+    const header = Buffer.alloc(8 + 2 * 20); header.writeUInt32BE(0xcafebabe, 0); header.writeUInt32BE(2, 4);
+    header.writeUInt32BE(48, 16); header.writeUInt32BE(56, 20); header.writeUInt32BE(104, 36); header.writeUInt32BE(56, 40);
+    writeFileSync(path, Buffer.concat([header, thin(v(17, 0), v(26, 4)), thin(v(17, 0), v(26, 4))]));
+    recordMinimumOS(path, '19.1');
+    const fatOut = readFileSync(path);
+    assert.equal(fatOut.readUInt32LE(48 + 44), v(19, 1)); assert.equal(fatOut.readUInt32LE(104 + 44), v(19, 1));
+    // No LC_BUILD_VERSION, or not a version: refused, the file unchanged.
+    const none = thin(v(17, 0), v(26, 4)); none.writeUInt32LE(0x1b, 32); writeFileSync(path, none);
+    assert.throws(() => recordMinimumOS(path, '18'), /no single LC_BUILD_VERSION/);
+    assert.throws(() => recordMinimumOS(path, 'eighteen'), /not a minimum OS version/);
+    assert.deepEqual(readFileSync(path), none);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

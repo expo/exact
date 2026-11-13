@@ -6,9 +6,33 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
+import { linuxRebuild, ownVerb, rebuildCommand } from './agent-build.mjs';
+import { linuxBinary, resolveApp } from './app.mjs';
 import { crop, decodePng } from './png.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
+
+/** Report every missing requested native build before starting a parity capture. */
+export function requireNativeBuilds(app, hosts, { device = false } = {}) {
+  const a = resolveApp(app), missing = [];
+  for (const host of new Set(hosts)) {
+    const override = host === 'linux' ? 'EXACT_LINUX_BIN' : host === 'macos' ? 'EXACT_MAC_BIN' : null;
+    const built = host === 'linux' ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a))
+      : host === 'macos' ? (process.env.EXACT_MAC_BIN ?? appleRunBinary(a))
+      : host === 'ios' ? appleArtifacts(a, { destination: device ? 'ios' : 'ios-simulator' }).bundle : null;
+    if (built === null || existsSync(built)) continue;
+    if (override && process.env[override] !== undefined) {
+      missing.push(`  ${host}: ${override} names no file: ${built}`);
+      continue;
+    }
+    const command = host === 'linux' ? linuxRebuild(a)
+      : host === 'ios' && device ? (ownVerb(a, 'ios --device') ?? `bun host/apple/build.mjs --device ${a.crate('apple')}`)
+      : rebuildCommand(a, host === 'ios' ? 'ios' : 'mac');
+    missing.push(`  ${host}: run ${command} first`);
+  }
+  if (missing.length) throw new Error(`missing native builds for ${a.name}:\n${missing.join('\n')}`);
+}
 
 /** A gallery's web build, the JS target the app ships (LLP 1071), in its own dist (`target/web-dist-js/<app>`) so a
  * smoke leaves `host/web/dist` alone; built when missing, and again under `EXACT_PARITY_REBUILD=1`. */

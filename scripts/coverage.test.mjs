@@ -51,7 +51,7 @@ test('the lane requires coverage and gives its web tests this commit\'s builds',
   const names = Object.keys(steps);
   expect(names.indexOf('prepare')).toBeLessThan(names.indexOf('test'));
   expect(names.indexOf('prepare')).toBeLessThan(names.indexOf('glue'));
-  for (const name of ['test', 'glue', 'web-build-test', 'web-ax-test']) expect(steps[name][2]).toContain('EXACT_REQUIRED=1');
+  for (const name of ['test', 'glue', 'web-build-test', 'web-ax-test', 'module-seams', 'notifications-web']) expect(steps[name][2]).toContain('EXACT_REQUIRED=1');
   const glue = steps.glue[2].join(' ');
   for (const v of ['EXACT_WEB_DIST=', 'EXACT_WEB_JS_DIST=', 'EXACT_NO_GPU_WASM_DIST=', 'EXACT_NO_GPU_JS_DIST=', 'EXACT_MOTION_DIST=']) expect(glue).toContain(v);
   expect(steps.prepare[2][1]).toContain('EXACT_WEB_LINK=all');
@@ -65,4 +65,18 @@ test('the lane drops settings that change what a check tests', () => {
 test('a bun step that ran no test is a failure', () => {
   expect(failures('web-build-test', 'bun test v1.4.2\nerror: regex "x" matched 0 tests. Searched 1 file\n', 0)).toEqual(['web-build-test: ran no tests']);
   expect(failures('glue', 'bun test v1.4.2\n 3 pass\n 0 fail\nRan 3 tests across 1 file.\n', 0)).toEqual([]);
+});
+
+test("the tests a crashed XCTest process took down are one failure, and a test that failed is named", () => {
+  const log = [
+    "Test case 'PushedTitleIOSTests.testAPush()' failed on 'Clone 1 of iPhone 18 Pro - xctest (83259)' (0.000 seconds)",
+    "Test case 'NavigationCollapseIOSTests.testADrag()' failed on 'Clone 1 of iPhone 18 Pro - xctest (83440)' (0.000 seconds)",
+    "Test case 'NavigationCollapseIOSTests.testAnInset()' failed on 'Clone 1 of iPhone 18 Pro - xctest (52457)' (5.465 seconds)",
+    "Test case 'PushedTitleIOSTests.testASwap()' failed on 'Clone 1 of 2026-11-13 05:03:35.751 xcodebuild[47825:30582401] [MT] elapsed",
+  ].join('\n');
+  expect(failures('ios', log, 1).sort()).toEqual([
+    'ios: ExactKitTests.NavigationCollapseIOSTests testAnInset failed',
+    'ios: ExactKitTests.PushedTitleIOSTests testASwap failed',
+    'ios: a test process crashed',
+  ]);
 });

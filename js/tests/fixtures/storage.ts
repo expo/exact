@@ -74,6 +74,15 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
     storage.fs.atomicWriteFile(song, bytes(value)).then(() => native.call({value})).catch((e) => { lastError = e.message; });
     return {text:"saved " + value};
   }
+  // What background work may do: draw randomness, after a write alone, after a combinator over one, or after a
+  // database's own step (LLP 1069.005 D3).
+  if (op === "save-then-draw" || op === "save-all-then-draw" || op === "query-then-draw") {
+    const draw = () => { lastError = crypto.randomUUID().length + "/" + crypto.getRandomValues(new Uint8Array(4)).length; };
+    const work = op === "query-then-draw" ? storage.sqlite.open("app:/data/notes.db").then(db => db.query("SELECT 1 AS one").then(draw).finally(() => db.close()))
+      : (op === "save-all-then-draw" ? Promise.all([storage.fs.writeFile(song, bytes(value))]) : storage.fs.writeFile(song, bytes(value))).then(draw);
+    work.catch((e) => { lastError = e.message; });
+    return {text:"saved " + value};
+  }
   // A background write that fails: its promise rejects, as on the web.
   if (op === "save-bad") {
     storage.fs.writeFile(storage.fs.directories.data + "/absent/file", bytes(value)).catch((e) => { lastError = String(e.code); });
@@ -86,6 +95,7 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
     return {text:"answered"};
   }
   if (op === "last-error") return {text:lastError};
+  if (op === "reset-error") { lastError = ""; return {text:"reset"}; }
   // Each part appended to one log, awaited in turn: two such answers
   // interleave at their awaits, as two async calls do on the web (D4.5).
   if (op === "append") {
@@ -140,6 +150,20 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     } catch(error:any) { return {text:error.message}; }
   }
   if (op === "placeholder") return {text: ""};
+  if (op === "doc-file-codes") {
+    const out: string[] = [];
+    for (const path of [value, value + "/child"]) {
+      for (const step of [
+        () => storage.fs.readdir(path),
+        () => storage.fs.mkdir(path),
+        () => storage.fs.rm(path),
+      ]) {
+        try { await step(); out.push("allowed"); }
+        catch (error: any) { out.push(error.kind + " " + error.code); }
+      }
+    }
+    return {text: out.join(" ")};
+  }
   if (op === "doc-link") {
     const steps = [
       () => storage.fs.readFile(value),
@@ -170,7 +194,8 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   }
   // LLP 1069.010.000 D4: the app's own atomic save of a kept file.
   if (op === "kept-save") {
-    await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved"));
+    try { await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved")); }
+    catch (e: any) { return {text: `${e.kind} ${e.code}`}; }
     return {text: (await storage.fs.recentDocuments()).map((d) => d.path).join(",")};
   }
   // LLP 1069.010.000 D1, D2a: the answer watches a chosen file and its
@@ -539,6 +564,19 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   if (op === "peek") {
     try { return {text: value + ":" + String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/note")))}; }
     catch (_) { return {text: value + ":empty"}; }
+  }
+  // Each write of `value` from one buffer refilled after the call, behind an operation in flight: the file holds
+  // what was passed. (Returns each file's contents, joined.)
+  if (op === "reused-buffer") {
+    const data = storage.fs.directories.data, buffer = bytes(value), view = new Uint8Array(buffer.buffer, 1);
+    const writes = [storage.fs.mkdir(data + "/reused"),
+      storage.fs.writeFile(data + "/reused/write", buffer),
+      storage.fs.atomicWriteFile(data + "/reused/atomic", view),
+      storage.fs.appendFile(data + "/reused/append", buffer.buffer)];
+    buffer.fill(63);
+    await Promise.all(writes);
+    const read = async (name: string) => String.fromCharCode(...new Uint8Array(await storage.fs.readFile(data + "/reused/" + name)));
+    return {text:[await read("write"), await read("atomic"), await read("append")].join(",")};
   }
   if (op === "read-at") return {text:String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/" + value)))};
   if (op === "read-size") {

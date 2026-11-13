@@ -318,6 +318,8 @@ test('an import spelled in a string or a comment is none', () => {
     expect(used('const t = `import "tpl" ${await import(\'inside\')} ${{ a: 1 }.a}`;\nimport y from \'after-template\';\n')).toEqual(['after-template', 'inside']);
     expect(used('const r = /import "rx"|\'/g; const q = a / b / c;\nimport z from \'after-regex\';\n')).toEqual(['after-regex']);
     expect(used('// a plain list, not the exact-camera view\n')).toEqual([]);
+    expect(used('const s = "\\\r\nimport { open } from \'@exact/hid\'";\n')).toEqual([]);
+    expect(used('\uFEFF// notes\u2028import\u00A0{ open } from "@exact/hid";\n')).toEqual(['@exact/hid']);
     expect(used([
       "import { a } from '@exact/notifications';", "import type { B } from '@exact/clipboard';", 'import { type C } from "zod/v4";',
       "export type { D } from 'types-only';", 'const later = await import("lazy-pkg");', "// import { d } from 'commented';",

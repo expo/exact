@@ -275,6 +275,22 @@ fn return_continues_a_list_and_ends_it_on_an_empty_item() {
         run("1. a|\n2. b\n   - x\n3. c\n\n1. other", Command::Newline),
         "1. a\n2. |\n3. b\n   - x\n4. c\n\n1. other"
     );
+    // A lazy line continues the item above it (CommonMark 0.31.2 §5.2's
+    // paragraph continuation text): the items after it still count on. A
+    // fence or a rule at the item's indent starts a block, and ends the list.
+    assert_eq!(
+        run("1. hello|\nworld\n2. next", Command::Newline),
+        "1. hello\n2. |\nworld\n3. next"
+    );
+    assert_eq!(
+        run("1. a|\n2. b\nlazy\n3. c", Command::Newline),
+        "1. a\n2. |\n3. b\nlazy\n4. c"
+    );
+    for end in ["```\n2. x\n```", "---\n2. x"] {
+        let source = format!("1. a|\n2. b\n{end}");
+        let after = format!("1. a\n2. |\n3. b\n{end}");
+        assert_eq!(run(&source, Command::Newline), after, "{source}");
+    }
     assert_eq!(run("9) nine|", Command::Newline), "9) nine\n10) |");
     assert_eq!(run("plain|", Command::Newline), "plain\n|");
     assert_eq!(

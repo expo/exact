@@ -91,14 +91,14 @@ def rootOf (index : Index) (panel : TabInfo) : Option TabInfo :=
   go (index.length + 1) panel.parent
 
 /-- The first tablist with named panels, in tab order. A route's tablist
-belongs to that route, as in `head.rs` `tab_panels`. -/
+belongs to that route, as in `head.rs` `tab_panels`; a panel inside its
+tablist is a candidate too. -/
 def panels (index : Index) (root : TabInfo) : Index := Id.run do
   let rec scan : Nat → Index → Index
     | 0, _ => []
     | _ + 1, [] => []
     | fuel + 1, n :: rest =>
-      let kids := if (n.str "navigationKey").isNone && n.str "role" != .some "tablist"
-        then children index n.path else []
+      let kids := if (n.str "navigationKey").isNone then children index n.path else []
       n :: scan fuel (kids ++ rest)
   let zone := scan (index.length + 1) (children index root.path)
   let candidates := zone.filter (·.str "role" == .some "tabpanel")

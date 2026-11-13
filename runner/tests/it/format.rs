@@ -727,6 +727,69 @@ fn date(ms: f64, offset: f64, style: &str) -> Value {
     .expect("a date")
 }
 
+#[test]
+fn day_keys_are_calendar_dates_at_every_offset() {
+    let label = |key: &str, offset: f64, style: &str| {
+        formatting(
+            Stdlib::FormatDate,
+            &[Value::str(key), Value::Number(offset), Value::str(style)],
+        )
+    };
+    for (key, medium, month_year) in [
+        ("2026-10-16", "Oct 16, 2026", "October 2026"),
+        ("2024-02-29", "Feb 29, 2024", "February 2024"),
+        ("2000-02-29", "Feb 29, 2000", "February 2000"),
+        ("2400-02-29", "Feb 29, 2400", "February 2400"),
+        ("0001-01-01", "Jan 1, 1", "January 1"),
+        ("0099-12-31", "Dec 31, 99", "December 99"),
+        ("9999-12-31", "Dec 31, 9999", "December 9999"),
+    ] {
+        for offset in [-1080.0, -720.0, -420.0, 0.0, 345.5, 840.0, 1080.0] {
+            for (style, want) in [("medium", medium), ("month-year", month_year), ("iso", key)] {
+                assert_eq!(
+                    label(key, offset, style),
+                    Some(Value::str(want)),
+                    "{key} {offset} {style}"
+                );
+            }
+        }
+    }
+    for key in [
+        "",
+        "2026-02-29",
+        "1900-02-29",
+        "2100-02-29",
+        "2024-04-31",
+        "2024-00-01",
+        "2024-13-01",
+        "2024-01-00",
+        "2024-01-32",
+        "0000-01-01",
+        "10000-01-01",
+        "2024-2-09",
+        "24-02-09",
+        "2024/02/09",
+        " 2024-02-09",
+        "2024-02-09 ",
+        "2024-02-09\n",
+        "2024-02-09T00:00:00Z",
+        "1707436800000",
+        "２０２４-02-09",
+        "2024-٠٢-09",
+    ] {
+        for style in ["medium", "month-year", "iso"] {
+            assert_eq!(
+                label(key, 0.0, style),
+                Some(Value::str("")),
+                "{key:?} {style}"
+            );
+        }
+    }
+    for offset in [f64::NAN, f64::INFINITY, -1081.0, 1080.1] {
+        assert_eq!(label("2026-10-16", offset, "medium"), Some(Value::str("")));
+    }
+}
+
 fn number(n: f64) -> Value {
     formatting(
         Stdlib::FormatNumber,

@@ -184,6 +184,32 @@ final class AgentCheckIOSTests: XCTestCase {
         XCTAssertNil(painted["onAccentFill"], "\(painted)")
     }
 
+    /// Each translucent view's opacity counts once in the ink and the fill under it.
+    func testATranslucentViewsOpacityCountsOnce() throws {
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "create", "id": 4, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "Faded"], "style": ["text_color": [0, 0, 0, 255], "font_size": 17]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 2, "ids": [4]], ["op": "children", "id": 4, "ids": [3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+            ["op": "frame", "id": 2, "x": 16.0, "y": 20.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 3, "x": 12.0, "y": 8.0, "w": 96.0, "h": 20.0],
+            ["op": "present", "id": 2, "property": "opacity", "x": 0.5, "y": 0.0],
+            ["op": "present", "id": 4, "property": "opacity", "x": 0.5, "y": 0.0],
+        ])
+        XCTAssertEqual(session?.presenter.views[2]?.alpha, 0.5)
+        XCTAssertEqual(session?.presenter.views[4]?.alpha, 0.5)
+        let items = try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]])
+        let faded = try XCTUnwrap(items.first { $0["text"] as? String == "Faded" }, "\(items)")
+        XCTAssertEqual((faded["fg"] as? [Double])?.last, 0.25, "\(faded)")
+        // Half red over the white page.
+        let bg = try XCTUnwrap(faded["bg"] as? [Double], "\(faded)")
+        XCTAssertEqual(bg[1], 127.5, accuracy: 1, "\(faded)")
+    }
+
     func testCheckObservesInkFitCoverTargetsOverflowCardsAndOverlap() throws {
         let white: [Double] = [255, 255, 255, 255]
         let agent = mounted([
@@ -550,6 +576,37 @@ final class AgentCheckIOSTests: XCTestCase {
     /// meets lies below the row's middle (a navigation bar's title); a row
     /// under a bar at its bottom is not, though the touch meets the bar's
     /// top half.
+    /// A toast (#394): an announcement laid over the page that lets touches through is no target and is not covered
+    /// by what its hit test reaches under it, and the judge takes it as lying over the page (`overlay`); one that takes
+    /// touches stays a cover of what is under it, and is no overlay.
+    func testAToastThatLetsTouchesThroughIsLaidOverThePage() throws {
+        let gray: [Double] = [230, 230, 230, 255]
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "A sentence the toast lies over", "testId": "under"], "style": ["font_size": 17]],
+            ["op": "create", "id": 3, "kind": "view", "handlers": ["press"], "props": ["testId": "beneath"]],
+            ["op": "create", "id": 4, "kind": "text", "props": ["text": "Saved", "testId": "toast", "accessibilityLive": "polite"],
+             "style": ["font_size": 17, "position_type": "absolute", "pointer_events": "none", "background_color": gray]],
+            ["op": "create", "id": 5, "kind": "text", "props": ["text": "Stuck", "testId": "stuck", "accessibilityLive": "polite"],
+             "style": ["font_size": 17, "position_type": "absolute", "background_color": gray]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 5]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+            ["op": "frame", "id": 2, "x": 16.0, "y": 100.0, "w": 368.0, "h": 24.0],
+            ["op": "frame", "id": 3, "x": 16.0, "y": 300.0, "w": 368.0, "h": 44.0],
+            ["op": "frame", "id": 4, "x": 16.0, "y": 96.0, "w": 368.0, "h": 32.0],
+            ["op": "frame", "id": 5, "x": 16.0, "y": 300.0, "w": 368.0, "h": 44.0],
+        ])
+        let reply = agent.check([:])
+        let items = try XCTUnwrap(reply["items"] as? [[String: Any]], "\(reply)")
+        func item(_ id: Int) throws -> [String: Any] { try XCTUnwrap(items.first { $0["id"] as? Int == id }, "\(items)") }
+        XCTAssertTrue(window?.hitTest(CGPoint(x: 200, y: 112), with: nil) === session?.presenter.views[2], "a touch passes through the toast")
+        XCTAssertEqual(try item(4)["overlay"] as? Bool, true)
+        XCTAssertNil(try item(4)["cover"], "what its hit test reaches under it does not cover it: \(items)")
+        XCTAssertNil(try item(5)["overlay"])
+        XCTAssertEqual((try item(3)["cover"] as? [String: Any])?["by"] as? Int, 5, "one that takes touches covers the button under it")
+    }
+
     func testACoverIsJudgedWholeAndARowPastItsScrollerIsNotCovered() throws {
         let gray: [Double] = [200, 200, 200, 255]
         let scrolls: [String: Any] = ["overflow_y": "scroll"]

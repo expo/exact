@@ -33,12 +33,18 @@ extension ExactSession {
         return true
     }
 
-    /// `openURL(url, id)`: `change` at `id` hears `opened` or `failed`
-    /// (LLP 1133.000 §2). `args` are the command's; one with no `id` is not
-    /// answered.
-    public func answerOpenURL(_ args: [Any], opened: Bool) {
-        guard state != .destroyed, args.count > 1, let id = args[1] as? String else { return }
-        guard let view = (runtime.command(["command": "openURL", "id": id])["view"] as? NSNumber)?.uint32Value else { return }
-        apply(runtime.change(view, opened ? "opened" : "failed", now: now()))
+    /// The answer to `openURL(url, id)`, for the platform's completion:
+    /// `change` at `id` hears `opened` or `failed` (LLP 1133.000 §2). `args`
+    /// are the command's; one with no `id` is not answered. `id` is looked
+    /// up in the runner that asked, so an answer that comes after a reload
+    /// or the session's end is dropped: the replacement may have its own
+    /// node by that id, which never asked.
+    public func openURLAnswer(_ args: [Any]) -> (Bool) -> Void {
+        let issued = GenerationStamp(self)
+        return { opened in
+            guard let session = issued.session, args.count > 1, let id = args[1] as? String,
+                  let view = (session.runtime.command(["command": "openURL", "id": id])["view"] as? NSNumber)?.uint32Value else { return }
+            session.apply(session.runtime.change(view, opened ? "opened" : "failed", now: session.now()))
+        }
     }
 }

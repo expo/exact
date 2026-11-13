@@ -23,7 +23,13 @@ import java.util.concurrent.CopyOnWriteArrayList
  * scheme, the contrast, a role's colour) and, when they moved, asks again for every name kept and then calls the
  * observers, so a [color] in `onDraw` that follows reads the new answer without waiting.
  */
-class ExactTamber(private val view: View) {
+class ExactTamber internal constructor(
+    private val view: View,
+    /** What exact2's thread asks after a turn ([Native.tamber]); a test gives its own. */
+    private val native: (String) -> String,
+) {
+    constructor(view: View) : this(view, { Native.tamber(it) })
+
     private val lock = Any()
     /** The place last asked for (0 the root, -1 none yet), the names asked, their answers, and the inputs they were
      * read under (null: not known). */
@@ -111,13 +117,14 @@ class ExactTamber(private val view: View) {
         val (at, was) = synchronized(lock) { if (id < 0) return else id to inputs }
         try {
             // The inputs alone first: they cost no colour, and mostly nothing moved.
-            val now = JSONObject(Native.tamber(request(at, emptyList()))).optString("inputs")
+            val now = JSONObject(native(request(at, emptyList()))).optString("inputs")
             if (now.isEmpty() || now == was) return
             val asked = synchronized(lock) { names.toList() }
-            take(at, asked, JSONObject(Native.tamber(request(at, asked, true))))
+            take(at, asked, JSONObject(native(request(at, asked, true))))
         } catch (e: UnsatisfiedLinkError) { return }
-        // Its view drawn again, so an `onDraw` reading [color] takes the new answer.
-        if (was != null) Tambers.main.post { view.invalidate(); for (l in listeners) l() }
+        // Its view drawn again, so an `onDraw` reading [color] takes the new answer: a place that was refused and
+        // answers now included.
+        Tambers.main.post { view.invalidate(); for (l in listeners) l() }
     }
 
     /** The main thread, after a stream was ingested: a view now another element's (a pin above it) is asked there,

@@ -1,0 +1,27 @@
+// A native module's read (LLP 1133.002 D13): the runner answers it from the
+// module's substitute and never asks the oracle, so its boot answer is a host
+// fact, as the runner's own sources' are. A read whose arguments change keeps
+// that answer while the substitute's does not move; the app's own source
+// beside it is the oracle's.
+use geolocationStatus, GeolocationStatus from "@exact/geolocation"
+
+shape Spot
+  text: string
+
+component App
+  state asked = 0
+  resource status = geolocationStatus() as shape GeolocationStatus else empty()
+  resource here = here(asked) as shape Spot
+  action locate
+    asked = asked + 1
+  view
+    column
+      text status.state testId="status"
+      text here.text testId="here"
+      button "locate" press=locate testId="locate"
+
+test "the module's status holds through a re-asked source"
+  expect text "status" == "prompt"
+  tap "locate"
+  expect state asked == 1
+  expect text "status" == "prompt"

@@ -118,8 +118,10 @@ internal class WindowFrames(private val wake: () -> Unit) {
         window.addOnFrameMetricsAvailableListener(listener, Handler(thread.looper))
     }
 
-    fun detach() {
+    /** Stops measuring [from]'s frames, or any window's when it is null; a window since replaced keeps its successor's. */
+    fun detach(from: Window? = null) {
         val w = window ?: return
+        if (from != null && from !== w) return
         window = null
         try { w.removeOnFrameMetricsAvailableListener(listener) } catch (e: IllegalArgumentException) {}
     }

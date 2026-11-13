@@ -126,18 +126,18 @@ import { timeReporter } from '../host/web/navigation/environment.js';
 // The Snapback device checks need the Snapback client (snapback4/), which this repository does not ship.
 const hasSnapback = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url));
 
-// LLP 1107 D1: `--reader` is a flag of the drive, said to the Android carrier as the variable it reads
-// (agent-android.mjs `androidBinary`), and never an op.
-test('--reader names the Canvas reader to the Android carrier', () => {
+// LLP 1107 D1: `--reader` and `--headless` are flags of the drive, which `main` hands to `open` as `reader`, and never
+// ops; neither sets EXACT_ANDROID_READER, which is how a script that opens a drive says it.
+test('--reader and --headless name the Android carrier as drive flags', () => {
   const before = process.env.EXACT_ANDROID_READER;
   try {
     delete process.env.EXACT_ANDROID_READER;
     expect(parseFlags(['android', '--app', 'shelf', 'tree']).flags.reader).toBeUndefined();
-    expect(process.env.EXACT_ANDROID_READER).toBeUndefined();
     const { flags, rest } = parseFlags(['android', '--reader', '--app', 'shelf', 'tree']);
     expect(flags.reader).toBe(true);
     expect(rest).toEqual(['android', 'tree']);
-    expect(process.env.EXACT_ANDROID_READER).toBe('1');
+    expect(parseFlags(['android', '--headless', 'tree']).flags.reader).toBe(false);
+    expect(process.env.EXACT_ANDROID_READER).toBeUndefined();
   } finally {
     if (before === undefined) delete process.env.EXACT_ANDROID_READER; else process.env.EXACT_ANDROID_READER = before;
   }
@@ -328,6 +328,8 @@ test('the pinned headless shell by default, the full build for a need, and CHROM
     expect(at({}).unavailable).toMatch(/headless shell is missing .*install chromium-headless-shell/);
     for (const path of [full, shell]) { mkdirSync(dirname(path), {recursive:true}); writeFileSync(path, ''); chmodSync(path, 0o755); }
     expect(at({})).toEqual({ executable: shell, unavailable: null });
+    expect(at({CHROME: ''})).toEqual(at({}));
+    expect(at({CHROME: ''}, ['gpu'])).toEqual(at({}, ['gpu']));
     expect(at({}, ['gpu'])).toEqual({ executable: full, unavailable: null });
     expect(at({CHROME: shell}, ['gpu']).executable).toBe(shell);
     expect(at({CHROME: resolve(dir, 'missing')}).unavailable).toBeTruthy();
@@ -676,7 +678,7 @@ const other = 'http://127.0.0.1:4400';`;
   expect(next).toContain('net.fetch https://other.example');
   expect(next).toContain("const other = 'http://127.0.0.1:4400'");
   expect(next).toContain("// const origin = 'http://comment'");
-  expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level literal/);
+  expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level const origin/);
   for (const init of ["'http://127.0.0.1:4400' as const", "('http://127.0.0.1:4400' satisfies string)", '`http://127.0.0.1:4400` as const']) {
     const wrapped = `export const origin = ${init}; export const grants = \`net.fetch \${origin}\`;`;
     expect(literalBackendOrigin(wrapped, parseSync)).toBe('http://127.0.0.1:4400');
@@ -924,12 +926,12 @@ test('interactive faults resolve backend, warn on impossible prefixes, and reloa
   expect(warnings[0]).toContain('matches no granted origin');
   expect(() => faultRequest('pass', ['fetch','backend'], [])).toThrow(/exactly one/);
   const calls=[];
-  const session={host:'web', now:12, logCursor:9,
+  const session={host:'web', now:12, logCursor:9, contact:{x:4,y:5},
     state: async()=>({background:{queued:1,inFlight:0},faults:[]}),
     clock:async arg=>{calls.push(arg);return {settled:true};}, carrier:{reset:async options=>{calls.push(options);}}};
   expect(await reloadWeb(session)).toEqual({reloaded:true});
   expect(calls).toEqual(['data',{keep:true,failFetch:''}]);
-  expect(session.now).toBe(0);
+  expect([session.now, session.contact]).toEqual([0, null]);
   expect(driverCapabilities()).toContain('reload (interactive)');
   await expect(reloadWeb({host:'ios', keptStore:'default'})).rejects.toThrow('on ios each drive is a new launch, so run a second drive to see a relaunch (it opens on the store `default` this one kept)');
   await expect(reloadWeb({host:'android'})).rejects.toThrow(/on android each drive is a new launch, so run a second drive to see a relaunch, and an authored test's `reload` relaunches the host$/);
@@ -994,7 +996,7 @@ test('web freshness tracks backend selection creation, edits and deletion',async
   const app={dir,manifest:{}},dist=join(dir,'dist'),selection=join(dir,'.exact/backend-origin');
   try {
     mkdirSync(dist);mkdirSync(join(dir,'.exact'));
-    const bake=()=>writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true)}));
+    const bake=()=>writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true,[]),inputRoots:[]}));
     bake();expect(webChanges(dist,app).all).toEqual([]);
     writeFileSync(selection,'http://127.0.0.1:4412');expect(webChanges(dist,app).app).toEqual([selection]);
     bake();expect(webChanges(dist,app).all).toEqual([]);
@@ -1006,7 +1008,7 @@ test('web freshness tracks backend selection creation, edits and deletion',async
     rmSync(source);expect(webChanges(dist,app).app).toEqual([source]);
     // A source edited while the build compiled (after it read its inputs, before its marker): a change.
     writeFileSync(source,'export {};\n');
-    const inputsAt=Date.now()-10_000;writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true),inputsAt}));
+    const inputsAt=Date.now()-10_000;writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true,[]),inputsAt,inputRoots:[]}));
     writeFileSync(source,'export const edited = 1;\n');utimesSync(source,new Date(inputsAt+5_000),new Date(inputsAt+5_000));
     expect(webChanges(dist,app).app).toEqual([source]);
   } finally {rmSync(dir,{recursive:true,force:true});}
@@ -1176,7 +1178,7 @@ test('a setting is a web build input by value and source, and serve finds one ch
   const {changedSettings}=await import('../js/bake/src/__exact_env.mjs');
   const dir=mkdtempSync(resolve(tmpdir(),'exact-settings-')), dist=resolve(dir,'dist'), name='EXACT_TEST_SETTING', key=`import.meta.env.${name}`;
   const app={dir,manifest:{env:[name]}};
-  const bake=env=>writeFileSync(resolve(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true),env}));
+  const bake=env=>writeFileSync(resolve(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true,[]),inputRoots:[],env}));
   try {
     mkdirSync(dist);
     writeFileSync(resolve(dir,'.env'),`${name}=http://a.example\n`);
@@ -1380,37 +1382,28 @@ test('permission and bind values do not occupy the gallery command word', async 
   }
 });
 
-test('an APK with Maven libraries refuses missing locks before any native build work', async () => {
-  const { androidLockCommand, buildApk } = await import('./agent-android.mjs');
+test('missing Maven locks name the app command and require both lock and verification files', async () => {
+  const { androidLockCommand, mavenLocksPresent } = await import('./agent-android.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-maven-')), error = console.error, said = [];
   try {
     console.error = line => said.push(line);
-    mkdirSync(resolve(dir, 'node_modules/@exact'), { recursive: true });
-    symlinkSync(resolve(import.meta.dir, '../packages/in-app-browser'), resolve(dir, 'node_modules/@exact/in-app-browser'), 'dir');
-    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { '@exact/in-app-browser': '*' } }));
-    writeFileSync(resolve(dir, 'app.ts'), 'import { openBrowser } from "@exact/in-app-browser";');
-    const app = { dir, name: 'shop', crate() { throw new Error('native build reached'); } };
-    for (const game of [false, true]) {
-      app.manifest = game ? { game: {} } : {};
-      expect(buildApk(app, {}, 'release')).toBeNull();
-    }
+    const app = { dir, name: 'shop' }, maven = ['androidx.browser:browser:1.9.0'];
+    expect(mavenLocksPresent(app, maven)).toBe(false);
     const root = resolve(import.meta.dir, '..');
     expect(said.at(-1)).toContain(`by running in '${root}': bun scripts/agent-android.mjs build 'shop' --apk --write-locks, with EXACT_APP_DIR set to '${dir}',`);
-    // An app inside the checkout that is not `apps/<name>` is named by its directory too.
     expect(androidLockCommand({ dir: resolve(root, 'packages/camera/test/fixture'), name: 'fixture' })).toBe(`in '${root}': bun scripts/agent-android.mjs build 'fixture' --apk --write-locks, with EXACT_APP_DIR set to '${resolve(root, 'packages/camera/test/fixture')}'`);
     expect(androidLockCommand({ dir: resolve(root, 'apps/caltrain'), name: 'caltrain' })).toBe(`in '${root}': bun scripts/agent-android.mjs build 'caltrain' --apk --write-locks`);
     writeFileSync(resolve(dir, 'exact.mjs'), '');
-    expect(buildApk(app, {}, 'host-dev')).toBeNull();
+    expect(mavenLocksPresent(app, maven)).toBe(false);
     expect(said.at(-1)).toContain(`by running in '${dir}': bun exact.mjs android --write-locks,`);
     for (const file of ['gradle.lockfile', 'gradle-verification.xml']) {
       writeFileSync(resolve(dir, file), 'locked');
-      if (file === 'gradle.lockfile') expect(buildApk(app, {}, 'release')).toBeNull();
+      if (file === 'gradle.lockfile') expect(mavenLocksPresent(app, maven)).toBe(false);
     }
-    expect(() => buildApk(app, {}, 'release')).toThrow('native build reached');
+    expect(mavenLocksPresent(app, maven)).toBe(true);
     rmSync(resolve(dir, 'gradle.lockfile'));
-    expect(() => buildApk(app, {}, 'release', true)).toThrow('native build reached');
-    writeFileSync(resolve(dir, 'app.ts'), '');
-    expect(() => buildApk(app, {}, 'release')).toThrow('native build reached');
+    expect(mavenLocksPresent(app, maven)).toBe(false);
+    expect(mavenLocksPresent(app, [])).toBe(true);
   } finally { console.error = error; rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1422,4 +1415,48 @@ test('a widget address carries a configuration of parameter names to values', as
   expect(parsed.argv).toEqual(['ios', 'state']);
   for (const bad of ['three', '[]', '{"categories":3}'])
     expect(() => widgetArguments(['ios', 'widget', 'plan', '--configuration', bad, 'state'])).toThrow('widget --configuration: expected a JSON object');
+});
+
+
+test('a backend flag keeps its source through child builds and an environment override replaces it', async () => {
+  const { backendOriginSelection, selectBackendOrigin } = await import('../js/bake/src/typescript.mjs');
+  const env = {};
+  selectBackendOrigin('https://chosen.example/', env);
+  expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://chosen.example', source: '--backend' });
+  env.EXACT_BACKEND_ORIGIN = 'https://other.example';
+  expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://other.example', source: 'EXACT_BACKEND_ORIGIN' });
+});
+
+test('an import without an extension reaches its JavaScript file, a directory its index, and both what they import', async () => {
+  const { notBuildInput } = await import('./agent-launch.mjs');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exact-module-graph-')));
+  try {
+    const files = {
+      'app.ts': "import { a } from './helper';\nimport { b } from './helpers';\nimport c from './view';\n", 'helper.js': "export { d } from './deep';\n",
+      'deep.mjs': 'export const d = 1;\n', 'helpers/index.js': "import './more/x';\n", 'helpers/more/x.cjs': '', 'view.jsx': "import './y';\n", 'y.js': '', 'unused.js': '',
+    };
+    for (const [name, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, name)), { recursive: true }); writeFileSync(join(dir, name), text); }
+    const input = notBuildInput(dir);
+    expect(Object.keys(files).filter(name => input(join(dir, name)))).toEqual(['unused.js']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an Apple build is not stale for a Contract file it did not compile, edited while it ran', async () => {
+  const { receiptChanges } = await import('./agent-launch.mjs');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exact-contract-sources-')));
+  try {
+    const files = ['app.contract', 'parts/row.contract', 'draft.contract', 'watch.contract', 'modules/apple/view.contract'];
+    writeFileSync(join(dir, 'app.json'), '{"watch":{"source":"watch.contract"}}');
+    for (const name of files) { mkdirSync(dirname(join(dir, name)), { recursive: true }); writeFileSync(join(dir, name), ''); }
+    const receipt = join(dir, 'receipt.json'), started = new Date(Date.now() - 60_000), edited = new Date(Date.now() - 30_000);
+    const app = { dir, target: join(dir, 'missing-target'), manifest: {}, crate: () => 'fixture-apple' };
+    const changed = (graph) => {
+      writeFileSync(receipt, JSON.stringify({ target: 'aarch64-apple-darwin', started: started.toISOString(), build: { graph } }));
+      for (const name of files) utimesSync(join(dir, name), edited, edited);
+      return receiptChanges(receipt, app).map(path => path.slice(dir.length + 1)).filter(name => name.endsWith('.contract')).sort();
+    };
+    expect(changed({ contractSources: [join(dir, 'app.contract'), join(dir, 'parts/row.contract')] })).toEqual(['app.contract', 'modules/apple/view.contract', 'parts/row.contract', 'watch.contract']);
+    // A receipt that does not list them keeps every one.
+    expect(changed({})).toEqual([...files].sort());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

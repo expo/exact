@@ -193,6 +193,16 @@ package final class TextArea: UITextView {
     }
 
     weak var owner: NodeView?
+    /// The hardware key whose handlers ran in `pressesBegan`: UIKit's own
+    /// newline or deletion for it does not run them again (`TextField.heard`).
+    var heard: String?
+    /// The software keyboard's Return or Backspace reaches `insertText` and
+    /// `deleteBackward` with no key event: its handlers hear it here. True
+    /// when one prevented it, and the edit is skipped.
+    private func softwareKeyPrevented(_ name: String) -> Bool {
+        guard heard != name, let owner, !owner.disabled else { return false }
+        return owner.presenter?.keyDown(at: owner, name) == true
+    }
     /// The Markdown styler when `markup="markdown"` (LLP 1045 D5).
     package var markup: MarkdownEditing?
     /// A plain textarea's painted decorations (LLP 1114.007).
@@ -268,6 +278,7 @@ package final class TextArea: UITextView {
     package override func insertText(_ text: String) {
         owner?.presenter?.supersedePress() // typed text, as a key (PressHandoffIOS)
         owner?.presenter?.heldKey(at: owner) // a key on a held node lets its hold go (HeldState.swift)
+        if text == "\n", markedTextRange == nil, softwareKeyPrevented("Enter") { return }
         // UIKeyInput (including the software keyboard) need not ask the
         // text-view delegate before insertion. Handle a plain Return here,
         // the app's `beforeinput` first; the command's own native insertion
@@ -285,6 +296,7 @@ package final class TextArea: UITextView {
     package override func deleteBackward() {
         owner?.presenter?.supersedePress()
         owner?.presenter?.heldKey(at: owner) // a key on a held node lets its hold go, a deletion that changes nothing included (HeldState.swift)
+        if softwareKeyPrevented("Backspace") { return }
         crossHidden(backward: true)
         if let selections = owner?.presenter?.fieldSelections {
             selections.nativeEdit(owner, replacement: "", marked: markedTextRange != nil) { if !rewritesSelection(with: "") { super.deleteBackward() } }
@@ -309,6 +321,7 @@ package final class TextArea: UITextView {
     package override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let remaining=owner?.pressedControls(presses,down:true) ?? presses
         if remaining.isEmpty || owner?.editorKeyDown(remaining) == true { return }
+        heard = remaining.first?.key.map(NodeView.keyName)
         if let key = remaining.first?.key, key.modifierFlags.intersection([.shift, .command, .control]).isEmpty,
            key.keyCode == .keyboardLeftArrow || key.keyCode == .keyboardRightArrow {
             crossHidden(backward: key.keyCode == .keyboardLeftArrow)
@@ -316,10 +329,12 @@ package final class TextArea: UITextView {
         super.pressesBegan(remaining,with:event)
     }
     package override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        heard = nil
         let remaining=owner?.pressedControls(presses,down:false) ?? presses
         if !remaining.isEmpty {owner?.editorKeyUp(remaining); super.pressesEnded(remaining,with:event)}
     }
     package override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        heard = nil
         let remaining=owner?.pressedControls(presses,down:false) ?? presses
         if !remaining.isEmpty {super.pressesCancelled(remaining,with:event)}
     }
@@ -421,9 +436,14 @@ package final class TextArea: UITextView {
     /// The authored `::placeholder` colour (LLP 1104 D3); nil, UIKit's.
     var placeholderColor: UIColor?
     // A scroll view's own drawing does not move with its content: the
-    // decorations' lines are drawn again at each new offset.
+    // decorations' lines and visible placeholder are drawn again at each offset.
     package override var contentOffset: CGPoint {
-        didSet { if contentOffset != oldValue, decorations?.drawsLines == true { setNeedsDisplay() } }
+        didSet {
+            if contentOffset != oldValue,
+               decorations?.drawsLines == true || (text.isEmpty && !placeholder.isEmpty) {
+                setNeedsDisplay()
+            }
+        }
     }
     /// The placeholder it draws may be in the tint: drawn again as the tint changes
     package override func tintColorDidChange() {
@@ -436,11 +456,14 @@ package final class TextArea: UITextView {
         if text.isEmpty, !placeholder.isEmpty {
             // Where the first line of text sits, however short the content
             // box: what overflows the view is clipped, as the web clips a
-            // textarea's placeholder at its padding box. `draw(in:)` drops a
-            // line its rect cannot hold whole, so a short box drew nothing.
-            let box = bounds.inset(by: textContainerInset)
+            // textarea's placeholder at its padding box. The container starts
+            // in content coordinates; bounds.origin is the scroll offset.
+            // String drawing drops a line its rect cannot hold whole, so the
+            // rect is one line taller than what the view shows.
+            let box = CGRect(origin: .zero, size: bounds.size).inset(by: textContainerInset)
+            let font = font ?? UIFont.systemFont(ofSize: 16)
             var attributes: [NSAttributedString.Key: Any] = [
-                .font: font ?? UIFont.systemFont(ofSize: 16),
+                .font: font,
                 .foregroundColor: placeholderColor ?? ThemeRoles.color("placeholder", in: self, or: UIColor.placeholderText),
             ]
             attributes[.paragraphStyle] = typingAttributes[.paragraphStyle]
@@ -454,7 +477,10 @@ package final class TextArea: UITextView {
                 style.alignment = direction == .rightToLeft ? .right : .left
                 attributes[.paragraphStyle] = style
             }
-            (placeholder as NSString).draw(with: CGRect(x: box.minX, y: box.minY, width: max(0, box.width), height: .greatestFiniteMagnitude),
+            let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle
+            let lineHeight = max(font.lineHeight, paragraph?.minimumLineHeight ?? 0) + (paragraph?.lineSpacing ?? 0)
+            let height = max(0, bounds.height - textContainerInset.top) + lineHeight
+            (placeholder as NSString).draw(with: CGRect(x: box.minX, y: box.minY, width: max(0, box.width), height: height),
                                            options: .usesLineFragmentOrigin, attributes: attributes, context: nil)
         }
     }

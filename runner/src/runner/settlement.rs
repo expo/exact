@@ -378,7 +378,11 @@ impl<D: DataSource> Runner<D> {
                             progress = true;
                         }
                         Err(Trap::Pending { .. }) => all = false,
-                        Err(t) => return Err(t.into()),
+                        Err(t) => {
+                            return Err(RunnerError::from(t).evaluated(|| {
+                                format!("derive {:?}", self.plan.str(self.plan.derives[i].name))
+                            }))
+                        }
                     }
                 }
                 for i in 0..self.resources.len() {
@@ -488,12 +492,12 @@ impl<D: DataSource> Runner<D> {
                                 ),
                             };
                             match self.elements(i, &env) {
-                                Ok(elements) => elements?,
-                                Err(Trap::Pending { .. }) => {
+                                Ok(elements) => elements,
+                                Err(RunnerError::Trap(Trap::Pending { .. })) => {
                                     all = false;
                                     continue;
                                 }
-                                Err(t) => return Err(t.into()),
+                                Err(error) => return Err(error),
                             }
                         };
                         let (order, gone, added) = self.join(i, elements);
@@ -579,7 +583,12 @@ impl<D: DataSource> Runner<D> {
                                     all = false;
                                     continue;
                                 }
-                                Err(t) => return Err(t.into()),
+                                Err(t) => {
+                                    return Err(RunnerError::from(t).evaluated(|| {
+                                        let name = self.plan.str(self.resource_row(i).name);
+                                        format!("resource {name:?} gate")
+                                    }))
+                                }
                             }
                         }
                     };
@@ -656,7 +665,7 @@ impl<D: DataSource> Runner<D> {
                         .filter(|_| self.member(i).is_none() && !waking)
                         .filter(|_| self.unchanged(&self.sites.deps().resource_args[i], &now))
                         .map(|s| s.resource_args[i].clone());
-                    for a in row.args.iter().filter(|_| kept_args.is_none()) {
+                    for (k, a) in row.args.iter().filter(|_| kept_args.is_none()).enumerate() {
                         let code = self.plan.arg(a).expr;
                         let result = {
                             let env = Env {
@@ -699,7 +708,15 @@ impl<D: DataSource> Runner<D> {
                                 pending = true;
                                 break;
                             }
-                            Err(t) => return Err(t.into()),
+                            Err(t) => {
+                                return Err(RunnerError::from(t).evaluated(|| {
+                                    format!(
+                                        "resource {:?} argument {}",
+                                        self.plan.str(row.name),
+                                        k + 1
+                                    )
+                                }))
+                            }
                         }
                     }
                     if pending {
@@ -716,21 +733,17 @@ impl<D: DataSource> Runner<D> {
                         args = kept;
                     }
                     resource_args[i] = args.clone();
+                    // @ref LLP 1048.000 D6 — give an element that a boot from
+                    // a page makes the page's answer at its arguments, and
+                    // what it read, to which its arguments' provenance below
+                    // adds, as to a declared resource's.
+                    if states[i].is_none() {
+                        states[i] = self.seed_member(i, &args, &mut force);
+                    }
                     // Store provenance follows the values used to form a
                     // resource query, including through derives. Such a
                     // resource is device data just like a direct reader.
                     self.resources[i].store_reader |= store_dependent;
-                    // Whether a store change asks it again follows what its
-                    // arguments' readers read as they stand now, so it is
-                    // checked here even when cached arguments skipped their
-                    // evaluation: an upstream answer can start reading the
-                    // store and give the same value.
-                    if self.resources[i].store_reader
-                        && !self.resources[i].contents_reader
-                        && self.args_read_contents(i)
-                    {
-                        self.resources[i].contents_reader = true;
-                    }
                     let forced = force.contains(&i);
                     let refreshed = forced || refreshing.contains(&i);
                     self.forget_refused(i, &args);
@@ -1079,11 +1092,20 @@ impl<D: DataSource> Runner<D> {
                             self.resources[i].watching = self.store.take_topics();
                             match answer {
                                 Err(RunnerError::Data {
-                                    error: DataError::DeferredAtBake(_),
-                                    ..
+                                    resource,
+                                    error: DataError::DeferredAtBake { message, warning },
                                 }) => {
-                                    // Storage belongs to the launched app. A bake has no
-                                    // request to dispatch: activation asks this source again.
+                                    if warning {
+                                        let warning = format!(
+                                            "warning [deferred-at-bake] resource `{resource}`: {message}; \
+                                             keeping its placeholder until launch, where this option is refused"
+                                        );
+                                        if !self.bake_warnings.contains(&warning) {
+                                            self.bake_warnings.push(warning);
+                                        }
+                                    }
+                                    // A bake has no request to dispatch: activation
+                                    // asks this source again, including refused options.
                                     let Some(value) = self.placeholder(i, &row, &resources) else {
                                         return Err(self.unanswerable(i));
                                     };

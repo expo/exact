@@ -151,7 +151,7 @@ interface ExtensionRoster {
 /** What an extension may use of the host. */
 class ExtensionContext internal constructor(val application: Context, private val name: String) {
     /** The activity that shows the app now, if one does: a permission's rationale is read from it. */
-    val activity: Activity? get() = Exact.reader?.get()
+    val activity: Activity? get() = Extensions.front()
 
     /**
      * Under the agent, unless the drive bound this extension as in production (`--bind`): an implementation that is its
@@ -210,8 +210,23 @@ class ExtensionContext internal constructor(val application: Context, private va
      * (`FLAG_GRANT_READ_URI_PERMISSION`), or null when it names none ([Files], LLP 1133.024 D22 item 2). */
     fun contentUri(path: String): android.net.Uri? = fileToRead(path)?.let { Files.uri(application, it) }
 
-    /** Whether the activity is resumed: a prompt shows only over a resumed activity (LLP 1133.010 D8). */
+    /** Whether the activity is resumed. */
     val resumed: Boolean get() = Extensions.resumedNow
+
+    /** Whether the activity shows, resumed or paused under a dialog: Android lets an app with a visible activity start
+     * another (["Restrictions on starting activities from the background"](https://developer.android.com/guide/components/activities/background-starts)),
+     * as Credential Manager starts its sheet. */
+    val visible: Boolean get() = Extensions.visibleNow
+
+    /**
+     * [go] with the activity once it is resumed, on the main thread: at once when it is; asked while it shows but is
+     * paused, as it is when a permission dialog's answer arrives (`onRequestPermissionsResult` comes before
+     * `onResume`), at the resume. For a prompt the platform keeps only over the app's own top activity: SystemUI
+     * dismisses a `BiometricPrompt` whose app is not the top activity of a visible task (LLP 1133.010 D8). [failed]
+     * has `InvalidStateError` with no activity showing, `AbortError` when the app stopped before the resume. The
+     * function returned withdraws a wait, answering neither.
+     */
+    fun whenResumed(failed: (String) -> Unit, go: (Activity) -> Unit): () -> Unit = Extensions.whenResumed(failed, go)
 
     /** Whether the app is in the foreground, as the runner's admission reads it ([ExactExtension.foreground]). */
     var foreground = true
@@ -307,13 +322,29 @@ class ExtensionContext internal constructor(val application: Context, private va
     /**
      * Start [intent] for its result (`Activity.startActivityForResult`), then [done] on the main thread with the
      * result code and the result's data (LLP 1133.018 D13 item 2): a picker's or an editor's answer. A result that
-     * reaches an activity made again meanwhile settles the call, since the call is the process's. With no activity in
-     * front, or no app that handles [intent], nothing starts and [done] has `Activity.RESULT_CANCELED`.
+     * reaches an activity made again meanwhile settles the call, since the call is the process's.
+     *
+     * The activity starts over the app's resumed activity. Asked while that one shows but is paused, as it is when a
+     * permission dialog's result arrives (`onRequestPermissionsResult` comes before `onResume`), the start waits for
+     * the resume; the app stopping first ends the wait. When nothing starts, [failed] has why, as a DOMException name:
+     * `InvalidStateError` with no activity showing, `AbortError` when the app stopped before the start,
+     * `NotFoundError` when no app handles [intent], `NotAllowedError` when the platform refused the start (a
+     * `SecurityException`: `ACTION_IMAGE_CAPTURE` from an app that declares CAMERA and does not hold it), and
+     * `UnknownError` for any other refusal.
+     *
+     * The function returned withdraws a start still waiting for the resume, answering neither [failed] nor [done], and
+     * says whether it did: a call let go ([ExactExtension.cancel]) withdraws its start so that no sheet opens for it.
      */
-    fun startActivityForResult(intent: android.content.Intent, done: (Int, android.content.Intent?) -> Unit) = Extensions.start(intent, done)
+    fun startActivityForResult(intent: android.content.Intent, failed: (String) -> Unit, done: (Int, android.content.Intent?) -> Unit) =
+        Extensions.start(intent, failed, done)
+
+    /** [startActivityForResult], where a start that did not happen is [done] with `Activity.RESULT_CANCELED`. */
+    fun startActivityForResult(intent: android.content.Intent, done: (Int, android.content.Intent?) -> Unit) =
+        Extensions.start(intent, { done(Activity.RESULT_CANCELED, null) }, done)
 
     /** [startActivityForResult] for a [android.content.IntentSender]: a Play services resolution's (Google Pay's sheet). */
-    fun startIntentSenderForResult(sender: android.content.IntentSender, done: (Int, android.content.Intent?) -> Unit) = Extensions.start(sender, done)
+    fun startIntentSenderForResult(sender: android.content.IntentSender, done: (Int, android.content.Intent?) -> Unit) =
+        Extensions.start(sender, { done(Activity.RESULT_CANCELED, null) }, done)
 
     /**
      * The app's handler [handler] run for the work [handle] names (LLP 1133.016 D15 item 1): one the call that made
@@ -421,9 +452,14 @@ internal object Extensions {
     /** The events raised so far ([ExtensionContext.emit]). */
     var emitted = 0
     private var application: Context? = null
+    /** The activity is resumed ([resumed], [paused]). */
     private var foreground = false
+    /** The activity shows: started and not stopped ([started], [stopped]). */
+    private var visible = false
+    /** The activity that shows the app; a test sets its own. */
+    internal var front: () -> Activity? = { Exact.reader?.get() }
     private val permissions = PermissionRequests { names, code ->
-        val activity = Exact.reader?.get()
+        val activity = front()
         if (activity == null) false else { activity.requestPermissions(names, code); true }
     }
 
@@ -569,6 +605,10 @@ internal object Extensions {
     /** Whether the activity is resumed ([resumed], [paused]). */
     val resumedNow: Boolean get() = foreground
 
+    /** Whether the activity shows, resumed or paused under a dialog ([started], [stopped]): what Android's own rule for
+     * a start from the foreground reads, an app with a visible activity. */
+    val visibleNow: Boolean get() = visible
+
     /** The extension that serves the authenticator entry (LLP 1133.010 D13), made if need be. */
     fun authenticator(): ExactAuthenticator? = roster.keys.firstNotNullOfOrNull { extension(it) as? ExactAuthenticator }
 
@@ -617,42 +657,83 @@ internal object Extensions {
     private val results = HashMap<Int, (Int, android.content.Intent?) -> Unit>()
     private var started = 0
 
-    fun start(intent: android.content.Intent, done: (Int, android.content.Intent?) -> Unit) {
-        val activity = Exact.reader?.get()
-        if (activity == null || !foreground) return done(Activity.RESULT_CANCELED, null)
-        // Request codes of their own range, apart from permission requests (0x4000–0x4fff).
-        val code = RESULTS + (started++ % 0x1000)
-        results[code] = done
-        try {
-            activity.startActivityForResult(intent, code)
-        } catch (e: android.content.ActivityNotFoundException) {
-            results.remove(code)
-            done(Activity.RESULT_CANCELED, null)
-        }
+    /** A start for a result: [go] starts it from the activity with its request code. */
+    private class Start(val go: (Activity, Int) -> Unit, val failed: (String) -> Unit, val done: (Int, android.content.Intent?) -> Unit)
+
+    /** The starts asked while the activity showed paused, made at the next resume ([ExtensionContext.startActivityForResult]). */
+    private val waiting = ArrayList<Start>()
+
+    fun start(intent: android.content.Intent, failed: (String) -> Unit, done: (Int, android.content.Intent?) -> Unit) =
+        start(Start({ activity, code -> activity.startActivityForResult(intent, code) }, failed, done))
+
+    fun start(sender: android.content.IntentSender, failed: (String) -> Unit, done: (Int, android.content.Intent?) -> Unit) =
+        start(Start({ activity, code -> activity.startIntentSenderForResult(sender, code, null, 0, 0, 0) }, failed, done))
+
+    /** Made or refused now, or waiting for the resume; the function returned withdraws a waiting one. */
+    private fun start(start: Start): () -> Boolean {
+        if (front() == null || !visible) { start.failed("InvalidStateError"); return { false } }
+        if (!foreground) { waiting += start; return { waiting.remove(start) } }
+        launch(start)
+        return { false }
     }
 
-    fun start(sender: android.content.IntentSender, done: (Int, android.content.Intent?) -> Unit) {
-        val activity = Exact.reader?.get()
-        if (activity == null || !foreground) return done(Activity.RESULT_CANCELED, null)
+    private fun launch(start: Start) {
+        val activity = front() ?: return start.failed("InvalidStateError")
+        // Request codes of their own range, apart from permission requests (0x4000–0x4fff).
         val code = RESULTS + (started++ % 0x1000)
-        results[code] = done
-        try {
-            activity.startIntentSenderForResult(sender, code, null, 0, 0, 0)
+        results[code] = start.done
+        val refusal = try {
+            start.go(activity, code)
+            return
+        } catch (e: android.content.ActivityNotFoundException) {
+            "NotFoundError"
+        } catch (e: SecurityException) {
+            "NotAllowedError"
         } catch (e: android.content.IntentSender.SendIntentException) {
-            results.remove(code)
-            done(Activity.RESULT_CANCELED, null)
+            // The sender's PendingIntent was cancelled.
+            "InvalidStateError"
+        } catch (e: RuntimeException) {
+            Log.w("exact", "an extension's activity did not start", e)
+            "UnknownError"
         }
+        results.remove(code)
+        start.failed(refusal)
     }
 
     /** [Activity.onActivityResult]: the answer of the call that started it, if this process made one. */
     fun activityResult(code: Int, result: Int, data: android.content.Intent?) { results.remove(code)?.invoke(result, data) }
 
+    /** A call of [ExtensionContext.whenResumed] that waits. */
+    private class Resume(val failed: (String) -> Unit, val go: (Activity) -> Unit)
+
+    /** The calls waiting for the next resume ([ExtensionContext.whenResumed]). */
+    private val resumes = ArrayList<Resume>()
+
+    fun whenResumed(failed: (String) -> Unit, go: (Activity) -> Unit): () -> Unit {
+        val activity = front()
+        if (activity == null || !visible) { failed("InvalidStateError"); return {} }
+        if (foreground) { go(activity); return {} }
+        val wait = Resume(failed, go)
+        resumes += wait
+        return { resumes.remove(wait) }
+    }
+
     /** [Activity.onRequestPermissionsResult]: the answer to the request up. */
     fun permissionsResult(code: Int, names: Array<String>, grants: IntArray) = permissions.result(code, names, grants)
 
-    /** [Activity.onResume]: a result that never came (the activity was made again) is read as the state now. */
+    /** [Activity.onStart]. */
+    fun started() { visible = true }
+
+    /** [Activity.onResume]: the starts and calls that waited for it are made, then a permission result that never came
+     * (the activity was made again) is read as the state now. */
     fun resumed() {
         foreground = true
+        val starts = waiting.toList()
+        waiting.clear()
+        starts.forEach(::launch)
+        val calls = resumes.toList()
+        resumes.clear()
+        calls.forEach { call -> front()?.let(call.go) ?: call.failed("InvalidStateError") }
         permissions.resumed()
         made.values.forEach { it.resumed() }
     }
@@ -662,5 +743,18 @@ internal object Extensions {
         foreground = false
         permissions.paused()
         made.values.forEach { it.paused() }
+    }
+
+    /** [Activity.onStop] of the activity that shows the app: the starts and calls waiting for a resume end, unless it
+     * stops to be made again for a configuration change ([changing]), whose successor makes them. */
+    fun stopped(changing: Boolean) {
+        visible = false
+        if (changing) return
+        val starts = waiting.toList()
+        waiting.clear()
+        starts.forEach { it.failed("AbortError") }
+        val calls = resumes.toList()
+        resumes.clear()
+        calls.forEach { it.failed("AbortError") }
     }
 }

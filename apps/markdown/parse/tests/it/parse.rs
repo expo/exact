@@ -121,6 +121,30 @@ fn headings_paragraphs_and_emphasis() {
     assert!(runs.iter().any(|r| r.text == "code" && r.code));
 }
 
+/// CommonMark 0.31.2 §4.2: the optional closing sequence of `#` is removed
+/// only when a space or tab precedes it and only spaces or tabs follow it.
+#[test]
+fn an_atx_heading_keeps_hashes_that_are_not_a_closing_sequence() {
+    for (source, text) in [
+        ("# C#\n", "C#"),
+        // Examples 72 and 73: a closing sequence, of any length, then spaces.
+        ("# foo ##################################\n", "foo"),
+        ("### foo ###     \n", "foo"),
+        // Example 74: a closing sequence followed by text is text.
+        ("### foo ### b\n", "foo ### b"),
+        // Example 75: no space before it.
+        ("# foo#\n", "foo#"),
+        // Example 76: an escaped `#` is not one.
+        ("### foo \\###\n", "foo ###"),
+        // Example 79: a heading of only a closing sequence is empty.
+        ("### ###\n", ""),
+    ] {
+        let doc = here(source);
+        assert_eq!(doc.blocks[0].kind, Kind::Heading, "{source:?}");
+        assert_eq!(plain(&doc.blocks[0].runs), text, "{source:?}");
+    }
+}
+
 fn assert_inline_runs(source: &str, expected: &[(&str, bool, bool, bool)]) {
     let doc = here(source);
     assert_eq!(doc.blocks.len(), 1, "{source:?}");
@@ -518,6 +542,42 @@ fn fenced_code_keeps_its_text_and_never_parses_it() {
         doc.blocks[0].text,
         "cargo build --workspace\n# not a heading"
     );
+}
+
+/// CommonMark 0.31.2 §4.5: a closing fence "may be followed only by spaces or
+/// tabs, which are ignored".
+#[test]
+fn a_closing_fence_may_end_in_spaces_or_tabs() {
+    for source in ["```\ncode\n``` \nnext\n", "~~~~\ncode\n~~~~~\t \nnext\n"] {
+        let doc = here(source);
+        assert_eq!(doc.blocks.len(), 2, "{source:?}");
+        assert_eq!(doc.blocks[0].kind, Kind::Code, "{source:?}");
+        assert_eq!(doc.blocks[0].text, "code", "{source:?}");
+        assert_eq!(plain(&doc.blocks[1].runs), "next", "{source:?}");
+    }
+    // Anything else after the marker leaves the line inside the block.
+    let doc = here("```\ncode\n``` x\n```\n");
+    assert_eq!(doc.blocks.len(), 1);
+    assert_eq!(doc.blocks[0].text, "code\n``` x");
+}
+
+/// A fence's indentation is spaces and tabs, removed from each line up to
+/// its width; leading Unicode spaces are the code's own.
+#[test]
+fn an_indented_fence_keeps_leading_unicode_spaces_as_code() {
+    for (source, code) in [
+        (" ```\n\u{2003}em\n x\n ```\n", "\u{2003}em\nx"),
+        (
+            "  ```\n\u{2003}em\n \u{a0}nbsp\n    four\n  ```\n",
+            "\u{2003}em\n\u{a0}nbsp\n  four",
+        ),
+        ("```\n\u{a0}nbsp\n```\n", "\u{a0}nbsp"),
+    ] {
+        let doc = here(source);
+        assert_eq!(doc.blocks.len(), 1, "{source:?}");
+        assert_eq!(doc.blocks[0].kind, Kind::Code);
+        assert_eq!(doc.blocks[0].text, code, "{source:?}");
+    }
 }
 
 #[test]

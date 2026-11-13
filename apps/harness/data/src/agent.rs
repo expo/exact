@@ -20,54 +20,46 @@ use std::time::Duration;
 /// A turn never runs more model rounds than this.
 const MAX_ROUNDS: usize = 40;
 
-/// Start a turn for `prompt`. The caller has checked nothing else runs;
-/// a prompt sent while one does is queued and [`pump`] starts it.
-pub fn start(shared: &Arc<Shared>, prompt: &str) {
-    let route = {
-        let mut s = shared.lock();
-        s.push(Entry {
-            kind: "user".into(),
-            blocks: vec![Block::lines(
-                prompt
-                    .lines()
-                    .map(|l| Line::plain(tools::clean_line(l)))
-                    .collect(),
-            )],
-            ..Entry::default()
-        });
-        // The model is captured with the route: what this turn's entries
-        // say answered, even if the picker changes mid-turn (P12).
-        let model = s.model_label();
-        match providers::route(&s.model, &s.provider(), &s.sources()) {
-            Err(e) => {
-                let message = format!("Can't reach {}: {e}", s.model);
-                let id = s.error_scrubbed(&message);
-                if let Some(e) = s.entries.last_mut().filter(|e| e.id == id) {
-                    e.model = model;
-                }
-                None
+/// Begin a turn for `prompt`, under the same lock that saw no turn running
+/// and took the prompt from the queue: the turn it installs is the one its
+/// worker runs. `None` when the model cannot be reached.
+fn begin(s: &mut State, prompt: &str) -> Option<(Turn, Route)> {
+    s.push(Entry {
+        kind: "user".into(),
+        blocks: vec![Block::lines(
+            prompt
+                .lines()
+                .map(|l| Line::plain(tools::clean_line(l)))
+                .collect(),
+        )],
+        ..Entry::default()
+    });
+    // The model is captured with the route: what this turn's entries
+    // say answered, even if the picker changes mid-turn (P12).
+    let model = s.model_label();
+    match providers::route(&s.model, &s.provider(), &s.sources()) {
+        Err(e) => {
+            let message = format!("Can't reach {}: {e}", s.model);
+            let id = s.error_scrubbed(&message);
+            if let Some(e) = s.entries.last_mut().filter(|e| e.id == id) {
+                e.model = model;
             }
-            Ok(route) => {
-                s.failed = false;
-                s.history.push(Msg::user(prompt));
-                s.next_turn += 1;
-                s.turn = Some(Turn {
-                    id: s.next_turn,
-                    cancel: Arc::new(AtomicBool::new(false)),
-                    model,
-                });
-                s.phase = "thinking".into();
-                Some(route)
-            }
+            None
         }
-    };
-    shared.changed();
-    let Some(route) = route else {
-        return;
-    };
-    let turn = shared.lock().turn.clone().expect("just set");
-    let shared = shared.clone();
-    std::thread::spawn(move || run(&shared, &turn, &route));
+        Ok(route) => {
+            s.failed = false;
+            s.history.push(Msg::user(prompt));
+            s.next_turn += 1;
+            let turn = Turn {
+                id: s.next_turn,
+                cancel: Arc::new(AtomicBool::new(false)),
+                model,
+            };
+            s.turn = Some(turn.clone());
+            s.phase = "thinking".into();
+            Some((turn, route))
+        }
+    }
 }
 
 fn run(shared: &Arc<Shared>, turn: &Turn, route: &Route) {
@@ -124,17 +116,22 @@ pub(crate) fn release(shared: &Arc<Shared>, turn: &Turn) {
 /// Start the queued prompts, oldest first, while no turn runs (P16).
 pub fn pump(shared: &Arc<Shared>) {
     loop {
-        let next = {
+        let started = {
             let mut s = shared.lock();
             if s.busy() {
                 return;
             }
-            match s.queue.pop_front() {
-                Some(prompt) => prompt,
-                None => return,
-            }
+            let Some(prompt) = s.queue.pop_front() else {
+                return;
+            };
+            begin(&mut s, &prompt)
         };
-        start(shared, &next);
+        shared.changed();
+        if let Some((turn, route)) = started {
+            let shared = shared.clone();
+            std::thread::spawn(move || run(&shared, &turn, &route));
+            return;
+        }
     }
 }
 

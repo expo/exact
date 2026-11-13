@@ -596,7 +596,8 @@ impl Candidate<'_> {
 }
 impl TextMeasurer for Candidate<'_> {
     fn measure_reservation(&mut self, request: &TextMeasureRequest<'_>) -> Option<TextMetrics> {
-        // Width samples are not canonical paragraph sources or paint artifacts.
+        // Width samples and alert titles are not canonical paragraph sources
+        // or paint artifacts.
         self.measurer.measure_reservation(request)
     }
     fn field_chrome(&mut self, request: &crate::FieldChromeRequest) -> crate::FieldChrome {
@@ -881,7 +882,7 @@ fn validate(arena: &NodeArena, b: ContentRegion) -> Result<(), LayoutError> {
             }
         }
     }
-    if !s.unpadded(arena.env()) {
+    if !s.unpadded(&arena.env_of(b.owner.index)) {
         return Err(bad());
     }
     members(arena, b.content)?;

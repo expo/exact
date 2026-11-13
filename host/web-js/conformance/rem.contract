@@ -1,12 +1,6 @@
-// Synthetic conformance plan (#136): `rem` and `em` lengths. The wasm page
-// writes the pixels the kernel resolves them to at each commit; the JS
-// target keeps no kernel, so its stylesheet holds them as CSS units
-// (css.rs `css_text_relative`) and the browser resolves them. `em` follows
-// the bound font size above it, `rem` the root's (`prefer root-font-size`),
-// on a static row and on a bound one alike; an `em` under no sized
-// ancestor follows the root size too (the page's `body` is `1rem`).
-// The app's `setRootFontSize` (#102) stands over the drive's root size on
-// both pages, a size of 0 is refused, and "medium" hands the root back.
+// Font-relative lengths follow root and inherited fonts on both targets.
+// Controls keep their browser typography; their authored em geometry uses it.
+// The app's root size overrides the drive's, refuses 0, and accepts "medium".
 component Rem
   state size = 16
   state wide = false
@@ -31,6 +25,15 @@ component Rem
         button press=flip testId="flip"
           text "flip"
         view testId="bound" width=(wide ? "12em" : "6rem") height="1em" background-color="#aaaaaa"
+        row gap=8
+          select testId="select-em" width="6em" padding="0.5em" value="one" aria-label="Single"
+            option "One" value="one"
+          select multiple=true testId="multiple-em" width="6em" padding="0.5em" value="one" aria-label="Multiple"
+            option "One" value="one"
+          select multiple=true testId="multiple-bound" width=(wide ? "8em" : "6em") padding=(wide ? "0.75em" : "0.5em") value="one" aria-label="Bound"
+            option "One" value="one"
+          select multiple=true testId="multiple-font" font-size="1.5em" width="6em" padding="0.5em" value="one" aria-label="Font"
+            option "One" value="one"
         row gap=8
           button press=root(18) testId="root18"
             text "18"

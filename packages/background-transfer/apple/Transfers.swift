@@ -121,10 +121,13 @@ public final class BackgroundTransferModule: NSObject, ExactPackage {
     /// `saveTo`, else the registration's folder. Nil when it has none. A
     /// folder there, which may have been made since `start`, is kept and the
     /// body left with the carrier; a file there is replaced, and kept if
-    /// that fails.
+    /// that fails. A move is remembered by a mark in the registration's
+    /// folder, so a later read names the file the body went to, and a
+    /// record that never had a body names none, though a file is there.
     private func place(_ id: String, _ x: [String: Any]) -> String? {
-        let target = x["saveTo"] as? String ?? "\(Self.kept(id))/\(x["index"] ?? 0)"
-        guard let dest = context.file(target) else { return nil }
+        let index = x["index"] ?? 0
+        let target = x["saveTo"] as? String ?? "\(Self.kept(id))/\(index)"
+        guard let dest = context.file(target), let mark = context.file("\(Self.kept(id))/\(index).placed") else { return nil }
         let fm = FileManager.default
         if let from = x["path"] as? String, fm.fileExists(atPath: from) {
             guard !Self.isFolder(dest) else {
@@ -139,12 +142,14 @@ public final class BackgroundTransferModule: NSObject, ExactPackage {
                     try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try fm.moveItem(at: body, to: dest)
                 }
+                try fm.createDirectory(at: mark.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data().write(to: mark)
             } catch {
                 context.log("background-transfer: \(id): the body was not moved to \(target): \(error.localizedDescription)")
                 return nil
             }
         }
-        return fm.fileExists(atPath: dest.path) && !Self.isFolder(dest) ? target : nil
+        return fm.fileExists(atPath: mark.path) && fm.fileExists(atPath: dest.path) && !Self.isFolder(dest) ? target : nil
     }
 
     private static func isFolder(_ url: URL) -> Bool {

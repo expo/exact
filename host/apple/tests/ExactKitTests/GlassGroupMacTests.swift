@@ -44,6 +44,32 @@ final class GlassGroupMacTests: XCTestCase {
         p.apply(wireBatch([["op": "present", "id": id, "property": "opacity", "x": opacity, "y": 0.0, "w": 0.0, "h": 0.0]]))
     }
 
+    func testViewportCaptureKeepsTheContentOfAGlassRoot() throws {
+        let f = try SheetFixture(page: """
+        component App
+          view
+            column viewport-fit="cover" backgroundMaterial="glass" width="100%" height="100%"
+              box width=200 height=100 background-color="#ff0000"
+              text "Glass content"
+
+        """)
+        defer { f.close() }
+        f.view.controlsOverlay = true
+        f.window.styleMask.insert(.fullSizeContentView)
+        f.window.titlebarAppearsTransparent = true
+        f.window.orderFrontRegardless()
+        f.window.layoutIfNeeded()
+        f.window.displayIfNeeded()
+        let glass = try XCTUnwrap(f.presenter.views.values.first { $0.props["backgroundMaterial"] == "glass" })
+        XCTAssertEqual(glass.appliedMaterial, "NSGlassEffectView(.regular)")
+        let picture = try XCTUnwrap(Capture.picture(of: f.presenter.navigation.split.agentRoot))
+        let scale = CGFloat(picture.pixelsWide) / picture.size.width
+        let red = try XCTUnwrap(picture.paintedColorAt(x: Int(100 * scale), y: Int(50 * scale))?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(red.redComponent, 0.9)
+        XCTAssertLessThan(red.greenComponent, 0.3)
+        XCTAssertLessThan(red.blueComponent, 0.3)
+    }
+
     /// LLP 1053.000.000.000 D2: an auto group's spacing is the points the
     /// Rust host resolved — the props' at creation, then the style key a
     /// gap change sends — and a number again when the prop is one.

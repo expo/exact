@@ -161,3 +161,54 @@ fn unsaved_text_on_stdin_gives_what_the_same_text_saved_gives() {
         );
     }
 }
+
+/// `build --stdin-as`: the unsaved text is a file the app uses, so the app is
+/// built from disk with that one file as the editor holds it.
+#[test]
+fn unsaved_text_of_a_used_file_is_built_with_its_app() {
+    let dir = Dir(std::env::temp_dir().join(format!("exact-unsaved-as-{}", std::process::id())));
+    std::fs::create_dir_all(dir.0.join("lib")).unwrap();
+    let row = "component Row\n  props\n    label: string\n  view\n    text label\n";
+    std::fs::write(dir.0.join("lib/row.contract"), row).unwrap();
+    let app =
+        "use Row from \"./lib/row.contract\"\ncomponent App\n  view\n    Row(label=\"hello\")\n";
+    std::fs::write(dir.0.join("app.contract"), app).unwrap();
+    let build = |text: &str| {
+        let args = [
+            "build",
+            "app.contract",
+            "--json",
+            "--errors-only",
+            "--stdin-as",
+            "lib/row.contract",
+        ];
+        let out = run(&dir, &args, Some(text));
+        let errors: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        (out.status.code(), errors)
+    };
+    // As saved, the app builds; with the row's unsaved text refused on its fifth line, the refusal is the row's.
+    assert_eq!(build(row).0, Some(0));
+    let (code, errors) = build(&row.replace("text label", "text nope"));
+    assert_eq!(code, Some(1));
+    let refusal = &errors.as_array().unwrap()[0];
+    assert!(
+        refusal["file"].as_str().unwrap().ends_with("row.contract") && refusal["line"] == 5,
+        "{errors}"
+    );
+    // And an unsaved repair of a file refused on disk builds.
+    std::fs::write(
+        dir.0.join("lib/row.contract"),
+        row.replace("text label", "text nope"),
+    )
+    .unwrap();
+    assert_eq!(build(row).0, Some(0));
+    // `--stdin` and `--stdin-as` are one or the other.
+    let both = [
+        "build",
+        "app.contract",
+        "--stdin",
+        "--stdin-as",
+        "lib/row.contract",
+    ];
+    assert_eq!(run(&dir, &both, Some(row)).status.code(), Some(2));
+}

@@ -3,7 +3,7 @@
 // smokes, which launch the same bundles.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { homedir, networkInterfaces, tmpdir } from 'node:os';
+import { constants, homedir, networkInterfaces, tmpdir } from 'node:os';
 import { createServer as createTCPServer } from 'node:net';
 import { basename, dirname, resolve } from 'node:path';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -525,6 +525,19 @@ export function crashReports(name, since, { bundleId, udid, dir = resolve(homedi
   return names.filter((f) => f.startsWith(name + '-') && /\.(ips|crash)$/.test(f))
     .map((f) => resolve(dir, f)).filter((f) => at(f) >= since && ours(f)).sort((a, b) => at(b) - at(a));
 }
+/** Launch the Mac executable and preserve how it ended for the build command's caller. */
+export function runMac(binary, env, { stdio = 'inherit', say = console.error } = {}) {
+  const crashed = crashWatch(basename(binary), dirname(binary));
+  const result = spawnSync(binary, [], { env, stdio });
+  if (result.error) say(`${binary}: launch failed: ${result.error.message}`);
+  if (result.signal) {
+    say(`${binary}: killed by ${result.signal}`);
+    const fatal = ['SIGABRT', 'SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGFPE', 'SIGTRAP', 'SIGSYS'].includes(result.signal);
+    for (const line of crashed(fatal ? 5000 : 0)) say(line);
+  }
+  return result.status ?? (result.signal ? 128 + (constants.signals[result.signal] ?? 0) : 1);
+}
+
 /** A crash report as one shape, whichever form it is in: its bundle id, time,
  *  the paths that place it on a simulator, how the process ended and why (the
  *  exception, the termination, the app-specific message, such as a Swift
@@ -599,6 +612,20 @@ export function crashWatch(name, bundle, scope) {
 
 
 // ---------------------------------------------------------------- a phone: devicectl, a profile, an identity
+
+/** Startup can fail before the app's first line; keep devicectl's evidence and
+ * distinguish a reported lock from a prompt the carrier cannot observe. */
+export function phoneStartupFailure(reason, lines) {
+  const details = [reason, ...lines.filter(line => !reason.includes(line))].join('\n');
+  const silent = lines.length ? '' : '\nthe app printed nothing';
+  if (/FBSOpenApplication[^\n]*\bLocked\b|\breason:\s*Locked\b|(?:device|iPhone|iPad) is locked|\bDeviceLocked\b/i.test(details)) {
+    return `the iPhone is locked: unlock it and run again\n${details}${silent}`;
+  }
+  const prompt = /No route to host|EHOSTUNREACH|waiting for foreground/i.test(details)
+    ? "\nApple's local-network prompt may be waiting on the phone. Allow Local Network there, including a prompt left by another app, then run again."
+    : '';
+  return `${details}${silent}${prompt}\nUnlock the phone and keep the app in the foreground; the phone must reach this Mac on the same LAN.`;
+}
 
 /** One launch, one phone connection; reject other peers before any agent request.
  * The token crosses via the paired device's launch environment, not a public URL. */

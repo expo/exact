@@ -14,7 +14,7 @@ use exact_runner::{
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 8;
+pub const ABI: u32 = 11;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -421,6 +421,14 @@ fn read_outcome(r: &mut Reader<'_>) -> Result<Outcome, String> {
 }
 fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
     match result {
+        Ok(Answer::Later(r)) if r.prefetch_refusal().is_some() => encode_result(
+            w,
+            Err(DataError::Unavailable(r.prefetch_refusal().unwrap().into())),
+        ),
+        Ok(Answer::Later(r)) if r.preload_refusal().is_some() => encode_result(
+            w,
+            Err(DataError::Unavailable(r.preload_refusal().unwrap().into())),
+        ),
         // A long poll that is no stream's independent GET, or with bad terms (LLP
         // 1016.000 D8), is refused before it crosses, ahead of every other kind.
         Ok(Answer::Later(r))
@@ -461,13 +469,17 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 "an idle timeout cannot cross the Rust module seam".into(),
             )),
         ),
-        // Nor a held mark (LLP 1016.000 D9): refused, never silently waited on.
-        Ok(Answer::Later(r)) if r.held => encode_result(
-            w,
-            Err(DataError::Unavailable(
-                "a held request cannot cross the Rust module seam yet".into(),
-            )),
-        ),
+        Ok(Answer::Later(r))
+            if r.held
+                && (r.storage.is_some() || r.continuation.is_some() || r.surface.is_some()) =>
+        {
+            encode_result(
+                w,
+                Err(DataError::Unavailable(
+                    "a held mark is HTTP-only at the Rust module seam".into(),
+                )),
+            )
+        }
         // Nor an upload's progress: refused, never sent as a plain stream.
         Ok(Answer::Later(r)) if r.upload_progress => encode_result(
             w,
@@ -534,6 +546,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                     w.string(name);
                     bytes(w, payload);
                 }
+                SurfaceRequest::Canvas { name, path, .. } => {
+                    w.u8(16);
+                    w.string(name);
+                    w.string(path);
+                }
             }
             w.u8(u8::from(r.grants.is_some()));
             w.string(r.grants.as_deref().unwrap_or(""));
@@ -562,6 +579,19 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             // A stream (tag 9) is always independent (LLP 1016.000); a long
             // poll (tag 10, D8) is a stream with its terms after the body; a
             // two-way socket (tag 11, LLP 1016.003) is a stream.
+            // A held mark (LLP 1016.000 D9, tag 15) wraps the HTTP result
+            // and its other markers; hosts without it reject it before effects.
+            if r.held {
+                w.u8(15);
+            }
+            // Prefetch wraps the HTTP result and its other markers (LLP 1162.000 D5).
+            if r.prefetch {
+                w.u8(14);
+            }
+            if let Some(name) = &r.preload {
+                w.u8(13);
+                w.string(name);
+            }
             if !r.socket && r.cache != CacheMode::Unspecified {
                 w.u8(12);
                 w.string(r.cache.name());
@@ -618,7 +648,7 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 // (an overrun is exact-js's; a Rust module's seam never makes one)
                 DataError::Unavailable(s)
                 | DataError::Interface(s)
-                | DataError::DeferredAtBake(s)
+                | DataError::DeferredAtBake { message: s, .. }
                 | DataError::Overrun(s)
                 | DataError::Failed(_, s, _) => (4, s),
             };
@@ -628,8 +658,32 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
     }
 }
 fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> {
-    let tag = r.u8().map_err(error)?;
-    Ok(match tag {
+    let mut tag = r.u8().map_err(error)?;
+    let held = tag == 15;
+    if held {
+        tag = r.u8().map_err(error)?;
+        if !matches!(tag, 1 | 6 | 9..=14) {
+            return Err("invalid held HTTP result tag".into());
+        }
+    }
+    let prefetch = tag == 14;
+    if prefetch {
+        tag = r.u8().map_err(error)?;
+        if !matches!(tag, 1 | 12 | 13) {
+            return Err("invalid prefetch HTTP result tag".into());
+        }
+    }
+    let preload = if tag == 13 {
+        let name = r.string().map_err(error)?;
+        tag = r.u8().map_err(error)?;
+        if !matches!(tag, 1 | 6 | 9..=12) {
+            return Err("invalid preload HTTP result tag".into());
+        }
+        Some(name)
+    } else {
+        None
+    };
+    let mut answer = match tag {
         0 => Ok(Answer::Now(Value::decode(r).map_err(error)?)),
         1 | 6 | 9..=11 => Ok(Answer::Later(read_http(r, tag)?)),
         12 => {
@@ -654,8 +708,13 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             Ok(Answer::Later(request))
         }
-        tag @ (7 | 8) => {
+        tag @ (7 | 8 | 16) => {
             let name = r.string().map_err(error)?;
+            let path = if tag == 16 {
+                Some(r.string().map_err(error)?)
+            } else {
+                None
+            };
             let payload = if tag == 8 {
                 Some(read_bytes(r)?.to_vec())
             } else {
@@ -663,9 +722,10 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             let present = r.u8().map_err(error)?;
             let scope = r.string().map_err(error)?;
-            let mut request = match payload {
-                Some(bytes) => Request::restore_surface(name, bytes),
-                None => Request::capture_surface(name),
+            let mut request = match (payload, path) {
+                (Some(bytes), _) => Request::restore_surface(name, bytes),
+                (None, Some(path)) => Request::capture_canvas(name, path),
+                (None, None) => Request::capture_surface(name),
             };
             request.grants = match present {
                 0 => None,
@@ -678,13 +738,33 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
         3 => Err(DataError::BadArguments(r.string().map_err(error)?)),
         4 => Err(DataError::Unavailable(r.string().map_err(error)?)),
         _ => return Err("invalid result tag".into()),
-    })
+    };
+    if let (Some(name), Ok(Answer::Later(request))) = (preload, &mut answer) {
+        request.preload = Some(name.into_boxed_str());
+        if let Some(why) = request.preload_refusal() {
+            return Err(why.into());
+        }
+    }
+    if let (true, Ok(Answer::Later(request))) = (held, &mut answer) {
+        request.held = true;
+    }
+    if prefetch {
+        let Ok(Answer::Later(request)) = &mut answer else {
+            return Err("invalid prefetch HTTP result".into());
+        };
+        request.prefetch = true;
+        if let Some(why) = request.prefetch_refusal() {
+            return Err(why.into());
+        }
+    }
+    Ok(answer)
 }
 
 /// An HTTP result's request (tags 1, 6 and 9–11): a stream's, a long poll's
 /// terms after its body (LLP 1016.000 D8), a two-way socket's (LLP 1016.003).
 fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
     let mut request = Request {
+        module: None,
         stream: tag >= 9,
         socket: tag == 11,
         bytes: false,
@@ -697,6 +777,8 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         body_to: None,
         redirect: Redirect::Follow,
         cache: Default::default(),
+        preload: None,
+        prefetch: false,
         held: false,
         reach: Default::default(),
         listen: None,
@@ -791,6 +873,10 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             1 => true,
             _ => return Err("invalid read flag".into()),
         };
+        let topics = (0..r.count().map_err(error)?)
+            .map(|_| r.string().map_err(error))
+            .collect::<Result<Vec<_>, _>>()?;
+        let entropy = r.u32().map_err(error)?;
         let count = r.count().map_err(error)?;
         let mut writes = Vec::new();
         for _ in 0..count {
@@ -798,26 +884,43 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             if name.starts_with(Store::KEPT) || !store.granted().contains(&name) {
                 return Err(format!("module wrote ungranted secret {name}"));
             }
-            let value = match r.u8().map_err(error)? {
-                0 => None,
+            // Bit 0: a value follows (else the name is forgotten); bit 1: the
+            // module persisted it under an exclusive lease (`set_durable`).
+            let tag = r.u8().map_err(error)?;
+            if tag > 3 {
+                return Err("invalid write tag".into());
+            }
+            let value = match tag & 1 {
                 1 => Some(r.string().map_err(error)?),
-                _ => return Err("invalid write tag".into()),
+                _ => None,
             };
-            writes.push((name, value));
+            writes.push((name, value, tag & 2 != 0));
         }
         let sockets = read_socket_ops(&mut r)?;
         let result = read_result(&mut r)?;
         end(&r)?;
-        Ok((observed, writes, sockets, result))
+        Ok((observed, topics, entropy, writes, sockets, result))
     };
-    let (observed, writes, (ops, overload), result) = decode().map_err(DataError::Unavailable)?;
+    let (observed, topics, entropy, writes, (ops, overload), result) =
+        decode().map_err(DataError::Unavailable)?;
     if observed {
         store.observe_external_read();
     }
-    for (name, value) in writes {
-        match value {
-            Some(value) => store.set(&name, &value)?,
-            None => store.forget(&name)?,
+    // What the answer watched and drew, as an embedded source's store
+    // records it: the runner takes them after the reply (LLP 1016.002, LLP
+    // 1069.005 D2).
+    for topic in &topics {
+        store.observe_topic(topic);
+    }
+    for _ in 0..entropy {
+        store.observe_entropy();
+    }
+    for (name, value, durable) in writes {
+        match (value, durable) {
+            (Some(value), false) => store.set(&name, &value)?,
+            (Some(value), true) => store.set_durable(&name, &value)?,
+            (None, false) => store.forget(&name)?,
+            (None, true) => store.forget_durable(&name)?,
         };
     }
     // What the module staged, through the same checks on the turn the
@@ -916,11 +1019,17 @@ impl<D: DataSource> Session<D> {
                     None => result,
                 };
                 w.u8(u8::from(store.reads() > 0));
+                let topics = store.take_topics();
+                w.u32(topics.len() as u32);
+                for topic in &topics {
+                    w.string(topic);
+                }
+                w.u32(store.entropy_draws() as u32);
                 let writes = store.take_writes();
                 w.u32(writes.len() as u32);
                 for write in writes {
                     w.string(&write.name);
-                    w.u8(u8::from(write.value.is_some()));
+                    w.u8(u8::from(write.value.is_some()) | u8::from(write.durable) << 1);
                     if let Some(value) = write.value {
                         store_value(&mut w, &value);
                     }

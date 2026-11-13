@@ -74,6 +74,10 @@ extension RegionTextSource {
                 decoration: row["decoration"] as? String ?? "", href: row["href"] as? String ?? "")
             // The colour is one its author fixed, not a role (LLP 1115.000 D7.9).
             run.fixedInk = row["fixed"] as? Bool == true
+            // Its inline boxes' room beside its text (`Run.inlineStart`, `inlineEnd`).
+            if let edges = row["edges"] as? [Double], edges.count == 2, edges.allSatisfy(\.isFinite) {
+                run.inlineStart = CGFloat(Float(edges[0])); run.inlineEnd = CGFloat(Float(edges[1]))
+            }
             // Its decorating ancestors' lines, in their colours (`Run.propagate`).
             run.underlineColor = row[dark ? "underlineDarkColor" : "underlineColor"] as? [Double]
             run.strikeColor = row[dark ? "strikeDarkColor" : "strikeColor"] as? [Double]

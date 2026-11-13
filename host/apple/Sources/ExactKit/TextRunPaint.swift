@@ -51,6 +51,18 @@ extension Spec {
         let cap = TextRasterJob.maxShadowReach
         return (min(left, cap), min(right, cap))
     }
+    /// How far the same shadows reach above and below the glyphs that cast
+    /// them. Uncapped: a job keeps a shadow anywhere within its room, so in a
+    /// tall paragraph a line far from a band can cast into it.
+    var shadowRows: (up: CGFloat, down: CGFloat) {
+        var up: CGFloat = 0, down: CGFloat = 0
+        for shadow in runs.map(\.shadow) + [hdrShadow] {
+            guard let s = shadow, TextEngine.isShadow(s) else { continue }
+            let spread = s[2] * 1.5 + 1
+            up = max(up, spread - s[1]); down = max(down, spread + s[1])
+        }
+        return (up, down)
+    }
 }
 
 extension TextEngine {
@@ -129,7 +141,8 @@ extension TextLinePaint {
             let a = CTRunGetAttributes(run) as NSDictionary
             if a[NSAttributedString.Key.exactHidden] as? Bool == true { return .nothing }
             if let font = a[kCTFontAttributeName], CTFontGetSymbolicTraits(font as! CTFont).contains(.traitColorGlyphs) { return .own }
-            let alpha = (a[NSAttributedString.Key.foregroundColor] as? PlatformColor)?.cgColor.alpha ?? 1
+            let alpha = (a[NSAttributedString.Key.foregroundColor] as? PlatformColor)?.cgColor.alpha
+                ?? (a[kCTForegroundColorAttributeName] as! CGColor?)?.alpha ?? 1
             if alpha == 0, !transparentInk { return .nothing }
             solid[i] = alpha == 1
             let lined = { (key: NSAttributedString.Key) in (a[key] as? NSNumber)?.doubleValue ?? 0 != 0 }
@@ -173,6 +186,13 @@ extension TextLinePaint {
         }
         ctx.setFillColor(ink)
         for (i, run) in runs.enumerated() {
+            if let icon = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactAtomIcon] as? TextAtomIcon {
+                if !icon.tinted || paints[i] != .nothing {
+                    let own = !icon.tinted || paints[i] == .own || paints[i] == .keptLined
+                    TextAtomIcon.draw(run, in: ctx, ink: own ? nil : ink)
+                }
+                continue
+            }
             switch paints[i] {
             case .nothing, .keptLined: continue
             case .own:
@@ -265,6 +285,7 @@ extension TextLinePaint {
             ctx.textPosition = .zero
             CTLineDraw(line, ctx)
             ctx.restoreGState()
+            for run in shown { TextAtomIcon.draw(run, in: ctx) }
         }
         switch pass {
         case .all: break

@@ -33,7 +33,7 @@
 // second executable path for the same binary, and macOS gives it the bundle
 // identity of whatever the *symlink* is beside — which is not the app.
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statfsSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statfsSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 if (import.meta.main && process.argv[2] === 'status' && !process.argv.includes('--help')) {
@@ -50,7 +50,7 @@ import { grantAdvice } from './grant-advice.mjs';
 import { installIn } from './package-manager.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
-const { applyPattern, createApp, createGame, patternList, wireSnapback } = await import('../game/new.mjs');
+const { applyPattern, createApp, createGame, patternList, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
 const { gameDefaults, sdkFetch } = await import('../game/app/shells.mjs');
 const { HOST_SDKS, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
 const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/build.mjs');
@@ -68,15 +68,12 @@ const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', i
 const { generate: gameVocabulary } = await import('../game/vocab.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const APPLICATIONS = resolve(homedir(), 'Applications');
 /** The app's assembled bundle in this repo — `host/apple/build.mjs --bundle`'s one stable output. */
 export const bundleOf = (app) => appleArtifacts(app).bundle;
 /** The executable inside a bundle: what a terminal launches to keep stdio. */
 export const executableIn = (bundle, app) => resolve(bundle, 'Contents/MacOS', appleExecutableName(app));
-/** The name this app answers to on the command line (`app.command`, else its directory's name). */
-export const commandOf = (app) => app.manifest.app?.command ?? app.name;
-/** Where `install` puts the app. */
-export const installedAt = (app) => resolve(APPLICATIONS, `${appleExecutableName(app)}.app`);
+const { install, uninstall } = await import('./exact-install.mjs');
+export const { binDirectory, commandOf, installedAt } = await import('./exact-install.mjs');
 
 /** The targets this host cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
  * TypeScript, a Hermes bundle, and only for its destination: on a Mac with Xcode; on Linux with the cross SDK (an ARM simulator). */
@@ -150,16 +147,6 @@ export function androidHermes(env = process.env, execute = spawnSync, local = he
   const pinned = checkHermesBundles(env, execute, process.platform, process.arch, ['aarch64-linux-android']);
   return { ok: pinned.ok, have: pinned.ok ? 'verified by hermes-lean-sys' : 'not installed or invalid', fix: pinned.fix };
 }
-/** Where a shim goes: `EXACT_BIN_DIR`, else the first of these already on PATH, else `~/.local/bin` (made, and named in the advice). */
-export function binDirectory() {
-  if (process.env.EXACT_BIN_DIR) return resolve(process.env.EXACT_BIN_DIR);
-  const path = (process.env.PATH ?? '').split(':').map((p) => p && resolve(p));
-  const candidates = [resolve(homedir(), '.local/bin'), '/usr/local/bin', resolve(homedir(), 'bin')];
-  return candidates.find((dir) => path.includes(dir) && writable(dir)) ?? candidates[0];
-}
-
-const writable = (dir) => { try { accessSync(dir, constants.W_OK); return true; } catch { return false; } };
-const onPath = (dir) => (process.env.PATH ?? '').split(':').some((p) => p && resolve(p) === dir);
 /** Cheap assertion on the executable's baked identity, shared with the driver. */
 function refuseForeignBundle(app, bundle) {
   assertAppleIdentity(app, executableIn(bundle, app));
@@ -212,41 +199,6 @@ async function run(app, files) {
   });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
   child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 0));
-}
-/** `exact install` — the app where the OS looks for apps, and its name where a shell looks for names. */
-function install(app) {
-  const bundle = build(app);
-  const target = installedAt(app);
-  mkdirSync(APPLICATIONS, { recursive: true });
-  // A copy, not a symlink: Launch Services registers what it finds at the
-  // path, and a symlinked bundle registers the repo's copy — which moves,
-  // and which a `cargo clean` deletes underneath the Dock.
-  rmSync(target, { recursive: true, force: true });
-  const copy = spawnSync('/bin/cp', ['-R', bundle, target], { stdio: 'inherit' });
-  if (copy.status !== 0) process.exit(copy.status ?? 1);
-  // Register it now rather than whenever the OS next rescans, so `open -a`
-  // and Open With work in the same second this returns.
-  spawnSync('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister', ['-f', target], { stdio: 'ignore' });
-
-  const command = commandOf(app);
-  const dir = binDirectory();
-  mkdirSync(dir, { recursive: true });
-  const shim = resolve(dir, command);
-  // `open` and not the executable: it hands the files to a copy that is
-  // already running instead of starting a second one, and it returns to the
-  // shell instead of holding it. `--args` after the files keeps a leading
-  // `-` in a filename from being read as one of open's own switches.
-  writeFileSync(shim, `#!/bin/sh
-# ${app.displayName} — written by \`exact install ${app.name}\`. Delete it or
-# run \`exact uninstall ${app.name}\` to take it away.
-exec /usr/bin/open -a ${JSON.stringify(target)} ${'"$@"'}
-`);
-  chmodSync(shim, 0o755);
-
-  console.log(`${app.displayName}: ${target}`);
-  console.log(`${command}: ${shim}`);
-  if (!onPath(dir)) console.log(`\n  ${dir} is not on your PATH. Add it:\n    echo 'export PATH="${dir}:$PATH"' >> ~/.zshrc && exec zsh`);
-  else console.log(`\n  ${command} <file> opens it — in the copy already running, if there is one.`);
 }
 /** A tool this verb depends on, run to completion. A failure here is the
  *  end of the verb: half a signed bundle is worse than none. */
@@ -360,15 +312,6 @@ function release(app) {
   console.log(`  ${zip}`);
   if (assess.status !== 0) throw new Error('the artifacts were built but Gatekeeper refuses them; do not send these');
 }
-/** `exact uninstall` — both halves, and nothing else. */
-function uninstall(app) {
-  const target = installedAt(app), shim = resolve(binDirectory(), commandOf(app));
-  for (const path of [target, shim]) {
-    if (!existsSync(path)) { console.log(`not installed: ${path}`); continue; }
-    rmSync(path, { recursive: true, force: true });
-    console.log(`removed ${path}`);
-  }
-}
 /** `exact list` — every app in this repo, its command, and whether it is installed. */
 function list() {
   const apps = readdirSync(resolve(ROOT, 'apps')).filter((name) => existsSync(resolve(ROOT, 'apps', name, 'app.contract')));
@@ -408,7 +351,7 @@ export async function setup({check = false, platform = null, device = false} = {
     const result = spawnSync(cmd, args, {cwd: ROOT, encoding: 'utf8'});
     return result.status === 0 ? result.stdout.trim() : '';
   };
-  if (!check && !output('rustup', ['--version'])) throw new Error('install rustup from https://rustup.rs, then rerun exact setup');
+  if (!check && !output('rustup', ['--version'])) throw new Error('rustup is not on PATH, so setup installed nothing: install it from https://rustup.rs, then rerun exact setup');
   if (!check) {
     run('rustup', ['toolchain', 'install', pin.channel, '--profile', pin.profile,
       ...pin.components.flatMap(c => ['--component', c]), ...pin.targets.flatMap(t => ['--target', t])]);
@@ -759,6 +702,8 @@ export function typeDiagnostics(report, dir) {
   const found = [], at = (file) => relative(process.cwd(), resolve(dir, file));
   for (const line of report.split(/\r?\n/)) {
     if (line.startsWith('warning: ') || /^.+:\d+:\d+ warning \[[\w-]+\] /.test(line)) continue;
+    const backend = /^error \[backend-selection\]: (.*)$/.exec(line);
+    if (backend) { found.push({id: 'backend-selection', severity: 'error', message: backend[1], file: at('app.ts'), line: 0, col: 0, end_col: 0, related: []}); continue; }
     const m = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);
     if (m) found.push({id: `typescript-${m[4]}`, severity: 'error', message: m[5], file: at(m[1]), line: Number(m[2]), col: Number(m[3]), end_col: Number(m[3]), related: []});
     else if (line.trim() && !/^error: .*: app\.ts failed the type check/.test(line)) {
@@ -796,8 +741,8 @@ export function refreshTypes(dir, binary = resolve(ROOT, 'target/debug', process
   if (!quiet) console.error(`app.contract.d.ts: ${before === null ? 'written' : 'regenerated, since a source\'s signature changed'} (the types app.ts imports)`);
   return true;
 }
-/** `exact new`: check the machine first, since a missing Cargo fails the
- * scaffold itself; then write the app and say what its builds will still need. */
+/** `exact new`: check the machine first, since a game's or a Snapback app's scaffold needs Cargo (an app's does
+ * not); then write it and say what its builds will still need. */
 function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, snapback = null, title, id} = {}) {
   if (update) {
     console.log(createApp(path, {update, without, with: platforms}));
@@ -813,13 +758,19 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
   if (game && !path) throw new Error('Usage: exact new <path> --game [--assets] (the last part names the game: lowercase-hyphenated, no host suffix)');
   // The web's rows alone for an app (LLP 1153 D1.6); a native platform's are checked by the verb that first needs it.
   const report = sdkReport(process.env, game ? {} : { only: 'web' });
-  if (report.some(row => row.name === 'rustup' && !row.ok)) {
+  // An app compiles no Rust to be made, so a machine without it (an agent's sandbox for a build service) can make one;
+  // a game resolves its crates now, and a Snapback app wires a device build.
+  const noRust = report.some(row => row.name === 'rustup' && !row.ok);
+  if (noRust && (game || snapback)) {
     printReport(report, {onlyMissing: true});
     throw new Error('exact new needs Rust (rustup) to build exact2\'s own tools, the compiler among them; install it, then run exact new again');
   }
   // A game is a path here, as an app is: `game/new.mjs` alone takes a bare name for game/games.
-  console.log(game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms}));
-  prebuildCompiler();
+  const created = game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms});
+  // A game's cache note is what to do next, so it comes after the compiler's line and the table.
+  const note = created.indexOf(`\n${UNCACHED_CRATES}`);
+  console.log(note < 0 ? created : created.slice(0, note));
+  if (!noRust) prebuildCompiler();
   if (report.some(row => !row.ok)) {
     // Builders read a bare "still needs" list as the reason a later command failed (bench diaries,
     // 2026-10-07/08): say when nothing on it blocks the app.
@@ -829,6 +780,8 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
       : '\nThe app was created; nothing below blocks it. Each is needed only for what it names (exact setup --check shows the whole table):');
     printReport(report, {onlyMissing: true});
   }
+  if (note >= 0) console.log(created.slice(note));
+  if (noRust) console.log('\nWithout Rust, this machine cannot check or build the app locally: `bun exact.mjs contract build app.contract` and every local build or dev loop compile exact2\'s tools first. A build service builds it as it is; to check here, install rustup (https://rustup.rs).');
 }
 
 const USAGE = `exact — run an Exact app from the command line (macOS)
@@ -861,6 +814,8 @@ const USAGE = `exact — run an Exact app from the command line (macOS)
   exact snapback <app> [--port <n>] [--online] [--rebuild [--artifact-only]]
                                wire an app to the backend above it; --port moves
                                its loopback origin, grants and test fetch prefixes
+                               (both need the Snapback client in this checkout's
+                               snapback4/, which the repository does not include)
   exact new <path> --game      a new game (game/README.md): a Rust world under
                                Contract's menus, with the same exact.mjs verbs;
                                --assets declares game.assets
@@ -940,8 +895,10 @@ export function hatch(args, say = console.log) {
   const has = (crate, ...hosts) => existsSync(resolve(dir, crate)) || hosts.some(h => manifest.host?.[h]);
   if (has('apple', 'ios', 'macos')) {
     platforms.push(...['ios', 'macos'].filter(p => !manifest.host || manifest.host[p]));
-    const mod = resolve(dir, 'modules/apple'), has = existsSync(mod) && readdirSync(mod).some(f => f.endsWith('.swift'));
-    const main = has ? readdirSync(mod).map(f => resolve(mod, f)).find(f => readFileSync(f, 'utf8').includes('// exact:element')) ?? resolve(mod, readdirSync(mod).find(f => f.endsWith('.swift'))) : resolve(mod, 'Hatches.swift');
+    // Its Swift sources, beside which it may keep directories and assets.
+    const mod = resolve(dir, 'modules/apple'), sources = existsSync(mod) ? readdirSync(mod, { withFileTypes: true }).filter(e => e.isFile() && e.name.endsWith('.swift')).map(e => resolve(mod, e.name)) : [];
+    const has = sources.length > 0;
+    const main = has ? sources.find(f => readFileSync(f, 'utf8').includes('// exact:element')) ?? sources[0] : resolve(mod, 'Hatches.swift');
     if (!has) write(main, `// ${title}'s native module on Apple: its access hatches. Written by \`exact hatch\`; yours from here.
 // A hatch is handed the platform object Exact built (a view, a window), configures it, and changes Contract
 // state only by acting on authored nodes: click(), focus(), blur(), input(text). The app works without it
@@ -1082,7 +1039,7 @@ export function ended(${scope[0]}) {
 // \`exact hatch\`; yours from here. There is no platform object here: a hatch draws into its node's overlay
 // (a whole recording that replaces the last), observes the input that lands in its box, and changes Contract
 // state only by acting on authored nodes: click(), focus(), blur(), input(text).
-use exact_linux::hatches::{App, Context, Element, Hatches, Window};
+use exact_painted::hatches::{App, Context, Element, Hatches, Window};
 
 #[derive(Default)]
 pub struct AppHatches;
@@ -1476,7 +1433,7 @@ async function main(argv) {
   if (verb === 'run') return run(app, rest);
   // `--release` on `install` is the same path, since that is what it is for.
   if (verb === 'release' || (verb === 'install' && rest.includes('--release'))) return release(app);
-  if (verb === 'install') return install(app);
+  if (verb === 'install') return install(app, build(app));
   return uninstall(app);
 }
 

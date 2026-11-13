@@ -11,6 +11,7 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
@@ -54,6 +55,9 @@ internal object AlarmRing {
     }
 
     fun channelBlocked(c: Context): Boolean = notices(c).getNotificationChannel(RING)?.importance == NotificationManager.IMPORTANCE_NONE
+
+    /** Whether a ring's notification, which carries its Stop, can be shown: no sound starts or continues without it (D7). */
+    fun stoppable(c: Context): Boolean = notices(c).areNotificationsEnabled() && !channelBlocked(c)
 
     private fun fire(c: Context, r: AlarmRecord): PendingIntent = PendingIntent.getBroadcast(c, r.code,
         Intent(c, AlarmReceiver::class.java).setAction(FIRE).putExtra("tag", r.tag), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -172,9 +176,15 @@ internal object AlarmRing {
 
     /**
      * A boot (or the package replaced): the system dropped every alarm, so each is set again from its record with a
-     * fresh anchor; one that fell due while the phone was off rings at once (D9).
+     * fresh anchor; one that fell due while the phone was off rings at once (D9). With no Stop to show, every alarm
+     * ends instead, as at a status read while `denied` (D7).
      */
     fun restore(c: Context) {
+        if (!stoppable(c)) {
+            dropHeld(c)
+            AlarmsModule.changed()
+            return
+        }
         val now = System.currentTimeMillis()
         for (r in AlarmRecords.all(c)) when (r.state) {
             "countdown", "scheduled" -> if (r.at!! <= now) ring(c, r) else arm(c, r)
@@ -196,7 +206,7 @@ internal object AlarmRing {
             return
         }
         // No ring that cannot be stopped (D7): with notifications off or the channel blocked there is no Stop.
-        if (!notices(c).areNotificationsEnabled() || channelBlocked(c)) {
+        if (!stoppable(c)) {
             cancel(c, tag)
             AlarmsModule.changed()
             return
@@ -243,8 +253,10 @@ class AlarmSystemReceiver : BroadcastReceiver() {
             Intent.ACTION_TIME_CHANGED -> AlarmRing.timeSet(c)
             // An epoch instant has no zone: nothing moves, the app reads again.
             Intent.ACTION_TIMEZONE_CHANGED -> AlarmsModule.changed()
+            // Sent at a grant, which follows a revocation that ended every alarm the system held and stopped the app,
+            // perhaps with no status read since: their records go, and granting again brings none back (D7).
             AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
-                if (c.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()) AlarmRing.restore(c) else AlarmRing.dropHeld(c)
+                AlarmRing.dropHeld(c)
                 AlarmsModule.changed()
             }
         }
@@ -271,16 +283,34 @@ class AlarmService : Service() {
     private val limits = HashMap<String, Runnable>()
     private var player: MediaPlayer? = null
     private var foregroundCode = 0
+    /** The latest start delivered. Stopping with it (`stopSelf(startId)`) ends the service only when no newer start is
+     * on its way, so an alarm started as the last ring ends is not taken down with the service. */
+    private var lastStart = 0
     private val main = Handler(Looper.getMainLooper())
+
+    /** Notifications or the alarm channel blocked while ringing takes the Stop away, so every ring ends (D7). Android
+     * sends both broadcasts to the app whose state changed. */
+    private val blocked = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            if (AlarmRing.stoppable(c)) return
+            AlarmRing.dropHeld(c)
+            AlarmsModule.changed()
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         running = this
+        val filter = IntentFilter(NotificationManager.ACTION_APP_BLOCK_STATE_CHANGED)
+        filter.addAction(NotificationManager.ACTION_NOTIFICATION_CHANNEL_BLOCK_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(blocked, filter, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(blocked, filter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStart = startId
         val tag = intent?.getStringExtra("tag")
         val r = tag?.let { AlarmRecords.get(this, it) }
         AlarmRing.channels(this)
@@ -290,7 +320,7 @@ class AlarmService : Service() {
             if (ringing.isEmpty()) {
                 foreground(Int.MAX_VALUE, Notification.Builder(this, AlarmRing.RING).setSmallIcon(android.R.drawable.ic_lock_idle_alarm).build())
                 stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelf(startId)
             }
             return START_NOT_STICKY
         }
@@ -353,7 +383,7 @@ class AlarmService : Service() {
         getSystemService(NotificationManager::class.java).cancel(code)
         if (ringing.isEmpty()) {
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSelf(lastStart)
             return
         }
         if (code == foregroundCode) {
@@ -372,6 +402,7 @@ class AlarmService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(blocked)
         player?.runCatching { stop(); release() }
         player = null
         main.removeCallbacksAndMessages(null)

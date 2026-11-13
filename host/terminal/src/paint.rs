@@ -59,8 +59,6 @@ pub struct Scene<'a> {
     pub images: &'a crate::image::Images,
     /// Centre a dialog with no insets in the grid (full screen).
     pub center: bool,
-    /// The kernel's environment: its border rule among it.
-    pub env: exact_kernel::Env,
     /// Whether a node has a `press` of its own (a `box press=`, a card):
     /// a press can hit it as it hits a control (whether that press runs is
     /// the host's: a disabled or inert box swallows it).
@@ -246,9 +244,9 @@ fn node(
         border(scene, out, &n, rect, clip, current);
         grouped::separator(scene, out, &n, clip, dx, dy);
     }
-    let [bt, br, bb, bl] = n.style.border_widths_in(&scene.env);
+    let [bt, br, bb, bl] = n.style.border_widths_in(&kernel.env_of(n.id));
     let (pl, _, pr, _) = kernel.resolved_padding(n.key).unwrap_or_default();
-    let content = content_cells(kernel, &scene.env, &n, dx, dy);
+    let content = content_cells(kernel, &n, dx, dy);
     let seen = rect.intersect(clip);
     if visible && seen.w > 0 && seen.h > 0 {
         out.shown.push(id);
@@ -340,18 +338,13 @@ fn node(
 /// A node's content box in cells, less the offsets above it: inside its
 /// borders and padding, or a field's own text rectangle. A textarea's
 /// lines are this wide for the painter and for the arrow keys alike.
-pub(crate) fn content_cells(
-    kernel: &Kernel,
-    env: &exact_kernel::Env,
-    n: &NodeRef<'_>,
-    dx: f32,
-    dy: f32,
-) -> CellRect {
+pub(crate) fn content_cells(kernel: &Kernel, n: &NodeRef<'_>, dx: f32, dy: f32) -> CellRect {
     let f = n.frame;
     if let Some(c) = n.field_content_rect() {
         return cells(f.x - dx + c.x, f.y - dy + c.y, c.width, c.height);
     }
-    let [bt, br, bb, bl] = n.style.border_widths_in(env);
+    // A box's lengths in its own environment (LLP 1123 D9)
+    let [bt, br, bb, bl] = n.style.border_widths_in(&kernel.env_of(n.id));
     let (pl, pt, pr, pb) = kernel.resolved_padding(n.key).unwrap_or_default();
     cells(
         f.x - dx + bl + pl,
@@ -456,7 +449,8 @@ fn border(
     clip: CellRect,
     current: ColorValue,
 ) {
-    let widths = n.style.border_widths_in(&scene.env);
+    let env = scene.kernel.env_of(n.id);
+    let widths = n.style.border_widths_in(&env);
     if widths.iter().all(|w| *w <= 0.0) || r.w < 1 || r.h < 1 {
         return;
     }
@@ -474,7 +468,6 @@ fn border(
     .iter()
     .zip(widths)
     .any(|(w, on)| on > 0.0 && *w >= 5.0);
-    let env = scene.kernel.env();
     let round = !heavy
         && [
             s.border_radius_top_left.clone(),

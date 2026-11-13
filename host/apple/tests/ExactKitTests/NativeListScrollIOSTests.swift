@@ -488,8 +488,13 @@ final class NativeListScrollIOSTests: GroupedListFixture {
         }
     }
 
-    func testAHiddenPositionWaitsForAPortThatCanHoldItUnlessTheAuthorWritesOne() throws {
-        for authored in [false, true] {
+    func testAHiddenPositionWaitsForAPortWithASize() throws {
+        let cases: [(written: String, top: CGFloat, message: String)] = [
+            ("none", 140, "the saved position is restored once the port has a size"),
+            ("authored", 60, "an authored position written while it waits is written after it"),
+            ("carried", 140, "a position carried from another scroll view while it waits does not replace it"),
+        ]
+        for (written, top, message) in cases {
             let p = presenter(height: 180) { self.model() }
             let owner = try XCTUnwrap(p.views[1])
             let style: [String: Any] = ["overflow_y": "scroll"]
@@ -503,12 +508,18 @@ final class NativeListScrollIOSTests: GroupedListFixture {
             // Shown before it is laid out, as a pane is while the cover that hid it in its arrangement still applies
             var shown: [[String: Any]] = [["op": "style", "id": 1, "style": style]]
             shown += laidOut(0, 0)
-            if authored { shown.append(["op": "props", "id": 1, "set": ["scrollTop": "0"]]) }
+            if written == "authored" { shown.append(["op": "props", "id": 1, "set": ["scrollTop": "60"]]) }
             p.apply(wireBatch(shown))
+            // The empty port at its start, where a write to it would clamp
+            let empty = try XCTUnwrap(owner.scrollView)
+            empty.contentOffset = .zero
+            if written == "carried" {
+                owner.retainScrollPosition(from: empty)
+                p.apply(wireBatch([]))
+            }
             p.apply(wireBatch(laidOut(180, 9000)))
             let scroll = try XCTUnwrap(owner.scrollView)
-            XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), authored ? 0 : 140, accuracy: 0.5,
-                           authored ? "an authored position replaces the saved one" : "the saved position is restored once the port has a size")
+            XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), top, accuracy: 0.5, message)
         }
     }
 

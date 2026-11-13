@@ -54,7 +54,7 @@ function outputTimestamp(ctx) {
  * runner time 0 is on `performance.now()`'s timeline. A test passes
  * `context`, `timestamp`, `now` and `activated` (an OfflineAudioContext has
  * no output timestamp and no activation). */
-function installSound({ files, log, origin, root = document.getElementById('exact-root'), context, timestamp, now = () => performance.now(), activated, fetchFile = src => fetch(new URL(src, document.baseURI)).then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error(`HTTP ${r.status}`))) }) {
+function installSound({ files, log, origin, context, timestamp, now = () => performance.now(), activated, fetchFile = src => fetch(new URL(src, document.baseURI)).then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error(`HTTP ${r.status}`))) }) {
   const ctx = context ?? new AudioContext({ latencyHint: 'interactive' });
   const stamp = timestamp ?? (() => outputTimestamp(ctx));
   let sources = [], buffers = [], decoded = 0, gesture = false;
@@ -63,10 +63,6 @@ function installSound({ files, log, origin, root = document.getElementById('exac
   const haptics = new Map();
   /** Every voice not yet over: `{id, sound, at, gain, playbackRate, pan, stopAt, node, held, timer, gainNode, panner, ramps}`. */
   const voices = new Map();
-  // `app.json`'s `audio_session`, where the browser has the Audio Session API (WebKit).
-  const session = root?.dataset.audioSession;
-  // The Audio Session draft has no mixing playback type (LLP 1096 D7).
-  if (session && navigator.audioSession) navigator.audioSession.type = session === 'playback-mix' ? 'ambient' : session;
   const userActivated = activated ?? (() => navigator.userActivation?.hasBeenActive ?? gesture);
   if (!context) {
     const resume = e => { if (!e.isTrusted) return; gesture = true; if (ctx.state !== 'running') ctx.resume().catch(() => {}); else for (const t of ACTIVATING) document.removeEventListener(t, resume, true); };

@@ -414,6 +414,7 @@ public final class ExactSession {
     public internal(set) var firstLayoutMs: Double?
     /// The first batch and its numbers, once booted (the smoke prints them).
     public private(set) var booted = false
+    var atomIconRemeasurePending = false
     public private(set) var bootError: String?
     public private(set) var bootMs = 0.0
     public private(set) var rustMs = 0.0
@@ -491,7 +492,7 @@ public final class ExactSession {
     func trackInputHold(_ hold: SwipeHold) { inputHolds.add(hold) }
     func retireInputHold(_ hold: SwipeHold) { inputHolds.remove(hold) }
     var pendingSurfaceRecords: [(String, String?, Bool)] = []
-    private var pendingSurfaceWork: [([String: Any], Int)] = []
+    var pendingSurfaceWork: [([String: Any], Int)] = []
     /// Authentication sessions this session opened (`Auth.swift`, LLP 1069.006).
     let authSessions = AuthSessions()
 
@@ -521,7 +522,7 @@ public final class ExactSession {
         canvases = SurfacesLink.installed?.canvases() ?? NoCanvases()
         webviews = WebViews()
         frames = Frames()
-        presenter.session = self
+        presenter.session = self; RowReuse.adopt(self)
         canvases.session = self
         webviews.session = self
         natives.session = self
@@ -538,6 +539,10 @@ public final class ExactSession {
         presenter.canvas2d.onImage = { [weak self] src, image in
             guard let self, self.state != .destroyed else { return }
             self.apply(self.runtime.canvasImage(src, width: image?.width ?? 0, height: image?.height ?? 0, ok: image != nil))
+        }
+        presenter.canvas2d.onRelease = { [weak self] src in
+            guard let self, self.state != .destroyed else { return }
+            self.runtime.canvasImageReleased(src)
         }
         presenter.canvas2d.onReplayEnded = { [weak self] in self?.workEnded() }
         presenter.canvas2d.onHeld = { [weak self] view, held in
@@ -683,6 +688,7 @@ public final class ExactSession {
                 if case .fill(let view) = next.kind { landedFill(view, stale: true) }
                 continue
             }
+            frameHealth.expireCapture(at: began)
             var batch = next.batch
             if batch.frameWorkTiming != nil { batch.frameWorkTiming?.landed = began }
             if case .advance = next.kind { applyUnlessEmpty(batch) } else if !(changesNothing(batch) && clockUnchanged(batch)) {
@@ -693,7 +699,7 @@ public final class ExactSession {
             #endif
             // A frame's owner work finishes when it lands, applied or skipped (LLP 1079.000 §4.6), and the card's charts show it
             if case .tick = next.kind { frameHealth.landed(FrameHealth.tick) } else if case .advance = next.kind { frameHealth.landed(FrameHealth.advance) }
-            frameHealth.chart?.present()
+            frameHealth.chart?.present(); frameHealth.maintain()
             if case .reply = next.kind {
                 sampler?.replyPump(main: submitted + (CACurrentMediaTime() - began) * 1000)
                 retryActivation(generation: next.generation)
@@ -1039,7 +1045,6 @@ public final class ExactSession {
     /// @ref LLP 1038 D7/D11 — observation only; Swift never interprets slots.
     private(set) var routerOp: [String: Any]?
 
-
     /// A batch from a timer, a scroll event or a host's measurement: one that
     /// changes nothing only moves the clock. An app's timer that writes nothing
     /// (a poll that finds no news), a `scroll=` handler whose writes show
@@ -1128,7 +1133,7 @@ public final class ExactSession {
         // What applying it cost, with its transactions, for the next sampled frame (LLP 1079 D3), told to the sampler there was when it began while the session keeps it: a recording the batch starts makes a new one, and one it stops lets a production bake's go.
         let timed = sampler, began = CACurrentMediaTime()
         defer { if let timed, timed === sampler { timed.batch(batch.seq, ms: outermost ? (CACurrentMediaTime() - began) * 1000 : 0) }; if let q = batch.seq { natives.hatchClock.seq = q.1 }; logAlerts(batch.alerts); logJournal(batch.journal) }
-        defer { if outermost, frameHealth.enabled { frameHealth.applied(batch, began: began, flags: frameHealth.frameFlags(frames, session: self)) } }
+        defer { if outermost { recordFrameHealthApply(batch, began: began) } }
         if batch.facts { app.scheduleStatus() } // the app's own `setMode` or `setRootFontSize` (LLP 1122 D4)
         if let must = batch.mustFinish { finishHold.moved(must) }
         // Each batch says what its turn left owed; batches apply in the owner's order, so the last one applied is the runner's now.
@@ -1151,14 +1156,16 @@ public final class ExactSession {
         }
         for op in batch.ops where op.op == .surfaceWork { pendingSurfaceWork.append((op.payload, generation)) }
         if !ExactEnv.agentMode { for op in batch.ops where op.op == .sound || op.op == .midi { if op.op == .sound { sound.apply(op.payload) } else { midi.apply(op.payload) } } } // LLP 1096 D8, LLP 1125 D7: the voice table's and the MIDI queue's ops, never under the agent's clock
-        // Opened once the batch is applied, off this session's window (LLP 1069.006 D3).
+        // Opened once the batch is applied, off this session's window (LLP 1069.006 D3), unless its generation has ended.
         for op in batch.ops where op.op == .auth || op.op == .presence {
-            let (payload, auth) = (op.payload, op.op == .auth)
-            DispatchQueue.main.async { [weak self] in if let self, state != .destroyed { if auth { authOp(payload) } else { presenceOp(payload) } } }
+            let (payload, auth, issued) = (op.payload, op.op == .auth, GenerationStamp(self))
+            DispatchQueue.main.async { if let session = issued.session { if auth { session.authOp(payload) } else { session.presenceOp(payload, issued: issued) } } }
         }
         // Each presenter takes its boot's table, a second one with the same too.
         ThemeRoles.apply(batch, root: presenter.root); if batch.ops.contains(where: { $0.op == .roles }) { presenter.applyThemeTint() }
+        let orientationChanged = presenter.orientationChangesScreen(batch)
         ThemeRoles.within(presenter.root) { presenter.apply(batch) }; Tambers.moved(self) // bindings' places (LLP 1121 D12)
+        drainCanvasCaptures(batch)
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         AnimatedRasters.shared.poke()
         for op in batch.ops where op.op == .reorder { presenter.reorder?.observe(ReorderState(op.payload)); presenter.reorderGroup?.observe(ReorderGroupState(op.payload)) }
@@ -1184,7 +1191,7 @@ public final class ExactSession {
             transformInputHold?.cancelIfInputIneligible()
             presenter.transformGeometry.changed()
             applying = false
-            ExactLaunch.shared.applied(self, batch)
+            ExactLaunch.shared.applied(self, batch, orientationChanged: orientationChanged)
             workEnded()
             #if os(macOS)
             regions.flush()
@@ -1278,17 +1285,12 @@ public final class ExactSession {
     private func drainSurfaceWork() {
         guard canvases.ready || canvases.failed != nil || canvases.isEmpty,
               !pendingSurfaceWork.isEmpty else { return }
-        let work = pendingSurfaceWork
-        pendingSurfaceWork = []
+        let work = pendingSurfaceWork.filter { $0.0["mode"] as? String != "canvas" }
+        pendingSurfaceWork.removeAll { $0.0["mode"] as? String != "canvas" }
         DispatchQueue.main.async { [weak self] in
             guard let self, state != .destroyed else { return }
             for (op, owner) in work { canvases.surfaceWork(op, generation: owner) }
         }
-    }
-
-    package func completeSurface(_ ticket: UInt64, generation owner: Int, kind: UInt32, body: Data = Data()) {
-        guard state != .destroyed, generation == owner, runtime.requestActive(ticket) else { return }
-        apply(runtime.fulfillSurface(ticket, kind: kind, body: body, now: now()))
     }
 
     /// The first node drew: the GPU module may load now (LLP 1009 D4), on
@@ -1381,7 +1383,7 @@ public final class ExactSession {
     }
     /// The appearance last reported for the session, and each node view found painting motion in another (a sheet's override, say), by id.
     private(set) var schemeDark: Bool?
-    private(set) var viewDark: [UInt32: Bool] = [:]
+    var viewDark: [UInt32: Bool] = [:]
     private var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views

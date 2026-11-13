@@ -120,7 +120,13 @@ pub fn write_line(dir: &Path, name: &str, value: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     let path = dir.join("keys");
-    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    // Only a missing file is empty: rewriting one that cannot be read would
+    // discard the lines it holds.
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
     let mut lines: Vec<String> = Vec::new();
     let mut placed = false;
     for line in old.lines() {
@@ -142,18 +148,29 @@ pub fn write_line(dir: &Path, name: &str, value: &str) -> Result<(), String> {
     if !text.is_empty() {
         text.push('\n');
     }
+    // The new text goes to a file beside the one a link names, which is
+    // renamed over it once on disk: until then the old file is whole.
+    let target = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    let parent = target.parent().unwrap_or(dir);
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let staged = parent.join(format!(".keys.tmp-{}-{n}", std::process::id()));
     let fail = |e: std::io::Error| format!("cannot write {}: {e}", path.display());
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .map_err(fail)?;
-    // `mode` applies only to a file it creates; an existing one is set here.
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(fail)?;
-    file.write_all(text.as_bytes()).map_err(fail)
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staged)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&staged, &target)?;
+        std::fs::File::open(parent)?.sync_all()
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    written.map_err(fail)
 }
 
 /// `text` with every secret replaced by "[redacted]".
@@ -206,6 +223,73 @@ mod tests {
             parse(&text).get("OPENROUTER_API_KEY").map(String::as_str),
             Some("test-value-one")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_left_as_it_was() {
+        let dir = std::env::temp_dir().join(format!(
+            "exact-harness-keys-unreadable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keys");
+
+        let invalid = b"# caf\xe9\nANTHROPIC_API_KEY=old\n".to_vec();
+        std::fs::write(&path, &invalid).unwrap();
+        assert!(write_line(&dir, "OPENAI_API_KEY", "new").is_err());
+        assert!(write_line(&dir, "ANTHROPIC_API_KEY", "").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), invalid);
+
+        std::fs::write(&path, "ANTHROPIC_API_KEY=old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+        let err = write_line(&dir, "OPENAI_API_KEY", "new");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(err.unwrap_err().starts_with("cannot read"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "ANTHROPIC_API_KEY=old\n"
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        write_line(&dir, "OPENAI_API_KEY", "new").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "OPENAI_API_KEY=new\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save replaces the file rather than rewriting it in place: a reader
+    /// of the old file sees it whole, and nothing staged is left behind.
+    #[test]
+    fn a_save_replaces_the_file_and_never_empties_the_old_one() {
+        use std::io::Read;
+        let dir =
+            std::env::temp_dir().join(format!("exact-harness-keys-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keys");
+        let old = "ANTHROPIC_API_KEY=old-one\nOPENAI_API_KEY=old-two\n";
+        std::fs::write(&path, old).unwrap();
+        let mut held = std::fs::File::open(&path).unwrap();
+        write_line(&dir, "OPENAI_API_KEY", "new-two").unwrap();
+        let mut seen = String::new();
+        held.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, old, "the old file was never truncated");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "ANTHROPIC_API_KEY=old-one\nOPENAI_API_KEY=new-two\n"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names, ["keys"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

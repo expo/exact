@@ -133,10 +133,10 @@ test('observer baseline: commit to feedback to real observer reads each row once
   })()`);
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'7',scroll_sequence:'1',offset:50,
     port_cross:result.width,port_main:180,cross:result.width-24,padding:[10,10],focus_view:3,interaction_view:5,
-    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true})]);
+    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true,viewOffset:50})]);
   expect(result.deliveries.flat().filter(v=>v==='2')).toHaveLength(1);
   expect(result.deliveries.flat().filter(v=>v==='4')).toHaveLength(1);
-  expect([result.reports,result.flags,result.pending]).toEqual([2,0,0]);
+  expect([result.reports,result.flags,result.pending]).toEqual([2,256,0]);
   console.log('observer baseline commit/feedback/observer',JSON.stringify(result));
   expect(result.commit).toEqual([1,1,0,0]);
   expect(result.feedback.slice(2)).toEqual([1,1]);
@@ -205,7 +205,7 @@ test('observer baseline: external growth coalesced after final own commit surviv
   expect(result.last.rows[0]).toEqual({view:2,epoch:'9007199254740993',size:97.25});
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'3',scroll_sequence:result.last.sequence,
     offset:result.last.top,port_cross:result.last.width,port_main:180,cross:result.last.rowWidth,
-    padding:[10,10],focus_view:null,interaction_view:null,measurements:[{view:2,epoch:'9007199254740993',size:97.25},{view:4,epoch:'2',size:60}]},{limit:1})]);
+    padding:[10,10],focus_view:null,interaction_view:null,measurements:[{view:2,epoch:'9007199254740993',size:97.25},{view:4,epoch:'2',size:60}]},{limit:1,viewOffset:result.last.top})]);
   expect([result.reports,result.idle,result.pending]).toEqual([3,true,0]);
   console.log('observer baseline coalesced external growth',JSON.stringify(result));
 });
@@ -247,7 +247,7 @@ test('collection read reuse: correction-free commit reads only list and port bas
     return {commit,wire:f.wires.at(-1),width:f.port.clientWidth};})()`);
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'1',scroll_sequence:'0',offset:-10,
     port_cross:result.width,port_main:180,cross:result.width-24,padding:[10,10],focus_view:null,interaction_view:null,
-    measurements:[{view:2,epoch:'9007199254740993',size:40},{view:4,epoch:'2',size:60}]},{limit:1})]);
+    measurements:[{view:2,epoch:'9007199254740993',size:40},{view:4,epoch:'2',size:60}]},{limit:1,viewOffset:-10})]);
   expect(result.commit).toEqual([1,1,0,0]);
 });
 test('collection read reuse: one row sample preserves fractional wire, epochs and both pins', async () => {
@@ -259,7 +259,7 @@ test('collection read reuse: one row sample preserves fractional wire, epochs an
     return {beforeReport,wire:f.wires.at(-1),width:f.port.clientWidth,pending:f.frames.size};})()`);
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'7',scroll_sequence:'1',offset:50,
     port_cross:result.width,port_main:180,cross:result.width-24,padding:[10,10],focus_view:3,interaction_view:5,
-    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true})]);
+    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true,viewOffset:50})]);
   expect(result.pending).toBe(0);
   expect(result.beforeReport.slice(2)).toEqual([1,1]);
 });
@@ -431,7 +431,7 @@ test('collection read reuse: synchronous report replacement samples new nodes an
   ]);
   for(const [i,r] of result.reports.entries())expect(result.wires[i]).toEqual([...collectionBytes({view:1,
     revision:r.revision,scroll_sequence:r.sequence,offset:-10,port_cross:r.width,port_main:180,
-    cross:r.rowWidth,padding:r.padding,focus_view:null,interaction_view:null,measurements:r.rows},{limit:1})]);
+    cross:r.rowWidth,padding:r.padding,focus_view:null,interaction_view:null,measurements:r.rows},{limit:1,viewOffset:-10})]);
 });
 test('collection read reuse: width wrapping keeps actual fractional heights and fresh later-pass dimensions', async () => {
   const result=await evaluate(`(() => {const f=fixture(),row=f.views.get(2);row.style.cssText='font:16px monospace;line-height:20.25px';row.textContent='word '.repeat(41);
@@ -1439,7 +1439,7 @@ test('a row list reports scrollLeft, the port width and height, its rows\' heigh
   expect(result.overflowAnchor).toBe('none');
   expect(result.wire).toEqual([...collectionBytes({ view: 1, revision: '1', scroll_sequence: '1', offset: 40, port_main: result.w,
     port_cross: result.h, cross: result.h - 12, padding: [0, 0], focus_view: null, interaction_view: null,
-    measurements: [{ view: 2, epoch: '1', size: 100 }, { view: 4, epoch: '1', size: 150.5 }] }, { limit: 1, scrolling: true })]);
+    measurements: [{ view: 2, epoch: '1', size: 100 }, { view: 4, epoch: '1', size: 150.5 }] }, { limit: 1, scrolling: true, viewOffset: 40 })]);
 });
 test('a correction on x moves scrollLeft; not while the strip moves, and a column list keeps correcting', async () => {
   const run = axis => evaluate(`(() => { const f=(${axisFixture})('${axis}'), l=f.list, n=f.name;

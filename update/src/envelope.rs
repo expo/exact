@@ -673,47 +673,57 @@ pub fn resolve_url(base: &str, url: &str) -> Result<String, String> {
                 base.scheme, base.authority
             ));
         }
-        return Ok(resolved.without_fragment());
+        let (path, query) = resolved.path_and_query();
+        return Ok(resolved.serialize(&remove_dot_segments(path, url)?, query));
     }
     if url.contains(':') && !url.starts_with('/') {
         // `mailto:`, `data:`, `file:` — anything with a scheme and no origin.
         return Err(format!("the url {url} is not http or https"));
     }
-    let (reference, fragment) = url.split_once('#').unwrap_or((url, ""));
-    let (reference_path, query) = reference.split_once('?').unwrap_or((reference, ""));
-    let (base_path, _) = base.path.split_once('?').unwrap_or((base.path, ""));
-    let joined = if let Some(absolute) = reference_path.strip_prefix('/') {
-        format!("/{absolute}")
-    } else if reference_path.is_empty() {
-        base_path.to_string()
+    // RFC 3986 §5.2.2 for a reference with no scheme or authority. A
+    // fragment identifies no bytes and is never sent.
+    let reference = url.split_once('#').map_or(url, |(reference, _)| reference);
+    let (reference_path, reference_query) = match reference.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (reference, None),
+    };
+    let (base_path, base_query) = base.path_and_query();
+    let (path, query) = if reference_path.is_empty() {
+        (base_path.to_string(), reference_query.or(base_query))
+    } else if reference_path.starts_with('/') {
+        (reference_path.to_string(), reference_query)
     } else {
         let directory = &base_path[..=base_path.rfind('/').unwrap_or(0)];
-        format!("{directory}{reference_path}")
+        (format!("{directory}{reference_path}"), reference_query)
     };
-    let mut segments: Vec<&str> = Vec::new();
-    for segment in joined.split('/') {
-        match segment {
-            "" | "." => {}
+    Ok(base.serialize(&remove_dot_segments(&path, url)?, query))
+}
+
+/// RFC 3986 §5.2.4 on an absolute path, keeping empty segments and a final
+/// slash as a browser does; a `..` above the root is refused, not clamped.
+fn remove_dot_segments(path: &str, url: &str) -> Result<String, String> {
+    let relative = path.strip_prefix('/').unwrap_or(path);
+    let segments: Vec<&str> = relative.split('/').collect();
+    let mut out: Vec<&str> = Vec::new();
+    for (i, segment) in segments.iter().enumerate() {
+        let last = i + 1 == segments.len();
+        match *segment {
+            "." => {}
             ".." => {
-                if segments.pop().is_none() {
+                if out.pop().is_none() {
                     return Err(format!("the url {url} climbs above the origin"));
                 }
             }
-            other => segments.push(other),
+            other => {
+                out.push(other);
+                continue;
+            }
+        }
+        if last {
+            out.push("");
         }
     }
-    let mut out = format!(
-        "{}://{}/{}",
-        base.scheme,
-        base.authority,
-        segments.join("/")
-    );
-    if reference.contains('?') {
-        out.push('?');
-        out.push_str(query);
-    }
-    let _ = fragment; // Fragments identify no bytes and are never sent.
-    Ok(out)
+    Ok(format!("/{}", out.join("/")))
 }
 
 /// The pieces needed to compare HTTP origins without accepting credentials or
@@ -731,12 +741,20 @@ impl HttpUrl<'_> {
         (self.scheme, self.host.as_str(), self.port)
     }
 
-    fn without_fragment(&self) -> String {
-        let path = self
-            .path
-            .split_once('#')
-            .map_or(self.path, |(path, _)| path);
-        format!("{}://{}{}", self.scheme, self.authority, path)
+    /// The path, `/` when the URL has none, and the query, without the
+    /// fragment.
+    fn path_and_query(&self) -> (&str, Option<&str>) {
+        let before = self.path.split_once('#').map_or(self.path, |(p, _)| p);
+        let (path, query) = match before.split_once('?') {
+            Some((path, query)) => (path, Some(query)),
+            None => (before, None),
+        };
+        (if path.is_empty() { "/" } else { path }, query)
+    }
+
+    fn serialize(&self, path: &str, query: Option<&str>) -> String {
+        let query = query.map_or(String::new(), |query| format!("?{query}"));
+        format!("{}://{}{path}{query}", self.scheme, self.authority)
     }
 }
 
@@ -912,6 +930,94 @@ mod url_tests {
         assert!(resolve_url(base, "../../../../app.plan").is_err());
         assert!(resolve_url(base, r"..\app.plan").is_err());
         assert!(resolve_url("https://user@updates.example/head", "./plan").is_err());
+    }
+
+    /// What `new URL(card, base)` gives (Bun 1.4.2), for the references that
+    /// keep a base's query, a trailing slash or an empty segment.
+    #[test]
+    fn references_resolve_as_a_browser_resolves_them() {
+        for (base, card, resolved) in [
+            (
+                "https://o.example?index=1",
+                "asset.bin",
+                "https://o.example/asset.bin",
+            ),
+            (
+                "https://o.example?index=1",
+                "",
+                "https://o.example/?index=1",
+            ),
+            (
+                "https://o.example?index=1",
+                "#f",
+                "https://o.example/?index=1",
+            ),
+            ("https://o.example", "?q=2", "https://o.example/?q=2"),
+            (
+                "https://o.example?index=1",
+                "https://o.example?x",
+                "https://o.example/?x",
+            ),
+            (
+                "https://o.example/a/i.json?v=1",
+                "",
+                "https://o.example/a/i.json?v=1",
+            ),
+            (
+                "https://o.example/a/i.json?v=1",
+                "#f",
+                "https://o.example/a/i.json?v=1",
+            ),
+            (
+                "https://o.example/a/i.json?v=1",
+                "?",
+                "https://o.example/a/i.json?",
+            ),
+            (
+                "https://o.example/a/i.json?v=1",
+                "?w=2#f",
+                "https://o.example/a/i.json?w=2",
+            ),
+            (
+                "https://o.example/a/b/i.json",
+                "../assets/",
+                "https://o.example/a/assets/",
+            ),
+            (
+                "https://o.example/a/i.json",
+                "./a//b.bin",
+                "https://o.example/a/a//b.bin",
+            ),
+            ("https://o.example/a/b/i.json", "..", "https://o.example/a/"),
+            (
+                "https://o.example/a/b/i.json",
+                ".",
+                "https://o.example/a/b/",
+            ),
+            (
+                "https://o.example/a/b/i.json",
+                "c/./d/../e",
+                "https://o.example/a/b/c/e",
+            ),
+            (
+                "https://o.example/a/i.json",
+                "/x/../y?z",
+                "https://o.example/y?z",
+            ),
+            (
+                "https://o.example/a/i.json",
+                "https://o.example/a/../b",
+                "https://o.example/b",
+            ),
+        ] {
+            assert_eq!(
+                resolve_url(base, card).as_deref(),
+                Ok(resolved),
+                "{card} against {base}"
+            );
+        }
+        assert!(resolve_url("https://o.example?index=1", "../asset.bin").is_err());
+        assert!(resolve_url("https://o.example/i.json", "https://o.example/../x").is_err());
     }
 }
 

@@ -77,7 +77,7 @@ extension NavigationHost {
 
     /// What covers `node` but for `kept`, which stays in the page: the node
     /// itself, or, where it holds any of `kept`, each part of it that holds
-    /// none (host/linux/src/bars.rs `covered`).
+    /// none (host/painted/src/bars.rs `covered`).
     static func covered(_ node: NodeView, keeping kept: [NodeView]) -> [NodeView] {
         guard kept.contains(where: { $0.isDescendant(of: node) }) else { return [node] }
         return node.container.subviews.compactMap { $0 as? NodeView }
@@ -252,14 +252,17 @@ extension NavigationHost {
                 // only the edges they reach; leave the viewport and bar
                 // backgrounds full-size. A sheet leaves them where they are
                 // (LLP 1123 D1).
-                let rect = list.convert(list.bounds, to: view)
-                let safe = view.bounds.inset(by: view.safeAreaInsets)
-                let edges = HostCover.Edges(
-                    top: max(0, min(rect.height, safe.minY - rect.minY)),
-                    right: max(0, min(rect.width, rect.maxX - safe.maxX)),
-                    bottom: max(0, min(rect.height, rect.maxY - safe.maxY)),
-                    left: max(0, min(rect.width, safe.minX - rect.minX)))
-                if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[list.id] = .edges(edges) }
+                // Authored overflow outside the viewport is no additional unsafe area.
+                let rect = list.convert(list.bounds, to: view).intersection(view.bounds)
+                if !rect.isNull && !rect.isEmpty {
+                    let safe = view.bounds.inset(by: view.safeAreaInsets)
+                    let edges = HostCover.Edges(
+                        top: max(0, min(rect.height, safe.minY - rect.minY)),
+                        right: max(0, min(rect.width, rect.maxX - safe.maxX)),
+                        bottom: max(0, min(rect.height, rect.maxY - safe.maxY)),
+                        left: max(0, min(rect.width, safe.minX - rect.minX)))
+                    if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[list.id] = .edges(edges) }
+                }
             }
         }
         applyClearance(extras)
@@ -288,19 +291,28 @@ extension NavigationHost {
     /// persona switcher lay under the large title, drawn over by it and
     /// untappable (LLP 1116.006 D1).
     func deliverCovers() {
+        guard !deliveringCovers else { return }
         // A callback the runtime waits on can make no runtime call: deliver once it returns
         if Owner.shared.isServingMain {
             DispatchQueue.main.async { [weak self] in self?.deliverCovers() }
             return
         }
-        let views = presenter.views
-        presenter.session?.localInsets(localInsets.take { views[$0] != nil })
-        var changes: [(UInt32, HostCover?)] = []
-        for (id, cover) in covers where delivered[id] != cover { changes.append((id, cover)) }
-        for id in delivered.keys where covers[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
-        delivered = covers
-        guard !changes.isEmpty else { return }
-        presenter.onCovers?(changes)
+        deliveringCovers = true
+        defer { deliveringCovers = false }
+        var toldInsets = localInsets.wanted
+        for _ in 0..<8 {
+            toldInsets = localInsets.wanted
+            let views = presenter.views
+            let locals = localInsets.take { views[$0] != nil }
+            presenter.session?.localInsets(locals)
+            var changes: [(UInt32, HostCover?)] = []
+            for (id, cover) in covers where delivered[id] != cover { changes.append((id, cover)) }
+            for id in delivered.keys where covers[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
+            delivered = covers
+            guard !changes.isEmpty || !locals.isEmpty else { return }
+            if !changes.isEmpty { presenter.onCovers?(changes) }
+        }
+        if delivered != covers || localInsets.wanted != toldInsets { presenter.session?.log("Navigation covers did not settle after 8 corrections") }
     }
 
     /// @ref LLP 1123 D9 — each route's own safe area, which its content reads
@@ -340,25 +352,16 @@ extension NavigationHost {
     /// production bake.
     static let checksOwnership = !ExactEnv.productionBake
 
-    /// Record the controllers Exact set on a stack.
-    func recordOwned(_ nav: UINavigationController) {
-        stacks[ObjectIdentifier(nav)]?.written = nav.viewControllers.map(ObjectIdentifier.init)
-    }
-
-    /// UIKit completed a transition (`didShow`): a pop the user made (UIKit's
-    /// back button, the edge swipe) leaves a prefix of what Exact wrote, and
-    /// is recorded; any other change is not Exact's and stays to be reported.
-    func recordPop(_ nav: UINavigationController) {
-        guard let stack = stacks[ObjectIdentifier(nav)] else { return }
-        let now = nav.viewControllers.map(ObjectIdentifier.init)
-        if now.count <= stack.written.count, Array(stack.written.prefix(now.count)) == now { stack.written = now }
-    }
-
     /// Before each batch: compare what Exact owns on each hatched object with
-    /// what Exact last wrote, and journal a difference once, by name. It is
-    /// detection, not enforcement; a change made and undone between two
-    /// batches is not seen.
+    /// what Exact last wrote, and UIKit's stacks and selection at rest with
+    /// the router's (`restDifference`), and journal a difference once, by
+    /// name. It is detection, not enforcement; a change made and undone
+    /// between two batches is not seen.
     func checkOwned() {
+        if NavigationHost.checksOwnership, let difference = restDifference {
+            let line = "navigation: at rest, \(difference)"
+            if ownedReported.insert(line).inserted { presenter.session?.log(line) }
+        }
         guard NavigationHost.checksOwnership, !changing, !syncing, presenter.session?.natives.hatchesConnected == true else { return }
         func say(_ what: String, _ property: String) {
             let line = "\(what): \(property) changed outside Exact, which owns it"
@@ -370,7 +373,6 @@ extension NavigationHost {
             guard let stack = stacks[ObjectIdentifier(nav)], stack.hatched else { continue }
             if nav.delegate !== stack.proxy { say("navigation \(stack.label)", "delegate") }
             if nav.transitionCoordinator == nil, !searching(nav.topViewController as? RouteController), nav.isNavigationBarHidden == topShowsBar(nav) { say("navigation \(stack.label)", "navigation bar visibility") }
-            if nav.viewControllers.map(ObjectIdentifier.init) != stack.written { say("navigation \(stack.label)", "viewControllers") }
             #if !os(tvOS)
             if let pop = nav.interactivePopGestureRecognizer, pop.delegate !== self { say("navigation \(stack.label)", "the pop gesture's delegate") }
             if #available(iOS 26.0, tvOS 26.0, *), let pop = nav.interactiveContentPopGestureRecognizer, pop.delegate !== self {

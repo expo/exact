@@ -3,7 +3,8 @@
 // on the dev server); a request that is no navigation (an asset's fetch)
 // still finds nothing, and a file that exists is still that file.
 import {afterAll, afterEach, beforeAll, describe, test, expect, spyOn, mock} from 'bun:test';
-import {mkdirSync, mkdtempSync, rmSync, readFileSync, renameSync, writeFileSync, symlinkSync} from 'node:fs';
+import { EXE } from '../../scripts/paths.mjs';
+import {mkdirSync, mkdtempSync, rmSync, readFileSync, realpathSync, renameSync, writeFileSync, symlinkSync} from 'node:fs';
 import {createServer} from 'node:net';
 import {createServer as httpServer} from 'node:http';
 import * as filesystem from '../../scripts/filesystem.mjs';
@@ -12,7 +13,7 @@ import {spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {Readable} from 'node:stream';
 import {createApp} from '../../game/new.mjs';
-import {developmentBuildEnv} from '../../scripts/app.mjs';
+import {HOST_DEV, developmentBuildEnv} from '../../scripts/app.mjs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {acceptsHTML, appDocumentPath, DirectoryOrigin, prefersMarkdown, webRootPath} from '../../scripts/origin.mjs';
@@ -105,7 +106,7 @@ component App
 function plan(dist, pattern) {
   const source = resolve(dist, 'routes.contract');
   writeFileSync(source, sourceFor(pattern));
-  const built = spawnSync(resolve(process.env.CARGO_TARGET_DIR ?? 'target', 'debug/contract'),
+  const built = spawnSync(resolve(process.env.CARGO_TARGET_DIR ?? 'target', `debug/contract${EXE}`),
     ['build', source, '-o', resolve(dist, 'app.plan')], {encoding: 'utf8'});
   if (built.error || built.status !== 0) throw new Error(`build the contract binary first: ${built.error ?? built.stderr}`);
   writeFileSync(resolve(dist, 'routes.json'), JSON.stringify({routes: planRouteTable(readFileSync(resolve(dist, 'app.plan')))}));
@@ -181,6 +182,9 @@ test('a build tree answers a miss with 404 and its 404.html, or a page with the 
     for (const path of ['/nope.png', '/no/such/route']) expect(await get(path, 'application/json'), path).toEqual([404, '']);
     // Without a 404 page, a request for a page that does not ask for HTML (curl's) is told how to ask.
     expect(await get('/profile/alice')).toEqual([404, "/profile/alice is a page: ask for it as a browser does, with Accept: text/html (curl -H 'Accept: text/html' …).\n"]);
+    writeFileSync(resolve(dist, '404.md'), '# Not found\n');
+    expect(await get('/profile/alice', 'text/markdown')).toEqual([404, "/profile/alice is a page: ask for it as a browser does, with Accept: text/html (curl -H 'Accept: text/html' …).\n"]);
+    expect(await get('/no/such/route', 'text/markdown')).toEqual([404, '# Not found\n']);
     // Asked without `miss`, a miss is nothing, as before: the dev gallery and the tool serve only what is there.
     expect(buildTreeFile(dist, '/no/such/route', 'text/html')).toBe(null);
     expect(buildTreeFile(dist, '/no/such/route', 'text/html', {miss: true})).toMatchObject({route: '/shell.html', status: 404});
@@ -188,6 +192,43 @@ test('a build tree answers a miss with 404 and its 404.html, or a page with the 
     if (server) { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
     rmSync(dist, {recursive: true, force: true});
   }
+});
+
+// A built page is its route's answer whatever the request accepts. Its file keeps an escaped separator, and a lookup
+// finds it by either case of the escape's hex digits.
+test.each(['', '*/*', 'application/json', 'text/html'])('built pages with encoded separators or a leading dot serve for Accept: %s', async accept => {
+  const dist = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-built-segment-')));
+  try {
+    writeFileSync(resolve(dist, 'routes.json'), JSON.stringify({routes: [{pattern: '/post/:id', render: 'build'}]}));
+    for (const [location, file, ...spellings] of [['/post/a%2Fb', 'post/a%2Fb/index.html', '/post/a%2fb'], ['/post/.private', 'post/.private/index.html', '/post/%2Eprivate']]) {
+      const path = resolve(dist, file);
+      mkdirSync(resolve(path, '..'), {recursive: true});
+      writeFileSync(path, `<title>${location}</title>`);
+      for (const read of [buildTreeFile, buildTreeFileAsync]) for (const spelling of [location, ...spellings]) {
+        expect((await read(dist, spelling, accept))?.path, spelling).toBe(path);
+      }
+    }
+  } finally { rmSync(dist, {recursive: true, force: true}); }
+});
+
+test('a build tree refuses paths whose dot segments resolve to another built page', async () => {
+  const dist = mkdtempSync(resolve(tmpdir(), 'exact-built-traversal-'));
+  try {
+    writeFileSync(resolve(dist, 'routes.json'), JSON.stringify({routes: [{pattern: '/', render: 'build'}, {pattern: '/secret', render: 'build'}]}));
+    writeFileSync(resolve(dist, 'index.html'), '<title>home</title>');
+    mkdirSync(resolve(dist, 'secret'));
+    writeFileSync(resolve(dist, 'secret/index.html'), '<title>secret</title>');
+    writeFileSync(resolve(dist, '404.html'), '<title>missing</title>');
+    for (const read of [buildTreeFile, buildTreeFileAsync]) {
+      expect((await read(dist, '/secret', 'text/html'))?.route).toBe('/secret/index.html');
+      for (const path of ['/%2e%2e/secret', '/a/b/../../secret', '/.private/../secret', '/a%5Cb/../secret', '/%00/../secret', '/a/.. ']) {
+        for (const miss of [false, true]) expect(await read(dist, path, 'text/html', {miss}), path).toBeNull();
+      }
+      for (const path of ['/.private', '/post/.private', '/post/%2Eprivate']) {
+        expect(await read(dist, path, '*/*', {miss: true}), path).toBeNull();
+      }
+    }
+  } finally { rmSync(dist, {recursive: true, force: true}); }
 });
 
 test('the shared pattern matcher retains the route corpus semantics without notfound', () => {
@@ -271,7 +312,7 @@ for (const wasm of [false, true]) describe.skipIf(wasm && !SLOW)(`${wasm ? 'wasm
     });
     await prepare(process.execPath, ['host/web/build.mjs', app, '--render', 'none', ...(wasm ? ['--wasm'] : [])]);
     if (wasm) {
-      await prepare('cargo', ['build', '-q', '--release', '-p', 'exact-js-bake']);
+      await prepare('cargo', ['build', '-q', '--profile', HOST_DEV, '-p', 'exact-js-bake']);
       // A loop's first start builds the module producer and the app's wasm crates into the app's own target
       // (dev.mjs `toolingEnv`), minutes for a new app on a loaded machine: preparation too, so start it once
       // here, past the 30-second waits, until it listens.

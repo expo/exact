@@ -15,6 +15,25 @@ final class SignInTests: XCTestCase {
         return ["identity": ["mode": "active", "providers": [provider]]]
     }
 
+    func testCapabilitiesOfferOnlyBuiltRequests() throws {
+        let context = ExactPackageContext(agent: false, session: "sign-in-caps", changed: { _ in }, log: { _ in }, now: { 0 })
+        let module = SignInModule(context: context)
+        let sync = try module.call("getIdentityCapabilitiesSync", [:])
+        var async: [String: Any] = [:]
+        module.later("getIdentityCapabilities", [:], preferred: nil) { async = $0 }
+        let admitted = SignInModule.capabilities(apple: true)
+        let providers = try XCTUnwrap(admitted["providers"] as? [String: [String: Bool]])
+        XCTAssertEqual(providers["apple"]?["active"], true)
+        XCTAssertEqual(providers["apple"]?["passive"], true)
+        for answer in [sync, async, admitted] {
+            XCTAssertEqual(answer["available"] as? Bool, true)
+            let providers = try XCTUnwrap(answer["providers"] as? [String: [String: Bool]])
+            XCTAssertEqual(providers["google"], ["active": false, "passive": false, "withPublicKey": false])
+            XCTAssertEqual(providers["apple"]?["withPublicKey"], false)
+            XCTAssertEqual(providers["apple"]?["active"], providers["apple"]?["passive"])
+        }
+    }
+
     func testRequestUsesRawNonceAndRequestedScopes() throws {
         let request = try SignInModule.request(options())
         XCTAssertEqual(request.nonce, "raw-nonce-123")

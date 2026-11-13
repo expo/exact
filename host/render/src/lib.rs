@@ -147,9 +147,9 @@ pub enum Ids {
     Runtime,
     /// None the reader keeps (the JavaScript runtime adopts by tag and drops
     /// them, `page::for_runtime`): the settled runner's tree is projected
-    /// when it is the checkpoint boot's, but for an open stream's `pending(x)`
-    /// ([`projects_as_booted`]),
-    /// saving the second tree (~1.4 ms of RealWorld's ~4.5 ms CPU a page).
+    /// when it is the checkpoint boot's, but for the differences
+    /// [`projects_as_booted`] names, saving the second tree (~1.4 ms of
+    /// RealWorld's ~4.5 ms CPU a page).
     Any,
 }
 
@@ -172,11 +172,15 @@ fn project_for<D: DataSource>(
 /// in a boot from the checkpoint. An initializer reads props, injects and
 /// earlier slots, and a prop may carry a parent's resource (a row's state
 /// seeded from it, `host/web-js/conformance/budget.contract`); such a plan
-/// renders with a kernel. One difference is not looked for, since a plan
-/// does not say which source streams: a view that reads `pending(x)` of an
-/// open stream reads false here and true in a boot whose source can answer at
-/// once, which asks the stream again (LLP 1048.000 D6). A runtime whose first
-/// tree differs this way renders the page afresh.
+/// renders with a kernel. A plan says neither which source streams nor which
+/// elements of a list share their arguments, so what follows from either is
+/// not looked for (LLP 1048.000 D6). A view that reads `pending(x)` of an open
+/// stream reads false here and true in a boot whose source can answer at
+/// once, which asks the stream again. An element that the render left
+/// pending, beside one with equal arguments that answered, shows as pending
+/// here and as answered in a boot, since the two make the same request. The
+/// JavaScript runtime adopts such a page by tag: its boot commit writes over a
+/// value that differs, and builds the page afresh where a node's tag differs.
 pub fn projects_as_booted(plan: &Plan) -> bool {
     use exact_plan::Opcode::*;
     plan.slots.iter().all(|slot| {
@@ -463,6 +467,8 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     // connection per render cost RealWorld most of its latency, measured
     // 2026-09-28); one that hit its deadline, with work in flight, is dropped.
     // The origins its declared sources carry too (LLP 1162.001 D3).
+    // HTTP answers belong to the server, across workers and expired renders
+    // (LLP 1153.001 D7); no runner or module state enters that cache.
     let grants =
         exact_runner::grants::with_declared(exact_runner::DataSource::grants(&settling), plan);
     let executor = EXECUTORS

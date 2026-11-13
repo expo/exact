@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { shaderFiles } from '../../scripts/app.mjs';
+import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
 
 // Resolve authored keys in memory; only the bake writes the resolved manifest.
 const merge = (base, overrides) => {
@@ -29,7 +29,9 @@ const writeChanged = (path, text, authored = true) => {
 export function gameDefaults(dir) {
   const source = resolve(dir, 'logic/src/lib.rs'), path = resolve(dir, 'app.json');
   if (!existsSync(source)) return null;
-  const authored = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  let authored = {};
+  try { if (existsSync(path)) authored = parseManifest(readFileSync(path, 'utf8')); }
+  catch (error) { throw new Error(`${path}: ${error.message}`); }
   const overrides = authored;
   const rust = readFileSync(source, 'utf8');
   const declaration = /impl\s+(?:exact_game::)?Game\s+for\s+(\w+)\s*\{[^{}]*?\bconst\s+ID\s*:\s*&'static\s+str\s*=\s*"([a-z][a-z0-9-]*)"/.exec(rust);
@@ -285,9 +287,9 @@ fn main() {
     const renderDependency = render ? `game-render = { package = "${render.crate}", path = ${JSON.stringify(relative(shell, renderDir))} }\n` : '';
     const dependencies = kind === 'gpu'
       ? `exact-game-render.workspace = true\n${app.game.audio === true ? "exact-game-audio.workspace = true\n" : ""}${renderDependency}game-logic = { package = "${crate}", path = ${JSON.stringify(relative(shell, logicDir))} }\n\n[target.'cfg(target_arch = "wasm32")'.dependencies]\nwasm-bindgen.workspace = true\nwasm-bindgen-futures.workspace = true\nweb-sys.workspace = true\n\n[build-dependencies]\nexact-game.workspace = true\nserde_json = "1"\ngame-logic = { package = "${crate}", path = ${JSON.stringify(relative(shell, logicDir))} }\n${bakeArt ? 'exact-game-bake.workspace = true\n' : ''}`
-      // Android's Canvas host is the Linux host's (exact_linux::canvas_jni!), linked only on Android.
-      : kind === 'android' ? `\n[target.'cfg(target_os = "android")'.dependencies]\nibex2-sqlite.workspace = true\nexact-logic.workspace = true\nexact-runner.workspace = true\nexact-linux.workspace = true\n${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`
-      : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : kind === 'windows' ? 'exact-linux.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
+      // Android's Canvas host is the Linux host's (exact_painted::canvas_jni!), linked only on Android.
+      : kind === 'android' ? `\n[target.'cfg(target_os = "android")'.dependencies]\nibex2-sqlite.workspace = true\nexact-logic.workspace = true\nexact-runner.workspace = true\nexact-painted.workspace = true\n${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`
+      : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : ['linux', 'windows'].includes(kind) ? 'exact-painted.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
     const files = {
       ...(kind === 'web' && data ? { [`src/bin/${name}-dev.rs`]: `//! The resident dev driver for the game's web shell: \`${name}-dev <source> <out>\`, baking with its data.\n\nfn main() -> std::process::ExitCode {\n    exact_web::dev::main::<app_data::${data.type}>()\n}\n` } : {}),
       'Cargo.toml': header + dependencies + (tests.length ? `\n[dev-dependencies]\nserde_json.workspace = true\nexact-update = { path = ${JSON.stringify(relative(shell, resolve(gameRoot, '../update')))} }\n` : ''),

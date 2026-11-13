@@ -595,7 +595,6 @@ impl<D: DataSource> Host<D> {
             layers: self.layers.iter().map(|(id, ..)| *id).collect(),
             images: &self.images,
             center: self.mode == Mode::Fullscreen,
-            env: self.runner.kernel().env(),
             // A disabled or inert box is still hit, and swallows the press
             // (`handler`), so nothing beneath it takes it either.
             presses: Box::new(|id| self.runner.handlers_of(id).contains(&EventKind::Press)),
@@ -950,6 +949,13 @@ impl<D: DataSource> Host<D> {
                 self.dispatch(old, Event::Blur);
             }
         }
+        // The blur's commit may have focused something (`focus()`, a
+        // dialog's autofocus), or made the target ineligible: that stands.
+        if self.focus.is_some() || to.is_some_and(|id| !self.input_eligible(id)) {
+            self.changed();
+            self.settle_collections();
+            return;
+        }
         self.focus = to;
         if let Some(new) = to {
             self.caret = self.value(new).graphemes(true).count();
@@ -999,7 +1005,6 @@ impl<D: DataSource> Host<D> {
     /// least move that shows it (`nearest`).
     pub(crate) fn reveal_to(&mut self, id: ViewId, block: &str) {
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let Some(target) = kernel.node(id).map(|n| n.frame) else {
             return;
         };
@@ -1014,7 +1019,7 @@ impl<D: DataSource> Host<D> {
         while let Some(p) = at {
             let Some(n) = kernel.node(p) else { break };
             if Self::is_scroller(&n) {
-                let [bt, _, bb, _] = n.style.border_widths_in(&env);
+                let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
                 let top = n.frame.y + bt;
                 let height = n.frame.height - bt - bb;
                 let reach = (n.content.1 - height).max(0.0);
@@ -1045,7 +1050,6 @@ impl<D: DataSource> Host<D> {
     /// Keep a `scrollFollowEnd` scroller at its end while it was there.
     fn follow_ends(&mut self) {
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let mut stack: Vec<ViewId> = self.runner.roots();
         let mut ends = Vec::new();
         while let Some(id) = stack.pop() {
@@ -1054,7 +1058,7 @@ impl<D: DataSource> Host<D> {
                 && n.props.bool(PropId::ScrollFollowEnd) == Some(true)
                 && n.props.bool(PropId::Virtualized) != Some(true)
             {
-                let [bt, _, bb, _] = n.style.border_widths_in(&env);
+                let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
                 let reach = (n.content.1 - (n.frame.height - bt - bb)).max(0.0);
                 ends.push((id, reach));
             }
@@ -1077,7 +1081,7 @@ impl<D: DataSource> Host<D> {
         self.press_with(id, true);
     }
 
-    /// Follow a link as Exact's hosts do (LLP 1038 §7, `host/linux`'s
+    /// Follow a link as Exact's hosts do (LLP 1038 §7, `host/painted`'s
     /// `presenter/links.rs`): a path naming one of the app's routes is a
     /// `navigate` on its navigation root; an `http`, `https`, `mailto` or
     /// `tel` URL leaves the app; anything else goes nowhere.
@@ -1100,9 +1104,10 @@ impl<D: DataSource> Host<D> {
     /// system to open (the web's one allowlist); anything else is refused.
     /// Whether it was handed on.
     pub(crate) fn open_url(&mut self, url: &str) -> bool {
-        let allowed = ["http://", "https://", "mailto:", "tel:"]
-            .iter()
-            .any(|p| url.len() > p.len() && url[..p.len()].eq_ignore_ascii_case(p));
+        // Bytes, not a `str` slice, which panics off a character boundary.
+        let allowed = ["http://", "https://", "mailto:", "tel:"].iter().any(|p| {
+            url.len() > p.len() && url.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())
+        });
         let handed = allowed && !url.chars().any(|c| c.is_control() || c.is_whitespace());
         if handed {
             self.outbound.push(url.to_string());

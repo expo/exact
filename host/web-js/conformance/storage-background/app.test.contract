@@ -1,0 +1,31 @@
+test "unawaited edits reply before a read and survive reload"
+  tap "init"
+  clock settle
+  tap "first"
+  expect state answer == "first"
+  tap "second"
+  expect state answer == "second"
+  tap "read"
+  clock settle
+  expect state answer == "second"
+  tap "chain"
+  expect state answer == "chain"
+  reload
+  tap "read"
+  clock settle
+  expect state answer == "end"
+
+test "a failed background operation leaves the answer and queue usable"
+  tap "init"
+  clock settle
+  tap "fail"
+  expect state answer == "fail"
+  clock settle
+  tap "code"
+  expect state answer == "ENOENT"
+  tap "recovered"
+  expect state answer == "recovered"
+  reload
+  tap "read"
+  clock settle
+  expect state answer == "recovered"

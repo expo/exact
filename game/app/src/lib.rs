@@ -55,7 +55,7 @@ fn bake_source<D: contract::DataSource>(
         platform
     };
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    // The Android shell is a cdylib only on Android (`exact_linux::canvas_jni!`); off it the library is empty.
+    // The Android shell is a cdylib only on Android (`exact_painted::canvas_jni!`); off it the library is empty.
     if platform == "android" && env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         fs::write(out.join("entry.rs"), "").unwrap();
         return;
@@ -126,7 +126,7 @@ fn bake_source<D: contract::DataSource>(
     } else {
         String::new()
     };
-    let composed = "exact_linux::Composed { packages: exact_packages(), ..Default::default() }";
+    let composed = "exact_painted::Composed { packages: exact_packages(), ..Default::default() }";
     let windows = format!(
         "fn main() {{ std::process::exit(exact_windows::run_composed::<AppData>({:?}, {}, PLAN, COMPAT, {composed})); }}",
         manifest.name,
@@ -142,7 +142,7 @@ fn bake_source<D: contract::DataSource>(
         }
         "linux" => &linux,
         // canvas_jni! embeds OUT_DIR's plan and compat itself.
-        "android" => "exact_linux::canvas_jni!(crate::AppData);",
+        "android" => "exact_painted::canvas_jni!(crate::AppData);",
         "windows" => &windows,
         _ => panic!("unsupported game app platform: {platform}"),
     };
@@ -183,12 +183,12 @@ fn runtime_entry(
     Ok(format!(
         r#"#[derive(Default)]
 struct ExactEmptyData;
-impl exact_logic::exact_runner::DataSource for ExactEmptyData {{
+impl exact_runner::DataSource for ExactEmptyData {{
     fn app_id(&self) -> &str {{ {app:?} }}
-    fn query(&mut self, source: &str, args: &[exact_logic::exact_runner::Value])
-        -> Result<exact_logic::exact_runner::Value, exact_logic::exact_runner::DataError>
+    fn query(&mut self, source: &str, args: &[exact_runner::Value])
+        -> Result<exact_runner::Value, exact_runner::DataError>
     {{
-        exact_logic::exact_runner::DataSource::query(&mut (), source, args)
+        exact_runner::DataSource::query(&mut (), source, args)
     }}
 }}
 {entry}"#
@@ -208,6 +208,12 @@ mod tests {
             });
             let entry = runtime_entry("()", "Default::default()", &inputs).unwrap();
             assert!(entry.contains("fn app_id(&self) -> &str { \"dev.exact.kept-game\" }"));
+            if platform == "web" {
+                assert!(
+                    !entry.contains("exact_logic::"),
+                    "web shells do not link exact-logic"
+                );
+            }
             assert!(
                 entry.contains("AppData, ExactEmptyData,")
                     || entry.contains("type AppData = ExactEmptyData;")
@@ -243,7 +249,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn empty_v5_call_binds_every_surface_default() {
+    fn empty_named_call_binds_every_surface_default() {
         #[derive(Default)]
         struct Defaults;
         impl exact_gpu::Surface for Defaults {
@@ -283,7 +289,7 @@ mod tests {
         let plan =
             contract::compile("component App\n  view\n    canvas surface=arena()\n").unwrap();
         let bytes = plan.encode();
-        assert_eq!(&bytes[4..8], &5u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &exact_plan::FORMAT_VERSION.to_le_bytes());
         let plan = exact_plan::Plan::decode(&bytes).unwrap();
         assert_eq!(plan.surfaces[0].mode, exact_plan::SurfaceArgsMode::Named);
         let mut runner = exact_runner::Runner::boot(

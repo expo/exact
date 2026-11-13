@@ -77,6 +77,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
     'segmented-padding': ['padding'], 'segment-padding-block': ['padding'], 'segment-padding-inline': ['padding'], 'segment-height-coarse': ['min-height'],
     'segment-shadow-y': ['box-shadow'], 'segment-shadow-blur': ['box-shadow'],
     'tabbar-height': ['min-height'], 'tabbar-padding-block': ['padding'], 'tabbar-padding-inline': ['padding'], 'tabbar-font': ['font-size'],
+    'tabbar-badge-height': ['min-width', 'height'], 'tabbar-badge-padding': ['padding-inline', 'margin-inline-start'], 'tabbar-badge-font': ['font-size'],
     'button-image-gap': ['--exact-button-column-gap', '--exact-button-row-gap'],
     'tabbar-symbol': ['width', 'height'], 'tabbar-gap': ['--exact-button-space-height'],
     'sidebar-row-height': ['min-height'], 'sidebar-symbol': ['width', 'height'], 'sidebar-gap': ['--exact-button-space-width'],
@@ -98,7 +99,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
   const largeTitle = schema.textStyles.find(([name]) => name === 'large-title')[5][schema.textStyleBodies.indexOf(16)];
   const DERIVED = {
     'min-height': [`${2 * value.get('segmented-padding')}px`], // a segment is the control's height less the track's padding either side
-    'border-radius': ['1em', half('range-track', 'px')], // the switch is a pill (any radius of half its height or more); the track's ends are round
+    'border-radius': ['1em', half('range-track', 'px'), `${parseFloat(value.get('tabbar-badge-height')) / 2}rem`.replace(/^0\./, '.')], // the switch and a tab's badge are pills (any radius of half its height or more); the track's ends are round
     'margin-top': [half('range-track', 'px'), '.625em'], // a range's thumb is centred on its track: half the track less half the thumb
     'background-position': ['1em'], // the thumb travels the track's width less its height
     'box-shadow': ['64px'], // a hovered row's wash reaches the card's edge, past any inset a row has
@@ -1229,11 +1230,11 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar u
 }, 90000);
 
 test('chromium: painted route titles match the web at several root sizes', async () => {
-  // Build outside the test: cargo test -p exact-linux --test route_titles --no-run.
+  // Build outside the test: cargo test -p exact-painted --test route_titles --no-run.
   const deps = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../../target', import.meta.url)), 'debug/deps');
   const binary = readdirSync(deps).filter(name => /^route_titles-[0-9a-f]+(?:\.exe)?$/.test(name))
     .map(name => resolve(deps, name)).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-  if (!binary) throw new Error('build the headless fixture: cargo test -p exact-linux --test route_titles --no-run');
+  if (!binary) throw new Error('build the headless fixture: cargo test -p exact-painted --test route_titles --no-run');
   const linux = spawnSync(binary, ['--exact', 'route_titles_keep_the_large_title_line', '--nocapture'], { encoding: 'utf8', timeout: 60000 });
   expect([linux.status, linux.stderr]).toEqual([0, '']);
   const layouts = JSON.parse(linux.stdout.match(/^ROUTE_TITLE_LAYOUT (.+)$/m)[1]);

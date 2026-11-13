@@ -157,6 +157,35 @@ private def typingProgram (events : List String) : CProgram :=
   | (c, .ok) => (lookup "text" c.slots).any (Value.same (.str "changed"))
   | _ => false
 
+-- A clock step past a change task and a later timer stops after the change,
+-- at its time, as `advance` and the runner do; the next step fires the
+-- timer. The compiler gives every change task a key, which `cboot` refuses,
+-- so no corpus case reaches this.
+private def changeThenTimer : CProgram :=
+  { root := {
+      name := "App",
+      states := [{ name := "followed", ty := .bool, init := .bool false },
+                 { name := "fired", ty := .bool, init := .bool false }],
+      actions := [
+        { name := "follow", params := [], body := [.assign "followed" (.bool true)] },
+        { name := "ding", params := [], body := [.assign "fired" (.bool true)] }],
+      tasks := [
+        { name := "follow", kind := .change, ms := .num 0, action := "follow" },
+        -- 50: 0x4049000000000000.
+        { name := "once", kind := .after, ms := .num 0x4049000000000000, action := "ding" }] } }
+
+#guard
+  let p := changeThenTimer
+  let (c, _) := CompSem.cboot p {}
+  let read (c : CompSem.CConfig) name := (lookup name c.slots).any (Value.same (.bool true))
+  match CompSem.cadvance p {} c 100 with
+  | (c, .ok) =>
+    read c "followed" && !read c "fired" && c.now == 0 &&
+    match CompSem.cadvance p {} c 100 with
+    | (c, .ok) => read c "fired" && c.now == 100
+    | _ => false
+  | _ => false
+
 /-- Both checks for one case, as lines: `#expand-error`, `#struct`, `#types`
 (each with what differs, or `ok`), then the flat observation after
 `#flat` and the component-level one after `#comp`. -/

@@ -14,6 +14,140 @@ fn create(ids: impl IntoIterator<Item = u32>, node_type: NodeType) -> Vec<Op> {
         .collect()
 }
 
+fn staged_capacities(staged: &super::Staged<'_>) -> [usize; 6] {
+    [
+        staged.created.capacity(),
+        staged.destroyed.capacity(),
+        staged.parents.capacity(),
+        staged.children.capacity(),
+        staged.roots_added.capacity(),
+        staged.roots_removed.capacity(),
+    ]
+}
+
+#[test]
+fn transaction_capacity_follows_the_operations_and_is_bounded_by_nodes() {
+    let kids: Vec<_> = (10..1_010).collect();
+    let mut ops = create([1, 2], NodeType::View);
+    ops.extend(create(kids.iter().copied(), NodeType::View));
+    ops.extend([children(1, &kids), Op::AttachRoot { id: 1 }]);
+    let k = kernel(&ops);
+    let arena = k.arena();
+
+    for ops in [vec![], vec![tall(1, 20.0); 100]] {
+        let capacity = super::capacity::Batch::new(arena, &ops);
+        let staged = super::Staged::new(arena, &capacity);
+        assert_eq!(staged_capacities(&staged), [0; 6]);
+    }
+    // Both incoming children and those detached from an existing list can
+    // outnumber operations. Repeated lists still name only this tree's IDs.
+    for ops in [
+        vec![children(2, &kids)],
+        vec![children(1, &[])],
+        vec![children(2, &kids); 100],
+    ] {
+        let capacity = super::capacity::Batch::new(arena, &ops);
+        assert!(capacity.parents >= kids.len());
+        assert!(capacity.parents <= arena.live_count());
+        let staged = super::Staged::new(arena, &capacity);
+        assert!(staged.parents.capacity() >= kids.len());
+        assert!(staged.parents.capacity() < 2 * arena.live_count());
+        assert_eq!(staged.created.capacity(), 0);
+        assert_eq!(staged.destroyed.capacity(), 0);
+        assert_eq!(staged.roots_added.capacity(), 0);
+        assert_eq!(staged.roots_removed.capacity(), 0);
+    }
+
+    let ops = create(2_000..2_020, NodeType::View);
+    let capacity = super::capacity::Batch::new(arena, &ops);
+    let staged = super::Staged::new(arena, &capacity);
+    assert!(staged.created.capacity() >= 20);
+    assert!(staged.parents.capacity() >= 20);
+    assert!(staged.children.capacity() >= 20);
+    assert_eq!(staged.destroyed.capacity(), 0);
+    assert_eq!(staged.roots_added.capacity(), 0);
+    assert_eq!(staged.roots_removed.capacity(), 0);
+
+    for (ops, added, removed) in [
+        (vec![Op::DestroyView { id: 10 }], 0, 0),
+        (vec![Op::DestroyView { id: 1 }], 0, 1),
+        (
+            vec![Op::AttachRoot { id: 2 }, Op::DestroyView { id: 2 }],
+            1,
+            1,
+        ),
+    ] {
+        let capacity = super::capacity::Batch::new(arena, &ops);
+        assert_eq!(capacity.roots_added, added);
+        assert_eq!(capacity.roots_removed, removed);
+    }
+}
+
+#[test]
+fn subtree_reservation_uses_the_staged_tree() {
+    let kids: Vec<_> = (10..1_010).collect();
+    let mut ops = create([1, 2, 3], NodeType::View);
+    ops.extend(create(kids.iter().copied(), NodeType::View));
+    ops.extend([children(2, &kids), children(1, &[2, 3])]);
+    let k = kernel(&ops);
+    let arena = k.arena();
+    let ops = [Op::DestroyView { id: 3 }];
+    let capacity = super::capacity::Batch::new(arena, &ops);
+    let mut staged = super::Staged::new(arena, &capacity);
+    // A preceding op moves a sibling and its children under this target.
+    staged.parents.insert(2, Some(3));
+    staged.children.insert(3, vec![2]);
+    staged.destroy(3);
+    assert_eq!(staged.destroyed.len(), 1_002);
+    assert!(!staged.destroyed.contains(&1));
+    assert_eq!(staged.parent_of(3), None);
+    assert!(kids.iter().all(|id| staged.destroyed.contains(id)));
+}
+
+#[test]
+fn continuation_reserves_each_phases_creations_and_keeps_receipt_order() {
+    use crate::arena::NodeArena;
+    use crate::layout::Unmirrored;
+    use crate::selector::SelectorIndex;
+
+    let mut arena = NodeArena::new();
+    let mut layout = Unmirrored;
+    let mut selectors = SelectorIndex::default();
+    let mut commit = super::DocumentCommit::new(7, 0, 1);
+    let mut expected = Vec::new();
+    for ids in [1..21, 21..61] {
+        let ops = create(ids.clone(), NodeType::View);
+        super::continue_document(
+            super::Target {
+                arena: &mut arena,
+                layout: &mut layout,
+                selectors: &mut selectors,
+            },
+            &ops,
+            None,
+            &mut commit,
+        )
+        .unwrap();
+        expected.extend(ids.map(|id| arena.key_of(id).unwrap()));
+        assert_eq!(commit.created.len(), expected.len());
+        assert!(commit.created.capacity() >= expected.len());
+    }
+    let before = commit.created.capacity();
+    super::continue_document(
+        super::Target {
+            arena: &mut arena,
+            layout: &mut layout,
+            selectors: &mut selectors,
+        },
+        &[tall(1, 10.0)],
+        None,
+        &mut commit,
+    )
+    .unwrap();
+    assert_eq!(commit.created.capacity(), before);
+    assert_eq!(super::finish_document(&arena, commit).created, expected);
+}
+
 fn children(id: u32, children: &[u32]) -> Op {
     Op::SetChildren {
         id,
@@ -521,6 +655,55 @@ fn moving_or_destroying_many_children_is_linear_in_them() {
         assert!(engine_matches);
         assert_eq!(k.live_count(), 3);
     }
+}
+
+/// Destroying a subtree once grouped its departing selector names by
+/// inserting each into a sorted vector, which moved the vector's tail for
+/// every name that arrived before the last: N²/2 moves when the names
+/// descend (40,000 children: 682 ms, release). Destroying one parent of
+/// 40,000 children takes about as long in either order.
+#[test]
+fn destroying_a_subtree_takes_as_long_whatever_its_selector_names_order() {
+    let n = 40_000u32;
+    let destroy = |descending: bool| {
+        let kids: Vec<u32> = (10..10 + n).collect();
+        let mut ops = create([1], NodeType::View);
+        ops.extend(create(kids.iter().copied(), NodeType::View));
+        for (i, &id) in kids.iter().enumerate() {
+            let rank = if descending { n as usize - i } else { i };
+            let name = format!("row-{rank:08}");
+            // Every hundredth child shares one test id; every tenth also
+            // carries an `id`.
+            if i % 100 == 0 {
+                ops.push(prop(id, PropId::TestId, "shared"));
+            } else {
+                ops.push(prop(id, PropId::TestId, &name));
+            }
+            if i % 10 == 0 {
+                ops.push(prop(id, PropId::Id, &name));
+            }
+        }
+        ops.extend([children(1, &kids), Op::AttachRoot { id: 1 }]);
+        let mut k = kernel(&ops);
+        assert_eq!(k.find_by_test_id("shared").len(), n as usize / 100);
+        let start = std::time::Instant::now();
+        let receipt = k.apply(0, 2, &[Op::DestroyView { id: 1 }]).unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(receipt.destroyed.len(), n as usize + 1);
+        assert_eq!(k.live_count(), 0);
+        assert!(k.find_by_test_id("shared").is_empty());
+        for rank in [1, 5, n as usize - 10, n as usize - 1] {
+            let name = format!("row-{rank:08}");
+            assert!(k.find_by_test_id(&name).is_empty(), "{name}");
+            assert!(k.find_by_id(&name).is_empty(), "{name}");
+        }
+        elapsed
+    };
+    let (up, down) = (destroy(false), destroy(true));
+    assert!(
+        down < up * 2 + std::time::Duration::from_millis(100),
+        "descending names took {down:?}, ascending {up:?}"
+    );
 }
 
 /// The batched detach against what one op at a time built: destroys

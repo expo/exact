@@ -281,6 +281,10 @@ extension Agent {
             presenter.session?.follow(href)
             return ["followed": href]
         }
+        if reach.element == nil, reach.run == nil, !reach.consumed, reach.invocation == nil,
+           let row = presenter.groupedLists?.selectRadioRow(from: node, pressing: reach.action?.live(in: presenter)) {
+            return ["pressed": Int(row), "delivery": "host-activation", "native": "grouped-list"]
+        }
         var f: UIView? = node
         var took = false
         var handoff: PressHandoff?

@@ -1,5 +1,5 @@
 // Observe's web and Apple services against wire.json, the bodies all three services must send.
-// The Linux service runs the same fixture in host/linux/tests/observe.
+// The Linux service runs the same fixture in host/painted/tests/observe.
 // `bun test ./modules/observe/tests/wire.test.mjs`. The Apple half needs swiftc, so it runs on macOS only.
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -328,5 +328,7 @@ test.skipIf(process.platform !== 'darwin')('the Apple service sends wire.json\'s
     expect(out.refused.metrics.length).toBeGreaterThan(0);
     expect(out.refused.metrics.every(metric => metric.sent === false)).toBe(true);
     expect(out.acknowledged.metrics.filter(metric => metric.sent === true).length).toBe(1);
+    // A crash record whose row the store refused stays for the next launch, which stores it once.
+    expect(out.crash).toEqual({ refusedRows: 0, keptAfterRefusal: true, storedRows: 1, keptAfterStore: false });
   } finally { rmSync(work, { recursive: true, force: true }); }
 }, 120_000);

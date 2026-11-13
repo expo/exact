@@ -38,6 +38,13 @@ extension TextEngine {
     /// size, so a `pre-wrap` "Say " is as wide as "Say" and its space, as
     /// Chrome measures it. `pre`'s (4) count.
     package static func uncountedTrailingWidth(_ line: CTLine, whiteSpace: Int, source: NSAttributedString, room: CGFloat) -> CGFloat {
+        // The start room of a run the next line starts with (`exactBreakRoom`).
+        let range = CTLineGetStringRange(line)
+        return trailingSpaces(line, whiteSpace: whiteSpace, source: source, room: room)
+            + breakRoom(endingAt: range.location + range.length, in: source)
+    }
+
+    private static func trailingSpaces(_ line: CTLine, whiteSpace: Int, source: NSAttributedString, room: CGFloat) -> CGFloat {
         if whiteSpace == 4 { return 0 }
         let trailing = CGFloat(CTLineGetTrailingWhitespaceWidth(line))
         guard whiteSpace == 1 else { return trailing }
@@ -52,7 +59,7 @@ extension TextEngine {
     /// The part of a line's trailing white space that its width counts
     /// (`uncountedTrailingWidth` leaves the rest out), in a box `room` wide.
     package static func countedTrailingWidth(_ line: CTLine, whiteSpace: Int, source: NSAttributedString, room: CGFloat) -> CGFloat {
-        max(0, CGFloat(CTLineGetTrailingWhitespaceWidth(line)) - uncountedTrailingWidth(line, whiteSpace: whiteSpace, source: source, room: room))
+        max(0, CGFloat(CTLineGetTrailingWhitespaceWidth(line)) - trailingSpaces(line, whiteSpace: whiteSpace, source: source, room: room))
     }
 
     package static func inkedSoftHyphen(_ line: CTLine, source: NSAttributedString, range: CFRange) -> CTLine {
@@ -201,7 +208,11 @@ extension TextEngine {
         // The room beside the line's ink (CoreText's offset for a right flush)
         let slack = CGFloat(CTLineGetPenOffsetForFlush(line, 1, room))
         guard slack - counted >= 0 else { return rtl ? slack : 0 }
-        return CGFloat(CTLineGetPenOffsetForFlush(line, flush, room)) - counted * flush + (rtl ? counted : 0)
+        // The start room of the run the next line starts with is kerned on
+        // this line's last glyph, and is the next line's (`exactBreakRoom`).
+        let range = CTLineGetStringRange(line)
+        let leaves = rtl ? 0 : source.map { breakRoom(endingAt: range.location + range.length, in: $0) } ?? 0
+        return CGFloat(CTLineGetPenOffsetForFlush(line, flush, room)) - counted * flush + (rtl ? counted : 0) + leaves * flush
     }
 }
 
@@ -217,12 +228,16 @@ package struct LineInsets {
     /// The indented paragraphs (each ends after its newline), UTF-16
     /// [start, end), in order: the first line's inset and the others'.
     package var heads: [(start: Int, end: Int, first: CGFloat, rest: CGFloat)] = []
+    /// Where a later run with an inline box's start room begins, the room a
+    /// line starting there takes (`TextEngine.kernInlineEdges`).
+    package var edgeStarts: [Int: CGFloat] = [:]
 
     package init() {}
     /// `spec`'s; `marker` is the width of a hung run's UTF-16 range, as
     /// the paragraph's own source shapes it.
     package init(_ spec: Spec, marker: (CFRange) -> CGFloat) {
-        textIndent = spec.textIndent; rtl = spec.direction == 1
+        textIndent = spec.firstLineIndent; rtl = spec.direction == 1
+        edgeStarts = Self.edgeStarts(spec.runs)
         guard spec.runs.contains(where: { $0.indent != 0 }) else { return }
         var open: (start: Int, first: CGFloat, rest: CGFloat)?
         var at = 0
@@ -249,7 +264,7 @@ package struct LineInsets {
     /// The inset of the line that starts at UTF-16 `location`: how far
     /// right its start moves (`left`) and how much room it gives (`width`).
     package func at(_ location: Int) -> (left: CGFloat, width: CGFloat) {
-        var width: CGFloat = location == 0 ? textIndent : 0
+        var width: CGFloat = location == 0 ? textIndent : edgeStarts[location] ?? 0
         var lo = 0, hi = heads.count
         while lo < hi { let mid = (lo + hi) / 2; if heads[mid].start <= location { lo = mid + 1 } else { hi = mid } }
         if lo > 0, location < heads[lo - 1].end {

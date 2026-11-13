@@ -50,3 +50,43 @@ test('a write that reads its file and is not superseded writes its image', async
   expect(await first).toBe(null);
   expect(clip.state().lastWrite.types).toEqual(['image/png']);
 });
+
+// Off the agent, over a `navigator.clipboard` stand-in whose writes settle when the test says: the clipboard holds
+// the write that settles last.
+test('the browser is given one write at a time, and a write superseded while it waits is never given', async () => {
+  const had = { clipboard: Object.getOwnPropertyDescriptor(navigator, 'clipboard'), item: globalThis.ClipboardItem };
+  const given = [], pending = [];
+  let held = '';
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    write: async ([item]) => {
+      const text = await item.data['text/plain'].text();
+      given.push(text);
+      await new Promise(ok => pending.push(ok));
+      held = text;
+    },
+  } });
+  globalThis.ClipboardItem = class { constructor(data) { this.data = data; } };
+  const settle = () => new Promise(ok => setTimeout(ok));
+  try {
+    const clip = implementation({ agent: false, log: () => {}, files: {} });
+    const first = clip.writeText({ data: 'first' }, { request: 1 });
+    await settle();
+    const second = clip.writeText({ data: 'second' }, { request: 2 });
+    await settle();
+    const third = clip.writeText({ data: 'third' }, { request: 3 });
+    await settle();
+    expect(given).toEqual(['first']);
+    pending.shift()();
+    expect(await first).toBe(null);
+    expect((await second)?.error).toBe('AbortError');
+    await settle();
+    expect(given).toEqual(['first', 'third']);
+    pending.shift()();
+    expect(await third).toBe(null);
+    expect(held).toBe('third');
+    expect(clip.state()).toMatchObject({ writes: 2, lastWrite: { text: 'third' } });
+  } finally {
+    if (had.clipboard) Object.defineProperty(navigator, 'clipboard', had.clipboard); else delete navigator.clipboard;
+    if (had.item) globalThis.ClipboardItem = had.item; else delete globalThis.ClipboardItem;
+  }
+});

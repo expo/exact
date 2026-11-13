@@ -721,8 +721,10 @@ targets excluded) and
 `geometryMemoryBytes` (the shared vertex and index buffers' allocated bytes);
 the GPU module adds the process's footprint and, on the web, its own heap. `audioState` is the game audio output's (`running`, `suspended`,
 `interrupted`, `closed`) where the target has a player. CPU encoding is distinct
-from queue submission and GPU execution; unsupported timing, memory and audio
-fields stay unavailable. No simulation state, save or hash contains these readings.
+from queue submission (`cpuSubmitMs`, which the GPU module times) and GPU
+execution (`gpuMs`: each frame's timestamp envelope, measured by the agent's
+timing without its samples or trace while only a reader asks); unsupported
+timing, memory and audio fields stay unavailable. No simulation state, save or hash contains these readings.
 
 ### Texture families
 
@@ -731,7 +733,9 @@ A `.tex` record is RGBA8, BC4, BC5, BC7 or ASTC 4×4 (`TextureData.format`,
 delivered, whole blocks per level, and never transcodes. The device requests every
 available block family (`exact_gpu::requested_features`); `Surface::device_ready`
 passes the granted features, and the surface chooses **BC** when granted, else
-**ASTC**, else **RGBA8**. Worlds and models name the authored `x.tex`; the surface asks
+**ASTC**, else **RGBA8**, among the families its target's bundle holds
+(`TextureFamily::BUNDLED`): BC alone on macOS, ASTC alone on iOS and tvOS, so an
+M-series iPad, which grants both, takes ASTC there. Worlds and models name the authored `x.tex`; the surface asks
 the host for `x.bc.tex`, `x.astc.tex` or `x.tex` and maps the delivered file back,
 so hosts fetch by name and the simulation never sees a family. A headless surface
 has no device and fetches RGBA8, which validates and hashes like any delivery

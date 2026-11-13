@@ -49,6 +49,7 @@ extension FrameHealth {
         }
     }
 
+    /// Expire only this producer: a native callback can begin before a session pass and commit after it.
     func expireCapture(at now: Double) {
         if agentCaptureUntil != 0, now >= agentCaptureUntil {
             agentCaptureUntil = 0
@@ -81,10 +82,8 @@ extension FrameHealth {
     }
 
     /// Record the outermost apply; match owner timestamps only to this batch's captured frame update.
-    func applied(_ batch: Batch, began: Double, flags: UInt64 = 0) {
+    func applied(_ batch: Batch, began: Double, finished: Double, flags: UInt64 = 0) {
         guard enabled, !virtual, began > 0 else { return }
-        let finished = CACurrentMediaTime()
-        expireCapture(at: finished)
         let owner = batch.frameWorkTiming.flatMap { $0.capture == captureID ? $0 : nil }
         var work = ExactFrameHealthWork()
         work.capture = captureID
@@ -107,7 +106,7 @@ extension FrameHealth {
             context.queued_ns = 0; context.owner_began_ns = 0; context.owner_finished_ns = 0; context.landed_ns = 0
             exact_frame_health_context(native.handle, context)
         }
-        (publicationOwner ?? self).publicationDue(at: finished)
+        (publicationOwner ?? self).markPublication()
     }
 
     func historyStatus() -> ExactFrameHealthHistoryStatus {
@@ -124,6 +123,16 @@ extension FrameHealth {
         guard period != requestedPeriodNs else { return }
         requestedPeriodNs = period
         if enabled { exact_frame_health_requested_period(handle, period) }
+    }
+}
+
+extension ExactSession {
+    func recordFrameHealthApply(_ batch: Batch, began: Double) {
+        guard frameHealth.enabled else { return }
+        let finished = CACurrentMediaTime()
+        frameHealth.expireCapture(at: finished)
+        frameHealth.applied(batch, began: began, finished: finished, flags: frameHealth.frameFlags(frames, session: self))
+        frameHealth.maintain(at: finished)
     }
 }
 

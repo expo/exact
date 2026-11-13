@@ -362,8 +362,9 @@ fn tab_stop(col: usize) -> usize {
 }
 
 /// LLP 1104 D7: the terminal drops the symbol and paints the title, or
-/// the accessible label of a symbol-only face. Measurement and paint share
-/// this wrap, with one cell of chrome on each side.
+/// the accessible label of a symbol-only face, and a tab's badge (LLP
+/// 1075.003 §9.9) after it in parentheses. Measurement and paint share this
+/// wrap, with one cell of chrome on each side.
 pub(crate) fn button_lines(
     face: &PressFace,
     style: &ButtonFaceStyle,
@@ -374,9 +375,15 @@ pub(crate) fn button_lines(
         .as_deref()
         .or(face.label.as_deref())
         .unwrap_or("");
+    let text = match face.badge.as_deref() {
+        Some(badge) if title.is_empty() => format!("({badge})"),
+        Some(badge) => format!("{title} ({badge})"),
+        None => title.to_owned(),
+    };
     let runs = [TextRun {
-        text: title.into(),
+        text: text.into(),
         style: exact_kernel::text::TextStyle::from_style(&style.title),
+        edges: Default::default(),
         inline: None,
     }];
     let (limit, min) = match width {
@@ -524,6 +531,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             assert_layout(&runs, &paragraph, Some(limit), false, &expected);
@@ -594,11 +602,13 @@ mod tests {
                     TextRun {
                         text: text[..split].into(),
                         style: paragraph.strut,
+                        edges: Default::default(),
                         inline: None,
                     },
                     TextRun {
                         text: text[split..].into(),
                         style: second,
+                        edges: Default::default(),
                         inline: None,
                     },
                 ];
@@ -622,6 +632,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             for mode in [
@@ -659,11 +670,13 @@ mod tests {
                     TextRun {
                         text: text[..split].into(),
                         style: paragraph.strut,
+                        edges: Default::default(),
                         inline: None,
                     },
                     TextRun {
                         text: text[split..].into(),
                         style: second,
+                        edges: Default::default(),
                         inline: None,
                     },
                 ];
@@ -701,6 +714,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             for mode in [
@@ -740,6 +754,7 @@ mod tests {
         let runs = [TextRun {
             text: "👩🏽‍💻\u{200b}é界".into(),
             style: paragraph.strut,
+            edges: Default::default(),
             inline: None,
         }];
         assert_layout(
@@ -757,6 +772,7 @@ mod tests {
         let runs = ["ab\u{ad}", "cd\u{200b}", "界\u{1b}"].map(|text| TextRun {
             text: text.into(),
             style: paragraph.strut,
+            edges: Default::default(),
             inline: None,
         });
         for space in [
@@ -796,6 +812,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.as_str().into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             for white_space in [WhiteSpace::Normal, WhiteSpace::Nowrap, WhiteSpace::PreLine] {
@@ -811,6 +828,7 @@ mod tests {
                 let runs = [TextRun {
                     text: text.as_str().into(),
                     style: paragraph.strut,
+                    edges: Default::default(),
                     inline: None,
                 }];
                 paragraph.white_space = WhiteSpace::Normal;
@@ -825,6 +843,7 @@ mod tests {
         let runs = [TextRun {
             text: "".into(),
             style: TextStyle::from_style(&style),
+            edges: Default::default(),
             inline: None,
         }];
         for width in [
@@ -863,6 +882,7 @@ mod tests {
                 let runs = [&text[..split], &text[split..]].map(|text| TextRun {
                     text: text.into(),
                     style: TextStyle::from_style(&style),
+                    edges: Default::default(),
                     inline: None,
                 });
                 for (space, wrapping) in [
@@ -1150,6 +1170,7 @@ mod tests {
         let runs = ["  ab", "c 界 é\nxy  "].map(|text| TextRun {
             text: text.into(),
             style: TextStyle::from_style(&style),
+            edges: Default::default(),
             inline: None,
         });
         for (white_space, limit, clamp, expected) in [
@@ -1204,6 +1225,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.as_str().into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             for white_space in [
@@ -1240,6 +1262,7 @@ mod tests {
         let runs = [TextRun {
             text: "XX\u{feff}YY".into(),
             style: paragraph.strut,
+            edges: Default::default(),
             inline: None,
         }];
         for white_space in [WhiteSpace::Normal, WhiteSpace::Pre, WhiteSpace::PreWrap] {
@@ -1260,6 +1283,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             let lines = wrap(&runs, &paragraph, Some(4), false);
@@ -1288,6 +1312,7 @@ mod tests {
             let runs = [TextRun {
                 text: text.into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             let lines = wrap(&runs, &paragraph, Some(4), false);
@@ -1312,6 +1337,7 @@ mod tests {
             let runs = [TextRun {
                 text: source.as_str().into(),
                 style: paragraph.strut,
+                edges: Default::default(),
                 inline: None,
             }];
             let lines = wrap(&runs, &paragraph, Some(4), false);
@@ -1341,6 +1367,7 @@ mod tests {
         let runs = [TextRun {
             text: "A\r\nB".into(),
             style: paragraph.strut,
+            edges: Default::default(),
             inline: None,
         }];
         let lines = wrap(&runs, &paragraph, Some(80), false);

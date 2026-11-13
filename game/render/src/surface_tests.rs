@@ -1023,7 +1023,7 @@ fn control_json_reaches_world_and_unknown_names_refuse_without_poisoning_it() {
 }
 
 /// The rows the Linux presenter sends for a pad's 150 ms and 210 ms presses
-/// (`host/linux`'s `pad_report_times_survive_the_read_and_the_first_owner`),
+/// (`host/painted`'s `pad_report_times_survive_the_read_and_the_first_owner`),
 /// parsed as the canvas parses them: the shorter is a tap, the longer a hold.
 #[test]
 fn pad_rows_tap_and_hold_by_their_report_times() {

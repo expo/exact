@@ -70,6 +70,38 @@
       "answers": "Photo"
     },
     {
+      "send": "takePhotoWithCameraApp",
+      "grants": [],
+      "origin": "app",
+      "foreground": true,
+      "gesture": true,
+      "options": {
+        "facingMode": "option<enum<user|environment>>",
+        "path": {
+          "type": "path",
+          "access": "write",
+          "optional": true
+        }
+      },
+      "answers": "Photo",
+      "substitute": {
+        "choose": {
+          "ticket": "camera-app",
+          "choices": [
+            "take"
+          ],
+          "typed": false
+        },
+        "unsupported": [
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
       "source": "getPhotoCapabilities",
       "live": true,
       "grants": [

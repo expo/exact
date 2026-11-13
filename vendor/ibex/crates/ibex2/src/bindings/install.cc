@@ -822,19 +822,14 @@ void Adapter::install_with(Groups groups, const Ibex2Bindings* bindings,
     }
 
     state_->install_status = InstallStatus::Installed;
-  } catch (const std::exception& error) {
+  } catch (const jsi::JSIException& error) {
     if (mutation_started)
       throw std::runtime_error(
           std::string("Ibex2 binding installation failed after mutating the runtime; ") +
           "the runtime must be discarded: " + error.what());
     throw;
-  } catch (...) {
-    if (mutation_started)
-      throw std::runtime_error(
-          "Ibex2 binding installation failed after mutating the runtime; the "
-          "runtime must be discarded");
-    throw;
   }
+  // Native engine exceptions retain their type; the caller discards the runtime.
 }
 
 void Adapter::verify_fetch_primitives_unreachable() {
@@ -1352,14 +1347,14 @@ bool Adapter::checkpoint() {
       if (!state_->alive || !runtime_) return false;
       try {
         report_error(error.value());
-      } catch (...) {
+      } catch (const jsi::JSIException&) {
         ibex2_report_uncaught(error.getMessage().c_str());
       }
-    } catch (const std::exception& error) {
+    } catch (const jsi::JSIException& error) {
       if (!state_->alive || !runtime_) return false;
       try {
         report_error(error.what());
-      } catch (...) {
+      } catch (const jsi::JSIException&) {
         ibex2_report_uncaught(error.what());
       }
     }
@@ -1401,7 +1396,7 @@ bool Adapter::deliver_next() {
   } catch (const jsi::JSError& error) {
     try {
       report_error(error.value());
-    } catch (...) {
+    } catch (const jsi::JSIException&) {
       std::string message = error.getMessage();
       const std::string& stack = error.getStack();
       if (!stack.empty()) {
@@ -1410,17 +1405,11 @@ bool Adapter::deliver_next() {
       }
       ibex2_report_uncaught(message.c_str());
     }
-  } catch (const std::exception& error) {
+  } catch (const jsi::JSIException& error) {
     try {
       report_error(error.what());
-    } catch (...) {
+    } catch (const jsi::JSIException&) {
       ibex2_report_uncaught(error.what());
-    }
-  } catch (...) {
-    try {
-      report_error("uncaught native callback exception");
-    } catch (...) {
-      ibex2_report_uncaught("uncaught native callback exception");
     }
   }
   return true;

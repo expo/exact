@@ -423,11 +423,8 @@ pub fn dirty(id: u32) -> bool {
 /// Drop all surfaces and release the module's device.
 pub fn unload() {
     MODULE.with(|m| {
-        if let Some(mut module) = m.borrow_mut().take() {
-            module.instances.clear();
-            if let Some(gpu) = module.gpu.take() {
-                gpu.device.destroy();
-            }
+        if let Some(module) = m.borrow_mut().take() {
+            module.unload();
         }
     });
     crate::shaders::clear_shaders();

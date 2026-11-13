@@ -86,7 +86,11 @@ backslash traversal, alternate-stream and reserved-device forms are refused.
 
 Snapback4 consumers use release **0.4.33**: the CLI is pinned in `bun.lock`;
 Cargo pins the device and its client to the matching release source commit
-`3653cae823145170df3e720f5e321bd1b5b4d79d`. `snapback4/` is one client for an
+`3653cae823145170df3e720f5e321bd1b5b4d79d`. The root `package.json` overrides
+the undici 0.4.33 pins with 8.12.2, the version 0.4.43 pins, for the eight
+advisories on 8.11.2 (among them
+[GHSA-qrxm-fqhp-jwvm](https://github.com/nodejs/undici/security/advisories/GHSA-qrxm-fqhp-jwvm));
+a pin at 0.4.43 or later drops the override. `snapback4/` is one client for an
 app's Rust and TypeScript on every host ([its README](../snapback4/README.md)):
 the protocol in Rust without I/O, the native device, the web's wasm, and the
 TypeScript driver an app mounts with `typescript.sources`. The client is its
@@ -131,6 +135,19 @@ On Apple hosts, a projected tab or pressable node reports the same accessibility
 state through its native segment, UIKit bar item or title, or AppKit menu item.
 UIKit menu rows and alert actions remain selectable but read as enabled: their
 public disabled states also stop selection.
+
+## Grouped section shadows
+
+A grouped list section's `box-shadow`, including class and state values, paints
+around its card, excluding the header and footer. A section without a card
+(`background-color="transparent"`) refuses a shadow. Shadow changes support
+`transition`; keyframe shadow animation on a grouped section is not supported
+yet and fails the build. If shadow keyframes are declared, a grouped section's
+animation must name its keyframes with a literal or a choice of literals so the
+compiler can check them; their timing may be computed, and an animation may
+be absent. Animations that do not set `box-shadow` remain on the section. On
+iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
+forwarding from UIKit’s visible cells, header and footer is not implemented yet.
 
 ## Serve RealWorld
 
@@ -190,7 +207,11 @@ of it is computed. A definition the type checker types carries `type`, its type 
 inject, resource, mutation (`T | null`), local or parameter by its value, a shape
 by its fields, a field by its value, an action or `fn` as a function of its
 parameters. An enum is the union of its strings, `"a" | "b"`. A shape inside a type is written by its name,
-and `shapes` maps each name used so to the shape's fields, `{ id: string }`.
+and `shapes` lists each shape used so, its `name` and its fields as `type`,
+`{ id: string }`. When loading stopped and each file was read on its own, a
+shape also has the `file` it was read in: two files may declare different
+shapes of one name. A bare `action` prop or inject has no `type`: its arity is
+what it is called with.
 A route, component, source, style, task or ID has no `type`. When the type
 check refused, only what is declared keeps one: shapes, fields, and `fn`s and
 their parameters.
@@ -256,6 +277,15 @@ it regenerated it), and `bun exact.mjs contract build app.contract --stdin`
 neither refreshes the types `app.ts` imports nor type-checks `app.ts`.
 `--stdin` takes no `--entry`.
 
+`build --stdin-as <used.contract>` reads stdin as the text of a file the named
+one uses, for the unsaved buffer of a file that is built with its app:
+
+```sh
+contract build app.contract --json --errors-only --stdin-as lib/row.contract < buffer
+```
+
+It is `--stdin` in every other way, and the two are not given together.
+
 `build --map -o <file.plan>` also writes `<file.plan>.map.json`, keyed by
 SHA-256 of the plan bytes. Each plan node has its original file and range,
 component call-site chain, and one binding per style row: its base value's
@@ -294,6 +324,31 @@ the plan, so this is not an original-source revision guarantee.
 `fmt --stdout` previews source-preserving formatting; `--check` prints a diff
 and exits nonzero when formatting differs. Plain `fmt <file>` writes the result
 explicitly. Formatting never runs automatically on save.
+
+## Contract evaluation limits
+
+Each evaluation may take 65,536 list steps, build a string of 64 MiB of
+UTF-8, or build a value of 16,777,216 nodes, 64 MiB of string bytes and
+64 levels. A bound trap keeps its `Trap(Kind { pc: N })` token and adds the
+evaluation and bound in words, in every build. For example:
+
+```text
+Trap(IterationLimit { pc: 343 }) in derive "visible": past the 65,536 list steps one evaluation may take
+```
+
+The evaluation names a derive, action, resource argument or state initializer.
+Resource and task gates, family keys and sequence evaluations name their owner too.
+A tree evaluation names its containing view and plan site, then the event
+argument, region subject, each key, state initializer, surface argument or
+list option. The JS target names the site alone. Argument numbers start at 1.
+A prop or style binding already names its site and row; its trap adds only
+the bound. A child's inlined derive or function names the evaluation that
+reads it. The pc is local to that evaluation's code body, not a source location.
+
+An action or derive trap refuses the commit. A prop or style binding trap
+unsets its row and journals it once until the binding succeeds again. Other
+tree evaluation traps poison the runner. Bake and boot errors carry the same
+evaluation and bound text (LLP 1090 D6, LLP 1017.003 D3).
 
 ## Run a terminal app
 
@@ -359,7 +414,9 @@ app's bundle identity: its name in the menu bar, its Dock tile, and the
 document types Finder's Open With reads. `install` also writes a shim named by
 the manifest's `app.command` into the first of `~/.local/bin`, `/usr/local/bin`,
 `~/bin` that is already on `PATH` (`EXACT_BIN_DIR` overrides), and prints the
-line to add when none is.
+line to add when none is. It replaces only this app's own: a bundle with
+another bundle identifier, a command it did not write, or a link at either
+path is refused, and nothing is changed. `exact uninstall` leaves them too.
 
 A standalone macOS app treats `kill -TERM <pid>` as an orderly quit: its
 `beforeunload` handlers can cancel, pending storage gets the same five-second
@@ -374,7 +431,56 @@ reference a kept secret as `{secret:NAME}`, except in a URL’s scheme or author
 write `{{` for a literal brace.
 The bake checks at most eight entries against fetch and `secret.keep` grants.
 Hosts that support preloads send them at process start; the app's own reads take
-a preload's reply, and a read made for a tool is sent.
+a preload's reply, and a read made for a tool is sent. A Rust data source may
+implement `launch() -> Option<exact_runner::request::Launch>` and register its
+`launch` function with `Launch::new(env!("CARGO_PKG_NAME"), launch)`. The function
+takes `&mut dyn LaunchContext` and returns nothing. Hand each named `LaunchRequest`
+to `context.preload(request)`: it returns `Result<(), String>` with a refusal reason,
+else starts it immediately (`Foreground` waits for Opened). `when` defaults to
+`Start`; the request's `timeout_ms` is its exchange deadline.
+The context offers `secret`, durable `set_secret` and `forget_secret`, and blocking
+`fetch` under the binary's grants, without the cache. `secret` returns the value
+from when the function began, or the value the function last wrote; it does not
+observe intervening app writes. A secret write succeeds only if nobody else has
+written that secret since the function began or since its own last successful
+write. A changed version returns a refusal reason. If `set_secret` or
+`forget_secret` fails, the function cannot write that secret again during this
+launch, and each request it hands over afterwards is refused: what is stored is
+then unknown.
+The context exposes no app storage.
+On hosts that start preloads, it runs before the app's module, after the manifest's
+start requests reach the client. Its requests share the eight-entry bound.
+A handoff is refused if the app has since written any secret the function read
+or wrote, even if the function read its snapshot again. Each accepted request
+depends on all those secrets: a later write by either writer cancels it and drops
+its reply.
+While the function runs, a read waits only if it names a preload with no definition
+yet. It proceeds when that name is handed over, the function returns, or five
+seconds pass, then uses the ordinary holding rule. Unnamed reads and reads under
+an update selection wait only for existing holds. The manifest's definitions may
+hold any eligible read for one second. The function's deadline also aborts its
+blocking fetch. Requests handed over before it stand; later handoffs are refused.
+A panic cancels the function's requests where the build unwinds (a development
+build); a release build aborts on a panic there as anywhere in the crate.
+
+A read may name its preload: `fetch(url, { exactPreload: "feed" })`, or
+`Request::get(url).preload("feed")?` in Rust. Names must match `^[a-z][a-z0-9-]*$`.
+The held reply must have the same method and URL; headers and body may differ.
+With an update selected, including a plan-only update, only full request equality
+can take a preload. A missing or mismatched name also falls back to equality.
+A refresh drops both the preload it names at an equal method and URL and any
+fully equal hold; under an update selection only equality applies.
+On the web the option is accepted and ignored. A TypeScript bundle naming it needs
+runtime 13 (LLP 1162.000 D1, D2).
+
+For a read the next screen will make, use `fetch(url, { exactPrefetch: true })`
+or `Request::get(url).prefetch()` in Rust. The option is accepted and checked on
+every host, and the request is made as written, as an ordinary fetch. No host holds
+its reply yet. A tool's, wake's or device's plain read may use it too. A send,
+a mutation, a stream, a file-bodied or an independent request, or native work,
+refuses it. In TypeScript the value must be a boolean.
+A TypeScript bundle naming it needs runtime 13; the Rust module seam needs ABI 9
+or later (LLP 1162.000 D5).
 
 A one-window Mac app ends when its window closes. An app with work the person
 expects to go on without the window (a server, a sync), as Mail and Messages
@@ -977,6 +1083,11 @@ plan cannot reach (LLP 1036.000 §5–§10). `--bundle` prints the stable Mac bu
 `<target>/clients/<source-key>/<id>/macos/<Name>.app`; `scripts/exact.mjs`,
 `agent --app` and metrics use that same resolver. `--host` leaves both standalone
 and sample products; simulator and device bundles have separate destinations.
+On the Mac the sample host is a bundle beside the app's, `<Name> Host.app`, which
+`agent host` launches. Under the app's macOS profile it embeds that profile and takes
+the app's id and entitlements (iCloud, push, a keychain group), so its two sessions
+keep what the app's do; with none it is `<id>.host`. It registers no document type or
+link scheme, which stay the app's.
 Two apps can build together. A second Apple build of the same source/app fails
 with its owner's PID and lock path before baking; remove a stale lock only after
 verifying that owner is no longer running. Failed packaging retains the previous
@@ -1482,6 +1593,14 @@ none set, `formatLocale` is the locale),
 normalizes POSIX names to BCP 47 (`C`/`POSIX` use `en-US`), and reads the zone from
 `TZ` when it names a zoneinfo entry, otherwise the system's IANA zone (UTC fallback).
 
+`bun scripts/agent.mjs trace --pid <pid> --out snapshot.json` asks a running development
+Mac or simulator app to save its trace without taking ownership of the process.
+The file includes `tree`, `state`, `layout` and `observation`. Tree and state read the
+runner directly, without guest DOM inspection or the carrier's drain; layout reads
+mounted host geometry. Each read is labelled passive. The frame ring ends before
+these observations, and their wall-clock bounds, clock mode, scheduling and substitutions
+are recorded. This path never seeks or settles the app.
+
 ### Inspect work and native presentation
 
 `perf <target> during "<operation>"`
@@ -1493,12 +1612,15 @@ Missing coverage is not a zero.
 
 On Apple, `"perf frames live 500"` observes display-link callbacks for 500 ms without
 advancing or changing the current clock. Its reply identifies scheduling, substitutions
-and dropped records. A normal Mac event loop is available through
-`const session = await open({host: 'macos', env: {EXACT_AGENT: 'live'}, storage: 'my-scratch-store'})` in a
-driver script importing `open` from `scripts/agent.mjs`; call
-`await session.perf(null, {live: 500})` and close the session afterward.
-This carrier still substitutes storage and secret presence. `--timing platform` alone
-keeps agent execution substitutions. Neither establishes production-equivalent performance,
+and dropped records. A normal Mac event loop is available with
+`bun scripts/agent.mjs macos --live --storage latency "tap change-station" "type station-search Palo" state`.
+The driver launches and closes this process and keeps input available. `--live` uses
+normal scheduling and the wall clock; `--storage` chooses its scratch store. Set
+`EXACT_STORE=real` in the launch environment to use the app's real secret and preference
+stores and secret presence. App files still follow the drive's scratch-store setting
+(`--storage`) and are unavailable when no scratch store is configured. `state.storage` and the observation's `store` describe those
+app files. `state.observation` reports clock mode, scheduling and substitutions.
+`--timing platform` alone keeps agent execution substitutions. A substituted run does not establish production-equivalent performance,
 and callback timing does not prove compositor presentation. `layout` distinguishes target
 and presented geometry; an unavailable presentation remains explicit.
 
@@ -1528,6 +1650,28 @@ Use a distinct filename: adjacent `app.ts` shadows an `app.d.ts` import.
 Generated declarations are build artifacts, not files to commit. A development
 build writes them beside `app.ts` for an editor: the web build and the native
 development bake both do.
+
+For a mixed Rust/TypeScript app, annotate the map as `TypeScriptSources` and
+the dispatcher as `TypeScriptAnswer`, imported from the same declaration:
+
+```ts
+import type { TypeScriptSources, TypeScriptAnswer } from './app.contract.d.ts';
+const sources: TypeScriptSources = { greeting: () => 'Hello' };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) =>
+  sources[source](args, store, storage, native);
+```
+
+The app's `build_mixed_with` bake derives these types from its `rust_sources`
+argument; no ownership list goes in `app.json` or TypeScript. Every remaining
+provider is required. Run `bun exact.mjs contract build app.contract` to obtain
+the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
+Cargo bake, which writes the declaration before checking `app.ts`, even if
+the check fails. Native bakes use it too, and a development producer keeps
+the roster from the previous bake's `rustSources` receipt. Rebuild after
+changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
+describe every app-owned source, including Rust's.
+Standalone `contract types` has no composer and treats every app-owned source
+as TypeScript's; for a TypeScript-only app the two provider types are equivalent.
 
 Development builds also expose `resourceStatus`: opaque request and displayed-answer
 generations, the last successful generation, pending status, and `displayed`
@@ -1586,7 +1730,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
 | `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
-| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts |
+| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Outside a drive the web writes it to the browser's console too, and an Android development build to logcat under the tag `exact-app` (`adb logcat -s exact-app`). An Android release build and the other native hosts keep it for `logs` alone |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
 under one domain (`https://*.example.com`), or a whole scheme, written as CSP
@@ -1657,8 +1801,15 @@ or carries a validator (LLP 1162 D4): in memory, 16 MiB per runtime, gone with
 the process. An entry answers only a request equal in method, URL and every
 header; a stale reply is revalidated when it has a validator. `refresh` and a
 declared `refreshes` go to the network and replace the entry, and a successful
-write to a URL drops that URL's entries. A browser uses its own cache; the
-render server keeps none.
+write to a URL drops that URL's entries. A browser uses its own cache.
+
+The render server keeps one cache for all its renders, as an RFC 9111 shared
+cache (LLP 1153.001 D7): a `GET` reply that gives an explicit lifetime
+(`s-maxage`, `max-age` or `Expires`) and says none of `no-store`, `private`,
+`no-cache` or `Vary: *`, up to 256 replies and 64 MiB, 8 MiB each. A request
+with `Authorization` is given or stores only a reply marked `public`,
+`s-maxage` or `must-revalidate`, and a redirected reply is not kept. Within
+`stale-while-revalidate`, a stale reply is given while one refetch replaces it.
 
 A read whose request and reply may both be handled out of order can leave
 the sequence altogether: `fetch(url, { exactIndependentHttp:
@@ -1680,6 +1831,18 @@ not independent by default: ordinary resource reads already overlap, while
 an independent reply settles as it arrives. Leave writes, and any read whose
 parse depends on an earlier reply, in the queue. Storage steps and native
 continuations cannot opt out of it.
+
+A Hermes data module has a 64 MiB heap limit by default. With an
+exception-on-OOM engine bundle (v6 or later), terminal heap exhaustion fails
+its outstanding requests and tool invocations with
+`held more than the 64 MiB a data module's heap may hold`. The executor
+destroys that runtime, including its timers, streams and queued storage
+work. The next new request or canvas call loads a fresh runtime; failed
+requests are not retried automatically. Other modules keep running. A native
+storage write already submitted may finish, so an OOM does not establish
+whether it committed. Its completion is discarded, and queued JavaScript
+writes never start. The pinned v5 engine still aborts on heap exhaustion;
+this recovery requires the v6 pin.
 
 On Hermes each turn of an answer has 100 ms of its own time: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
@@ -2019,7 +2182,9 @@ logic ABI refuse a request that has it, by name.
 A stream's request is never sent at build, so an option the host refuses on one
 (`exactTimeout` on a stream, `exactIdleTimeout` out of range) does not
 fail a native build: the resource shows its placeholder and fails at launch
-with that error, as on the web. An error the source throws itself still
+with that error, as on the web. The native build warns once per resource and
+refusal, naming the rejected option. Valid streams and ordinary storage or native
+module deferrals produce no warning. An error the source throws itself still
 fails the build.
 
 A long poll, a request the server holds until something changes, says so with
@@ -2037,8 +2202,9 @@ until each held request has had one reply (20 s by default), then `clock data`. 
 the asks that wait (a first ask answered at once need not be); a stream never is
 (`exactStream` stops counting when its first message commits), and with
 `exactStream` it is refused; an upload (`exactBodyFrom`) is never held either, its file being read
-before it is sent, nor is a download to a file (`exactBodyTo`). A Rust source's request takes `Request::held()` (not across the Rust
-module seam, which refuses it, as it refuses a deadline). On the web build an
+before it is sent, nor is a download to a file (`exactBodyTo`). A Rust source's request takes `Request::held()`,
+across the Rust module seam too (which refuses a deadline). A server render waits for a held
+request as for any other, until its reply or the render's deadline. On the web build an
 answer counts as held only while every fetch it has out is held: an ordinary
 fetch beside it is waited on, and so is a held one made in a plain `.then`
 callback, where the page cannot tell whose answer it is (made in the answer's
@@ -2108,9 +2274,10 @@ A TypeScript source's `http:`/`https:` stream whose 2xx body is not
 2026-10-23): each `message` has an ArrayBuffer `data`, the bytes read since the
 mapper's last turn, at arbitrary boundaries (a framing is the mapper's to
 parse), never dropped or coalesced. At most 1 MiB, or the stream's
-`exactIndependentHttp.maxResponseBytes` if smaller, waits for the mapper; a read
-past it ends the stream with `Refused` (`byte stream receive queue exceeds 1
-MiB`) after the bytes already waiting. The body's end is `Network`, `the byte
+`exactIndependentHttp.maxResponseBytes` if smaller, waits in the receive queue. A read that would pass this bound waits until
+the runner takes the queued bytes; the host stops reading in the meantime.
+A slow drain loses no bytes and does not end the stream. The separate limit
+on messages waiting behind an unsettled mapper still applies. The body's end is `Network`, `the byte
 stream ended`. A 204, a 205 and a `HEAD` have no body and stay the one answer.
 The request carries `Accept: text/event-stream`, as every stream's does, unless
 the source names an `accept` header; name one where the server negotiates by
@@ -2241,8 +2408,8 @@ every host take it, and Rust sources with `Request::long_poll(cursor, from)` on
 a stream's request. An older prelude would ignore it and open an event stream,
 so it moves `typescriptRuntime` to 3: a native app with a TypeScript data module
 needs a new binary once more. A Rust source's long poll is a new kind on the
-module seam. The Rust module ABI is 7: long polls, two-way sockets
-(LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
+module seam. The Rust module ABI is 10: held marks (LLP 1016.000 D9), prefetches (LLP 1162.000 D5), preload names (LLP 1162.000 D1), long polls,
+two-way sockets (LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
 (LLP 1048.000 D9) require a matching binary.
 
 On the **web JS target and on macOS, iOS, Linux and Windows, TypeScript sources**
@@ -2400,6 +2567,23 @@ operations read the app's file records, and each SQLite mutation atomically
 saves the whole database file. Database files share the filesystem namespace,
 so closed databases can be copied or exported through `storage.fs`. SQLite integer results
 are `bigint`: convert them to a Contract-compatible value before returning.
+
+### Sign in through the system browser (`openAuthSession`)
+
+`openAuthSession` answers 501 on the headless Linux host and Windows, and on Android
+when no system browser resolves or `ephemeral: true` is requested (this build has no
+ephemeral browser API). Android supports custom-scheme callbacks from
+`auth.callback` grants; HTTPS App Links and loopback callbacks answer 501. Returning
+to the activity after it stopped, without a callback, cancels with 499, whether by
+Back or another link that brings the activity forward. A pause without a stop,
+such as a permission dialog or a multi-window focus change, keeps the wait. Callbacks
+are routed by endpoint and state: a stale, wrong-state or missing-state callback is
+consumed without completing the live sign-in or cancelling it on that resume.
+A matching state with invalid callback data, such as repeated state or userinfo,
+settles with 502. Callbacks without a live session are discarded. Reload retires the old wait. A browser wait survives activity
+recreation and expires after ten minutes, including device sleep, with 499. A launch
+delivered while no activity is attached cancels with 499. A sign-in
+interrupted by process death must be started again.
 
 ### Notifications
 
@@ -2800,11 +2984,14 @@ each voice ended is the same on every host and under the driver's clock
 | --- | --- |
 | web (both targets) | Web Audio: a one-shot `AudioBufferSourceNode` per voice at `start(when)` with its `playbackRate`, through a `StereoPannerNode` when its `pan` is not 0, aimed at the speaker through the context's output timestamp; a change is `setValueAtTime` then `linearRampToValueAtTime` on the voice's `gain`, `playbackRate` (k-rate: it moves once per 128-frame render quantum) and `pan`, a panner added when a change first gives a pan; the first sound after the page's first tap or key (one before it is dropped and journaled `sound blocked`) |
 | macOS, iOS, tvOS | one `AVAudioEngine` with a C mixer behind an `AVAudioSourceNode`, sample-accurate (a playback rate reads between frames by linear interpolation; a pan follows the `StereoPannerNode`'s equal-power algorithm; a change's ramp is read at every frame), in an arm loaded on demand (`libexact_sound.dylib`; `ExactSound.framework` in an `.ipa`) |
-| Linux, Windows, Android (the Linux host in its reader) | no Contract sound output: the runner keeps the voice record |
+| Android | AAudio with the shared C mixer in `libexact_sound.so`, loaded at the first play; scheduled by the stream's output timestamp, with gain, playback rate, pan, live changes and cancellation |
+| Linux, Windows | no Contract sound output: the runner keeps the voice record |
 
 Under the driver no scheduled sound plays on any host (`output: "agent"`). The
-runner initializes `state.sounds.output` to `"agent"`; Linux, Windows and Android
-leave it there even outside the driver. Outside the driver, macOS, iOS and tvOS
+runner initializes `state.sounds.output` to `"agent"`; Linux and Windows
+leave it there even outside the driver. Android's state reader is available
+only under the driver and retains `"agent"`; it does not expose AAudio's output
+state or latency. Outside the driver, macOS, iOS and tvOS
 replace it with an object whose `kind` is `"avaudioengine"` and whose `state` is `"closed"`,
 `"running"`, `"stopped"` or `"failed"`. Both web targets report an object with
 `kind: "web-audio"` and the audio context's `state` once the output loads; before
@@ -2841,14 +3028,32 @@ that output plays (a change then interrupts other apps' audio). The driver's fro
 skips preparation and opens no surface output. With `EXACT_AGENT_TIMING=platform`,
 preparation runs, but the driver drops `exact:audio` requests, so they do not
 raise the prepared ambient session.
-On the web, the sound output sets the Audio Session API's type where supported:
+On the web, page initialization sets the Audio Session API's type where supported:
 `"ambient"` and `"playback"` pass through, and `"playback-mix"` maps to `"ambient"`: the
 [W3C draft](https://w3c.github.io/audio-session/)
 has no mixing playback type. This preserves other apps' audio but obeys the
-ring/silent switch in WebKit. Without a `sound` declaration or a command or
-sequence that initializes sound output, the browser keeps `auto`: `video`,
-`audio` and GPU audio alone do not apply this setting. `data-audio-session`
-keeps the manifest's value.
+ring/silent switch in WebKit. The policy applies to `video`, `audio` and GPU audio
+without a `sound` declaration or an `AudioContext`. Without `audio_session`, the
+browser keeps `auto`. `data-audio-session` keeps the manifest's value.
+On Android, Contract effects use the host's single audio-focus owner.
+`"ambient"` uses sonification attributes, mixes without focus and skips effects
+while the ringer is silent or vibrating. `"playback"` uses media/music attributes
+and requests full focus; `"playback-mix"` uses the same attributes without focus
+or ducking. Device volume and Do Not Disturb still apply. All three stop output
+and discard pending effects when the activity leaves the foreground or the
+output becomes noisy (for example, headphones are unplugged). A transient focus
+loss also stops effects; new effects may play after focus returns. A permanent
+loss waits until the activity returns to the foreground.
+
+The Android arm decodes declared WAVs at first play. It uses
+[AAudio's speaker timestamp](https://developer.android.com/ndk/reference/group/audio#aaudiostream_gettimestamp)
+to place frames; startup waits up to 100 ms for that timestamp, then uses the
+stream's buffer size as a latency estimate if none is available. Late effects
+start from their attack. The idle stream closes after its last frames reach the
+speaker and releases its focus claim. A failed open or disconnected stream is
+reported; a play at least one second after the failure tries again. Background
+playback, MIDI output and timed sequence haptics on Android remain unavailable.
+
 The Mac has no session. A development run with `EXACT_SOUND_CHECK=1` taps the
 engine's main mixer and journals (and prints) how far each onset after a
 silence reached the speaker from its time.
@@ -3085,8 +3290,67 @@ from an action to open it. `change` receives `Picked[]` with each file's name, t
 launch and a counter, never after the file: show or upload it under `name`. A
 specific `accept` list is limited to media types and types in the app's
 `file_handlers`. The live Linux picker is unavailable;
-its agent substitute accepts any file. Image pixel and Canvas readback remain
-deferred.
+its agent substitute accepts any file. Android uses the system photo picker for
+`image/*`, `video/*` or both wildcards on Android 13
+or Android 11 with R extension 2, and `ACTION_OPEN_DOCUMENT` otherwise. `multiple`
+works with either. Files are copied before `change`; the app needs no persistent
+access to the provider. Cancellation,
+a launch failure or a copy failure fires `cancel`, with failures journaled. A missing
+Photo Picker falls back to the document picker once. An unknown extension in `accept`
+uses an unrestricted document picker, then the selection is checked against `accept`.
+HEIC/HEIF is kept when accepted (including `image/*`); otherwise an image accept that
+requires D6's JPEG conversion receives JPEG at quality 0.9, with orientation applied
+and source metadata removed. A specific list containing `image/jpeg`, `.jpg` or
+`.jpeg` uses the document picker and includes `image/heic` and `image/heif` alongside
+the requested types. A PNG-only filter offers no HEIC conversion. The delivered result is checked against `accept`. Provider
+metadata, stream opening and copying run on a worker under the result's temporary
+read grant. Access lasts while the receiving activity's task stack remains active;
+finishing the task can end it before copying completes. No persistable permission
+is taken or released. Under the agent the picker stays held. Image pixel readback and a canvas's
+synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
+a canvas's pixels go to a file (below).
+
+### A 2D canvas's pixels as a PNG file (`captureCanvas`)
+
+`captureCanvas(surface, path)` writes what the host has drawn and kept for the
+one mounted 2D canvas of `surface` (every draw applied, its images and text as
+drawn, an accumulating drawing whole) as a PNG at the `app:/` file `path`,
+under `fs.write`, and resolves `{path, width, height, scale}`: the size in device
+pixels, and the device pixels per CSS px (1 for a canvas with `bitmap-width` or
+`bitmap-height`). A capture takes the first completed drawing at or after the
+commit that requested it. If another drawing completes before the host snapshots,
+it takes that later drawing. Later commits, advances and animation frames never
+retire a pending capture. Unmounting the canvas, replacing its surface or ending
+the session retires it with `EncodingError` and leaves the file untouched.
+The PNG is straight-alpha sRGB. A completed draw with no operations
+keeps the bitmap, transparent when nothing has painted it. No pixel
+crosses the source: show the file with
+an `image`, send it with `fetch(url, {exactBodyFrom})`, or hand it to a module
+(LLP 1056 D9):
+
+```ts
+export const grants = 'fs.write app:/tmp';
+// in a mutation's answer: the annotation as drawn, for the clipboard
+const shot = await captureCanvas('annotate', `app:/tmp/shot-${seed}.png`);
+```
+
+Call it from a live answer, directly or after `await`. On the JS web target,
+a plain `.then()` callback has no answer owner and capture rejects with
+`InvalidStateError`. Cancelling the owning answer prevents publication.
+
+A Rust source answers `Answer::Later(Request::capture_canvas(surface, path))`
+and reads the reply with `exact_runner::canvas_capture::captured_image(&outcome)`.
+`path`'s directory must exist (`app:/tmp/x.png`, not `app:/tmp/new/x.png` before
+a `mkdir`); the file is replaced whole or left as it was. A refusal is a
+`DOMException` (in Rust, `"<name>: <message>"`): `NotFoundError` when no canvas of
+the surface is mounted, `InvalidStateError` when several are or its size was
+refused, `IndexSizeError` when it has no bitmap (a box with no area),
+`QuotaExceededError` over 8,192² pixels, `NotSupportedError` for a `display-p3` or
+`float16` canvas or a drive with no store (`--storage <name>`), `NotAllowedError`
+for a path that is not an `app:/` file under `fs.write`, and `EncodingError` when
+the encoder or the write fails. Linux, Windows and Android encode the tiny-skia
+bitmap, macOS and iOS the Core Graphics bitmap or the GPU's surface, and the web
+the canvas element's own `toBlob`.
 
 For a PDF picker, declare the type in `app.json`:
 
@@ -3149,13 +3413,15 @@ times. It resolves `{path, type, size, width, height}`, `type` the one written
 ```ts
 export const grants = 'fs.read app:/tmp\nfs.write app:/tmp';
 // files from `change` on an `input type="file"`; posts: 4000 px and 2 MB
+await storage.fs.mkdir('app:/tmp/upload');
 const out = await storage.fs.compressImage(files[0].path, `app:/tmp/upload/${seed}.jpg`,
   { maxDimension: 4000, maxBytes: 2_000_000 });
 const body = await storage.fs.readFile(out.path);
 ```
 
-Both paths are `app:/` files (`fs.read` on `from`, `fs.write` on `to`); `to` is
-replaced atomically, and left as it was on any failure. It always re-encodes, so
+Both paths are `app:/` files (`fs.read` on `from`, `fs.write` on `to`); create
+`to`'s parent directory first with `storage.fs.mkdir`. `to` is replaced atomically,
+and left as it was on any failure. It always re-encodes, so
 compare the pick's `size`, `width` and `height` first to skip it. It is one
 storage operation in the module's queue; natively it runs off the JS thread. A bad option
 (a `type` other than `'image/jpeg'`, the default, or `'image/png'` too)
@@ -3376,7 +3642,8 @@ requests (`apps/markdown/data`). A kept item is the object chosen: a move
 or rename is followed and keeps its path (`<name>` is the name it was
 chosen by); a file another program replaced at its name is not the
 document, and the app's own `atomicWriteFile` carries the entry to the file
-it wrote, from Rust or TypeScript. A path whose entry is gone
+it wrote, from Rust or TypeScript. When the kept set cannot be saved, that
+write fails after writing the file, and writing it again keeps it. A path whose entry is gone
 refuses `ENOENT`: ask the person to choose again. Without `doc.keep`
 both calls are refused. Under the agent on a Mac the kept set is the
 drive's scratch store (`--storage`), never the person's.
@@ -3487,6 +3754,13 @@ string, a template or `+` of constants, an array of them `.join('\n')`, or a
 top-level `const` holding one). Numbers keep their type: `1 + 2` is `3`, while
 `'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
 
+A backend override (`--backend`, `EXACT_BACKEND_ORIGIN` or `.exact/backend-origin`)
+needs one top-level `const origin`, set to a literal http(s) string or a setting
+such as `import.meta.env.API_BASE_URL ?? 'https://api.example'`, and used in
+`net.fetch ${origin}`. Settings are inlined before the override. A refused
+selection names its selector and reports `backend-selection`, including in
+`contract build --json`.
+
 For grants that differ by backend, write an object literal such as
 `export const grants = { 'http://127.0.0.1:4790': ['net.fetch http://127.0.0.1:4790', 'secret.keep fixture-token'], 'https://discord.com': ['net.fetch https://discord.com', 'net.websocket wss://gateway.discord.gg', 'secret.keep discord-token'] };`.
 Keys must be unique string literals naming http(s) origins without credentials,
@@ -3521,6 +3795,13 @@ types, and an `app.module.json` pairing receipt into a **new** directory; it
 never overwrites an existing generation. An installed package's code is captured
 file by file as the bundle reaches it; the receipt's `packages` names each
 `name@version` with a digest of what was taken (LLP 1027 D5, "Package code").
+A linked (workspace or `link:`) package's `peerDependencies` resolve from the
+app for both declarations and runtime code, including subpath exports. The app
+must have a version that satisfies the declared range, even when the linked
+package has its own install.
+A peer imported by a reachable declaration or runtime file is refused if missing
+or incompatible. Installed packages, including those an isolated install (pnpm,
+Bun) links from its store, keep Node's ancestor lookup.
 `EXACT_TSC` and `EXACT_ROLLDOWN` override producer tools. `hermesc` is always
 the compiler paired with the selected `hermes-lean-sys` bundle.
 A module's placement (LLP 1027.002) is the manifest's: `typescript.placement`
@@ -3529,7 +3810,8 @@ platform under `platforms.<platform>.placement`; `EXACT_TYPESCRIPT_PLACEMENT`
 and `EXACT_RUST_PLACEMENT` override a bake for a measurement. A change is a new
 compatibility id, never an update. `build_mixed_with` bakes a mixed app through
 its own composer, so a resource only Rust owns needs no TypeScript placeholder;
-the development producer keeps such a resource's last Cargo-baked value.
+the development producer keeps such a resource's last Cargo-baked value and
+the composer's ownership roster for the generated TypeScript provider types.
 
 Native module clients can supply a `Module` factory to `exact_apple::host!`
 (the sixth argument) and apply an `ExactGeneration` containing an `ExactModule`
@@ -3598,6 +3880,11 @@ bare-plan host fixtures. The driver supports `ios --device [--phone <name|udid>]
 the phone connects outward to a temporary Mac-side port with a per-launch token.
 Use a trusted LAN, allow local networking, and keep the app visible;
 `EXACT_AGENT_HOST` overrides the Mac IPv4 address. The carrier is not encrypted.
+The first launch of each bundle id can raise Apple's Local Network prompt. Allow
+it on the phone; the driver cannot answer it, and a prompt left by another app
+can also keep this launch inactive. `No route to host` or `waiting for foreground`
+can mean that prompt is waiting. Unlock the phone before launching. Startup
+failures retain devicectl's lock diagnostics and say when the app printed nothing.
 Android APK drives (`bun exact.mjs agent android`, or `agent.mjs android --reader`) check and wake the screen, dismiss an insecure keyguard, and refuse a secure lock screen: unlock the device and retry; a readiness timeout includes the observed screen state.
 
 The dev page's **Open in native…** link offers an installed-client action and
@@ -3702,7 +3989,7 @@ on macOS or in an iOS list row), the `changed` after this call hands it.
 
 **Linux, Windows and Android paint their own pixels**, so there is no platform
 object to hand over. A hatch there is Rust: one type that implements
-`exact_linux::Hatches` in `modules/linux/*.rs` (or `modules/android/`,
+`exact_painted::Hatches` in `modules/linux/*.rs` (or `modules/android/`,
 `modules/windows/`), named once with `pub type ExactHatches = App;` and
 included by the app's Linux crate (`contract::native::rust_hatch_entry` in its
 `build.rs`, which the Rust-data apps here already call). Its handle carries the
@@ -3719,7 +4006,10 @@ Android; its words are the ones `app.json` gives `android`.
 No hatch runs before first pixel. A node's end runs while its view is still
 there, so take back there whatever the hatch added. On iOS a hatched node is a
 view of its own and its list row is not reused unless the hatch sets
-`element.reusable`; `logs` says what each word gives up.
+`element.reusable`; `logs` says what each word gives up. On the Mac a row that
+leaves a virtualized list's window can be rebound to the item the list needs
+next (LLP 1078): its hatched node hears `ended`, then `built` for the new item,
+as a new node would.
 
 **Into Contract only as a person could.** A handle acts on an authored node:
 `click()`, `focus()`, `blur()`, and `input(text)`, which replaces a text
@@ -3794,7 +4084,11 @@ checkout by name, and any other path only through that placeholder. The web buil
 `web/build.rs` passes to `contract::bake(plan, …)` into a module of its own, where build.rs's `use`s and
 locals are not: write it as a path from the data crate (`my_app_data::MyApp`), or that path's `::default()`
 or `::new()` with no arguments, with no comma after it (rustfmt adds one when it breaks the call across
-lines). A source built with arguments is exported by a crate of the app's own
+lines). For a mixed app, the build copies the third argument to
+`exact_js_bake::build_mixed_with`: a reference to the same data-crate value or constructor,
+with no constructor arguments. TypeScript answers the other sources. A declared
+`rust.module.package` supplies the module instead of a generated one.
+A source built with arguments is exported by a crate of the app's own
 instead, named in app.json's `rust.module.package` (Update Lab's `logic/`).
 
 A source that wraps another implements `exact_runner::DataSourceWrapper`.
@@ -3966,7 +4260,7 @@ real-socket, wall-clock and toolchain-launching tests are `async lane:`; a test
 may still re-run its own binary to isolate its environment). The sixth compiles
 every crate and target of the workspace and runs none of their tests: without it
 a crate outside `default-members` can stop compiling on `main` while the other
-five pass, as `exact-web-js` and `exact-linux`'s tests did on 2026-10-11. It
+five pass, as `exact-web-js` and `exact-painted`'s tests did on 2026-10-11. It
 needs the pinned Bun first on `PATH` (or named by `BUN`): app crates' build
 scripts run Bun, and under an older one each fails with `Bun <version> is older
 than …`. The async lane runs the first three with
@@ -4025,9 +4319,11 @@ time. Edit the table, never the generated code.
 Every web build includes `/.exact/install/`, with explicit `web/`, `ios/` and
 `macos/` pages. Each shows stacked Web, iOS and macOS sections; unavailable
 platforms are gray. Web works by default and shows its destination URL. Native
-methods appear only when configured. The header shows build/source/timestamp
-and serving context. Optional `brand.logo` and `brand.wordmark` reuse app images
-or a text wordmark with an asset font; the footer uses the gray Exact mark.
+methods appear only when configured. The header shows the build id, available
+source facts and serving context. Development builds record their build time;
+release builds leave it unrecorded. Optional `brand.logo` and `brand.wordmark`
+reuse app images or a text wordmark with an asset font; the footer uses the gray
+Exact mark.
 Beside the pages, `/.exact/install.json` carries the same content as data (the
 app, its build, each platform's methods in order with labels resolved, and what
 it can reach), for a native client such as Exact2 Go to draw its own install

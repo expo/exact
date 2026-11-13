@@ -16,6 +16,7 @@ const SRC: &str = r#"
 shape Big
   text: string
 component App
+  resource held = holdObjects(0) as shape string
   resource atInit = atInit() as shape string
   resource large = large() as shape string
   resource collections = collections() as shape string
@@ -151,4 +152,34 @@ fn overlapping_large_replies_collect_once_none_is_pending() {
     };
     cleared(&mut m, &mut s);
     assert_eq!(cleared(&mut m, &mut s), "cleared");
+}
+
+#[test]
+#[cfg_attr(
+    not(exact_js_oom),
+    ignore = "requires an exception-on-OOM Hermes receipt"
+)]
+fn heap_oom_retires_the_runtime_and_the_next_request_succeeds() {
+    let mut m = module();
+    let mut s = Store::new(GRANTS, []);
+    let args = [Value::Number(100.)];
+    let mut reply = m.answer(&mut s, "holdObjects", &args);
+    for _ in 0..101 {
+        if !matches!(reply, Ok(Answer::Later(_))) {
+            break;
+        }
+        reply = m.parse(
+            &mut s,
+            "holdObjects",
+            &args,
+            exact_runner::Dispatch::again_outcome(),
+        );
+    }
+    let error = reply.expect_err("the retained objects exceed the heap");
+    assert!(
+        format!("{error:?}").contains("held more than the 64 MiB a data module's heap may hold"),
+        "{error:?}"
+    );
+    assert!(!m.is_loaded());
+    assert_eq!(state(&mut m, &mut s, "atInit"), "held");
 }

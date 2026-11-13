@@ -119,7 +119,7 @@ pub(super) fn acquire(
     }
     if readers
         .0
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_READERS).then_some(n + 1)
         })
         .is_err()
@@ -229,7 +229,7 @@ fn named(path: &str, e: ibex2::boundary::HostError) -> Outcome {
 /// A filesystem refusal of `path`, named by the option `what`.
 pub(super) fn named_as(what: &str, path: &str, e: ibex2::boundary::HostError) -> Outcome {
     match e {
-        // As `readFile`'s denial reads (js/src/prelude.js `deniedPath`).
+        // As `readFile`'s denial reads (js/src/storage.js `deniedPath`).
         ibex2::boundary::HostError::Denied { capability } => refused(format!(
             "{what} {path}: denied: {capability} {path}: no grant covers it; grant `{capability} {path}`"
         )),
@@ -332,7 +332,7 @@ pub(super) fn reader(
     use std::sync::atomic::Ordering;
     if READERS
         .0
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_READERS).then_some(n + 1)
         })
         .is_err()

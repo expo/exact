@@ -10,9 +10,46 @@ import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
 
 /** The hosts a `test`, `agent` or `verify` may name first. */
 const APP_HOSTS = ['web', 'ios', 'macos', 'mac', 'linux', 'windows', 'android'];
+/** app.json's text as JSON, a leading byte-order mark named with its fix (scripts/app.mjs `parseManifest`; this
+ * module keeps its own copy, since copied SDKs carry it alone). */
+export function parseManifest(text) {
+  if (text.charCodeAt(0) === 0xfeff) throw new Error('starts with a byte-order mark (U+FEFF), which JSON does not allow; save it as UTF-8 without a BOM');
+  return JSON.parse(text);
+}
 /** The host `verb` runs on, taken off `rest` when its first word names one (help's optional `[web|ios|…]`): a test
- *  file or an op written first stays where it is, and the run is the web's. */
-export const hostOf = (verb, rest) => ['test', 'agent', 'verify'].includes(verb) && APP_HOSTS.includes(rest[0]) ? rest.shift() : 'web';
+ *  file or an op written first stays where it is, and the run is on a host the app ships (`shippedHost`; null when
+ *  none drives here). */
+export const hostOf = (verb, rest, manifest = {}, os = process.platform) => ['test', 'agent', 'verify'].includes(verb) && APP_HOSTS.includes(rest[0]) ? rest.shift()
+  : ['test', 'agent', 'verify'].includes(verb) ? shippedHost(verb, manifest, os).host : 'web';
+
+/** The platforms other than the web that a verb drives, each with whether it drives on `os` and, when not, why:
+ *  `verify` has legs for three; `test` and `agent` drive every host the driver carries (scripts/agent.mjs). */
+const LEGS = {
+  ios: (os) => os === 'darwin' || 'its simulator needs macOS',
+  macos: (os, verb) => verb === 'verify' ? 'verify has no leg for it' : os === 'darwin' || 'it needs macOS',
+  windows: (os) => os === 'win32' || 'it runs on Windows',
+  // The driver opens the Linux host's binary as a Unix one (app.mjs `linuxBinary`): on macOS and Linux.
+  linux: (os, verb) => verb === 'verify' ? 'verify has no leg for it' : ['darwin', 'linux'].includes(os) || 'its headless host is driven on macOS and Linux',
+  android: () => true,
+};
+
+/** The host a `test`, `agent` or `verify` that names none runs on: the web when the manifest names it (`host.web`, a
+ *  web store or binary) or names no platform at all, as an app `exact new` made does; else the first platform the
+ *  manifest names (under `host`, `deploy.store` or `deploy.binaries`, as the build and deploy read them) that the verb
+ *  drives on `os`, this machine's own first. With none, `host` is null and `why` says so in a line: a web run would
+ *  check a host the app does not ship. */
+export function shippedHost(verb, manifest, os = process.platform) {
+  const named = new Set([manifest?.host, manifest?.deploy?.store, manifest?.deploy?.binaries].flatMap((table) => Object.keys(table ?? {})));
+  if (!named.size || named.has('web')) return { host: 'web' };
+  const own = { darwin: ['ios', 'macos'], win32: ['windows'], linux: ['linux'] }[os] ?? [];
+  const order = [...new Set([...own, 'ios', 'macos', 'windows', 'linux', 'android'])];
+  const leg = (p) => p in LEGS ? LEGS[p](os, verb) : `${verb} has no host for it`;
+  const host = order.find((p) => named.has(p) && leg(p) === true);
+  if (host) return { host };
+  const reasons = [...named].map((p) => `${p}: ${leg(p)}`).join('; ');
+  const then = verb === 'verify' ? 'so only the semantics check runs' : `so ${verb} runs nowhere unless named (\`${verb} web\` runs it on the web anyway)`;
+  return { host: null, why: `app.json names ${[...named].join(', ')} and not the web, and none drives here (${reasons}), ${then}` };
+}
 
 /** The compiler's warnings in what a build said (LLP 1116.004 D7), each once as `contract build` prints
  * it, `file:line:col warning [id] text`: the web compiler's or a bake's own line, Cargo's for a build
@@ -40,7 +77,7 @@ export function webBuildFailure(stderr) {
   // Keep TypeScript's lines (`app.ts(2,8): error TS…`), the shared ambient
   // check's file:line:col diagnostics, including paths with spaces, and its
   // refusals of package code (js/bake/src/typescript.mjs `capturedSources`).
-  const packageRefusal = (l) => / (?:imports Node's built-in|uses the DOM's|uses Node's|loads a module by a computed name|loads code from a string|uses the page's)|, (?:which is not installed|a native addon|which the checked capture did not resolve)|: not an npm package name and version| must be a constant the build reads without running|^(?:Error: )?two copies of |^(?:Error: )?package (?:declarations exceed|code exceeds) 64 MiB/.test(l);
+  const packageRefusal = (l) => / (?:requires peer|imports Node's built-in|uses the DOM's|uses Node's|loads a module by a computed name|loads code from a string|uses the page's)|, (?:which is not installed|a native addon|which the checked capture did not resolve)|: not an npm package name and version| must be a constant the build reads without running|^(?:Error: )?(?:package declarations: )?two copies of |^(?:Error: )?package (?:declarations exceed|code exceeds) 64 MiB/.test(l);
   const marker = /^(error|[A-Z]\w*Error|E[A-Z]+)\b:?/;
   const kept = (l) => marker.test(l.trim()) || /\): error TS\d+:|^(?:Error: )?(?:tsconfig: |module outside captured app: |source links are not captured: )|^note: /.test(l) || ambientDiagnostic(l) || packageRefusal(l) || /\bunoptimized$|\bnot on PATH\b|import\.meta\.env/.test(l);
   const message = [];
@@ -108,7 +145,7 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
     test: ['scripts/agent.mjs', host, '--app', name],
     agent: ['scripts/agent.mjs', host, '--app', name],
     // Builds itself, so not below (LLP 1116.004 D7): one report of the build, the tests and check.
-    ...game ? {} : { verify: ['scripts/verify.mjs', host, '--app', name] },
+    ...game ? {} : { verify: ['scripts/verify.mjs', ...(host ? [host] : []), '--app', name] },
     ios: ['host/apple/build.mjs', '--ios', `${name}-apple`, ...(os === 'linux' ? ['--no-install'] : [])],
     mac: ['host/apple/build.mjs', `${name}-apple`],
     // An iPhone build, uploaded to AppDrop: the link a person opens to install it.
@@ -197,21 +234,22 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     if (staged) { dir = staged.dir; args = [args[0], ...staged.args]; }
   }
   const [verb, ...rest] = args;
-  const host = hostOf(verb, rest);
-  const verbs = appVerbs(name, dir, { host, game });
   // The app's own verbs (paint, minesweeper, ledger: a regenerated file dropped the ones added to it): app.json's
   // `commands`, each a command as argv (`"seed": ["bun", "seed.mjs"]`), run in the app's directory with the
   // arguments after the verb. A game's app.json is optional.
   const manifest = resolve(dir, 'app.json');
   let declared = {};
-  try { if (existsSync(manifest)) declared = JSON.parse(readFileSync(manifest, 'utf8')); }
+  try { if (existsSync(manifest)) declared = parseManifest(readFileSync(manifest, 'utf8')); }
   catch (error) {
-    if (!reply) throw error;
     const message = `${manifest}: ${error.message}`;
+    if (!reply) throw new Error(message);
     console.error(message);
     reply({ code: 'app_json', error: message });
     return 1;
   }
+  // A game's hosts are its bake's (game/README.md): its drives stay the web's unless named.
+  const host = hostOf(verb, rest, game ? {} : declared);
+  const verbs = appVerbs(name, dir, { host, game });
   const own = declared.commands ?? {};
   const clash = Object.keys(own).find((name) => verbs[name]);
   if (clash) {
@@ -255,12 +293,30 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   const log = (exit) => { if (verb !== 'feedback') try {
     const commit = spawnSync('git', ['-C', exact2, 'rev-parse', '--short=9', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() || null;
     mkdirSync(resolve(dir, '.exact'), { recursive: true });
-    appendFileSync(resolve(dir, '.exact/commands.jsonl'), JSON.stringify({ at: new Date(started).toISOString(), exact2: commit, verb: ['test', 'agent', 'verify'].includes(verb) ? `${verb} ${host}` : verb, exit, ms: Date.now() - started }) + '\n');
+    appendFileSync(resolve(dir, '.exact/commands.jsonl'), JSON.stringify({ at: new Date(started).toISOString(), exact2: commit, verb: ['test', 'agent', 'verify'].includes(verb) ? `${verb} ${host ?? 'none'}` : verb, exit, ms: Date.now() - started }) + '\n');
   } catch {}
   if (feedback) try {
     for (const line of feedback.nudge(dir, { verb, host, exit, ms: Date.now() - started, args: rest, interrupted })) console.error(line);
   } catch {}
   return exit; };
+  // A drive with no host the app ships here runs nowhere, and says why (verify runs its semantics check alone).
+  if (host === null && verb !== 'verify') {
+    const { why } = shippedHost(verb, declared);
+    console.error(`${verb}: ${why}`);
+    reply?.({ code: 'platform_refused', error: why });
+    return log(2);
+  }
+  // A native build that failed under a cargo that is not rustup's (Homebrew's `rust`, ahead of ~/.cargo/bin) says so:
+  // that cargo ignores rust-toolchain.toml and builds with a rustc whose std has no iOS target (`cargoProxyFault`).
+  const native = ['ios', 'mac', 'linux', 'windows', 'android', 'share'].includes(verb) || (['test', 'agent', 'verify'].includes(verb) && host !== 'web');
+  const withCargoFault = async (exit) => {
+    if (exit && !interrupted && native) try {
+      const pin = Bun.TOML.parse(readFileSync(resolve(exact2, 'rust-toolchain.toml'), 'utf8')).toolchain.channel;
+      const fault = (await import(resolve(exact2, 'scripts/exact.mjs'))).cargoProxyFault(pin);
+      if (fault) console.error(`exact: ${fault}`);
+    } catch {}
+    return exit;
+  };
   // A build verb's `--json` (`reply`): one object on stdout, and the build's output on stderr. A failure is
   // `{code, error}`, as share's, with a non-zero status. It reports a finished artifact, so it takes no launch, no build
   // left running and no test run; and a flag the build's script refuses is refused before anything is built.
@@ -397,7 +453,7 @@ if (verb === 'contract') {
   if (backendFlag >= 0) {
     const value = rest[backendFlag + 1];
     if (!value || value.startsWith('--')) { console.error('--backend <url>: name the backend origin'); return log(2); }
-    process.env.EXACT_BACKEND_ORIGIN = value;
+    (await import('../js/bake/src/typescript.mjs')).selectBackendOrigin(value);
     rest.splice(backendFlag, 2);
   }
   // `--url` with a page served elsewhere drives that page; `--url /path` opens this app's build at a path, so it builds too.
@@ -439,7 +495,7 @@ if (verb === 'contract') {
     const built = drivesWeb ? await webBuildQuiet(spawned, [resolve(exact2, verbs['web-build'][0]), ...verbs['web-build'].slice(1)], dir)
       : await script(['scripts/agent-build.mjs', host, '--app', name], [], [0, 2, 2]);
     if (checked) { delete process.env.EXACT_BUILD_CHECK_OUT; try { process.env.EXACT_BUILD_CHECKED = readFileSync(checked, 'utf8'); rmSync(checked); } catch {} }
-    if (built) return log(built);
+    if (built) return log(await withCargoFault(built));
   }
   // A verb that builds, runs, compiles or checks the app prepares first (`beforeBuild`); a drive prepared above. An
   // app's own command keeps its name (a game's verify, an app's check) and prepares nothing.
@@ -473,7 +529,7 @@ if (verb === 'contract') {
   // and serve.mjs run alone keep LAN (LLP 1023 D8).
   if (verb === 'serve' && !rest.includes('--lan')) rest.push('--loopback');
   if (jsonBuilt) return log(await jsonBuild(spawned, [resolve(exact2, verbs[verb][0]), ...verbs[verb].slice(1), ...rest], verb, reply));
-  if (verb !== 'test') return log(await script(verbs[verb], rest));
+  if (verb !== 'test') return log(await withCargoFault(await script(verbs[verb], rest)));
   // An app with a server of its own (the rest pattern's) has it run for the tests, where app.ts calls it, on an empty
   // database kept through them: as verify runs it, by the same code (LLP 1116.007 D2).
   const { withAppServer } = await import(resolve(exact2, 'scripts/verify.mjs'));
@@ -483,7 +539,10 @@ if (verb === 'contract') {
     const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
     for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
       if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
-      failed = (await script(verbs.test, ['--test', file, ...rest])) || failed;
+      const code = await script(verbs.test, ['--test', file, ...rest]);
+      // A signal passed to this file's drive was a request to stop the run, not a failing test.
+      if (stopped) return code || 128 + (constants.signals[stopped] ?? 0);
+      failed = code || failed;
     }
     return failed;
   }, { verb: 'test', optional: true }));

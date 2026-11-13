@@ -313,6 +313,9 @@ pub fn media_accept(token: &str) -> bool {
 /// progress (`kernel/src/control.rs`). No host widens either itself.
 pub(crate) const FULL_WIDTH: &[(StyleId, &str)] = &[(StyleId::Width, "100%")];
 
+/// A `select` is no wider than what holds it (LLP 1115.000 D10.4).
+pub(crate) const CONTAINED: &[(StyleId, &str)] = &[(StyleId::MaxWidth, "100%")];
+
 /// The tag an `input` control lowers with (a `select` keeps its own).
 pub(crate) fn tag(kind: &str, t: Tag) -> Tag {
     match kind {
@@ -884,7 +887,22 @@ impl Lowerer<'_> {
         let labelled = attrs
             .iter()
             .any(|a| a.name == "aria-label" && !may_be_empty(&a.value));
-        let faces = face_counts(self, children)?;
+        // A tab that names its panel may hold its badge beside its face (LLP 1075.003 §9.9).
+        let panel_tab = attrs.iter().any(|a| a.name == "aria-controls")
+            && attrs
+                .iter()
+                .rev()
+                .find(|a| a.name == "role")
+                .and_then(|a| literals(&a.value))
+                .is_some_and(|roles| roles == ["tab"]);
+        if panel_tab && badges(children) > 1 {
+            return err(
+                "lower-button-style-attr",
+                "a tab shows one badge: a filled box holding one `text`; write a custom `button` for more",
+                span,
+            );
+        }
+        let faces = face_counts(self, children, panel_tab)?;
         if faces.contains(&(0, 0)) {
             return err(
                 "lower-button-content",
@@ -979,12 +997,44 @@ fn symbol_source(source: &Expr) -> bool {
     }
 }
 
+/// A tab's badge (LLP 1075.003 §9.9): a box, not a text, an image or a
+/// control, whose only child is one `text` with nothing inside it. It stands
+/// beside the tab's face: UIKit's tab bar item shows its text as the item's
+/// badge, and the web paints the box on the tab.
+pub(crate) fn is_badge(node: &contract_syntax::Node) -> bool {
+    use contract_syntax::Node;
+    let Node::Element { tag, children, .. } = node else {
+        return false;
+    };
+    !matches!(
+        tag.as_str(),
+        "text" | "image" | "button" | "link" | "input" | "select" | "textarea"
+    ) && matches!(children.as_slice(), [Node::Element { tag, children, .. }] if tag == "text" && children.is_empty())
+}
+
+/// The most badges any arm of `nodes` shows.
+fn badges(nodes: &[contract_syntax::Node]) -> usize {
+    use contract_syntax::Node;
+    nodes
+        .iter()
+        .map(|node| match node {
+            Node::When {
+                then, otherwise, ..
+            } => badges(then).max(badges(otherwise)),
+            Node::Match { some, none, .. } => badges(&some.1).max(badges(none)),
+            node => usize::from(is_badge(node)),
+        })
+        .sum()
+}
+
 /// Every face a native button's children can show, as (texts, images),
 /// saturated above two texts/one image; refusing what a face cannot hold (LLP 1069.011.001 D3, D12): repeated/arbitrary children and non-face
-/// rows, after each child's class merge.
+/// rows, after each child's class merge. A tab that names its panel
+/// (`badge`) may also hold a badge, which is no part of its face.
 fn face_counts(
     lower: &Lowerer<'_>,
     nodes: &[contract_syntax::Node],
+    badge: bool,
 ) -> Result<Vec<(u8, u8)>, LowerError> {
     use contract_syntax::Node;
     let mut faces = vec![(0u8, 0u8)];
@@ -1002,6 +1052,7 @@ fn face_counts(
     };
     for node in nodes {
         let here: Vec<(u8, u8)> = match node {
+            node if badge && is_badge(node) => vec![(0, 0)],
             Node::Element {
                 tag,
                 positional,
@@ -1115,8 +1166,8 @@ fn face_counts(
             Node::When {
                 then, otherwise, ..
             } => {
-                let mut out = face_counts(lower, then)?;
-                for f in face_counts(lower, otherwise)? {
+                let mut out = face_counts(lower, then, badge)?;
+                for f in face_counts(lower, otherwise, badge)? {
                     if !out.contains(&f) {
                         out.push(f);
                     }
@@ -1124,8 +1175,8 @@ fn face_counts(
                 out
             }
             Node::Match { some, none, .. } => {
-                let mut out = face_counts(lower, &some.1)?;
-                for f in face_counts(lower, none)? {
+                let mut out = face_counts(lower, &some.1, badge)?;
+                for f in face_counts(lower, none, badge)? {
                     if !out.contains(&f) {
                         out.push(f);
                     }

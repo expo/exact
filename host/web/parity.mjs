@@ -27,11 +27,12 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { decodePng } from '../../scripts/png.mjs';
 import { chromium } from '../../scripts/agent-launch.mjs';
+import { HOST_DEV } from '../../scripts/app.mjs';
 import { fileURLToPath } from 'node:url';
 
 const here = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const root = resolve(here, '../..');
-const run = (args) => spawnSync('cargo', ['run', '-q', '--release', '-p', 'exact-web', '--bin', 'parity', '--', ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1' } });
+const run = (args) => spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'exact-web', '--bin', 'parity', '--', ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1' } });
 
 // LLP 1063: these are recordings of one script, not a browser oracle. Boxes
 // use CSS pixels/points; 0.1 tolerates native layout rounding, opacity 0.005

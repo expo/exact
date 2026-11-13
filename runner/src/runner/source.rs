@@ -663,6 +663,26 @@ data_source! {
         Vec::new()
     }
 
+    /// Resume one untargeted tool invocation by the request the runner holds.
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let _ = (fetch, continuation);
+        self.parse(store, source, args, outcome)
+    }
+
+    /// The module owning `source`; an empty name selects background work.
+    fn module_identity(&self, source: &str) -> Option<super::ModuleIdentity> {
+        let _ = source;
+        None
+    }
+
     /// The host's wake, for a source that hears an abort off the host's
     /// thread (a worker's let-go): it calls `wake` after it has one to take.
     fn abort_wake(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
@@ -798,6 +818,11 @@ data_source! {
     /// and on a device grants nothing.
     fn grants(&self) -> &str {
         ""
+    }
+
+    /// Optional binary-bound Rust entry point, without activating this source (LLP 1162.000 D2).
+    fn launch(&self) -> Option<crate::request::Launch> {
+        None
     }
 
     /// Checked process-start definitions, without activating this source (LLP 1162.000 D2).
@@ -987,8 +1012,12 @@ pub enum DataError {
     UnknownSource(String),
     BadArguments(String),
     Unavailable(String),
-    /// Build-time storage cannot answer; use the resource placeholder until activation.
-    DeferredAtBake(String),
+    /// A build-time call cannot answer; use the resource placeholder until activation.
+    DeferredAtBake {
+        message: String,
+        /// An invalid option needs a build warning; ordinary deferral does not.
+        warning: bool,
+    },
     /// The seam to a loaded Rust module could not carry the call (an
     /// answer over its bound, a trap): the source is there but cannot
     /// answer now. A resource asked this fails; it does not refuse the
@@ -1015,7 +1044,9 @@ impl std::fmt::Display for DataError {
             Self::UnknownSource(name) => write!(f, "unknown source: {name}"),
             Self::BadArguments(reason)
             | Self::Unavailable(reason)
-            | Self::DeferredAtBake(reason)
+            | Self::DeferredAtBake {
+                message: reason, ..
+            }
             | Self::Interface(reason)
             | Self::Overrun(reason)
             | Self::Failed(_, reason, _) => f.write_str(reason),

@@ -118,3 +118,24 @@ test('a project reached through a linked directory imports its other file beside
     expect(transform(resolve(link, 'shapes.contract'), shapes, { contract: bin }).diagnostics).toEqual([]);
   } finally { rmSync(link, { force: true }); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a file an app uses has the errors of the text the editor holds, not of the file as saved', async () => {
+  const bin = process.env.EXACT_CONTRACT ?? resolve(root, 'target/debug/contract');
+  if (!existsSync(bin)) { console.log('skipped: no contract binary'); return; }
+  const { transform } = await import('./mapper.js');
+  const dir = mkdtempSync(resolve(root, 'target/content-mapper-test-'));
+  const row = 'component Row\n  props\n    label: string\n  view\n    text label\n', broken = row.replace('text label', '\n    text nope');
+  writeFileSync(resolve(dir, 'row.contract'), row);
+  writeFileSync(resolve(dir, 'app.contract'), 'use Row from "./row.contract"\ncomponent App\n  view\n    Row(label="a")\n');
+  try {
+    const f = resolve(dir, 'row.contract'), errors = text => transform(f, text, { contract: bin }).diagnostics;
+    expect(errors(row)).toEqual([]);
+    // An unsaved error is shown at its place in the buffer, a line below where the saved text has that word.
+    const [unsaved] = errors(broken);
+    expect(unsaved.messageText).toContain('nope');
+    expect(broken.slice(unsaved.start, unsaved.start + unsaved.length)).toBe('nope');
+    // And an unsaved repair of a file saved with an error has none.
+    writeFileSync(f, broken);
+    expect(errors(row)).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

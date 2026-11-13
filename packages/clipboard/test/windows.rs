@@ -123,7 +123,7 @@ fn path_image_and_text_land_together_and_failed_preparation_leaves_them() {
 
 #[test]
 fn composed_package_dispatches_calls_and_refuses_non_app_origins() {
-    use exact_linux::{package::Entry, presenter::PainterChoice, Presenter};
+    use exact_painted::{package::Entry, presenter::PainterChoice, Presenter};
     let plan = contract::compile("component App\n  view\n    text \"Clipboard\"\n")
         .unwrap()
         .encode();
@@ -259,7 +259,7 @@ component App
     )
     .unwrap()
     .encode();
-    let mut config = exact_linux::app::Config::from_env(&plan, "{}");
+    let mut config = exact_painted::app::Config::from_env(&plan, "{}");
     assert!(config.agent);
     assert!(!config.windowed());
     assert_eq!(

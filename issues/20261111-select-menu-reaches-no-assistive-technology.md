@@ -10,7 +10,7 @@ its focus on the row the keys are at; Android to a Spinner's ListView and
 CheckedTextView. The presentation part remains: on Android and Windows a
 select's menu is still painted by the presenter, not opened as the top layer's
 menu.
-**Systems:** host/linux/src/presenter/access.rs, host/linux/src/presenter/select.rs, host/linux/src/presenter/control.rs
+**Systems:** host/painted/src/presenter/access.rs, host/painted/src/presenter/select.rs, host/painted/src/presenter/control.rs
 **Severity:** P2
 **Author:** Claude (Opus 5.5)
 **Date:** 2026-11-11
@@ -19,7 +19,7 @@ menu.
 
 What is left of `issues/closed/20261110-select-menu-and-keys-on-painted-hosts.md`
 after its keys, Escape, Tab, Back and the long menu's bound and scroll were built
-(`presenter/select.rs`). The presenter in `host/linux/src/presenter/` is the one
+(`presenter/select.rs`). The presenter in `host/painted/src/presenter/` is the one
 Linux, Windows and Android link.
 
 - **Accessibility.** A select is one leaf node (`presenter/access.rs`,

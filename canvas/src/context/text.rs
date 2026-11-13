@@ -4,28 +4,37 @@
 //! `maxWidth` are resolved here, so the list carries a run's left end on its
 //! alphabetic baseline and its squeeze.
 
-use super::{Context2d, DomException, Inner};
+use super::{Context2d, DomException, Inner, Spacing};
 use crate::font::{self, Estimate, Font, RawMetrics, TextMetrics, TextRun};
 use crate::list::{text_operands, Op};
 use std::sync::Arc;
 
-/// `letterSpacing`/`wordSpacing` in px: a CSS length with a unit (Chrome
-/// refuses a bare `0` and percentages); `em` is the current font's size.
-fn spacing(v: &str, font_size: f64) -> Option<(String, f64)> {
+/// `letterSpacing`/`wordSpacing`: a CSS length with a unit (Chrome refuses a
+/// bare `0` and percentages). `em`, `ex` and `ch` follow the font in force;
+/// `ex` and `ch` are half an em, CSS's value where the font's own x-height
+/// and `0` advance are not measured (CSS Values 4 §6.1.1).
+fn spacing(v: &str) -> Option<Spacing> {
     let t = v.trim().to_ascii_lowercase();
     let (n, unit) = t
         .find(|c: char| c.is_ascii_alphabetic())
         .map(|i| t.split_at(i))?;
-    let px = if unit == "em" {
-        exact_num::parse_f64(n).ok().map(|v| v * font_size)
-    } else {
-        font::length_px(&t, false)
-    }?;
-    if !px.is_finite() || n.is_empty() {
+    if n.is_empty() {
         return None;
     }
     let value = exact_num::parse_f64(n).ok()?;
-    Some((format!("{}{unit}", exact_num::js(value)), px))
+    let (px, em) = match unit {
+        "em" => (0.0, value),
+        "ex" | "ch" => (0.0, value / 2.0),
+        _ => (font::length_px(&t, false)?, 0.0),
+    };
+    if !px.is_finite() || !em.is_finite() {
+        return None;
+    }
+    Some(Spacing {
+        text: format!("{}{unit}", exact_num::js(value)),
+        px,
+        em,
+    })
 }
 
 impl Inner {
@@ -43,8 +52,8 @@ impl Inner {
             font: &t.font,
             text,
             rtl: self.rtl(),
-            letter_spacing: t.letter_spacing.1,
-            word_spacing: t.word_spacing.1,
+            letter_spacing: t.letter_spacing.used(t.font.size),
+            word_spacing: t.word_spacing.used(t.font.size),
             kerning: t.kerning,
         };
         match &self.env.text {
@@ -66,8 +75,8 @@ impl Inner {
             f.caps as f64,
             t.kerning as f64,
             t.rendering as f64,
-            t.letter_spacing.1,
-            t.word_spacing.1,
+            t.letter_spacing.used(f.size),
+            t.word_spacing.used(f.size),
         ];
         text_operands(&f.family_list(), &mut rec);
         if self.state.font_sent.as_deref() != Some(&rec[..]) {
@@ -209,27 +218,27 @@ impl Context2d {
     /// `letterSpacing = v`: a CSS length; anything else ignored.
     pub fn set_letter_spacing(&self, v: &str) {
         let mut g = self.g();
-        if let Some(s) = spacing(v, g.state.text.font.size) {
+        if let Some(s) = spacing(v) {
             g.state.text.letter_spacing = s;
         }
     }
 
     /// `letterSpacing`.
     pub fn letter_spacing(&self) -> String {
-        self.g().state.text.letter_spacing.0.clone()
+        self.g().state.text.letter_spacing.text.clone()
     }
 
     /// `wordSpacing = v`: a CSS length; anything else ignored.
     pub fn set_word_spacing(&self, v: &str) {
         let mut g = self.g();
-        if let Some(s) = spacing(v, g.state.text.font.size) {
+        if let Some(s) = spacing(v) {
             g.state.text.word_spacing = s;
         }
     }
 
     /// `wordSpacing`.
     pub fn word_spacing(&self) -> String {
-        self.g().state.text.word_spacing.0.clone()
+        self.g().state.text.word_spacing.text.clone()
     }
 
     /// `fillText(text, x, y)`.

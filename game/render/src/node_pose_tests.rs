@@ -104,7 +104,7 @@ fn clip_then_ik_then_offset_palettes_and_socket_match_at_all_alphas() {
     let (mut skin, uniform) = setup_skin(&gpu, &model, e);
     skin.feed(&gpu.queue, sim.world(), &[e], true);
     let mut attachments = crate::world::scene::Attachments::default();
-    attachments.feed(sim.world(), true, true, false, false);
+    attachments.feed(sim.world(), true, true, None, false);
     sim.run(17.);
     // The base endpoints are sampled clips followed by the real two-bone solver.
     let rest = animation::bind_pose(&model);
@@ -132,7 +132,7 @@ fn clip_then_ik_then_offset_palettes_and_socket_match_at_all_alphas() {
     assert_eq!(skin.records.len(), 1, "three jobs share one instance span");
     assert_eq!(skin.pose_words.len(), model.nodes.len() * 20);
     assert!(skin.jobs_words.chunks_exact(4).all(|j| j[1] == 0));
-    attachments.feed(sim.world(), false, true, false, false);
+    attachments.feed(sim.world(), false, true, None, false);
     for alpha in [0., 0.5, 1.] {
         let mut frame = [0.; 20];
         frame[19] = alpha;
@@ -277,7 +277,7 @@ fn pack_primes_first_pose_birth_teleport_generation_replacement_and_lod() {
     skin.pack(sim.world(), &[e], false);
     primed(&skin);
     let mut attachments = crate::world::scene::Attachments::default();
-    attachments.feed(sim.world(), true, true, false, false);
+    attachments.feed(sim.world(), true, true, None, false);
     attachments.frame(0.5);
     let charm = sim.world().named("charm").unwrap();
     close(
@@ -296,7 +296,7 @@ fn pack_primes_first_pose_birth_teleport_generation_replacement_and_lod() {
     sim.world_mut().insert(e, pose);
     skin.pack(sim.world(), &[e], false);
     primed(&skin);
-    attachments.feed(sim.world(), false, false, false, false);
+    attachments.feed(sim.world(), false, false, None, false);
     attachments.frame(0.5);
     close(
         attachments
@@ -311,7 +311,7 @@ fn pack_primes_first_pose_birth_teleport_generation_replacement_and_lod() {
     skin.pack(sim.world(), &[e], false);
     assert_eq!(skin.pose_words[0], 3., "retain the first-pose prime");
     assert_eq!(skin.pose_words[len], 4.);
-    attachments.feed(sim.world(), false, false, false, false);
+    attachments.feed(sim.world(), false, false, None, false);
     attachments.frame(0.5);
     let mut midpoint = skin.pose_words[len..].to_vec();
     midpoint[0] = 3.5;
@@ -466,7 +466,7 @@ fn overflowing_either_endpoint_draws_both_base_endpoints_in_spans_and_sockets() 
     let (mut skin, _) = setup_skin(&gpu, &model, e);
     skin.feed(&gpu.queue, sim.world(), &[e], true);
     let mut attachments = crate::world::scene::Attachments::default();
-    attachments.feed(sim.world(), true, true, false, false);
+    attachments.feed(sim.world(), true, true, None, false);
     sim.run(17.);
     let mut current = base.clone();
     current[17] = 2.;
@@ -477,7 +477,7 @@ fn overflowing_either_endpoint_draws_both_base_endpoints_in_spans_and_sockets() 
     sim.world_mut().get_mut::<Gait>(e).unwrap().overflow = true;
     sim.run(0.);
     skin.feed(&gpu.queue, sim.world(), &[e], false);
-    attachments.feed(sim.world(), false, true, false, false);
+    attachments.feed(sim.world(), false, true, None, false);
     let len = base.len();
     assert_eq!(&skin.pose_words[10..20], &base[10..20]);
     assert_eq!(&skin.pose_words[len + 10..len + 20], &current[10..20]);

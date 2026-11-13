@@ -130,7 +130,10 @@ final class CanvasInputHost {
         return root.hitTest(root.superview?.convert(windowPoint(event, view), from: nil) ?? windowPoint(event, view)) === view
     }
     func pointer(_ event: NSEvent, phase: String) -> Bool {
-        guard let view, !view.disabled, !view.inert else { return false }
+        // A disabled or inert canvas takes no new input, but a held button's
+        // release still reaches it: the surface holds nothing, and the next
+        // press is a press, not a move.
+        guard let view, phase == "up" || (!view.disabled && !view.inert) else { return false }
         // The event's type names left and right; an event made with
         // NSEvent.mouseEvent (the agent's) carries buttonNumber 0 for both.
         let bit = [.leftMouseDown, .leftMouseUp, .leftMouseDragged].contains(event.type) ? 1

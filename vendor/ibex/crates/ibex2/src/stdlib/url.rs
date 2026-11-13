@@ -204,10 +204,11 @@ pub struct SearchParams {
 }
 
 impl SearchParams {
-    /// Parse from a query string, with or without a leading `?`.
+    /// Parse query data, without its `?` delimiter: the constructor removes
+    /// one leading `?` before parsing and a URL's query excludes it, so a `?`
+    /// here begins a name (URL Standard, "URLSearchParams constructor").
     pub fn parse(input: &str) -> Self {
-        let trimmed = input.strip_prefix('?').unwrap_or(input);
-        let pairs = form_urlencoded::parse(trimmed.as_bytes())
+        let pairs = form_urlencoded::parse(input.as_bytes())
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         Self { pairs }
@@ -396,7 +397,7 @@ mod tests {
 
     #[test]
     fn search_params_keep_order_and_duplicates() {
-        let params = SearchParams::parse("?a=1&b=2&a=3");
+        let params = SearchParams::parse("a=1&b=2&a=3");
         assert_eq!(params.get("a"), Some("1"));
         assert_eq!(params.get_all("a"), vec!["1", "3"]);
         assert_eq!(params.len(), 3);
@@ -483,7 +484,7 @@ mod tests {
 
     #[test]
     fn search_params_sort_delete_pair_and_json() {
-        let mut p = SearchParams::parse("?b=2&a=1&a=3&\"q\"=x\ty");
+        let mut p = SearchParams::parse("b=2&a=1&a=3&\"q\"=x\ty");
         p.sort();
         assert_eq!(p.to_query_string(), "%22q%22=x%09y&a=1&a=3&b=2");
         assert!(p.has_pair("a", "3") && !p.has_pair("a", "2"));
@@ -493,5 +494,15 @@ mod tests {
             p.entries_json(),
             r#"[["\"q\"","x\ty"],["a","3"],["b","2"]]"#
         );
+    }
+
+    #[test]
+    fn a_leading_question_mark_in_query_data_begins_a_name() {
+        let mut p = SearchParams::parse("?a=1&b=2");
+        assert_eq!(p.get("?a"), Some("1"));
+        assert!(!p.has("a"));
+        p.set("b", "3");
+        assert_eq!(p.to_query_string(), "%3Fa=1&b=3");
+        assert_eq!(SearchParams::parse("%3Fa=1").get("?a"), Some("1"));
     }
 }

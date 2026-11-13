@@ -52,7 +52,7 @@ pub use markup::dataset;
 use markup::{markup_pieces, Json};
 pub use page::{
     build_locations, canonical_location, checkpoint, digest, read_checkpoint, route_at,
-    route_location, Site,
+    route_location, route_title, Site,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -75,6 +75,8 @@ pub struct Document {
     /// The active head's fields: the page's `<head>` (LLP 1048.003 D1). A
     /// head node has no element in the root.
     pub head: exact_runner::Head,
+    /// The selected route's header heading (LLP 1115.000 D4.1).
+    pub route_title: Option<String>,
     /// Every `@keyframes` rule an element's `animation` names, once each
     /// (LLP 1055 D7), for the head: a reader without JavaScript sees it play.
     pub keyframes: String,
@@ -83,6 +85,9 @@ pub struct Document {
     pub scroll_document: bool,
     /// The first shown, eager image, preloaded on JavaScript pages (LLP 1048.007 D5).
     pub hero_image: Option<HeroImage>,
+    /// The views whose elements carry `data-exact-on`, in document order: a
+    /// boot document's swap moves a queued event by them (LLP 1048.005).
+    pub controls: Vec<ViewId>,
 }
 
 /// The image selected for a JavaScript page's preload and fetch priority.
@@ -155,8 +160,9 @@ pub trait Source {
     /// The element an SVG reference from `from` names.
     fn resolve(&self, from: ViewId, id: &str) -> Option<ViewId>;
     /// `style`, node `id`'s, with the weight and leading a text style named
-    /// on it gives the wasm host (LLP 1115.000 D12.2). JavaScript's fills
-    /// are written from the node's facts instead.
+    /// on it gives the wasm host (LLP 1115.000 D12.2), and its animation row
+    /// held for a prefetched row (LLP 1055 D13). JavaScript's fills and holds
+    /// are applied when it adopts the document.
     fn with_style_rows<'s>(
         &self,
         _id: ViewId,
@@ -196,7 +202,10 @@ impl Source for KernelSource<'_> {
         style: Cow<'s, exact_kernel::StyleProps>,
     ) -> Cow<'s, exact_kernel::StyleProps> {
         match self.kernel.node(id) {
-            Some(node) if self.bare => super::element::with_style_rows(style, &node),
+            Some(node) if self.bare => super::element::with_style_rows(
+                super::element::animation_style(self.kernel, &node, style),
+                &node,
+            ),
             _ => style,
         }
     }
@@ -258,7 +267,7 @@ pub fn project_tree<D: DataSource>(
             .and_then(|n| n.site)
             .is_some_and(|site| exact_runner::rows::repeated(runner.plan(), site))
     };
-    let (out, keyframes, scroll_document, _, sent, hero_image) = write(
+    let (out, keyframes, scroll_document, _, sent, hero_image, controls) = write(
         tree,
         tree.roots(),
         handlers,
@@ -274,10 +283,12 @@ pub fn project_tree<D: DataSource>(
         viewport_fit: first_prop(tree, tree.roots(), PropId::ViewportFit),
         interactive_widget: first_prop(tree, tree.roots(), PropId::InteractiveWidget),
         head: tree.head(),
+        route_title: page::route_title(tree, tree.roots()),
         keyframes,
         scroll_document,
         hero_image,
         root: out,
+        controls,
     };
     Ok((document, sent))
 }
@@ -344,7 +355,7 @@ fn walk<D: DataSource>(
             .site_of(id)
             .is_some_and(|(site, _)| exact_runner::rows::repeated(runner.plan(), site))
     };
-    let (out, keyframes, scroll_document, computed, _, hero_image) = write(
+    let (out, keyframes, scroll_document, computed, _, hero_image, controls) = write(
         &src,
         &roots,
         handlers,
@@ -364,16 +375,18 @@ fn walk<D: DataSource>(
         viewport_fit: first_prop(&src, &roots, PropId::ViewportFit),
         interactive_widget: first_prop(&src, &roots, PropId::InteractiveWidget),
         head: runner.head(),
+        route_title: page::route_title(&src, &roots),
         keyframes,
         scroll_document,
         hero_image,
+        controls,
     };
     Ok((document, computed))
 }
 
 /// The roots' elements; the `@keyframes`, whether an element is the page's
-/// scroller, what was computed, and what of the HTML the sink has not been
-/// handed yet.
+/// scroller, what was computed, what of the HTML the sink has not been
+/// handed yet, and [`Document::controls`].
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn write<S: Source>(
     src: &S,
@@ -392,6 +405,7 @@ fn write<S: Source>(
         Option<Computed>,
         String,
         Option<HeroImage>,
+        Vec<ViewId>,
     ),
     DocumentError,
 > {
@@ -423,6 +437,7 @@ fn write<S: Source>(
         style: writing.style,
         sink: writing.sink,
         sent: 0,
+        controls: Vec::new(),
     };
     for root in roots {
         walk.element(*root, None, 16., false)?;
@@ -438,6 +453,7 @@ fn write<S: Source>(
             src,
             priority_at: walk.image_priority_at,
         }),
+        walk.controls,
     ))
 }
 
@@ -662,6 +678,8 @@ struct Walk<'r, 'w, S: Source> {
     /// [`Writing::sink`], and how much of `out` it has been handed.
     sink: Option<&'w mut dyn FnMut(&str)>,
     sent: usize,
+    /// [`Document::controls`].
+    controls: Vec<ViewId>,
 }
 
 impl<S: Source> Walk<'_, '_, S> {
@@ -924,6 +942,7 @@ impl<S: Source> Walk<'_, '_, S> {
         // focus, blur or keys and is not one already.
         attrs.push(("data-view".into(), Some(id.to_string())));
         if let Some(kinds) = self.handlers.get(&id).filter(|kinds| !kinds.is_empty()) {
+            self.controls.push(id);
             attrs.push((
                 "data-exact-on".into(),
                 Some({

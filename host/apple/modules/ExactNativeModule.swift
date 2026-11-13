@@ -324,8 +324,8 @@ open class ExactModule {
     /// already built). Set `showsBar` here; the bar's look is the app's.
     open func navigation(_ navigation: ExactNavigation) {}
     /// A route: when its controller is built (`route.isNew`), and again
-    /// whenever its `data-*` words or the header Exact projects change, each
-    /// time before the frame that shows it. Its `navigationItem` is the
+    /// whenever its `data-*` words, the header Exact projects or its content
+    /// scroll view change, each time before the frame that shows it. Its `navigationItem` is the
     /// app's, over the defaults Exact projects from an authored header.
     open func route(_ route: ExactRoute) {}
     /// A route's controller is leaving for good; its handle does nothing
@@ -734,10 +734,15 @@ public final class ExactRoute {
     public internal(set) var navigation: ExactNavigation?
     /// The route node's `data-*` words.
     public internal(set) var data: ExactData
-    /// The route's content scroll view: its native top-edge selection, else the one named
-    /// by `navigationScroll` or its first vertical scroller. Select with UIKit's
-    /// `controller.setContentScrollView(_:for:)`; nil for the top edge makes it that scroller
-    /// again, as UIKit's nil makes an edge automatic.
+    /// The route's content scroll view when the hatch was last called: the app's top-edge
+    /// selection; else, where the route has a `navigationScroll`, the scroll view of the element
+    /// it names, or nil when no element carries the name or it does not scroll; else the scroll
+    /// view of the route's first vertical scroller; else the route's own viewport, which only an
+    /// unpresented route under `interactive-widget="resizes-visual"` has; else nil. A top-edge
+    /// selection or nil made with UIKit's `controller.setContentScrollView(_:for:)` reaches it
+    /// when Exact next prepares the route, at the next authored update (after a nil, possibly
+    /// within the call), and the hatch is called again then; nil makes the edge automatic, as
+    /// in UIKit.
     /// An authored scroller's offset, insets, size and delegate remain Exact's.
     public internal(set) weak var contentScrollView: UIScrollView?
     /// Whether this call is the controller's first.

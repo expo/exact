@@ -28,6 +28,7 @@ mod lines;
 mod messages;
 pub(crate) use messages::folds;
 mod native;
+pub(crate) mod shadow;
 mod title;
 mod value;
 
@@ -67,7 +68,7 @@ const SUBHEADLINE: &str = "-exact-subheadline";
 
 use crate::metrics::grouped as metric;
 use actions::{action_cell, disclosure};
-use lines::{stack_lines, stack_of_lines, subtitle};
+use lines::{stack_lines, stack_of_lines};
 use title::{title_button, title_face};
 
 /// The style a grouped list's attributes ask for: `None` for any other
@@ -506,6 +507,15 @@ fn section(
     // is the space above and below it and whether it shows; its text styles
     // reach the rows as they do in any box.
     let classed = class(attrs)?.map(|(_, rows)| rows).unwrap_or_default();
+    let authored: Vec<_> = classed.iter().chain(attrs).cloned().collect();
+    let shadows: Vec<_> = authored.iter().filter(|a| shadow::is_shadow(a)).collect();
+    if cardless && !shadows.is_empty() {
+        return err(
+            "lower-grouped-list",
+            "a section without its card takes no `box-shadow`: the shadow belongs to the card",
+            shadows[0].span,
+        );
+    }
     let drawn = |a: &Attr, row: &StyleId| match row {
         StyleId::MarginTop | StyleId::MarginBottom => true,
         StyleId::Display => shown_or_hidden(&a.value),
@@ -529,8 +539,16 @@ fn section(
         attrs
             .iter()
             .filter(|a| a.name != "background-color")
-            .cloned(),
+            .filter(|a| !shadow::moves_to_card(a))
+            .map(|a| {
+                if !shadows.is_empty() && a.name == "transition" {
+                    shadow::transition(a, false)
+                } else {
+                    a.clone()
+                }
+            }),
     );
+    sheet.push(shadow::mark(false, span));
     let label = |node: &Node, footer: bool| -> Node {
         let Node::Element {
             tag,
@@ -582,8 +600,7 @@ fn section(
             instance: *instance,
         }
     };
-    // A plain list has no card: its rows are the list's own ground, as
-    // UIKit's plain cells and an AppKit table's rows are, not a lighter fill.
+    // Plain rows use the list's ground, as UIKit's plain cells and AppKit's table rows do.
     let mut group = vec![if cardless {
         s("background-color", "transparent", span)
     } else if style == "plain" {
@@ -635,9 +652,14 @@ fn section(
         group.push(m("row-gap", "separator-gap", span));
     }
     group.push(s("overflow", "hidden", span));
+    // The card casts the shadow; the section also contains its header and footer.
+    if !shadows.is_empty() {
+        group.extend(shadow::card(attrs, &authored));
+        group.push(shadow::mark(true, span));
+    }
     let mut styled = |n: &Node| {
         Ok(swipe_rows::grouped(n, &|n, swiped| {
-            row(n, !cardless, swiped)
+            row(n, !cardless, swiped, class)
         }))
     };
     let body = rows
@@ -819,14 +841,14 @@ fn s_val(value: &str, span: Span) -> Expr {
 /// carries as a custom row.
 /// A grouped list's row: the sheet's rows, without the look of an element
 /// that yields it to the row (`row_look`).
-pub(crate) fn row(node: &Node, separated: bool, swiped: bool) -> Node {
+pub(crate) fn row(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     match crate::row_look::yielded(node) {
-        Some(own) => styled(&own, separated, swiped),
-        None => styled(node, separated, swiped),
+        Some(own) => styled(&own, separated, swiped, class),
+        None => styled(node, separated, swiped, class),
     }
 }
 
-fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
+fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     let Node::Element {
         tag,
         attrs,
@@ -1075,6 +1097,8 @@ fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
             i,
             last,
             stack,
+            row_attrs: attrs,
+            class,
             lines,
             field,
             titled: titled == Some(k),
@@ -1118,6 +1142,8 @@ struct Place<'a> {
     last: usize,
     /// Whether a `column` here is the row's text stack (`text_stack`).
     stack: bool,
+    row_attrs: &'a [Attr],
+    class: ClassRows<'a>,
     /// Whether a stack of lines here takes the cell's margins (`stacks`).
     lines: bool,
     /// The field beside the row's label, if it is such a row.
@@ -1152,6 +1178,8 @@ fn part(child: &Node, at: Place<'_>, texts: &mut Count) -> Node {
         i,
         last,
         stack,
+        row_attrs,
+        class,
         lines,
         field,
         titled,
@@ -1367,7 +1395,7 @@ fn part(child: &Node, at: Place<'_>, texts: &mut Count) -> Node {
                 vec![n("min-width", 0.0, at)],
             )
         }
-        ("column", _) if stack => subtitle(child),
+        ("column", _) if stack => cell::column(child, row_attrs, class),
         // A column around the title's one text is the title, as a stack of
         // lines is: a text after it is the value at the far edge, not a
         // second title sharing the row's room (grocery-list's quantity

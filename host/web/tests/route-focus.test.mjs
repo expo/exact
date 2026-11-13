@@ -40,6 +40,7 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
           <button id="row-far" data-exact-router-press="true" style="height:60px">Far</button>
         </div>
         <div id="menu" role="menu" popover="auto"><button id="m-1">Open</button><button id="m-2" disabled>Share</button><a id="m-3" href="#x">Copy</a><button id="m-4">Remove</button></div>
+        <button id="menu-open" popovertarget="menu">Actions</button>
         <div id="chooser" role="alertdialog" aria-label="Open in" popover="auto"><button id="c-1" data-exact-on="press">Maps</button><button id="c-2" data-exact-on="press">Google Maps</button><button id="c-cancel">Cancel</button></div>
         <div id="bar-menu" role="menu" popover="auto"><button id="b-1">Bump</button><button id="b-open-in" popovertarget="chooser" popovertargetaction="show">Open in…</button></div>
         <button id="chooser-open" popovertarget="chooser">Open in</button>
@@ -99,7 +100,7 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 async function serve() {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    const file = ['navigation.js', 'input-glue.js', 'agent-input.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
+    const file = ['navigation.js', 'input-glue.js', 'menu-rows.js', 'agent-input.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
     if (!file) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, file)));
   });
@@ -144,6 +145,20 @@ async function inChrome(test, width = 600, motion = false) {
 }
 const enter = (key) => key('Enter', 'Enter', 13, '\r');
 
+check('an ArrowDown handler can push a ringed route before any pointer input', () => inChrome(async (evaluate, press, key) => {
+  await evaluate(`document.addEventListener('keydown', e => { if (e.key === 'ArrowDown') push('key', '/key'); }, { once: true })`);
+  await key('ArrowDown', 'ArrowDown', 40);
+  expect(await evaluate('focus().slice(0, 2)')).toEqual(['title-key', true]);
+}));
+
+check('a pointer route arrival clears the unchanged openers keyboard ring', () => inChrome(async (evaluate, press, key) => {
+  await evaluate(`document.getElementById('row-1').focus()`);
+  await key('Shift', 'ShiftLeft', 16);
+  expect(await evaluate('focus().slice(0, 2)')).toEqual(['row-1', true]);
+  await press('row-1');
+  expect(await evaluate('focus().slice(0, 2)')).toEqual(['title-1', false]);
+}));
+
 check('a route the app pushes before any press takes the focus with no ring', () => inChrome(async (evaluate, press, key) => {
   // A channel an app reopens as it starts (Excord's resume): the heading has the focus, as after any push, and the
   // browser draws no ring, which a script's focus on a page no one has touched would otherwise get.
@@ -172,8 +187,7 @@ check('on a push the focus moves to the new route\'s heading, and on Back to the
   await enter(key);
   expect(await evaluate('focus()')).toEqual(['title-2', true, 0, 0]);
   expect(await evaluate('pop(); focus()')).toEqual(['row-2', true, 0, 0]);
-  // And a pointer's press on it: no ring, and Back returns to the link. (Clicked while it still showed the key's
-  // ring, the heading would show one too: the browser hands a script's focus the ring its last focus had.)
+  // A pointer's press opens the route without a ring, and Back returns to the link.
   await evaluate('document.activeElement.blur()');
   await press('row-2');
   expect(await evaluate('focus()')).toEqual(['title-2', false, 0, 0]);
@@ -278,6 +292,19 @@ check('a modal route is a dialog to assistive technology: the focus moves in, an
   // A route that is no longer modal is no longer a dialog, and a pushed route never was.
   expect(await evaluate(`document.getElementById('route-bare').removeAttribute('navigationPresentation'); show(); ${sheet('bare')}`)).toEqual([null, null, null, null]);
   expect(await evaluate(`pop(); push('1', '/item/1'); ${sheet('1')}`)).toEqual([null, null, null, null]);
+}), 60000);
+
+check('a keyboard-opened menu focuses its first usable item and Escape restores its opener', () => inChrome(async (evaluate, press, key) => {
+  await evaluate(`import('./menu-rows.js').then(() => exact.menuRows())`);
+  await evaluate(`document.getElementById('menu').prepend(Object.assign(document.createElement('button'), { disabled: true, textContent: 'Unavailable' })); document.getElementById('menu-open').focus()`);
+  await enter(key);
+  await evaluate(`new Promise(resolve => document.getElementById('menu').matches(':popover-open') && document.activeElement.id === 'm-1' ? resolve() : document.getElementById('menu').addEventListener('toggle', resolve, { once: true }))`);
+  expect(await evaluate('focus()[0]')).toBe('m-1');
+  await key('ArrowDown', 'ArrowDown', 40);
+  expect(await evaluate('focus()[0]')).toBe('m-3');
+  await key('Escape', 'Escape', 27);
+  await evaluate('new Promise(requestAnimationFrame)');
+  expect(await evaluate(`[focus()[0], document.getElementById('menu').matches(':popover-open')]`)).toEqual(['menu-open', false]);
 }), 60000);
 
 check('a tablist\'s tabs and a menu\'s items move by the arrow keys', () => inChrome(async (evaluate, press, key, move) => {

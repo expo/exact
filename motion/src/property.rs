@@ -395,6 +395,16 @@ impl Value {
         Value::oklab(l, a, b, alpha)
     }
 
+    /// Whether `other` is the same value: a colour in the other encoding is
+    /// compared in OKLab, where a transition between the two keeps it.
+    pub fn same(self, other: Value) -> bool {
+        if self.oklab == other.oklab {
+            self == other
+        } else {
+            self.to_oklab() == other.to_oklab()
+        }
+    }
+
     /// A colour's straight extended linear sRGB and alpha, unclipped.
     pub fn linear_srgb(self) -> ([f64; 3], f64) {
         let alpha = self.w.clamp(0.0, 1.0);

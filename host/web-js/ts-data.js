@@ -7,14 +7,14 @@
 // use); `openAuthSession` is auth.js.
 // The runtime's bindings load before the app's module and what it imports, so ts-fetch.js takes the page's own
 // functions before any app code runs.
-import { activeCall, answering, dropTimers, files as bodyFiles, SOCKET_AND_FETCH, useFetch } from './ts-fetch.js';
+import { activeCall, answering, dropTimers, files as bodyFiles, Promise as AnswerPromise, SOCKET_AND_FETCH, useFetch } from './ts-fetch.js';
 // The sources' `fetch`: ts-fetch.js's, or ts-fetch-refused.js's where no source holds a network grant (the build names it).
 import { fetch as sourceFetch } from '__FETCH_MODULE__';
 import * as source from '__APP_TS__';
 import { createSecretFacade, hasGrant, inOverlay, overlaying, setAppGrantSet } from './admission.js';
 import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
-import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
+import { canvasCommitted, checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
@@ -23,7 +23,8 @@ useFetch(sourceFetch);
 const appId = source.appId;
 // Work an answer awaits that is no held fetch, counted on its answer (ts-fetch.js `answering.ordinary`, LLP 1016.000 D9).
 const ordinary = start => (answering.ordinary ?? (f => f()))(start);
-// What an answer's timers run on (ts-fetch.js `arm`).
+// What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
+// outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
 answering.page = { clock, journal, drive, time };
 __AUTH_IMPORT__
 // Values cross by the plan's types (`named` into the module's objects,
@@ -277,7 +278,7 @@ const native = Object.freeze({
 // person chose (`documents-glue.js`, the handles its pickers keep). Without
 // storage grants the same interface refuses, without fetching any adapters.
 // A refusal is `{kind: 'Unavailable', code, message}`, with Hermes's codes
-// (js/src/prelude.js `storageCode`; kanban F28): 'agent' for a drive with no
+// (js/src/storage.js `storageCode`; kanban F28): 'agent' for a drive with no
 // scratch store, 'denied' past the grants, the filesystem's POSIX name, else
 // 'failed'.
 const codedError = e => {
@@ -311,7 +312,7 @@ function landed(op, ok, value) {
   op.reject(error);
 }
 // A stream's mapper has no storage in any turn of its call (LLP 1016.000 D7), refused in Hermes's words
-// (js/src/prelude.js `storageCall`); null elsewhere.
+// (js/src/storage.js `storageCall`); null elsewhere.
 function inMapper(method) {
   if (!answering.mapperCall) return null;
   const error = codedError(new Error(`storage.${method}() called in a stream's mapper: it was never run. Start storage inside an answer`));
@@ -360,7 +361,7 @@ const DIRECTORIES = Object.freeze({ data: 'app:/data', cache: 'app:/cache', temp
 // it again once it adopts the page (render.mjs). The lowered bundles restore the
 // answer across `await`. Each answer has its own facade; its `owner` names
 // refusals when no answer is current, as in a plain `.then`.
-// `compressImage` and `transformImage` options, checked as the native prelude checks them (binary.js
+// `compressImage` and `transformImage` options, checked as the native prelude checks them (storage.js
 // `imageOptions`) before anything is asked of storage: the options to run with, or the TypeError a call rejects with.
 function imageOptions(method, from, to, options, limits) {
   const api = `storage.fs.${method}()`, out = { ...limits }, o = options ?? {};
@@ -435,6 +436,7 @@ function renderStorage(owner) {
   return Object.freeze({ fs: Object.freeze({ directories: DIRECTORIES, ...fs, watch }), sqlite: Object.freeze({ open: refuse('storage.sqlite.open()') }), work: promise => Promise.resolve(promise) });
 }
 function storageOf(grants) {
+  const ordinary = start => answering.ordinary(start, true);
   const admitted = ['fs-read', 'fs-write', 'sqlite-open'].some(kind => hasGrant(grants, kind));
   let fs, sqlite;
   const key = () => import('./storage-environment.js').then(({ storageKey, agentStorageRefusal }) => {
@@ -466,44 +468,8 @@ function storageOf(grants) {
   const denied = (op, document = false) => inMapper(op.split(/[. ]/)[1]) ?? (document ? Promise.resolve() : key()).then(() => {
     throw Object.assign(new Error(`denied: ${op}`), { kind: 'Unavailable', code: 'denied' });
   });
-  const databases = () => sqlite ??= key().then(k => import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)));
-  // A database's and a statement's methods refuse as storage's do, in the queue.
-  const wrap = (o, convert, path) => Object.freeze(Object.fromEntries(Object.entries(convert).map(([m, then]) =>
-    [m, (...args) => queued(`${m} ${path}`, () => o[m](...args)).then(then ? v => then(v, path) : undefined)])));
-  const statement = (s, path) => wrap(s, { execute: null, query: null, close: null }, path);
-  // Each entry's sql and params read once; options as a record with no
-  // prototype, so `__proto__` stays a key the validation refuses.
-  const batchNow = c => Array.isArray(c) ? c.map(e => {
-    if (!e || typeof e !== 'object') return e;
-    const { sql, params } = e;
-    return { sql, params: Array.isArray(params) ? params.map(v => v instanceof Uint8Array ? new Uint8Array(v) : v) : params };
-  }) : c;
-  const optionsNow = o => {
-    if (o === null || typeof o !== 'object') return o;
-    const f = o.foreignKeys, r = Object.create(null);
-    for (const k of Object.keys(o)) if (k !== 'foreignKeys') Object.defineProperty(r, k, { value: true, enumerable: true });
-    if (f !== undefined) r.foreignKeys = f;
-    return r;
-  };
-  const database = (d, path, call) => {
-    const handle = { path, call, told: false };
-    openDatabases.add(handle);
-    const wrapped = wrap(d, { execute: null, query: null, prepare: statement, transaction: null, close: null }, path);
-    // A transaction's batch and options as they are at the call, not when the
-    // queue reaches it (js/src/prelude.js `batchNow`, `optionsNow`).
-    const db = { ...wrapped, transaction: (commands, options) => {
-      let args;
-      try { args = [batchNow(commands), optionsNow(options)]; }
-      catch (e) { return Promise.reject(Object.assign(new Error(String(e?.message ?? e)), { kind: 'Unavailable', code: 'failed' })); }
-      return wrapped.transaction(...args);
-    } };
-    // A close counts once issued; one refused or failed leaves the database open, and tracked.
-    return Object.freeze({ ...db, close: (...args) => {
-      openDatabases.delete(handle);
-      // A failed close still rejects for the caller, so one left unhandled is still reported.
-      return db.close(...args).catch((e) => { openDatabases.add(handle); throw e; });
-    } });
-  };
+  // The page's SQLite worker, and the module's handles over it (ts-sqlite.js), loaded at the first open.
+  const databases = () => sqlite ??= key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')]));
   // `compressImage` (LLP 1069.002 A1) and `transformImage` (LLP 1133.019 D14): their options are checked before either
   // is queued (`imageOptions`); app files only.
   const image = (method, from, to, options, limits) => {
@@ -542,7 +508,7 @@ function storageOf(grants) {
           : isDocument(captured) ? documents().then(f => f[m](...captured)) : files().then(f => f[m](...captured), orEmpty(m, captured[0]));
         return (admitted ? queued(`${m}${typeof args[0] === 'string' ? ` ${args[0]}` : ''}`, run) : denied(`fs.${m}`, isDocument(captured) && !copiesIn(m, captured))).catch(refused);
       })])) }),
-    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(d => d.open(path))).then(d => database(d, path, call)) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
+    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
     work: promise => Promise.resolve(promise),
   });
 }
@@ -559,6 +525,18 @@ export function install(data, mixed = false, modules = null) {
   data.grants = setAppGrantSet(tsGrantSet);
   const storage = globalThis.__exactRender ? renderStorage(null) : storageOf(tsGrantSet);
   if (globalThis.__exactRender) { data.watchedInRender = watchedInRender; data.refusedInRender = refusedInRender; }
+  globalThis.captureCanvas = (surface, path) => {
+    if (overlaying.on) return Promise.reject(inOverlay('captureCanvas()'));
+    if (answering.mapper || answering.mapperCall) return Promise.reject(new Error("captureCanvas() is unavailable in a stream's mapper: capture in the answer that opens the stream"));
+    const call = answering.call, active = () => !!call && !call.settled && (call.wanted?.() ?? call.turn) && !call.ticket?.r?.gone;
+    if (globalThis.__exactRender) return refuseInRender('captureCanvas()', call);
+    if (!active()) return Promise.reject(new DOMException('captureCanvas() requires a live answer: call it directly or after await', 'InvalidStateError'));
+    return ordinary(() => {
+      const ready = canvasCommitted(surface, active);
+      return Promise.all([ready, import('./canvas-capture.js')]).then(([, m]) =>
+        m.captureCanvas(surface, path, (path, png) => m.writeCanvas(appId, tsGrantSet, path, png, active), ready, active));
+    });
+  };
   // The module's storage, as the runner's `state.background` (LLP 1097 D8).
   if (storage) data.background = () => ({ queued: queue.length, inFlight: head ? 1 : 0, ...counts });
   // A rejection nothing handled reaches the journal, as on every host (D8):
@@ -580,10 +558,11 @@ export function install(data, mixed = false, modules = null) {
   // that answer's, and one in a stream's mapper call is still refused. The
   // synchronous turn alone stays `call.turn`.
   globalThis.__exact_async_context = Object.freeze({
-    current: () => ({ call: answering.call, watching, asking, mapperCall: answering.mapperCall }),
+    Promise: AnswerPromise,
+    current: () => [answering.call, watching, asking, answering.mapperCall, answering.promiseCall],
     swap(to) {
-      const before = { call: answering.call, watching, asking, mapperCall: answering.mapperCall };
-      answering.call = to?.call ?? null; watching = to?.watching ?? null; asking = to?.asking ?? ''; answering.mapperCall = to?.mapperCall ?? null;
+      const before = this.current();
+      [answering.call, watching, asking, answering.mapperCall, answering.promiseCall] = to;
       return before;
     },
   });
@@ -596,11 +575,14 @@ export function install(data, mixed = false, modules = null) {
   let seeded = !source.kept;
   const seed = () => {
     seeded = true;
-    const page = checkpoint().kept;
-    for (const r of page ? Resources : []) {
-      if (r.member) continue; // The checkpoint holds the list's aggregate; the source answers one member.
-      const k = page.get(r.name), types = sourceTypes[r.source];
-      if (k && types) try { source.kept(r.source, k[0].map((a, i) => named(a, types[0][i])), named(k[1], types[1])); } catch {}
+    for (const { source: sourceName, answers } of checkpoint().kept?.values() ?? []) {
+      const types = Object.hasOwn(sourceTypes, sourceName) ? sourceTypes[sourceName] : undefined;
+      if (!types) {
+        continue;
+      }
+      for (const [args, value] of answers) {
+        try { source.kept(sourceName, args.map((a, i) => named(a, types[0][i])), named(value, types[1])); } catch {}
+      }
     }
   };
   const ts = (name, args, store, target, mutation = false, forced) => {

@@ -78,7 +78,12 @@ in one generated Lean module whose `main` prints `Contract.Observe.run` for
 each. The two texts must match line for line. Data sources are a seeded oracle
 that answers any call with a value of the declared shape. The runner's
 transcript of that oracle becomes the Lean side's oracle, so if the semantics
-makes a call the runner didn't, that is a divergence.
+makes a call the runner didn't, that is a divergence. What the runner answers
+itself never reaches the oracle: its own sources (`exactViewport`, `exactPage`,
+…) and a native module's (LLP 1133.002 D13), which it answers from the module's
+substitute. Each such resource that answered at boot holds that answer as a
+host fact (`fact` in the oracle's text), and each module's source is named
+(`module`).
 
 The observation starts with `== <step>` and `outcome ok|refused|poisoned`.
 Before the configuration, each attempted commit prints
@@ -174,9 +179,15 @@ replay the landing; a disagreement still fails verification. The `.events` file
 records its `clock until` origin and bound in a comment. The bound has no effect
 in this world. The usual mutation clock runs after a met step.
 
-The observation matcher reads only top-level values. A field or index path such
-as `session.phase` or `rows.0` stops at `clock until (field path)` before landing.
-The receipt counts met waits, not-met stops and field-path stops separately.
+State expectations and waits resolve record fields and zero-based list indices
+through the compiled plan's shapes on either evaluator's observation. Paths such
+as `session.phase` and `rows.0.name` read the same positional values. Present
+options unwrap during traversal and at the resolved leaf. An existing `none`
+can match `none`; a missing root, field or index, or a path through `none` or
+a scalar, has no value and cannot match even `none`. Traversal
+and value scanning are bounded by the runner's value-depth limit. A wait on a
+missing path lands once, then stops as not met. The receipt counts met waits and
+not-met stops separately.
 A leading `size WxH` is consumed as a launch fact with no event: the harness has
 no layout. The test parser refuses a `size` after an input; a `resize` still
 stops the block.
@@ -568,37 +579,27 @@ source as it is.
    `decide +kernel` for given operands. `native_decide` is not used (it
    adds an axiom).
 
-Worked example: Type Tour's `screen` is a string and
-`go(target: string)` writes any string it is given, yet the phone is only
-ever on one of its five screens, because every handler that names `go`
-passes a literal screen.
+Type Tour declares routes for its six screens. Its generated embedding also
+contains the not-found route. The proof checks the names and the parent chains
+used by direct Display and conversation links:
 
 ```lean
-def screens : List String := ["lock", "home", "settings", "display", "messages"]
-def ScreenOK (v : Value) : Prop := ∃ s ∈ screens, v = .str s
+def screens : List String := ["lock", "home", "messages", "thread", "settings", "display", "notfound"]
 
-theorem screen_always : ∀ c, Reachable typeTour c → SlotIn "screen" ScreenOK c.slots := by
-  refine Reachable.slotIn screen_boot ?_
-    (fun _ a ha => by simp [typeTour, clockActions, thenActions] at ha)
-  intro c ev a args env ls vs payload rows _ hh hvs
-  refine BodyKeeps.of_wp fun ad had hname => ?_
-  subst hname
-  simp only [typeTour, List.mem_cons, List.mem_nil_iff, or_false] at had
-  rcases had with rfl | rfl | … <;> simp only [wp, assignPre] <;>
-    simp [Keeps, Effects.write, Effects.rowWrite, Effects.command, ScreenOK, screens]
-  -- left: `go`, whose argument `go_handler` (checked over the view by
-  -- `decide`) says is a literal screen
-  …
+theorem route_names : ∀ r ∈ typeTour.routes, r.name ∈ screens := by decide
+
+theorem display_parents :
+    (Route.chain typeTour.routes "/settings/display").map (·.name) =
+      ["lock", "home", "settings", "display"] := by decide +kernel
 ```
 
-`screen_boot` unfolds `typeTour.states` to see `screen` starts as
-`"lock"`; tasks are none; every action but `go` is dismissed by `simp`
-over its `wp`. The whole proof is `Apps/Proofs/TypeTour.lean`. What is
+The proofs are in `Apps/Proofs/TypeTour.lean`. What is
 proved, by app:
 
 | App | Theorem | Says |
 |---|---|---|
-| Type Tour | `TypeTour.screen_always` | `screen` is always one of the five screens. |
+| Type Tour | `TypeTour.route_names` | Every declared route names one of the seven screens, including not-found. |
+| Type Tour | `TypeTour.display_parents`, `TypeTour.thread_parents` | Direct Display and conversation links include Settings and Messages respectively. |
 | Update Lab | `UpdateLab.advance_keeps_user_state` | Moving the clock (the 250 ms probe) never changes `counter`, `note` or `live`. |
 | Update Lab | `UpdateLab.results_shape` | The three result slots always hold `none` or `some` answer. |
 | Update Lab | `UpdateLab.increment_adds_one` | A committed `increment` leaves `counter` at its old value plus one. |
@@ -1000,7 +1001,10 @@ the host presents no frames (the harness never does): due at
 the runner's (`runner/src/stdlib.rs`, `runner/src/format/`) transcribed:
 `en-US` at the fixed UTC offset the call names, the wall time truncated
 then shifted and held to years 1–9999 (else `""`), the calendar by
-Hinnant's `civil_from_days` over integers, compact numbers from the
+Hinnant's `civil_from_days` over integers. `formatDate` also takes a strict
+ASCII `YYYY-MM-DD` Gregorian day key in years 0001–9999, validated by
+`Str.isoDate` and formatted without shifting its day; invalid keys or offsets
+print `""`. Compact numbers come from the
 shortest digits Rust's `{}` prints (of two equally near shortest forms the
 upper, where `toString` takes the even). `t(...)` reads the strings tables
 (`strings/<locale>.json` beside the source), which the embedding carries
@@ -1134,7 +1138,14 @@ Geometry reads (`frame(id)`, `measure(id)`: where layout put a node) are
 refused as unsupported rather than given a meaning: layout is out of
 scope. So are resources reading `exactTransport` and `exactMIDI` (LLP
 1125), which the runner answers from its transport and its MIDI ports and
-answers again as they play; the semantics models neither. `sendMIDI` and
+answers again as they play; the semantics models neither. A native
+module's state (a permission, a preferred value, what a send to it answered)
+is the runner's: the semantics holds a module read's boot answer, a call it
+has no fact for (a send, one per element, or a read with no answer at boot:
+closed, held or failed, whose placeholder is no answer) is unsupported, and a
+step where a read no longer holds its boot answer carries `# outside: a
+module's answer moved`, from which a first difference is `OUTSIDE`, a poll
+the trace leaves out included. `sendMIDI` and
 `requestMIDIAccess` are in, as commands. `toLowerCase` and `toUpperCase`
 (LLP 1088 D2) are typed but left out: their mappings are Unicode's case
 tables, which the semantics does not carry, and the generator writes

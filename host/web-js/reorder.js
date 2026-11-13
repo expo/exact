@@ -53,7 +53,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       if (!source) return false;
       const p = this.index.pos.get(source);
       this.preview = { binding, token, source, before: this.index.order[p + 1] ?? null, height: this.index.h[p], terminal: false, pinOwned: true, handle, certified: null,
-        outgoing: false, holding: false, dropped: false, stepped: false, grouped: false };
+        outgoing: false, holding: false, stepped: false, grouped: false };
       this.emitPreview();
       return true;
     },
@@ -75,35 +75,63 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       if (!p || p.terminal || p.holding || !(p.stepped || p.certified && GEOMETRY.every(k => p.certified[k] === g[k]))) return null;
       if (!this.index.pos.has(p.source) || (p.before !== null && !this.index.pos.has(p.before))) return null;
       const drop = [p.source.slice(2), p.before === null ? null : p.before.slice(2)];
-      p.dropped = true;
+      this.rememberDrop();
       this.endPreview();
       return drop;
     },
-    settleDropAnchor(failed) {
+    settleDropAnchors(refused = null) {
+      for (const [token, p] of this.pendingDrops ?? []) {
+        const at = this.index.pos.get(p.source);
+        if (token === refused || at === undefined || (this.index.order[at + 1] ?? null) === p.before || p.before !== null && !this.index.pos.has(p.before)) this.pendingDrops.delete(token);
+      }
+    },
+    // Anchor eligibility outlives the visual preview without keeping its row pinned.
+    rememberDrop() {
       const p = this.preview;
-      if (!p?.dropped) return;
-      const at = this.index.pos.get(p.source);
-      if (failed || at === undefined || (this.index.order[at + 1] ?? null) === p.before) p.dropped = false;
+      this.expireDropAnchors();
+      (this.pendingDrops ??= new Map()).set(p.token, { source:p.source, before:p.before, deadline:clock.now + HOLD_MS });
+      this.settleDropAnchors();
     },
+    cancelDropAnchor(token) {
+      if (!(this.preview?.token === token && this.preview.holding)) this.pendingDrops?.delete(token);
+    },
+    expireDropAnchors() {
+      // No pin or presentation needs a timer for expiry.
+      for (const [token, p] of this.pendingDrops ?? []) if (clock.now >= p.deadline) this.pendingDrops.delete(token);
+    },
+    // @ref runner/src/instance/collection/index.rs `capture_drop_anchors`: the first visible row's anchor,
+    // then the next row's while that row is a pending drop's.
     dropAnchor() {
-      const p = this.preview, g = this.geometry;
-      if (!p || !p.dropped || !g) return null;
-      return { source:p.source, before:p.before, anchor:this.index.anchor(this.anchorOffset(g.offset, g.port_main), g.port_main, this.follows(), p.source) };
+      this.expireDropAnchors();
+      const g = this.geometry, drops = [...this.pendingDrops?.values() ?? []];
+      if (!g || !drops.length) return null;
+      const dropped = drops.map(p => p.source), skipped = [], anchors = [];
+      for (;;) {
+        const a = this.index.anchor(this.anchorOffset(g.offset, g.port_main), g.port_main, this.follows(), skipped);
+        anchors.push(a);
+        const key = a.row === null || a.follows ? null : a.order[a.row];
+        if (!dropped.includes(key)) return { drops: drops.map(p => [p.source, p.before]), anchors };
+        skipped.push(key);
+      }
     },
+    // Drops that land in the same update all move, so the anchor is a row none of them moved.
     committedAnchor(ordinary, drop) {
+      this.settleDropAnchors();
       if (!drop) return ordinary;
-      const order = drop.anchor.order, now = this.index.pos.get(drop.source);
-      if (now !== undefined && (this.index.order[now + 1] ?? null) !== drop.before) return ordinary;
-      this.settleDropAnchor(false);
+      const order = drop.anchors[0].order;
+      const landed = drop.drops.filter(([source, before]) => {
+        const now = this.index.pos.get(source);
+        if (now === undefined || (this.index.order[now + 1] ?? null) !== before || order === this.index.order) return false;
+        const old = order.indexOf(source);
+        if (old < 0) return false;
+        let prev, next;
+        for (let i = old - 1; i >= 0 && prev === undefined; i--) prev = this.index.pos.get(order[i]);
+        for (let i = old + 1; i < order.length && next === undefined; i++) next = this.index.pos.get(order[i]);
+        return prev > now || next < now;
+      }).map(([source]) => source);
       // Updates that do not move a surviving source keep the ordinary anchor.
-      if (now === undefined || order === this.index.order) return ordinary;
-      const old = order.indexOf(drop.source);
-      if (old < 0) return ordinary;
-      let before, after;
-      for (let i = old - 1; i >= 0 && before === undefined; i--) before = this.index.pos.get(order[i]);
-      for (let i = old + 1; i < order.length && after === undefined; i++) after = this.index.pos.get(order[i]);
-      if (!(before > now || after < now)) return ordinary;
-      return drop.anchor;
+      if (!landed.length) return ordinary;
+      return drop.anchors.find(a => a.row === null || !landed.includes(a.order[a.row])) ?? drop.anchors.at(-1);
     },
     // A hold is ended only by its own endings (LLP 1094 D8, `endHold`).
     endPreview() {
@@ -214,13 +242,15 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       const p = this.preview;
       if (!p || p.terminal || p.holding || !(p.stepped || p.certified && GEOMETRY.every(k => p.certified[k] === g[k]))) return null;
       if (!this.index.pos.has(p.source) || (p.before !== null && !this.index.pos.has(p.before))) return null;
-      p.holding = true; p.dropped = true; p.certified = null;
+      p.holding = true; p.certified = null;
+      this.rememberDrop();
       return [p.source.slice(2), p.before === null ? null : p.before.slice(2)];
     },
     holdOutgoing() { if (this.preview) { this.preview.holding = true; this.preview.certified = null; } },
     endHold(instant) {
       const p = this.preview;
-      if (p) { p.holding = false; p.dropped = false; p.terminal = true; p.certified = null; }
+      if (p) { p.holding = false; p.terminal = true; p.certified = null; }
+      if (p) this.pendingDrops?.delete(p.token);
       const was = this.instant; this.instant = instant; this.emitPreview(); this.instant = was;
     },
     setHidden(ident) { this.hidden = ident; this.emitPreview(); if (ident == null) delete this.hidden; },
@@ -328,7 +358,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   function dispatchDrop(target, args, session = null) {
     const owner = ReorderOwner, token = owner.preview.token;
     return commit(() => target.el.$reorderdrop(...args), "action", ok => {
-      if (owner.preview?.token === token) owner.settleDropAnchor(!ok);
+      owner.settleDropAnchors(ok ? null : token);
       if (!ok && session && Session === session && session.phase === "holding") endSession(session, null, false);
     });
   }
@@ -349,17 +379,21 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       return ReorderOwner.movePreview(geometry, y) ? "accepted" : "needs";
     },
     /** The list's `reorderdrop` with the item's key and the one it now goes before. */
-    drop(token, geometry) {
-      if (!hasReorder(token) || !sameGeometry(ReorderOwner.reorderGeometry(), geometry)) return false;
+    drop(token, geometry, releaseAt = clock.now) {
+      if (!hasReorder(token) || !sameGeometry(ReorderOwner.reorderGeometry(), geometry) || !Number.isFinite(releaseAt) || releaseAt < 0) return false;
       const drop = ReorderOwner.previewDrop(geometry);
       if (!drop) return false;
+      clock.now = Math.max(clock.now, releaseAt);
+      const pending = ReorderOwner.pendingDrops?.get(token);
+      if (pending) pending.deadline = clock.now + HOLD_MS;
       dispatchDrop(ReorderOwner, drop);
       return true;
     },
     cancel(token) {
+      const owner = ReorderOwner?.preview?.token === token ? ReorderOwner : [...Lists.values()].find(c => c.pendingDrops?.has(token));
+      owner?.cancelDropAnchor(token);
       const p = ReorderOwner?.preview;
       if (!p || p.token !== token || p.holding) return;
-      p.dropped = false;
       if (!p.terminal && p.pinOwned) ReorderOwner.endPreview();
     },
     frame(token) {
@@ -454,6 +488,8 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       s.before = before === null ? null : `s:${before}`;
       s.place = [s.source, ...(s.source.placeOf(s.item) ?? [null, null])];
       clock.now = Math.max(clock.now, releaseAt);
+      const pending = s.source.pendingDrops?.get(token);
+      if (pending) pending.deadline = clock.now + HOLD_MS;
       s.phase = "holding"; s.deadline = clock.now + HOLD_MS;
       every(HOLD_MS, () => { if (Session === s && s.phase === "holding") return commit(() => { say("reorderdrop: the move did not show within 1 s"); endSession(s, "timeout", false); }, "reorderdrop hold"); return true; }, true);
       s.timer = clock.timers.at(-1);

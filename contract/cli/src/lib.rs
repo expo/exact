@@ -74,7 +74,8 @@ pub use contract_types::strings::Strings;
 pub use exact_runner::DataSource;
 mod preload;
 pub use logic::{
-    apple_linked, linux_entry, native_storage_constructor, rust_entry, web_linked, web_rust_mode,
+    apple_linked, linux_entry, native_storage_constructor, rust_entry, rust_entry_naming,
+    web_linked, web_rust_mode,
 };
 pub use manifest::{Activity, Configuration, Manifest, Parameter, Widget};
 pub use map::{plan_digest, SourceMap};
@@ -1123,7 +1124,15 @@ fn compile_file_warned(
 /// Boot the plan once against `data` and write every resource's boot value
 /// into the plan as compiled data. The result still validates and its bytes
 /// are a pure function of (source, data).
-pub fn bake<D: DataSource>(mut plan: Plan, data: D) -> Result<Plan, BakeError> {
+pub fn bake<D: DataSource>(plan: Plan, data: D) -> Result<Plan, BakeError> {
+    bake_with_warnings(plan, data).map(|(plan, _)| plan)
+}
+
+/// Bake the first frame and retain warnings about calls deferred until launch.
+pub fn bake_with_warnings<D: DataSource>(
+    mut plan: Plan,
+    data: D,
+) -> Result<(Plan, Vec<String>), BakeError> {
     // The manifest names the app. An unnamed stand-in source preserves it;
     // Runner::boot refuses a nonempty source identity that disagrees.
     if plan.app_id.is_empty() {
@@ -1180,6 +1189,7 @@ pub fn bake<D: DataSource>(mut plan: Plan, data: D) -> Result<Plan, BakeError> {
         }
     }
     b.finish()
+        .map(|plan| (plan, runner.bake_warnings().to_vec()))
         .map_err(|e| BakeError::Runner(RunnerError::Plan(e)))
 }
 

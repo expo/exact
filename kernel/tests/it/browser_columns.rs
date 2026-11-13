@@ -151,47 +151,54 @@ fn line_height(css: &str) -> f32 {
 
 #[test]
 fn columns_land_where_chrome_puts_them() {
+    let wrong: Vec<_> = include_str!("fixtures/browser_columns.tsv")
+        .lines()
+        .flat_map(mismatches)
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Where the kernel differs from a row of the fixture's format.
+fn mismatches(line: &str) -> Vec<String> {
     let mut wrong = Vec::new();
-    for line in include_str!("fixtures/browser_columns.tsv").lines() {
-        let field: Vec<_> = line.split('\t').collect();
-        let name = field[0];
-        let list = nodes(field[2]);
-        let k = lay_out(field[1], &list);
-        // A D10 case's kernel columns, where it says the kernel differs.
-        let want = |i: usize| match field.get(i + 3) {
-            Some(own) if *own != "-" => *own,
-            _ => field[i],
-        };
-        for item in want(3).split(' ') {
-            let (id, rect) = item.split_once('=').unwrap();
-            let got = rects(&k, id.parse().unwrap());
-            if !same(&got, rect) {
-                wrong.push(format!("{name}: #{id} kernel {got}, expected {rect}"));
-            }
+    let field: Vec<_> = line.split('\t').collect();
+    let name = field[0];
+    let list = nodes(field[2]);
+    let k = lay_out(field[1], &list);
+    // A D10 case's kernel columns, where it says the kernel differs.
+    let want = |i: usize| match field.get(i + 3) {
+        Some(own) if *own != "-" => *own,
+        _ => field[i],
+    };
+    for item in want(3).split(' ') {
+        let (id, rect) = item.split_once('=').unwrap();
+        let got = rects(&k, id.parse().unwrap());
+        if !same(&got, rect) {
+            wrong.push(format!("{name}: #{id} kernel {got}, expected {rect}"));
         }
-        if want(4) != "-" {
-            for item in want(4).split(' ') {
-                let (id, size) = item.split_once('=').unwrap();
-                let c = k.node(id.parse().unwrap()).unwrap().content;
-                let got = format!("{},{}", f(c.0), f(c.1));
-                if !same(&got, size) {
-                    wrong.push(format!("{name}: #{id} scroll {got}, expected {size}"));
-                }
-            }
-        }
-        if want(5) != "-" {
-            for item in want(5).split(' ') {
-                let (id, starts) = item.split_once(':').unwrap();
-                let id: u32 = id.parse().unwrap();
-                let css = list.iter().find(|n| n.id == id).map_or("", |n| n.css);
-                let got = lines(&k, id, line_height(css));
-                if !same(&got, starts) {
-                    wrong.push(format!("{name}: #{id} lines {got}, expected {starts}"));
-                }
+    }
+    if want(4) != "-" {
+        for item in want(4).split(' ') {
+            let (id, size) = item.split_once('=').unwrap();
+            let c = k.node(id.parse().unwrap()).unwrap().content;
+            let got = format!("{},{}", f(c.0), f(c.1));
+            if !same(&got, size) {
+                wrong.push(format!("{name}: #{id} scroll {got}, expected {size}"));
             }
         }
     }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    if want(5) != "-" {
+        for item in want(5).split(' ') {
+            let (id, starts) = item.split_once(':').unwrap();
+            let id: u32 = id.parse().unwrap();
+            let css = list.iter().find(|n| n.id == id).map_or("", |n| n.css);
+            let got = lines(&k, id, line_height(css));
+            if !same(&got, starts) {
+                wrong.push(format!("{name}: #{id} lines {got}, expected {starts}"));
+            }
+        }
+    }
+    wrong
 }
 
 // Equal lists of numbers, each to 0.01.
@@ -441,6 +448,57 @@ fn align_content_moves_the_columns_as_one() {
             .compute_layout(1, Offer::definite(800.0, 600.0))
             .unwrap();
         assert_eq!(corners(&k, 2), corners(&fresh, 2), "{css}");
+    }
+}
+
+/// An absolutely positioned box in a multi-column container that
+/// `align-content` moves (`fixtures/browser_columns_aligned.tsv`, in
+/// `columns_land_where_chrome_puts_them`'s format). Chrome 157.0.8103.78,
+/// 2026-11-13, by that method; Chrome 156.0.8078.4 gave the first and the
+/// 30px rows too.
+/// Chrome adds the alignment to the box's flow-thread top before it picks
+/// the column, so `align-content: end` takes a `top: 0` box four columns
+/// on. A containing block inside an `overflow: hidden` box moves with that
+/// box.
+#[test]
+fn align_content_moves_an_absolute_box_as_chrome_does() {
+    let wrong: Vec<_> = include_str!("fixtures/browser_columns_aligned.tsv")
+        .lines()
+        .flat_map(mismatches)
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A popover is laid out in the viewport, out of the columns' flow, so the
+/// columns place it nowhere: in an aligned multi-column container its frame
+/// is the one it has without columns.
+#[test]
+fn a_popover_in_columns_keeps_its_viewport_frame() {
+    for (name, cb) in [
+        ("fragmentable", "position:relative"),
+        ("decorated", "position:relative;background-color:#ff0000"),
+    ] {
+        let frame = |columns: &str| {
+            let field = format!(
+                "2>1>width:320px;height:100px;{columns}align-content:end \
+                 & 3>2>height:20px \
+                 & 4>2>{cb} \
+                 & 5>4>height:20px \
+                 & 6>4>width:10px;height:10px"
+            );
+            let mut k = lay_out("", &nodes(&field));
+            let popover = Op::SetProp {
+                id: 6,
+                prop: PropId::Popover,
+                value: "auto".into(),
+            };
+            k.apply(0, 2, &[popover]).unwrap();
+            k.compute_layout(1, Offer::definite(800.0, 600.0)).unwrap();
+            let f = k.node(6).unwrap().frame;
+            (f.x, f.y, f.width, f.height)
+        };
+        let alone = frame("");
+        assert_eq!(frame("column-count:2;column-gap:0px;"), alone, "{name}");
     }
 }
 

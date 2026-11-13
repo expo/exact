@@ -39,7 +39,8 @@ import { admitHead, channelOf, defaultRelease, publishStream } from './deploy.mj
 import { classifyArtifacts, cohortReceipt, readBuilds, resolveApp } from './app.mjs';
 import { buildRust, rustBundle, RustBaker } from './rust.mjs';
 import { blobPath, channelOrigin, openOrigin, sha256, streamPath, validateChannel } from './origin.mjs';
-import { filesystem, filesystemRead } from './filesystem.mjs';
+import { filesystem, filesystemRead, filesystemTree } from './filesystem.mjs';
+import { unbundledTextures } from './texture-families.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const USAGE = 'usage: bun scripts/push.mjs <app> [--origin <dir|url>] [--channel <name>] [--keys <dir>] [--seq-above <n>] [--watch]';
@@ -103,17 +104,24 @@ function pushTools(app, env, typescript) {
   return { graph: resolve(target, 'release/exact-bake'), typescript: resolve(target, 'release/exact-js-bake') };
 }
 
-/** A TypeScript app's plan and module pair, baked as its build script bakes
- * them (`exact_js_bake::bake`, production mode). */
+/** A TypeScript app's plan, module pair and named entries, baked as its build
+ * script bakes them (`exact_js_bake::bake`, production mode). */
 function bakeTypescript(tool, app, env) {
   const dir = mkdtempSync(resolve(app.target, 'push-ts-'));
   try {
     rmSync(dir, { recursive: true });
     const r = spawnSync(tool, [app.dir, '--out', dir], { cwd: ROOT, env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     if (r.status !== 0) refuse(r.stderr.trim().split('\n').slice(-6).join('\n'));
-    return { plan: readFileSync(resolve(dir, 'app.plan')), receipt: readFileSync(resolve(dir, 'app.module.json')), bytecode: readFileSync(resolve(dir, 'app.hbc')) };
+    return { plan: readFileSync(resolve(dir, 'app.plan')), receipt: readFileSync(resolve(dir, 'app.module.json')), bytecode: readFileSync(resolve(dir, 'app.hbc')), entries: bakedEntries(dir) };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
+
+/** Whether an update's file is one of the named entries a bake makes beside the app's plan: its widgets' and Live
+ * Activities' plans and their companion files (bake/src/widgets.rs). */
+const namedEntry = (name) => /^(plans|activities)\//.test(name);
+
+/** The named entries a bake wrote under `dir`, by name. */
+const bakedEntries = (dir) => new Map(['plans', 'activities'].flatMap((tree) => [...(filesystemTree(resolve(dir, tree)) ?? [])].map(([name, bytes]) => [`${tree}/${name}`, bytes])));
 
 /** The module pair as an update carries it (`typescript/`): the plan no
  * longer needs the cohort's source shapes, since the module answers them;
@@ -133,13 +141,15 @@ function typescriptBundle(bundle, build, baked, cohort) {
     { name: 'typescript/app.hbc', bytes: baked.bytecode },
   ].map((a) => ({ ...a, sha256: sha256(a.bytes) }));
   const requires = { grantCeiling: inputs.grantCeiling, ...(runtime !== undefined ? { typescriptRuntime: runtime } : {}) };
-  const artifacts = build.graph.artifacts.map((a) => {
+  // A new stream's bake already lists a pair when its widgets or activities need one (bake/src/widgets.rs); this one replaces it.
+  const other = (a) => !a.name.startsWith('typescript/');
+  const artifacts = build.graph.artifacts.filter(other).map((a) => {
     if (a.name !== 'app.plan') return a;
     const { sources, ...rest } = a.requires;
     return { ...a, requires: { ...rest, ...requires } };
   });
   artifacts.push(...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires })));
-  return { bundle: { ...bundle, assets: [...bundle.assets, ...assets] }, build: { ...build, graph: { ...build.graph, artifacts } } };
+  return { bundle: { ...bundle, assets: [...bundle.assets.filter(other), ...assets] }, build: { ...build, graph: { ...build.graph, artifacts } } };
 }
 
 function planGraph(tool, app, plan, cohort, env) {
@@ -153,10 +163,11 @@ function planGraph(tool, app, plan, cohort, env) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-/** A new stream's assets: the bake's bundle rows, read from the app's files
- * and held to the digests the binary was built with. */
+/** A new stream's assets from the app's files: the bake's bundle rows, held to the digests the binary was built with.
+ * What the bake made (the named entries and the module pair) comes from push's own bake instead. */
 function bakedAssets(app, build) {
-  return build.graph.artifacts.filter((a) => a.name !== 'app.plan').map((a) => {
+  const made = (name) => namedEntry(name) || name.startsWith('typescript/');
+  return build.graph.artifacts.filter((a) => a.name !== 'app.plan' && !made(a.name)).map((a) => {
     const path = resolve(app.dir, a.name.startsWith('shaders/') ? `gpu/${a.name}` : a.name);
     const bytes = existsSync(path) ? readFileSync(path) : null;
     if (!bytes || sha256(bytes) !== a.sha256) refuse(`${a.name}: ${path} is not what the installed binary was built with; push to an existing stream, or rebuild the binary`);
@@ -164,14 +175,19 @@ function bakedAssets(app, build) {
   });
 }
 
-/** The head's assets other than its module pair: an `assets/` or `deck/`
- * file as it is now in the app, anything else (shaders) as the head has it. */
-async function carriedAssets(origin, app, head) {
+/** The head's assets other than its module pair and named entries, which push
+ * bakes: an `assets/` or `deck/` file as it is now in the app, but for the
+ * texture families a cohort baked
+ * with one (`inputs.textureFamily`) does not read, and anything else (shaders)
+ * as the head has it. A cohort baked before thinning names no family: its
+ * renderer falls back to files a thinned update would leave out. */
+async function carriedAssets(origin, app, head, inputs) {
   const out = [];
   for (const folder of ['assets', 'deck']) {
     const root = resolve(app.dir, folder);
-    const names = filesystem({ op: 'names', root, optionalRoot: true });
-    for (const name of Object.keys(names ?? {})) {
+    const names = Object.keys(filesystem({ op: 'names', root, optionalRoot: true }) ?? {});
+    const unbundled = unbundledTextures(names.map((name) => `${folder}/${name}`), inputs?.textureFamily);
+    for (const name of names.filter((name) => !unbundled.has(`${folder}/${name}`))) {
       const encoded = await filesystemRead({ op: 'get', root, path: name });
       if (encoded === null) refuse(`${folder}/${name}: asset disappeared during push`);
       const bytes = Buffer.from(encoded, 'base64');
@@ -179,7 +195,7 @@ async function carriedAssets(origin, app, head) {
     }
   }
   for (const card of head.assets ?? []) {
-    if (/^(rust|typescript|assets|deck)\//.test(card.name)) continue;
+    if (/^(rust|typescript|assets|deck)\//.test(card.name) || namedEntry(card.name)) continue;
     const bytes = await origin.get(blobPath(card.sha256));
     if (!bytes || sha256(bytes) !== card.sha256) refuse(`${card.name}: the head's blob is missing from the origin`);
     out.push({ name: card.name, bytes, sha256: card.sha256 });
@@ -220,18 +236,25 @@ export async function pusher(opts) {
     requireReleasePins(app);
     const started = performance.now();
     const found = await streams(origin, app, channel, env);
-    const native = found.find((s) => ['native', 'tiered'].includes(s.cohort.compat.inputs.rustMode));
-    const built = typescript ? bakeTypescript(tools.typescript, app, env)
-      : await buildRust(app, { compat: found[0].cohort.compat, env, nativeTarget: native?.cohort.compat.target ?? null, profile: 'release', baker });
-    if (!built) refuse(`${app.name} has neither a TypeScript module (app.ts) nor a rust.module.package; push carries a plan baked with its module`);
+    // A Rust module is built for each native target a stream's binary runs, as deploy builds it; a wasm stream takes
+    // any of them, whose wasm variant is the same.
+    const nativeTargets = [...new Set(found.filter((s) => ['native', 'tiered'].includes(s.cohort.compat.inputs.rustMode)).map((s) => s.cohort.compat.target))];
+    const variants = new Map();
+    if (typescript) variants.set(null, bakeTypescript(tools.typescript, app, env));
+    else for (const target of nativeTargets.length ? nativeTargets : [null]) variants.set(target, await buildRust(app, { compat: found[0].cohort.compat, env, nativeTarget: target, profile: 'release', baker }));
+    if (!variants.values().next().value) refuse(`${app.name} has neither a TypeScript module (app.ts) nor a rust.module.package; push carries a plan baked with its module`);
     const bakedIn = seconds(started);
     const release = defaultRelease(gitHead()).replace(/^r-/, 'p-');
     const snapshot = { id: gitHead(), commit: gitHead(), dirty: true };
-    const results = [];
+    // Every stream's update is made and checked before any is published, so one its binary cannot take publishes none.
+    const updates = [];
     for (const { stream, head, cohort, platform, build: binary } of found) {
+      const built = variants.get(cohort.compat.target) ?? variants.values().next().value;
       const graph = planGraph(tools.graph, app, built.plan, cohort, env);
       const inputs = cohort.compat.inputs;
-      const assets = head ? await carriedAssets(origin, app, head) : bakedAssets(app, binary);
+      // The named entries are this bake's, in place of the last generation's whole.
+      const entries = [...built.entries].map(([name, bytes]) => ({ name, bytes, sha256: sha256(bytes) }));
+      const assets = [...(head ? await carriedAssets(origin, app, head, inputs) : bakedAssets(app, binary)), ...entries];
       let bundle = { plan: { bytes: built.plan, sha256: sha256(built.plan), formatVersion: inputs.formatVersion, kernelSchema: inputs.kernelSchema }, assets };
       let build = { version: 1, trust: 'production', compat: cohort.compat, binary: { sha256: cohort.binary },
         graph: { ...graph, artifacts: [graph.artifacts[0], ...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires: {} }))] } };
@@ -239,8 +262,10 @@ export async function pusher(opts) {
       const checked = classifyArtifacts(build, cohort, signingKey);
       if (!checked.bundle) refuse(`${platform} ${stream.compatibilityId.slice(0, 8)} cannot take this as an update — ${checked.missing.join('; ')}. It needs a new binary: bun scripts/deploy.mjs ${app.name}`);
       const row = { kind: 'stream', platform, channel, compatibilityId: stream.compatibilityId, action: 'bundle', receipt: cohort };
-      results.push(await publishStream({ origin, row, bundle, compat: cohort.compat, app, signer, release, snapshot, opts: { seqAbove: opts.seqAbove }, log: () => {}, build }));
+      updates.push({ row, bundle, compat: cohort.compat, build });
     }
+    const results = [];
+    for (const update of updates) results.push(await publishStream({ origin, ...update, app, signer, release, snapshot, opts: { seqAbove: opts.seqAbove }, log: () => {} }));
     for (const r of results) {
       const what = r.action === 'current' ? 'already current' : `seq ${r.seq}: ${r.changes.map((c) => c.name).join(', ')}`;
       console.log(`  ${r.platform} ${r.compatibilityId.slice(0, 8)} — ${what}`);

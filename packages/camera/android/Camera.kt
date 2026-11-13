@@ -18,15 +18,27 @@
 //   hosts'.
 // - Tier 3 (D5): `useCasesHatch` sees the use cases before each bind, `imageCaptureHatch` each `ImageCapture.Builder`
 //   after the module's words, `cameraHatch` the `Camera` after each bind.
+// - `takePhotoWithCameraApp` is the system's camera app (`MediaStore.ACTION_IMAGE_CAPTURE`, what Jetpack's
+//   `ActivityResultContracts.TakePicture` sends), with its own shutter, flash and review. It writes a file staged
+//   outside the app's directories through the reader's `Files` provider, under a write grant for that file while it is
+//   up; the photo replaces the answered path only when the person keeps it, so a cancel leaves what was there, and
+//   nothing reaches MediaStore or the gallery. An app that uses only this asks for no permission. Android refuses the
+//   intent to an app that declares CAMERA (`getUserMedia` derives it) without holding it, so such an
+//   app asks for it first, as a hand-built one must. Under the agent the runner holds the person's sheet, and `take`
+//   writes the agent's picture.
 package exact.camera
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.media.MediaActionSound
+import android.provider.MediaStore
 import android.view.View
 import android.widget.ImageView
 import androidx.camera.core.Camera
@@ -37,6 +49,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
+import dev.exact.canvas.Files
 import dev.exact.canvas.TrackError
 import dev.exact.canvas.TrackConsumer
 import dev.exact.canvas.VideoSource
@@ -44,6 +57,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
+import java.nio.file.StandardCopyOption
 
 class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     companion object {
@@ -103,6 +118,11 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             "picture" -> reply(JSONObject().put("path", picture ?: ""))
             else -> reply(error("NotSupportedError"))
         }
+    }
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
+        if (name == "takePhotoWithCameraApp") cameraApp(args, (preferred as? JSONObject)?.optString("tap"), reply)
+        else later(name, args, reply)
     }
 
     override fun preferred(values: JSONObject) {
@@ -233,10 +253,11 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
 
     // Photos (D1, D2)
 
-    /** Under the agent, each photo for `state.extensions` (§9, Disclosure), by path and SHA-256. */
-    private fun disclose(path: String, track: String, bytes: ByteArray) {
+    /** Under the agent, each photo for `state.extensions` (§9, Disclosure), by path and SHA-256; a photo from the camera
+     * app names no track. */
+    private fun disclose(path: String, track: String?, bytes: ByteArray) {
         val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        photos.put(JSONObject().put("path", path).put("sha256", sha).put("track", track).put("origin", context.origin))
+        photos.put(JSONObject().put("path", path).put("sha256", sha).put("track", track ?: JSONObject.NULL).put("origin", context.origin))
         context.state(JSONObject().put("photos", photos))
     }
 
@@ -277,6 +298,94 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
                     reply(error("UnknownError"))
                 }
             })
+    }
+
+    // The camera app (`takePhotoWithCameraApp`)
+
+    /** Whether the camera app is up for a call; one is at a time. */
+    private var cameraAppUp = false
+
+    /** The answer of `takePhotoWithCameraApp`, [tap] the agent's on its sheet. */
+    private fun cameraApp(args: JSONObject, tap: String?, reply: (JSONObject) -> Unit) {
+        if (cameraAppUp) return reply(error("InvalidStateError"))
+        val ext = "jpg"
+        val path = args.optString("path").ifEmpty { null }?.let { if (it.endsWith(".$ext")) it else "$it.$ext" } ?: "app:/tmp/camera/${++taken}.$ext"
+        val file = context.file(path) ?: return reply(error("UnknownError"))
+        if (context.agent) {
+            if (tap != "take") {
+                say("camera app: cancelled (the agent's sheet)")
+                return reply(error("AbortError"))
+            }
+            val bytes = agentBytes() ?: return reply(error("UnknownError"))
+            file.parentFile?.mkdirs()
+            try { Files.write(file, bytes) } catch (e: IOException) { return reply(error("UnknownError")) }
+            say("camera app took $path (${bytes.size} bytes, the agent's picture)")
+            disclose(path, null, bytes)
+            return reply(photo(path, file))
+        }
+        val camera = android.Manifest.permission.CAMERA
+        if (!declares(camera) || held(camera)) return openCameraApp(path, file, args, reply)
+        cameraAppUp = true
+        context.askPermission(camera) {
+            cameraAppUp = false
+            if (held(camera)) return@askPermission openCameraApp(path, file, args, reply)
+            say("camera app: the app declares CAMERA and does not hold it")
+            reply(error("NotAllowedError"))
+        }
+    }
+
+    private fun held(permission: String) = context.application.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    /** Whether the app's manifest asks for [permission]. */
+    private fun declares(permission: String): Boolean = runCatching {
+        val app = context.application
+        @Suppress("DEPRECATION")
+        app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions?.contains(permission) == true
+    }.getOrDefault(false)
+
+    private fun openCameraApp(path: String, file: File, args: JSONObject, reply: (JSONObject) -> Unit) {
+        // Outside `app:/cache` and `app:/tmp` (`cache/cache`, `cache/temporary`), where the app's own code writes. A
+        // file staged before the process last ended answers nothing now.
+        val staging = File(context.application.cacheDir, "exact.camera-app")
+        Files.removeTree(staging)
+        val staged = File(staging, "photo.jpg")
+        val out = Files.writableUri(context.application, staged) ?: return reply(error("UnknownError"))
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, out)
+            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // Android names no extra for the side; these are the ones camera apps read (Google Camera among them).
+        when (args.optString("facingMode")) {
+            "user" -> intent.putExtra("android.intent.extras.CAMERA_FACING", 1).putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
+                .putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
+            "environment" -> intent.putExtra("android.intent.extras.CAMERA_FACING", 0).putExtra("android.intent.extras.LENS_FACING_BACK", 1)
+        }
+        cameraAppUp = true
+        say("camera app for $path")
+        val end = { reason: String ->
+            Files.endWrite(staged)
+            Files.removeTree(staging)
+            cameraAppUp = false
+            say("camera app: $reason")
+        }
+        context.startActivityForResult(intent, { refusal ->
+            end("not started, $refusal")
+            reply(error(refusal))
+        }) { code, _ ->
+            Files.endWrite(staged)
+            val shot = code == Activity.RESULT_OK
+            val kept = shot && Files.regular(staged) && staged.length() > 0 && runCatching { keep(staged, file) }.isSuccess
+            end(if (kept) "took $path (${file.length()} bytes)" else if (shot) "kept nothing at $path" else "cancelled")
+            reply(if (kept) photo(path, file) else error(if (shot) "UnknownError" else "AbortError"))
+        }
+    }
+
+    /** [staged] in place of [file]: renamed over it, which replaces a link there rather than writing what it names. */
+    private fun keep(staged: File, file: File) {
+        file.parentFile?.mkdirs()
+        try {
+            java.nio.file.Files.move(staged.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.output(file).use { out -> staged.inputStream().use { it.copyTo(out) } }
+        }
     }
 
     /** The capture's `ImageCapture`, built again when a builder word changes (D4). */

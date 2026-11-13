@@ -217,7 +217,8 @@ class GamepadModule(context: ExtensionContext) : ExactExtension(context) {
     /** As the other hosts' recorders write a magnitude: 1 and 0.5. */
     private fun number(x: Double) = if (x == Math.floor(x)) x.toLong().toString() else x.toString()
 
-    private fun amplitude(m: Double) = (m * 255).toInt().coerceIn(0, 255)
+    /** A positive magnitude's amplitude: `createOneShot` refuses 0, so one below 1/255 is the weakest, 1. */
+    private fun amplitude(m: Double) = (m * 255).toInt().coerceIn(1, 255)
 
     private fun vibrate(pad: PadDevice, strong: Double, weak: Double, ms: Long) {
         if (ms <= 0) return

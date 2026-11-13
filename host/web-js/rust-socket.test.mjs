@@ -33,7 +33,7 @@ function standIn(url) {
   const reply = fill => {
     const bytes = [], u8 = v => bytes.push(v), u16 = v => bytes.push(v & 255, v >>> 8 & 255), u32 = v => bytes.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255);
     const string = v => { const e = new TextEncoder().encode(v); u32(e.length); bytes.push(...e); };
-    u32(8); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(11); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   // A call (`call_request`) as a Rust source receives it.
   const decode = at => {
@@ -57,7 +57,7 @@ function standIn(url) {
     return { code, source, outcome, kind, own, open };
   };
   const exports = {
-    memory, exact_logic_abi: () => 8, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 11, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
@@ -97,7 +97,7 @@ function standIn(url) {
       } else if (call.outcome?.event !== undefined) result = { value: Array.isArray(call.outcome.data) ? `bytes ${call.outcome.data.join(',')}` : call.outcome.data };
       else result = { value: 'ended' };
       reply(w => {
-        w.u8(2); w.u8(0); w.u32(0);
+        w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u32(0);
         w.u32(ops.length);
         for (const [id, op] of ops) {
           w.u32(id); w.u8(op[0]);
@@ -133,7 +133,7 @@ test("a Rust source's socket on the JS target subscribes on open, sends from a m
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-socket-'));
   const instantiate = WebAssembly.instantiate;
   try {
-    for (const name of ['rust-data.js', 'admission.js']) {
+    for (const name of ['rust-data.js', 'admission.js', 'held.js']) {
       const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
       writeFileSync(resolve(dir, name), source);
     }
@@ -160,7 +160,8 @@ test("a Rust source's socket on the JS target subscribes on open, sends from a m
       const a = data.answer(name, [], store, name, false);
       expect(a.req).toMatchObject({ socket: true, stream: true, url: `${url}/${name}` });
       const ctl = Object.assign(new AbortController(), { resource: true, owner, ticket: ++tickets, streamName: name, active: () => true });
-      data.fetch(a.req, m => {
+      // (rt.js sends it as the asking commit's origin, resources.js)
+      data.fetch({ ...a.req, origin: 'app' }, m => {
         try { const p = data.parse(name, [], { streamed: [m] }, store); shown[name] = p.v; for (const go of p.effects ?? []) go(); }
         catch (e) { shown[name] = `failed: ${e.message}`; }
       }, ctl).then(o => { shown[name] = data.parse(name, [], o, store).v; });

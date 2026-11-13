@@ -804,6 +804,29 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 200000);
 
+// The package suites read the roster, manifest and APK from apkBuildDir; under the reader's own build directory an
+// outside app's were never found.
+test("apkBuildDir holds the APK build --apk makes: an outside app's own target, a checkout app's the reader's", async () => {
+  const { androidBinary, apkBuildDir } = await import('./agent-android.mjs');
+  const { resolveApp } = await import('./app.mjs');
+  const before = { EXACT_APP_DIR: process.env.EXACT_APP_DIR, EXACT_ANDROID_READER: process.env.EXACT_ANDROID_READER, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR };
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-dir-'));
+  try {
+    delete process.env.EXACT_APP_DIR; delete process.env.CARGO_TARGET_DIR;
+    process.env.EXACT_ANDROID_READER = '1';
+    writeFileSync(resolve(dir, 'app.contract'), 'component Fixture\n  view\n    text "fixture"\n');
+    const outside = resolveApp(dir);
+    expect(apkBuildDir(dir)).toBe(resolve(outside.target, 'android/app'));
+    expect(androidBinary(outside)).toBe(resolve(apkBuildDir(dir), 'outputs/apk/release/app-release.apk'));
+    const root = resolve(import.meta.dir, '..');
+    expect(apkBuildDir('caltrain')).toBe(resolve(root, 'host/android/app/build/caltrain'));
+    expect(androidBinary(resolveApp('caltrain'))).toBe(resolve(apkBuildDir('caltrain'), 'outputs/apk/release/app-release.apk'));
+  } finally {
+    for (const [name, value] of Object.entries(before)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Android distribution refuses bad metadata and incomplete credentials before compiling', async () => {
   const { androidReleaseEnvironment } = await import('./agent-android.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-upload-'));
@@ -909,4 +932,39 @@ test('locks are written in a Gradle home with nothing resolved, keeping its conf
     rmSync(warm, { recursive: true, force: true });
     rmSync(bare, { recursive: true, force: true });
   }
+});
+
+test('a locked Gradle failure keeps its output and names lock repair only for dependency failures', async () => {
+  const { runGradle, androidLockCommand } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-gradle-advice-'));
+  try {
+    const script = resolve(dir, 'gradle.mjs'), app = { dir, name: 'fixture' };
+    writeFileSync(script, `process.stdout.write('task progress\\n'); const [message, code] = process.argv.slice(2); process.stderr.write(message.slice(0, 9), () => process.stderr.write(message.slice(9) + '\\n', () => { process.exitCode = Number(code); }));`);
+    const advice = `fixture: Gradle locks or verification metadata do not match its dependencies; for an intended graph change, run ${androidLockCommand(app)}, then review and commit gradle.lockfile and gradle-verification.xml`;
+    for (const [message, code, expected] of [
+      ['Dependency verification failed for configuration releaseRuntimeClasspath', 1, true],
+      ['Resolved a module which is not part of the dependency lock state', 1, true],
+      ['Did not resolve a module which is part of the dependency lock state', 1, true],
+      ['Strict dependency locking is enabled and no lock state exists', 1, true],
+      ['Compilation failed: unresolved reference', 1, false],
+      ['Timeout waiting to lock the build cache', 1, false],
+      ['Dependency verification failed in an expected fixture', 0, false],
+    ]) {
+      let result;
+      const passed = runGradle(['--dependency-verification=strict'], { env: process.env }, process.platform, {
+        lockAdvice: advice,
+        run(command, args, options) {
+          // Run the actual stream relay with a Gradle stand-in; no JDK, SDK or network is involved.
+          const payload = [process.execPath, ['--no-env-file', script, message, String(code)], advice];
+          const childArgs = args[0] === '--no-env-file' ? [...args.slice(0, -1), JSON.stringify(payload)] : ['--no-env-file', script, message, String(code)];
+          result = spawnSync(process.execPath, childArgs, { ...options, stdio: 'pipe', encoding: 'utf8' });
+          return result;
+        },
+      });
+      expect(passed).toBe(code === 0);
+      expect(result.stdout).toBe('task progress\n');
+      expect(result.stderr).toContain(message);
+      expect(result.stderr.includes(advice)).toBe(expected);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

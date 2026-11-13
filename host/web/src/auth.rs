@@ -29,7 +29,7 @@ impl<D: DataSource> Host<D> {
 
     /// The page's word (`exact_auth`): `{"op":"arm","ticket","agent",
     /// "origin","popup"}` → `{"settled":true}` | `{"held":true}` |
-    /// `{"present":{"url","callback"}}` (a page that can't open a popup —
+    /// `{"present":{"url","callback","state"}}` (a page that can't open a popup —
     /// no activation, or the glue not loaded — is 428 `popup blocked`);
     /// `{"op":"done","ticket","url"}` or `{…,"status","message"}` →
     /// `{"settled":true}`.
@@ -70,6 +70,8 @@ impl<D: DataSource> Host<D> {
                         quote(&session.url, &mut s);
                         s.push_str(",\"callback\":");
                         quote(&session.callback, &mut s);
+                        s.push_str(",\"state\":");
+                        quote(&session.state, &mut s);
                         s.push_str("}}");
                         s
                     }

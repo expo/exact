@@ -62,7 +62,7 @@ function streamTiming(start) {
 }
 import { observe } from './check.js';
 import { faultOp, faultsJson, setFaultLog } from '../web/faults.js';
-import { inertAncestor, displayMode, environment, navigation, routeFlags, foldEnv, preferFold, typedControl, settleValue, animationClocks, pageReporter } from './navigation.js';
+import { inertAncestor, displayMode, environment, navigation, routeFlags, foldEnv, preferFold, typedControl, settleValue, animationClock, pageReporter } from './navigation.js';
 import { backButton } from './input-glue.js';
 import { guestOutline, guestTap, guestType, viewBox, reveal, selectAll, scrollRange, typeControl, watchGlides, glidesSettled, scrollsSeen } from './agent-input.js';
 watchGlides();
@@ -138,7 +138,7 @@ export function install(exact) {
     if (el.getAttribute('aria-hidden') === 'true') props.accessibilityElementsHidden = true;
     if (el.getAttribute('aria-modal') === 'true' && !sheet) props.accessibilityModal = true;
     if (el.getAttribute('aria-busy') === 'true') props.accessibilityBusy = true;
-    if (el.hasAttribute('autofocus')) props.autofocus = true; else if (el.dataset.autofocus === 'false') props.autofocus = false;
+    if (el.hasAttribute('autofocus') || el.dataset.autofocus === 'true') props.autofocus = true; else if (el.dataset.autofocus === 'false') props.autofocus = false;
     const n = { id: id(el), type: type(el), depth, props };
     if (el.dataset.exactSaid?.split(' ').includes('appearance')) n.style = { appearance: { value: getComputedStyle(el).appearance, source: 'authored' } };
     if (el.dataset.exactOn) n.handlers = el.dataset.exactOn.split(' ');
@@ -294,50 +294,12 @@ export function install(exact) {
     const r = el.getBoundingClientRect();
     return { id: id(el), x: r.x, y: r.y, w: r.width, h: r.height, opacity: Number(getComputedStyle(el).opacity), exiting: el.hasAttribute('data-exiting') };
   });
-  // The browser runs CSS animations; under the agent they follow its clock,
-  // each from the clock time it began, author-paused ones keeping their own
-  // (the web host's own `animationClock`), and `clock settle` runs the clock
-  // to where the last one ends, as the wasm host's does.
-  // (navigation.js's `animationClock`, restated; the build gives this module
-  // its own copy of navigation.js, so it could now be imported.)
-  // A synced animation starts on its clock's boundary (LLP 1055.002).
-  const starts = new WeakMap(), held = new WeakSet(), clocks = animationClocks(document);
-  // A scroll-driven animation follows its scroll, not a clock.
-  const timed = () => document.getAnimations().filter(a => !a.timeline || a.timeline instanceof DocumentTimeline);
-  const anim = {
-    // One the page held before this module came (`exact.early`, the build's main.js: a spinner of the first render)
-    // began at the clock it was held at, and is the clock's, not paused by its author.
-    register(t) { clocks.commit(); for (const a of timed()) if (!starts.has(a)) { const early = exact.early?.get(a); starts.set(a, clocks.start(a, early ?? t) ?? early ?? t); if (a.playState === 'paused' && early === undefined) held.add(a); } },
-    seek(to, sync = true) {
-      for (const a of timed()) {
-        const timing = a.effect?.getComputedTiming();
-        if (!timing || held.has(a)) continue;
-        const t = to - (starts.get(a) ?? exact.clock.now);
-        if (t >= timing.endTime && timing.endTime !== Infinity) a.finish(); else { a.pause(); a.currentTime = t; }
-      }
-      if (sync) exact.synced?.();
-    },
-    // A picture shows a transition where it ends (LLP 1116.003 D8): each one under way is held a hair before its end
-    // (still running, so no event fires) for a screenshot or a check; the next request's seek puts it back on the clock.
-    hold() {
-      let n = 0;
-      for (const a of timed()) {
-        const t = a.effect?.getComputedTiming();
-        if (!t || held.has(a) || !(t.activeDuration > 0) || t.activeDuration === Infinity) continue;
-        const at = a.currentTime ?? 0, end = t.delay + t.activeDuration;
-        if (at >= t.delay && at < end - 0.5) { a.currentTime = end - 0.5; n++; }
-      }
-      return n;
-    },
-    settle() {
-      let to = Math.max(exact.clock.now, exact.settleAt?.() ?? 0, exact.extensions?.spanDue?.() ?? 0);
-      for (const a of timed()) {
-        const timing = a.effect?.getComputedTiming();
-        if (timing && timing.endTime !== Infinity && !held.has(a)) to = Math.max(to, (starts.get(a) ?? exact.clock.now) + timing.endTime);
-      }
-      return to;
-    },
-  };
+  const anim = animationClock(
+    () => exact.clock.now,
+    () => Math.max(exact.settleAt?.() ?? 0, exact.extensions?.spanDue?.() ?? 0),
+    () => exact.synced?.(),
+    a => exact.early?.get(a)
+  );
   // Animated images held to the agent's clock (LLP 1011.000): the web host's
   // own `image-glue.js`, fetched at the first seek of a page with a GIF or
   // WebP (the only images it holds; a page without one does no work).
@@ -349,7 +311,7 @@ export function install(exact) {
   const seek = (sync = true) => { anim.register(exact.clock.now); anim.seek(exact.clock.now, sync); holdImages(); };
   // Whether this clock runs `a` (a refused tap's advice, scripts/agent-aim.mjs `pageOutside`): on the document's timeline,
   // and not held by its author, then or, not yet registered, at its registration.
-  exact.clockRuns = a => (!a.timeline || a.timeline instanceof DocumentTimeline) && (starts.has(a) ? !held.has(a) : a.playState !== 'paused' || exact.early?.has(a));
+  exact.clockRuns = anim.runs;
   // motion.js owns post-commit reconciliation. The agent registers a
   // commit's new animations here, and reconciles only when its clock moves.
   exact.After.push(() => seek(false));
@@ -413,7 +375,7 @@ export function install(exact) {
         if (req.agree) return { viewport: reply.viewport, agreement: { unavailable: 'no independent model: the page is the tree' }, ...tags() }; else if (req.native && reply.node) { delete reply.nodes; reply.node.native = { ...reply.node.native, subviews: { unavailable: 'the DOM is the tree; layout <target> names the element' } }; } // @ref LLP 1080.001 D1, D2
         return reply;
       }
-      case 'focus': { const el = views.get(req.id); if (!el) return { error: `no view ${req.id}` }; el.focus(); if (req.select !== false) await selectAll(el); return {}; }
+      case 'focus': { const el = views.get(req.id); if (!el) return { error: `no view ${req.id}` }; el.focus(); if (req.select !== false) await selectAll(el); return { ok: document.activeElement === el }; }
       case 'tap':
         if (req.part != null) return partTap(req);
         // A held state (LLP 1122 D8, `holdState`): the input glue's, as the real one (it loads after paint).
@@ -633,7 +595,7 @@ export function install(exact) {
         const marked = t => held.has(t.id) ? { held: true } : timerOf(t) !== undefined ? { timer: timerOf(t) } : {};
         const pending = [...exact.resources.filter(r => r.ticket && (!r.ticket.messages || r.ticket.upload || held.has(r.ticket.id)) && !r.gone).map(r => ({ name: r.name, ticket: r.ticket.id, ...marked(r.ticket) })),
           ...(exact.mutations ?? []).flatMap(m => (m.ticket ? [m.ticket] : m.tickets ?? []).filter(t => held.has(t.id) || timerOf(t) !== undefined).map(t => ({ name: m.name, ticket: t.id, ...marked(t) }))), ...holds()]; // a parallel mutation's every send (LLP 1161.000 D6)
-        const streams = exact.resources.filter(r => r.ticket?.ctl).map(r => ({ name: r.name, ticket: r.ticket.id, messages: r.ticket.messages, coalesced: r.ticket.coalesced, ...(r.ticket.ctl.grant ? { grant: r.ticket.ctl.grant } : {}), ...(r.ticket.ctl.socket ? { readyState: r.ticket.ctl.socket.readyState, bufferedAmount: r.ticket.ctl.socket.bufferedAmount, sent: r.ticket.ctl.socket.sent } : {}), ...(r.ticket.ctl.retrying ? { retrying: { attempt: r.ticket.ctl.retrying.attempt, inMs: Math.max(0, Math.round(r.ticket.ctl.retrying.at - performance.now())), error: r.ticket.ctl.retrying.error } } : {}) }));
+        const streams = exact.resources.filter(r => !r.gone && r.ticket?.ctl && (r.ticket.stream || r.ticket.req?.stream)).map(r => ({ name: r.name, ticket: r.ticket.id, messages: r.ticket.messages, coalesced: r.ticket.coalesced, ...(r.ticket.ctl.grant ? { grant: r.ticket.ctl.grant } : {}), ...(r.ticket.ctl.socket ? { readyState: r.ticket.ctl.socket.readyState, bufferedAmount: r.ticket.ctl.socket.bufferedAmount, sent: r.ticket.ctl.socket.sent } : {}), ...(r.ticket.ctl.retrying ? { retrying: { attempt: r.ticket.ctl.retrying.attempt, inMs: Math.max(0, Math.round(r.ticket.ctl.retrying.at - performance.now())), error: r.ticket.ctl.retrying.error } } : {}) }));
         // The painted surface of views with presence rows, exit ghosts included (glue.js `st.presence`).
         // Focus, the keyboard's overlap and the document's language, as glue.js's `state` adds them.
         const active = document.activeElement && document.activeElement !== document.body ? document.activeElement : null, activeId = active ? id(active) : null;

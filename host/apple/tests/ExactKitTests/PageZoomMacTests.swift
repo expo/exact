@@ -50,6 +50,18 @@ final class PageZoomMacTests: XCTestCase {
         return try Data(contentsOf: dir.appendingPathComponent("app.plan"))
     }
 
+    func testAccumulatedZoomStepsSnapToTheNearbyLevel() {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "page-zoom-roundoff")
+        defer { session.destroy() }
+        for level in PageZoom.levels {
+            session.setPageZoom([NSNumber(value: level - 3e-16)])
+            XCTAssertEqual(session.pageZoom, level)
+        }
+        session.setPageZoom([NSNumber(value: 1.23456789)])
+        XCTAssertEqual(session.pageZoom, 1.23456789, accuracy: 1e-12, "custom factors keep their precision")
+    }
+
     func testAPageZoomScalesThePageAndShrinksItsViewport() throws {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "page-zoom")
@@ -92,6 +104,16 @@ final class PageZoomMacTests: XCTestCase {
         XCTAssertEqual(try node("width").props["text"], "400")
         XCTAssertEqual(try node("box").convert(try node("box").bounds, to: nil).width, 100, accuracy: 0.01)
         XCTAssertEqual(session.text.lineScale, backing)
+        session.presenter.viewport.scrollerStyle = .legacy
+        for _ in 0..<3 {
+            session.pageZoom = 1.25
+            session.setPageZoom([NSNumber(value: 0.9999999999999997)])
+            view.layoutSubtreeIfNeeded()
+            XCTAssertEqual(session.pageZoom, 1)
+            XCTAssertEqual(session.presenter.viewportSize, CGSize(width: 400, height: 300))
+            XCTAssertTrue(session.presenter.viewport.horizontalScroller!.isHidden)
+            XCTAssertTrue(session.presenter.viewport.verticalScroller!.isHidden)
+        }
         // Clamped to Chromium's limits.
         session.pageZoom = 9
         XCTAssertEqual(session.pageZoom, 5)

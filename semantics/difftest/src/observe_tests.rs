@@ -1,6 +1,137 @@
 use crate::{compile, observe, oracle::Oracle, script};
 
 #[test]
+fn state_paths_deliver_nested_fields_and_indices() {
+    let scripts = script::scripted(
+        "paths",
+        include_str!("../../corpus/records/observation-paths.contract"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(scripts.len(), 2);
+    for s in &scripts {
+        assert!(s.delivery.stopped.is_none(), "{:?}", s.delivery.stopped);
+        crate::expectations(s).unwrap();
+    }
+    assert_eq!(scripts[1].delivery.until_met, 6);
+}
+
+#[test]
+fn missing_and_invalid_state_paths_never_match_none() {
+    let source = include_str!("../../corpus/records/observation-paths.contract");
+    let s = script::scripted("paths", source, None).unwrap().remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, _) = observe::run(plan.clone(), Oracle::for_case(&plan, &s.case), &[]);
+    assert_eq!(
+        crate::state_path::value(&plan, &lines, "gateway.matrix.0.1"),
+        Some(observe::number(2.0).as_str())
+    );
+    assert_eq!(
+        crate::state_path::value(&plan, &lines, "gateway.rows.1.absent"),
+        Some(observe::number(9.0).as_str())
+    );
+    assert!(crate::state_path::value(&plan, &lines, "remote.state").is_some());
+    for path in [
+        "unknown",
+        "unknown.state",
+        "gateway.missing",
+        "gateway.rows.2.state",
+        "gateway.rows.999999999999999999999999999999999999999",
+        "gateway.rows.-1",
+        "gateway.rows.+0",
+        "gateway.rows.01",
+        "gateway.rows.length",
+        "gateway.matrix.0.9",
+        "gateway.phase.state.field",
+        "gateway.phase.absent.field",
+        "saved.state",
+        "gateway.",
+        "gateway..phase",
+        "",
+        ".gateway",
+    ] {
+        assert_eq!(
+            crate::state_path::value(&plan, &lines, path),
+            None,
+            "{path}"
+        );
+        let mut missing = s.clone();
+        missing.items = vec![script::Item::Expect(
+            script::Expect::State(
+                path.into(),
+                contract_syntax::StateComparison::Equal,
+                vec!["none".into()],
+            ),
+            Default::default(),
+        )];
+        assert!(
+            crate::expectations_on(&missing, &plan, &lines).is_err(),
+            "{path}"
+        );
+    }
+    for path in [
+        "gateway.missing",
+        "gateway.rows.2.state",
+        "gateway.phase.absent.field",
+        "saved.state",
+    ] {
+        let source = format!("{source}\ntest \"missing wait\"\n  clock until state {path} == null within 10\n  tap \"start\"\n");
+        let s = script::scripted("missing wait", &source, None)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(s.case.events, [script::Event::Land], "{path}");
+        assert_eq!(s.delivery.taken, 0, "{path}");
+        let (_, kind, why) = s.delivery.stopped.unwrap();
+        assert_eq!(kind, "clock until (not met)", "{path}");
+        assert!(why.contains("<not printed>"), "{why}");
+    }
+    let absent = lines
+        .iter()
+        .filter(|l| !l.starts_with("slot gateway "))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        crate::state_path::value(&plan, &absent, "gateway.phase.state"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "async lane: needs Lean (semantics/README.md)"]
+fn state_paths_match_on_runner_and_lean_observations() {
+    let scripts = script::scripted(
+        "paths",
+        include_str!("../../corpus/records/observation-paths.contract"),
+        None,
+    )
+    .unwrap();
+    crate::leanrun::build().unwrap();
+    let cases = scripts.iter().map(|s| s.case.clone()).collect();
+    let outcomes = crate::check(cases, 2, "state-paths").unwrap();
+    for (s, outcome) in scripts.iter().zip(outcomes) {
+        assert!(matches!(outcome.verdict, crate::Verdict::Agree));
+        let plan = compile(&s.case).unwrap();
+        let (runner, lean) = outcome.observations.unwrap();
+        for lines in [runner, lean] {
+            crate::expectations_on(s, &plan, &lines).unwrap();
+            let last = crate::chunks(&lines).last().copied().unwrap();
+            assert_eq!(
+                crate::state_path::value(&plan, last, "held.phase.state"),
+                Some(
+                    observe::quote(if s.delivery.until_met == 0 {
+                        "idle"
+                    } else {
+                        "ready"
+                    })
+                    .as_str()
+                )
+            );
+        }
+    }
+}
+
+#[test]
 fn trace_names_due_work_and_handlers_whose_arguments_refused() {
     let scripts = script::scripted(
         "trace",
@@ -170,7 +301,7 @@ test "type in both fields"
         Oracle::for_case(&plan, &s.case),
         &s.case.events,
     );
-    crate::expectations_on(&s, &lines).unwrap();
+    crate::expectations_on(&s, &plan, &lines).unwrap();
     assert_eq!(
         lines
             .iter()
@@ -205,5 +336,137 @@ fn host_facts_are_the_runners_own_sources_never_a_gated_resources() {
             include_str!("../../corpus/components/device-facts.contract")
         ),
         ["exactPage", "exactViewport"]
+    );
+}
+
+/// A native module's read is answered by the runner from the module's
+/// substitute (#401): its boot answer is a host fact, the oracle's text names
+/// the module's source, and a step that re-asks the app's own source beside
+/// it leaves the module's answer where it was.
+#[test]
+fn a_module_read_is_a_host_fact_and_its_source_a_module() {
+    let path = crate::leanrun::project().join("corpus/resources/module.contract");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let s = script::scripted("module", &source, Some(&path))
+        .unwrap()
+        .remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, oracle) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &plan, &lines).unwrap();
+    let oracle = oracle.unwrap();
+    assert_eq!(oracle.host_sources(), ["geolocationStatus"]);
+    let text = oracle.text();
+    assert!(text.contains("module \"geolocationStatus\"\n"), "{text}");
+    assert!(text.contains("fact \"status\" "), "{text}");
+    // The app's own source is the oracle's, asked once per argument.
+    assert_eq!(text.matches("answer \"here\"").count(), 2, "{text}");
+    assert!(
+        !lines.iter().any(|l| l.starts_with(observe::MODULE_MOVED)),
+        "{lines:#?}"
+    );
+}
+
+#[test]
+fn scripted_state_bounds_and_membership_check_the_runner_observation() {
+    let source = r#"component App
+  state n = -2
+  state word = "ready"
+  view
+    text "Bounds"
+test "bounds"
+  expect state n >= -2
+  expect state n <= 2
+  expect state n in 0 -2 2
+  expect state word in "idle" "ready"
+"#;
+    let s = script::scripted("bounds", source, None).unwrap().remove(0);
+    assert!(s.delivery.stopped.is_none());
+    let plan = compile(&s.case).unwrap();
+    let (lines, _) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &plan, &lines).unwrap();
+    let wrong = script::scripted("bounds", &source.replace("n >= -2", "n >= -1"), None)
+        .unwrap()
+        .remove(0);
+    assert!(crate::expectations_on(&wrong, &plan, &lines)
+        .unwrap_err()
+        .contains("does not hold"));
+}
+
+/// A module read held at boot (its permission still prompt) shows its
+/// placeholder, which is no answer: no host fact, so the semantics leaves the
+/// read out (#401).
+#[test]
+fn an_unanswered_module_read_is_no_fact() {
+    let path = crate::leanrun::project().join("corpus/resources/module-unanswered.contract");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let s = script::scripted("unanswered", &source, Some(&path))
+        .unwrap()
+        .remove(0);
+    let plan = compile(&s.case).unwrap();
+    let (lines, oracle) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &plan, &lines).unwrap();
+    let oracle = oracle.unwrap();
+    assert!(oracle.host_sources().is_empty());
+    let text = oracle.text();
+    assert!(!text.contains("fact \"position\""), "{text}");
+    assert!(text.contains("module \"watchPosition\"\n"), "{text}");
+}
+
+/// A polled substitute (an accelerometer's samples) moves its read on a clock
+/// advance, a commit the trace leaves out: the step carries both notes, and
+/// the semantics' observation, which holds the boot answer, differs there.
+/// That difference is outside the semantics, not a divergence (#401).
+#[test]
+fn a_polled_module_answer_that_moves_is_outside() {
+    let path = crate::leanrun::project().join("corpus/resources/module.contract");
+    let source = "use accelerometer, Accelerometer from \"@exact/motion\"\n\ncomponent App\n  resource motion = accelerometer() as shape Accelerometer else empty()\n  view\n    text `${motion.sequence}` testId=\"motion\"\n\ntest \"polls\"\n  clock +3000\n";
+    let s = script::scripted("polled", source, Some(&path))
+        .unwrap()
+        .remove(0);
+    let plan = compile(&s.case).unwrap();
+    let mut oracle = Oracle::for_case(&plan, &s.case);
+    oracle.grants = "device.motion".into();
+    let (rust, oracle) = observe::run(plan, oracle, &s.case.events);
+    assert_eq!(oracle.unwrap().host_sources(), ["accelerometer"]);
+    let steps = crate::chunks(&rust);
+    let moved = steps[1];
+    assert!(
+        moved.contains(&observe::OMITTED_COMMIT.to_string()),
+        "{rust:#?}"
+    );
+    assert!(
+        moved.iter().any(|l| l.starts_with(observe::MODULE_MOVED)),
+        "{rust:#?}"
+    );
+    // What the semantics prints: the boot answer through the advance.
+    let held: Vec<&String> = steps[0]
+        .iter()
+        .filter(|l| l.starts_with("resource ") || l.starts_with("view "))
+        .collect();
+    let mut lean: Vec<String> = steps[0].to_vec();
+    lean.extend(["== clock +3000".to_string(), "outcome ok".to_string()]);
+    lean.extend(held.into_iter().cloned());
+    assert_ne!(
+        lean[4..],
+        moved
+            .iter()
+            .filter(|l| !l.starts_with('#'))
+            .cloned()
+            .collect::<Vec<_>>()[..]
+    );
+    assert!(
+        matches!(crate::compare(rust, lean), crate::Verdict::Unsupported(why) if why.starts_with(observe::MODULE_MOVED))
     );
 }

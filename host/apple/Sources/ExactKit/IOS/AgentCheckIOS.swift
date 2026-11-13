@@ -119,10 +119,10 @@ extension Agent {
             }
             return r
         }
-        /// `v`'s alpha times its ancestors'.
+        /// `v`'s alpha times its ancestors'. A view's `alpha` is its layer's `opacity`, so each counts once.
         func opacity(_ v: UIView) -> Double {
             var o = 1.0, at: UIView? = v
-            while let cur = at { o *= Double(cur.alpha) * Double(cur.layer.opacity); at = cur.superview }
+            while let cur = at { o *= Double(cur.alpha); at = cur.superview }
             return o
         }
         /// Whether `s` or a view in it paints at `p` something a style does not say for certain: a fill, a picture, a
@@ -239,6 +239,32 @@ extension Agent {
             return ["by": Int(p.id), "dx": Double(r2(past)), "pad": Double(r2(pad))]
         }
 
+        /// Whether `n` lets touches through: `pointer-events: none` on it, or on the nearest ancestor that says one,
+        /// as the property inherits (NodeViewIOS.swift's `hitTest` passes such a node by).
+        func passesTouches(_ n: NodeView) -> Bool {
+            var at: UIView? = n
+            while let v = at {
+                if let said = (v as? NodeView)?.style["pointer_events"]?.string { return said == "none" }
+                at = v.superview
+            }
+            return false
+        }
+        /// Whether `n` is in a live region (`aria-live` polite or assertive, a `status` or `alert` role) laid out of
+        /// flow, at or above it up to that region.
+        func laidOverAsAnnouncement(_ n: NodeView) -> Bool {
+            var at: UIView? = n, out = false
+            while let v = at {
+                if let node = v as? NodeView {
+                    out = out || ["absolute", "fixed"].contains(node.layoutPosition)
+                    let live = ["polite", "assertive"].contains(node.props["accessibilityLive"] ?? "")
+                        || ["status", "alert"].contains(node.props["accessibilityRole"] ?? "")
+                    if live { return out }
+                }
+                at = v.superview
+            }
+            return false
+        }
+
         /// A flex or grid item past its container's sides within the viewport (a centred word wider than its column runs
         /// out both sides), where neither the container nor an ancestor it lies beyond clips it or scrolls it sideways, and
         /// it is in flow and untransformed. The web's `spill` (host/web-js/check.js) is the same rule.
@@ -261,8 +287,8 @@ extension Agent {
         // and not each of its children.
         var visited = Set<ObjectIdentifier>()
         func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil) {
-            guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, v.layer.opacity > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
-            let a = alpha * v.alpha * CGFloat(v.layer.opacity)
+            guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
+            let a = alpha * v.alpha
             var heldBelow = held, outBelow = out
             if let n = v as? NodeView {
                 guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n) else { return }
@@ -275,7 +301,12 @@ extension Agent {
                     if let parent, let padded = paddedWidth(n, in: parent) { item["padded"] = padded }
                     if n.isParagraph { paragraph(n, b, alpha: a, into: &item) }
                     control(n, into: &item)
-                    if item["control"] != nil || item["text"] != nil, let c = cover(n, b), item["control"] != nil || c["kind"] as? String != "offscreen" { item["cover"] = c }
+                    // What lets touches through is no target, and a hit test passes through it to what lies under it, so
+                    // cannot say what lies over it; in an announcement laid over the page (a toast) it lies there by design.
+                    // The web's `through` and `overlay` (host/web-js/check.js).
+                    let through = passesTouches(n)
+                    if through, laidOverAsAnnouncement(n) { item["overlay"] = true }
+                    if !through, item["control"] != nil || item["text"] != nil, let c = cover(n, b), item["control"] != nil || c["kind"] as? String != "offscreen" { item["cover"] = c }
                     if item["text"] == nil, item["control"] == nil { fill(n, b, alpha: a, faded: alpha < 0.999, into: &item) }
                     // A fill's presented part too: a card below the viewport, or past its scroller's edge, is not drawn, and the
                     // pixels there are the page's (LLP 1116.010 D2: trivia's Badge below the viewport was "a card that does not show").

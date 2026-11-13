@@ -1,0 +1,25 @@
+// data: fieldnotes
+// storage: background
+// LLP 1097 §5: the Fieldnotes carrier, with its identity and grants and main placement.
+routes nav
+  home "/"
+    share "/share"
+
+component StorageBackground
+  state answer = ""
+  mutation work as shape string then accepted
+  action accepted
+    answer = match work { case some(value) => value, case none => "" }
+  action ask(command: string)
+    send work = library(command)
+  view
+    column testId="root" padding=12 gap=8 background-color="#ffffff"
+      text answer testId="answer"
+      button "Initialize" press=ask("init") testId="init"
+      button "First edit" press=ask("first") testId="first"
+      button "Second edit" press=ask("second") testId="second"
+      button "Read" press=ask("read") testId="read"
+      button "Chained rounds" press=ask("chain") testId="chain"
+      button "Fail" press=ask("fail") testId="fail"
+      button "Failure code" press=ask("code") testId="code"
+      button "Recover" press=ask("recovered") testId="recovered"

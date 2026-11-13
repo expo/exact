@@ -500,7 +500,7 @@ function barItems(route, header) {
       // a layer, the bar's segments, its search field, or what its author wrote `appearance: none` on (iOS projects none of it): no item
       if (child.matches(heading)) {
         headings++;
-      } else if (child.matches(press) || opensPopover(child) || disabled(child) && !holds(child)) {
+      } else if (child.matches(press) || opens(child) || disabled(child) && !holds(child)) {
         if (!tap && child.matches(press) && holds(child)) {
           walk(tap = child);
         } else {
@@ -530,24 +530,37 @@ export function markBars(node) {
     markBars(child);
   }
 }
-// Whether a button shows or toggles a popover, a header's menu (kernel/src/invocation.rs `opens_popover`).
-function opensPopover(el) {
+// Whether a button opens what it names, a header's item with no press of its own: a popover it shows or toggles, or a
+// dialog it shows modally (kernel/src/invocation.rs `opens`).
+function opens(el) {
   if (el.localName !== "button") {
     return false;
   }
   const commanded = document.getElementById(el.getAttribute("commandfor") || "");
   if (commanded) {
-    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(el.getAttribute("command") ?? "");
+    const command = el.getAttribute("command") ?? "";
+    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(command) || commanded.localName === "dialog" && /^show-modal$/i.test(command);
   }
   return !!document.getElementById(el.getAttribute("popovertarget") || "")?.hasAttribute("popover") && !/^hide$/i.test(el.getAttribute("popovertargetaction") ?? "");
 }
 // LLP 1115.000 D4.1: title precedence is authored head, visible route heading, then app name.
-const titleOf = (route) => headerOf(route)?.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]")?.textContent.trim() ?? "";
+const titleOf = (route) => {
+  for (const el of headerOf(route)?.getElementsByTagName("*") ?? []) {
+    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]")) return el.textContent.trim();
+  }
+  return "";
+};
 let saidTitle = null, appName = null;
+export function routeTitle(root) {
+  for (const nav of root?.getElementsByTagName("*") ?? []) {
+    if (nav.hasAttribute("navigationBack")) return titleOf(selectedRoute(nav)) || null;
+  }
+  return null;
+}
 export function pageTitle(said = saidTitle) {
   saidTitle = said;
   appName ??= document.querySelector("meta[property=\"og:site_name\"]")?.content ?? document.title;
-  const nav = root?.querySelector("[navigationBack]"), title = said ?? (nav && titleOf(selectedRoute(nav)) || appName);
+  const title = said ?? routeTitle(root) ?? appName;
   if (document.title !== title) {
     document.title = title;
   }

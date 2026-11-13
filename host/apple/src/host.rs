@@ -35,6 +35,8 @@ mod arrange_group_tests;
 mod arrange_tests;
 #[path = "canvas2d.rs"]
 pub(crate) mod canvas2d;
+#[path = "canvas_capture.rs"]
+mod canvas_capture;
 #[path = "canvas_performance.rs"]
 mod canvas_performance;
 #[path = "colors.rs"]
@@ -77,6 +79,8 @@ use paragraph::props_for;
 mod persistence;
 #[path = "presence.rs"]
 mod presence;
+#[path = "renew.rs"]
+mod renew;
 #[path = "tamber.rs"]
 mod tamber;
 #[cfg(test)]
@@ -176,6 +180,7 @@ pub(crate) struct Mirror {
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
     pub(crate) preloads: Option<crate::launch_preloads::LaunchPreloads>,
+    pub(crate) launch_store: Option<std::sync::Arc<crate::launch_preloads::StoreWatch>>,
     boot_requests: Vec<RequestOut>,
     preload_content: Vec<String>,
     preload_accepted: bool,
@@ -205,6 +210,8 @@ pub struct Host<D: DataSource> {
     /// Canvas draws run in a turn of their own (`exact_canvas_draw`), not in
     /// the turns main waits on (LLP 1072 §8.5).
     canvas_deferred: bool,
+    /// This session's display scale for Canvas 2D (LLP 1056 D4).
+    canvas_scale: f64,
     dirty_paragraphs: BTreeSet<ViewId>,
     pending_layout: IdSet<NodeKey>,
     layout_withheld: bool,
@@ -230,6 +237,9 @@ pub struct Host<D: DataSource> {
     engine: Engine,
     paint: paint::Paint,
     holds: BTreeMap<u64, HoldToken>,
+    /// Canvas captures the presenter is encoding, or refused (`canvas_capture.rs`).
+    canvas_capture_waiting: Vec<(RequestOut, Option<String>)>,
+    canvas_captures: BTreeMap<u64, canvas_capture::Pending>,
     height_owner: Option<NodeKey>,
     height_handles: BTreeMap<NodeKey, HeightHandle>,
     height_auto_owned: bool,
@@ -260,6 +270,9 @@ pub struct Host<D: DataSource> {
     secrets: Option<Box<dyn crate::store::KeptStore>>,
     pending_store_writes: Vec<exact_runner::StoreWrite>,
     pending_store_stamps: std::collections::BTreeMap<String, exact_data::secrets::Stamp>,
+    /// What the disk held for each owed name when its write first failed.
+    pending_store_bases: std::collections::BTreeMap<String, Option<Vec<u8>>>,
+    reported_store_failures: BTreeSet<String>,
     data_activated: bool,
     /// The source's activation, run ahead of `activate_data` by `prepare_data`.
     source_prepared: Option<Result<(), String>>,
@@ -307,7 +320,6 @@ impl<D: DataSource> Host<D> {
             None,
         )
     }
-
     /// Boot carrying an earlier host's state (the dev reload, LLP 1007 §6):
     /// slots by name where their types still fit, settled resources where
     /// their arguments still match, the clock.
@@ -330,7 +342,6 @@ impl<D: DataSource> Host<D> {
             None,
         )
     }
-
     /// Boot with the app's kept secrets (LLP 1018 D6): `snapshot` is what
     /// the platform's store holds under the granted names, read before this
     /// call (a carried boot takes the carried store instead); `secrets` is
@@ -369,7 +380,6 @@ impl<D: DataSource> Host<D> {
         host.commit_boot();
         Ok((host, batch))
     }
-
     /// Boot with one action over the accepted plan before its first layout.
     /// The Apple ABI uses this for synchronous font registration without decoding the plan twice.
     #[allow(clippy::too_many_arguments)]
@@ -536,6 +546,7 @@ impl<D: DataSource> Host<D> {
             .transpose()?
             .unwrap_or_default();
         let mut host = Host {
+            launch_store: None,
             preloads,
             boot_requests,
             preload_content,
@@ -557,6 +568,7 @@ impl<D: DataSource> Host<D> {
             canvas_held: IdSet::default(),
             canvas_kept: Default::default(),
             canvas_deferred: false,
+            canvas_scale: layout.canvas_scale.unwrap_or(canvas2d::DEFAULT_SCALE),
             dirty_paragraphs: BTreeSet::new(),
             pending_layout: IdSet::default(),
             layout_withheld: false,
@@ -583,6 +595,8 @@ impl<D: DataSource> Host<D> {
             },
             paint: paint::Paint::default(),
             holds: BTreeMap::new(),
+            canvas_capture_waiting: Vec::new(),
+            canvas_captures: BTreeMap::new(),
             height_owner: None,
             height_handles: BTreeMap::new(),
             height_auto_owned: false,
@@ -615,6 +629,8 @@ impl<D: DataSource> Host<D> {
             secrets,
             pending_store_writes: Vec::new(),
             pending_store_stamps: Default::default(),
+            pending_store_bases: Default::default(),
+            reported_store_failures: BTreeSet::new(),
             update_line: None,
             delivery,
             colors_seen: None,
@@ -688,7 +704,6 @@ impl<D: DataSource> Host<D> {
         let batch = host.write(batch, None);
         Ok((host, batch))
     }
-
     /// Release effects only after the containing app accepted every candidate.
     pub(crate) fn commit_boot(&mut self) {
         if let Some(note) = self.delivery.and_then(|hooks| (hooks.take_note)()) {
@@ -700,12 +715,10 @@ impl<D: DataSource> Host<D> {
             preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
         }
     }
-
     /// The runner.
     pub fn runner(&self) -> &Runner<D> {
         &self.runner
     }
-
     /// The runner, mutably: an auth session's arm (LLP 1069.006).
     pub fn runner_mut(&mut self) -> &mut Runner<D> {
         &mut self.runner
@@ -727,7 +740,7 @@ impl<D: DataSource> Host<D> {
             return Some(crate::picker::file_op(op, request, self.runner.data_ref()));
         }
         if op.as_deref() == Some("appRoots") {
-            return Some(crate::picker::roots_reply());
+            return Some(crate::picker::app_roots_reply(self.runner.data_ref()));
         }
         if op.as_deref() == Some("sensorEvents") {
             return Some(self.sensor_events(request));
@@ -808,6 +821,9 @@ impl<D: DataSource> Host<D> {
 
     /// Take the source's announced topics, waking the host (LLP 1016.002).
     pub fn listen(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        if let Some(store) = &self.launch_store {
+            store.listen(wake.clone());
+        }
         self.preload_wake.set(wake.clone());
         self.runner.listen(wake);
     }
@@ -1204,6 +1220,8 @@ impl<D: DataSource> Host<D> {
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
         crate::doc_watch::sync(&mut self.doc_watch, &mut self.runner);
         let (mut batch, error) = self.resize_rounds(batch, error);
+        self.drain_canvas_captures(&mut batch);
+        self.forget_canvas_captures();
         self.state_onto(&mut batch);
         self.write(batch, error.as_deref())
     }
@@ -1237,6 +1255,7 @@ impl<D: DataSource> Host<D> {
             > 1)
         .then(|| self.runner.handlers());
         self.close_new_top_layer(receipts);
+        let mut repaint = Vec::new();
         for t in receipts {
             let r = &t.receipt;
             // Flights capture their leavers before an exit takes them
@@ -1262,6 +1281,7 @@ impl<D: DataSource> Host<D> {
                     self.transform_drags.remove(id);
                 }
             }
+            repaint.extend(self.renew_views(r, &mut batch));
             for key in &r.created {
                 if let Some(node) = self.runner.kernel().node_by_key(*key) {
                     let id = node.id;
@@ -1345,6 +1365,7 @@ impl<D: DataSource> Host<D> {
             self.cancel_invalid_height_drag();
             self.reconcile_transform_drags(&mut batch);
         }
+        self.repaint_renewed(&repaint, &mut batch);
         let seek = self.engine.advance(self.engine_time(self.now_ms));
         debug_assert!(seek.is_ok(), "the clock never runs backwards here");
         // An advance whose commits changed no node (a frame task that only

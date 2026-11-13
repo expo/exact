@@ -5,6 +5,7 @@
 //! lines; this build script consumes only the metadata those crates export.
 
 mod engine_os;
+mod engine_receipt;
 mod package_tool;
 
 use engine_os::ENGINE_OS;
@@ -17,18 +18,28 @@ use std::process::Command;
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(exact_js_engine)");
     println!("cargo:rustc-check-cfg=cfg(exact_js_intl)");
+    println!("cargo:rustc-check-cfg=cfg(exact_js_oom)");
     for name in ["BUN", "EXACT_JS_ENGINE", "EXACT_ROLLDOWN"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
     for source in [
         "package_tool.rs",
         "engine_os.rs",
+        "engine_receipt.rs",
         "src/shim.cc",
         "src/console.js",
         "src/pure.js",
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
+        "src/time.js",
+        "src/crypto.js",
+        "src/module-work.js",
+        "src/fetch.js",
+        "src/auth.js",
+        "src/store.js",
+        "src/storage.js",
+        "src/reply.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",
@@ -92,6 +103,16 @@ fn main() {
         shim.define("EXACT_JS_INTL", None);
         println!("cargo:rustc-cfg=exact_js_intl");
     }
+    let engine = required_path("DEP_HERMES_LEAN_ENGINE_DIR");
+    let receipt = engine.join("hermes-input-receipt.json");
+    println!("cargo:rerun-if-changed={}", receipt.display());
+    let bytes = std::fs::read(&receipt).ok();
+    let oom = engine_receipt::oom_enabled(bytes.as_deref(), &engine)
+        .unwrap_or_else(|error| panic!("exact-js: {}: {error}", receipt.display()));
+    if oom {
+        shim.define("EXACT_JS_OOM", None);
+        println!("cargo:rustc-cfg=exact_js_oom");
+    }
     shim.compile("exact_js_shim");
     println!("cargo:rustc-cfg=exact_js_engine");
 
@@ -121,12 +142,22 @@ fn main() {
 
     // Ibex installs PURE | CRYPTO | ABORT before Exact's trusted policy
     // and data-seam layers; application bytecode follows after
-    // Adapter::capture_intrinsics() and Adapter::harden().
+    // Adapter::capture_intrinsics() and Adapter::harden(). The web's module
+    // realm evaluates binary.js and then the prelude's scripts, time.js
+    // through prelude.js, in this order (host/web-js/glue.mjs `MODULE_PRELUDE`).
     let prelude = [
         "src/pure.js",
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
+        "src/time.js",
+        "src/crypto.js",
+        "src/module-work.js",
+        "src/fetch.js",
+        "src/auth.js",
+        "src/store.js",
+        "src/storage.js",
+        "src/reply.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",
@@ -157,6 +188,18 @@ fn main() {
     let prelude_path = out.join("prelude.js");
     std::fs::write(&prelude_path, &prelude).expect("write combined prelude");
     compile(&prelude_path, &out.join("prelude.hbc"));
+    let adoption_probe = prelude.replacen(
+        "p.module = true;",
+        "p.module = true; global.exact.adoptOom();",
+        1,
+    );
+    assert_ne!(
+        adoption_probe, prelude,
+        "the adoption probe must run at the adopt seam"
+    );
+    let adoption_path = out.join("prelude-with-adoption-probe.js");
+    std::fs::write(&adoption_path, adoption_probe).expect("write adoption probe prelude");
+    compile(&adoption_path, &out.join("prelude-with-adoption-probe.hbc"));
     let leaked_path = out.join("prelude-with-abort-hook.js");
     std::fs::write(&leaked_path, leaked_abort_hooks).expect("write abort-hook fixture prelude");
     compile(&leaked_path, &out.join("prelude-with-abort-hook.hbc"));
@@ -216,8 +259,10 @@ fn main() {
         "mapper",
         "process",
         "heap",
+        "oom",
         "snapshot",
         "context",
+        "canvas-capture",
         "network",
         "walk",
         "presence",

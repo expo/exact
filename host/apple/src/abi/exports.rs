@@ -421,6 +421,12 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.request_active(ticket)), |_| 0)
         }
 
+        /// Mark an owned pixel copy before the presenter starts encoding it.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_snapshotted(rt: u32, ticket: u64) -> u8 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.canvas_snapshotted(ticket)), |_| 0)
+        }
+
         /// Complete presenter-owned surface work; the input is bytes or a failure message.
         #[no_mangle]
         pub extern "C" fn exact_fulfill_surface(rt: u32, ticket: u64, kind: u32, len: usize, now_ms: f64) -> u32 {
@@ -747,6 +753,13 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.native_timers(enabled != 0); 0 }, |n| n)
         }
 
+        /// Nonzero: a retiring list row is rebound to the item its list
+        /// needs next, and the batch says `renew` for each of its views (LLP 1078).
+        #[no_mangle]
+        pub extern "C" fn exact_row_reuse(rt: u32, on: u32) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.set_row_reuse(on != 0); 0 }, |n| n)
+        }
+
         /// Deliver one native timer instance without draining other native timers.
         #[no_mangle]
         pub extern "C" fn exact_fire_native_timer(rt: u32, index: u32, generation: u64, now: f64) -> u32 {
@@ -970,6 +983,13 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_canvas_display(rt: u32, scale: f64, memory: f64) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_display(scale, memory), |n| n)
+        }
+
+        /// A Canvas 2D image handle the presenter let go (LLP 1056 D9): the
+        /// handle is the input buffer's first `len` bytes.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_image_released(rt: u32, len: usize) {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_image_released(len), |_| ())
         }
 
         /// A 2D canvas's replay is behind (`held` 1) or caught up (0): a

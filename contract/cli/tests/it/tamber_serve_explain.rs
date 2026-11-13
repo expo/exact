@@ -217,7 +217,7 @@ fn uses_reads_sources_not_text() {
     let dir = app("uses-c2-r1", design);
     std::fs::create_dir_all(dir.join("assets/icons")).unwrap();
     std::fs::write(dir.join("assets/icons/reply.svg"), SVG).unwrap();
-    let view = "component App\n  view\n    column\n      text \"symbol:icon.reply\"\n      image \"photo.png\" aria-label=\"symbol:icon.reply\" // \"symbol:icon.reply\"\n      image (\n        \"symbol:icon.reply\")\n      Card()\n\ncomponent Card\n  params\n    glyph: icon = \"icon.reply\"\n  view\n    column animation-name=\"pulse\" animation-duration=\"motion.fast\"\n      image \"symbol:param.glyph\"\n\nkeyframes pulse\n  from opacity=0\n  to opacity=1\n";
+    let view = "component App\n  view\n    column\n      text \"symbol:icon.reply\"\n      image \"assets/photo.png\" aria-label=\"symbol:icon.reply\" // \"symbol:icon.reply\"\n      image (\n        \"symbol:icon.reply\")\n      Card()\n\ncomponent Card\n  params\n    glyph: icon = \"icon.reply\"\n  view\n    column animation-name=\"pulse\" animation-duration=\"motion.fast\"\n      image \"symbol:param.glyph\"\n\nkeyframes pulse\n  from opacity=0\n  to opacity=1\n";
     std::fs::write(dir.join("app.contract"), view).unwrap();
     let mut s = Serve::start(&dir, &[]);
     let (icon, _) = s.ask(json!({"method": "uses", "token": "icon.reply"}));

@@ -21,7 +21,7 @@ final class StatusItemHost: NSObject {
     nonisolated(unsafe) private static var hosts: [Weak] = []
     private struct Weak { weak var host: StatusItemHost? }
     /// The placed items, by the button's id.
-    private var items: [UInt32: NSStatusItem] = [:]
+    private(set) var items: [UInt32: NSStatusItem] = [:]
     /// The image each item was given from: a sync runs after every batch.
     private var images: [UInt32: NSImage?] = [:]
     private var saidUnplaced = false
@@ -91,8 +91,9 @@ final class StatusItemHost: NSObject {
         node.rejectNativeActiveProperties(on: "NSStatusBarButton")
         let item = items[node.id] ?? {
             let made = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            // Where the person dragged it is kept, as a hand-built app's is.
-            made.autosaveName = "exact-status-\(node.props["testId"] ?? node.props["id"] ?? String(items.count))"
+            // Where the person dragged it is kept, as a hand-built app's is,
+            // under a name no other live item has.
+            made.autosaveName = "exact-status-\(node.props["testId"] ?? node.props["id"] ?? String(node.id))"
             made.button?.target = self
             made.button?.action = #selector(clicked(_:))
             items[node.id] = made

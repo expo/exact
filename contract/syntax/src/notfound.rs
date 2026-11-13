@@ -120,7 +120,9 @@ fn wrap(nodes: &mut [Node], routes: &RoutesDecl) -> bool {
 /// "Go Home" is a link to the first screen, so it works where the page is a
 /// document (a server's not-found page) and goes where any link to a route
 /// goes (the root's `navigate`, else the router's own `go`). Read as Contract,
-/// as an author would write it, and given the `routes` line's position.
+/// as an author would write it, and given the `routes` line's position. The
+/// link's `href` is set after the parse, as a value: the pattern is the
+/// author's text, which a quote in it would otherwise end.
 fn screen(routes: &RoutesDecl, entry: &str) -> Option<Node> {
     let home = root_pattern(routes)?;
     let text = format!(
@@ -135,13 +137,28 @@ fn screen(routes: &RoutesDecl, entry: &str) -> Option<Node> {
             color="-exact-secondary-label"
           text "Page not found" font="-exact-title3" testId="not-found-title"
           text `There is no page at ${{{entry}.url}}.` color="-exact-secondary-label" max-width=360 testId="not-found-message"
-          link href="{home}" margin-top=8 testId="not-found-home"
+          link href="" margin-top=8 testId="not-found-home"
             text "Go Home"
 "#
     );
     let mut parsed = crate::parse(&text).ok()?;
     let mut node = parsed.components.pop()?.view.pop()?;
+    let href = link_href(std::slice::from_mut(&mut node))?;
+    href.value = Expr::Str(home.to_owned(), href.value.span());
     let at = routes.span;
     node.visit_spans(&mut |s: &mut Span| *s = at);
     Some(node)
+}
+
+/// The `href` of the first `link` in `nodes`.
+fn link_href(nodes: &mut [Node]) -> Option<&mut Attr> {
+    nodes.iter_mut().find_map(|node| {
+        if !matches!(node, Node::Element { tag, .. } if tag == "link") {
+            return node.child_lists_mut().into_iter().find_map(link_href);
+        }
+        let Node::Element { attrs, .. } = node else {
+            return None;
+        };
+        attrs.iter_mut().find(|a| a.name == "href")
+    })
 }

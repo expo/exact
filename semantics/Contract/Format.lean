@@ -13,6 +13,7 @@ a table's locale, from the format data the plan carries for it (the last
 section, LLP 1054.000.003 D6).
 -/
 import Contract.Number
+import Contract.Value
 
 namespace Contract.Format
 
@@ -169,6 +170,21 @@ def wallMs (epoch offset : F64) : Option F64 :=
   else
     let wall := trunc epoch + offset * 60000
     if firstWall ≤ wall && wall ≤ lastWall then .some wall else .none
+
+/-- A strict day key's midnight, without shifting its calendar day.
+The offset is still bounded as for timestamps, and years are 1–9999. -/
+def dayKeyWall (key : String) (offset : F64) : Option F64 := do
+  let _ ← wallMs 0 offset
+  let (year, month, day) ← Str.isoDate key
+  if year = 0 then .none
+  else
+    let year := year - (if month ≤ 2 then 1 else 0)
+    let era := year / 400
+    let yoe := year - era * 400
+    let month := if month > 2 then month - 3 else month + 9
+    let doy := (153 * month + 2) / 5 + day - 1
+    let days := era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return (F64.ofNat days - 719468) * 86400000
 
 /-- Rust's `f64::rem_euclid`. -/
 def remEuclid (a b : F64) : F64 :=

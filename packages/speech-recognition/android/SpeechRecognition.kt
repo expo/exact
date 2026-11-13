@@ -135,7 +135,8 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
         val recognizer = recognizer(args) ?: return answer(null)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         val done = { s: RecognitionSupport? -> main.post { recognizer.destroy(); answer(s) }; Unit }
-        recognizer.checkRecognitionSupport(intent, Executors.newSingleThreadExecutor(), object : RecognitionSupportCallback {
+        // On main, which costs no thread: an executor of its own per check would leave its thread waiting forever.
+        recognizer.checkRecognitionSupport(intent, context.application.mainExecutor, object : RecognitionSupportCallback {
             override fun onSupportResult(recognitionSupport: RecognitionSupport) = done(recognitionSupport)
             override fun onError(error: Int) = done(null)
         })

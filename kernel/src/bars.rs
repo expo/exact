@@ -77,8 +77,11 @@ pub mod fact {
     pub const TABLIST: u32 = 1 << 2;
     /// It hears `press`.
     pub const PRESS: u32 = 1 << 3;
-    /// A button whose invocation opens a popover (`Invocation::opens_popover`).
-    pub const MENU: u32 = 1 << 4;
+    /// A button whose invocation opens what it names (`Invocation::opens`):
+    /// a popover (the item's menu, or a popover shown from it) or a modal
+    /// dialog. It is an item with no `press` of its own, as HTML's
+    /// `commandfor` button is a button.
+    pub const OPENS: u32 = 1 << 4;
     /// Its `id` is the one the navigation root names as the stack's Back
     /// control (`navigationBack`).
     pub const BACK: u32 = 1 << 5;
@@ -116,11 +119,11 @@ pub mod fact {
     pub const LEVEL: u32 = 16;
 
     /// A node's facts, from its own facts and three that a tree supplies:
-    /// whether it hears `press` (the runner's), whether it is a button that
-    /// opens a popover (`Invocation::opens_popover`, which resolves the
-    /// name it gives), and the `id` the navigation root names as its Back
-    /// control.
-    pub fn of(node: &crate::NodeFacts<'_>, press: bool, menu: bool, back: Option<&str>) -> u32 {
+    /// whether it hears `press` (the runner's), whether it is a button whose
+    /// invocation opens what it names (`Invocation::opens`, which resolves
+    /// the name it gives), and the `id` the navigation root names as its
+    /// Back control.
+    pub fn of(node: &crate::NodeFacts<'_>, press: bool, opens: bool, back: Option<&str>) -> u32 {
         let props = node.props;
         let role = props.str(PropId::AccessibilityRole);
         let heading = node.node_type == NodeType::Text && role == Some("heading");
@@ -147,7 +150,7 @@ pub mod fact {
                 LAYER,
             ),
             (press, PRESS),
-            (menu, MENU),
+            (opens, OPENS),
             (back.is_some() && props.str(PropId::Id) == back, BACK),
             (props.str(PropId::SemanticTag) == Some("header"), HEADER),
             (node.style.display == Display::None, HIDDEN),
@@ -322,7 +325,7 @@ impl<N: Copy + PartialEq> Walk<N> {
                 // bar items. One tablist, as one search field.
                 self.unplaced |= self.segments.is_some();
                 self.segments.get_or_insert(child);
-            } else if facts & (fact::PRESS | fact::MENU) != 0
+            } else if facts & (fact::PRESS | fact::OPENS) != 0
                 // A disabled button around the heading is walked for it, as a box is.
                 || (facts & fact::DISABLED != 0 && !holds_heading(tree, child))
             {
@@ -538,8 +541,8 @@ impl Tree for Live<'_> {
         let Some(node) = self.kernel.node(id) else {
             return 0;
         };
-        let menu = crate::Invocation::of(self.kernel, &node).is_some_and(|i| i.opens_popover());
-        fact::of(&node.facts(), (self.pressed)(id), menu, self.back)
+        let opens = crate::Invocation::of(self.kernel, &node).is_some_and(|i| i.opens());
+        fact::of(&node.facts(), (self.pressed)(id), opens, self.back)
     }
     fn children(&self, id: ViewId) -> Vec<ViewId> {
         self.kernel

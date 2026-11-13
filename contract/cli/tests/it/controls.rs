@@ -1186,6 +1186,38 @@ fn a_range_and_a_determinate_progress_are_full_width_by_an_implied_row() {
     assert_eq!(width(&r, "fit-range"), 129.0);
 }
 
+/// LLP 1115.000 D10.4 (expo/exact#395): a `select` is no wider than what
+/// holds it, by a row lowering implies, `max-width: 100%`; one its author
+/// writes replaces it. Its longest option no longer runs it past a phone.
+#[test]
+fn a_select_is_no_wider_than_what_holds_it() {
+    use exact_kernel::{Dimension, StyleId};
+    let long = "option \"All Sources\" value=\"all\"\n        option \"Commentaries and Dictionaries\" value=\"library\"";
+    let mut r = boot(&format!(
+        "component App\n  state v = \"all\"\n  action pick(s: string)\n    v = s\n  view\n    column width=30 testId=\"root\"\n      select value=v change=pick aria-label=\"Scope\" align-self=\"flex-start\" testId=\"held\"\n        {long}\n      select value=v change=pick aria-label=\"Scope\" align-self=\"flex-start\" max-width=\"none\" testId=\"free\"\n        {long}\n"
+    ));
+    let row = |r: &Runner<NoData>, id: &str| {
+        let style = r.kernel().node(view_of(r, id)).unwrap().style;
+        (
+            style
+                .mask
+                .has(StyleId::MaxWidth)
+                .then_some(style.max_width.clone()),
+            style.written.has(StyleId::MaxWidth),
+        )
+    };
+    assert_eq!(row(&r, "held"), (Some(Dimension::Percent(100.0)), false));
+    assert!(row(&r, "free").1, "an authored maximum is written");
+    let root = view_of(&r, "root");
+    r.kernel_mut()
+        .compute_layout(root, exact_kernel::Offer::definite(320.0, 480.0))
+        .unwrap();
+    let width = |r: &Runner<NoData>, id: &str| r.kernel().node(view_of(r, id)).unwrap().frame.width;
+    // Its own width here is the 46 a select with no host to measure it has.
+    assert_eq!(width(&r, "free"), 46.0);
+    assert_eq!(width(&r, "held"), 30.0);
+}
+
 #[test]
 fn the_compiler_refuses_what_a_progress_does_not_take() {
     let refused = |line: &str| {

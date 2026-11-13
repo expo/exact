@@ -4,7 +4,7 @@ import XCTest
 
 /// Answers Arrange's calls as the runtime would, and records them in order:
 /// the Swift half of the web/Linux sequence (`host/web/src/reorder_tests.rs`,
-/// `host/linux/tests/it/arrange.rs`); `host/apple/src/arrange_tests.rs` is
+/// `host/painted/tests/it/arrange.rs`); `host/apple/src/arrange_tests.rs` is
 /// the Rust half.
 final class ReorderRecorder: ReorderCalls {
     var log: [String] = []

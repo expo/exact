@@ -159,7 +159,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// raster, symbol, surface).
     var layerPaintCache: Bool?
     /// What the host last wrote to AppKit accessibility (props and form state).
-    struct AccessibilityWrite: Equatable { var enabled = true; var identifier: String?; var label: String?; var help: String?; var required = false; var formInitialized = false }
+    struct AccessibilityWrite: Equatable { var enabled = true; var identifier: String?; var label: String?; var help: String?; var required = false; var formInitialized = false; var text: TextAccessibilityWrite? }
     var lastAccessibilityWrite = AccessibilityWrite()
     var boxGradient: CAGradientLayer?
     var imageLayer: CALayer?
@@ -524,6 +524,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             o.autoresizingMask = [.width, .height]
             addSubview(o)
             overlay = o
+            Self.canvasOverlays.add(o)
         }
         if kind == "textarea" { makeTextArea() }
         if kind == "input" {
@@ -602,7 +603,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         }
         if let blur = materialView as? NSVisualEffectView {
             let sheetGround = requested == nil && needsSheetMaterial
-            blur.blendingMode = sheetGround ? .behindWindow : .withinWindow
+            blur.blendingMode = sheetGround || blur.material == .sidebar ? .behindWindow : .withinWindow
             blur.state = .followsWindowActiveState
         }
         if #available(macOS 26.0, *), let glass = materialView as? NSGlassEffectView { glass.tintColor = glassTint.flatMap { NSColor(cgColor: $0) } }
@@ -645,17 +646,6 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         }
     }
 
-    /// The canvas this node is painted through, if any: the nearest canvas
-    /// above whose overlay holds it.
-    package var canvasAbove: NodeView? {
-        var v: NSView = self
-        while let s = v.superview {
-            if let c = s as? NodeView, c.overlay === v { return c }
-            v = s
-        }
-        return nil
-    }
-
     /// Something under a canvas repainted outside a batch (LLP 1014 D4 b, c):
     /// the canvas captures again on this run-loop turn — unless the draw is
     /// the capture's own, or follows a batch that already captured.
@@ -680,7 +670,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         repaintThrough(); queueScrollEvent(); scrollEndMoved()
     }
     private var scrollEventQueued = false
-    private var lastScrollEvent = CGPoint.zero
+    var lastScrollEvent = CGPoint.zero
     var scrollEnd: ScrollEnd?
     private func queueScrollEvent() {
         guard handlers.contains("scroll"), !scrollEventQueued else { return }
@@ -863,14 +853,14 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         style.values.contains { $0.isSchemeColor || $0.isSchemeGradient || $0.containsSystemColor }
     }
 
-    /// The appearance changed under this view. A repaint is not enough: the
-    /// text engine caches a paragraph spec and a laid-out paragraph, and a
-    /// `Run` carries a concrete colour, so ink from the previous appearance
-    /// would survive a redisplay. Inline text nodes are not in the native
-    /// hierarchy, so the paragraph that owns them is invalidated too, and
-    /// the colours assigned outside a draw are re-applied. @ref LLP 1034 D2
+    /// Cached text and colours assigned outside a draw must be resolved again.
+    /// Inline nodes have no native appearance callback; invalidate their owner too.
+    /// @ref LLP 1034 D2
     package override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        if let controls = presenter?.controls, let button = controls.controls[id] as? NativeButtonMac {
+            controls.configureNative(button, self, accent: channels("accent_color").map { TextEngine.color($0) })
+        }
         presenter?.tables.appearanceChanged(self); refreshGroupedSeparator(); presenter?.navigation.split.recolor(self)
         if let regions = presenter?.session?.regions, regions.owns(self) { regions.geometryChanged() }
         // An `svg`'s paints are resolved again; paint motion hears the appearance (LLP 1062 D4).
@@ -947,7 +937,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     // UIKit/AppKit collapse the native extent; keep that transient reset out of
     // scroll events and restore only when the box returns.
     var beforeLayoutScroll: CGPoint?
-    private var hiddenScroll: CGPoint?
+    var hiddenScroll: CGPoint?
     var hasScrollLayoutBox: Bool {
         var ancestor: NSView? = self
         while let current = ancestor {
@@ -1040,12 +1030,12 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             let last = lastAccessibilityWrite
             if ax.enabled != last.enabled { setAccessibilityEnabled(ax.enabled) }
             if ax.identifier != last.identifier { setAccessibilityIdentifier(ax.identifier) }
-            if ax.label != last.label { setAccessibilityLabel(ax.label) }
+            if ax.label != last.label { setAccessibilityLabel(ax.label); ax.text = nil }
             lastAccessibilityWrite = ax
         }
         updateTextAccessibility()
         updateRoleAccessibility()
-        if kind == "image", let src = props["imageSource"], src != imageSource { loadImage(src) }
+        if kind == "image", let src = props["imageSource"], src != imageSource { renewSource(); loadImage(src) }
         if kind == "image", props["imageSource"] == nil, imageSource != nil {
             loadGeneration += 1
             presenter?.session?.rasters.cancel(id)
@@ -1058,7 +1048,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         updateEmbedded()
         video?.update()
         updateMaterial()
-        needsDisplay = true
+        if Self.paints(set: set, clear: clear) { needsDisplay = true }
     }
 
     // Empty container layers carry geometry and children, with no bitmap.
@@ -1195,9 +1185,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         // On a layer-backed view this is the layer's `masksToBounds`, unless
         // the node casts a shadow that clipping would clip (`BoxShadow.swift`).
         // A paragraph paints its own text, which a box would not clip.
-        syncClipBox(overflowClips && kind != "text" && (shadowColor != nil || clipsOneAxis) && scroll == nil && overlay == nil && materialContent == nil)
-        let clipped = overflowClips && clipBox == nil
-        if clipsToBounds != clipped { clipsToBounds = clipped }
+        syncShadowClip()
         applyClipRadius()
         applyShadow()
         syncGlassGroup()

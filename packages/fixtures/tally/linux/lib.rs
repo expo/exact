@@ -4,7 +4,7 @@
 //! the count, answers it with the call's origin, emits `tallied` and asks
 //! the status's readers again.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 
 pub struct Tally {
     context: Context,

@@ -261,9 +261,9 @@ pub(crate) unsafe extern "C" fn host_door(
             if yes { "1" } else { "0" }.to_string()
         })),
         // The runner's clock as this call began, ms: when a timer the answer
-        // arms is due (binary.js `timers`). None at bake.
+        // arms is due (time.js `timers`). None at bake.
         21 => Ok(state.store.map(|s| (*s).clock_ms().to_string())),
-        // Module work's state (LLP 1146 D2, binary.js `__exact_module_work`):
+        // Module work's state (LLP 1146 D2, module-work.js `__exact_module_work`):
         // what may still settle a waiting answer.
         22 => match serde_json::from_str::<serde_json::Value>(&b) {
             Ok(v) => {
@@ -281,6 +281,15 @@ pub(crate) unsafe extern "C" fn host_door(
             }
             Err(_) => Err("abort: a ticket that is not a number".into()),
         },
+        27 => {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if id < (1 << 53) {
+                Ok(Some(id.to_string()))
+            } else {
+                Err("data module request ids exhausted".into())
+            }
+        }
         24 | 26 if state.baking || state.validating || state.readonly_secrets => Err(
             "shared secrets are unavailable during bake, validation, or a read-only snapshot"
                 .into(),

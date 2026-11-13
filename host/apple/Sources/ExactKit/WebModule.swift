@@ -224,6 +224,10 @@ final class WebViews {
     private var nextToken: UInt32 = 1
     private(set) var failure: String?
     var moduleLocation: () -> String = WebViews.modulePath
+    #if os(macOS)
+    /// Whether the guests brought the session's window up from behind (`keepGuestsSeen`).
+    private var lifted = false
+    #endif
 
     var status: String {
         if module != nil { return "module loaded; \(entries.count) iframes" }
@@ -285,7 +289,31 @@ final class WebViews {
         let view = Unmanaged<ExactWebPlatformView>.fromOpaque(rawView).takeUnretainedValue()
         entry.handle = handle
         entry.platformView = view
+        // The node's create commit can come before its window holds it.
+        DispatchQueue.main.async { [weak self] in self?.keepGuestsSeen() }
         return view
+    }
+
+    /// A drive's window sits behind the other apps' (`NSWindow.Level.agentBehind`),
+    /// where it is usually covered, and WebKit runs a covered window's pages as
+    /// a hidden tab's: no animation frames, timers about once a second, nothing
+    /// new painted. While the session holds a guest its window stands at the
+    /// normal level, in front, as a live frame recording lifts it
+    /// (`Agent.liveFrames`), and goes back behind when the last guest goes.
+    private func keepGuestsSeen() {
+        #if os(macOS)
+        guard Agent.windowsBehind, let window = session?.presenter.viewport.window else { return }
+        let guests = entries.values.contains { $0.handle != nil }
+        if guests, !lifted, window.level == .agentBehind {
+            lifted = true
+            window.level = .normal
+            window.orderFrontRegardless()
+        } else if !guests, lifted {
+            lifted = false
+            window.level = .agentBehind
+            window.orderFront(nil)
+        }
+        #endif
     }
 
     /// `partition`, `zoom` and the `apple.*` words as the arm takes them
@@ -541,6 +569,7 @@ final class WebViews {
         held = held.filter { $0.value.view != id }
         if let handle = entry.handle { module?.destroy(handle) }
         entries.removeValue(forKey: id)
+        keepGuestsSeen()
     }
 
     func reset() {
@@ -559,16 +588,29 @@ final class WebViews {
         data.withUnsafeBytes { module.endSession($0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count)) }
     }
 
-    fileprivate func receivedEvent(id: UInt32, kind: UInt32, data: Data) {
+    /// `deliver` on a later main-queue turn, if frame `id` is still `entry`'s
+    /// node in the session generation that raised the event. A reload's
+    /// runner numbers its nodes from 1 again, so an old frame's queued event
+    /// would otherwise run the handler of whatever node has its id now.
+    private func later(_ entry: WebEntry, id: UInt32, _ deliver: @escaping (ExactSession) -> Void) {
+        guard let session else { return }
+        let issued = GenerationStamp(session)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.entries[id] === entry, let session = issued.session else { return }
+            deliver(session)
+        }
+    }
+
+    func receivedEvent(id: UInt32, kind: UInt32, data: Data) {
         // A failed file says nothing more, but the view the arm shows in its place is still shown (kind 7).
         guard let entry = entries[id], !entry.fileFailed || kind == 7, let owner = entry.owner else { return }
         switch kind {
         case 0:
-            if owner.handlers.contains("load") { DispatchQueue.main.async { [weak owner] in owner?.presenter?.load(id) } }
+            if owner.handlers.contains("load") { later(entry, id: id) { [weak owner] _ in owner?.presenter?.load(id) } }
         case 1:
             if owner.handlers.contains("message") {
                 let text = String(decoding: data, as: UTF8.self)
-                DispatchQueue.main.async { [weak owner] in owner?.presenter?.message(id, text) }
+                later(entry, id: id) { [weak owner] _ in owner?.presenter?.message(id, text) }
             }
         case 2: entry.loading = false
         case 3: entry.loading = true
@@ -577,11 +619,10 @@ final class WebViews {
             guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let name = value["event"] as? String, let record = value["record"] as? [String: Any] else { return }
             entry.navigation = record
-            guard owner.handlers.contains(name), let session,
+            guard owner.handlers.contains(name),
                   let json = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys) else { return }
             let text = String(decoding: json, as: UTF8.self)
-            DispatchQueue.main.async { [weak session] in
-                guard let session else { return }
+            later(entry, id: id) { session in
                 session.apply(session.runtime.frameNavigation(id, event: name, record: text, now: session.now()))
             }
         case 5:
@@ -591,11 +632,10 @@ final class WebViews {
             if name == "download", let path = record["path"] as? String, path.hasPrefix("app:/tmp/downloads/"), record["state"] as? String == "completed" {
                 reserved.remove(String(path.dropFirst("app:/tmp/downloads/".count)))
             }
-            guard owner.handlers.contains(name), let session,
+            guard owner.handlers.contains(name),
                   let json = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys) else { return }
             let text = String(decoding: json, as: UTF8.self)
-            DispatchQueue.main.async { [weak session] in
-                guard let session else { return }
+            later(entry, id: id) { session in
                 session.apply(session.runtime.frameNavigation(id, event: name, record: text, now: session.now()))
             }
         case 6:
@@ -790,23 +830,7 @@ final class WebViews {
 
     func tap(_ owner: NodeView, request values: [String: Any], at: [Double]) -> [String: Any] {
         guard let entry = entries[owner.id] else { return ["error": "iframe \(owner.id) is unavailable"] }
-        let selector = javascriptString(values["selector"] as? String)
-        let x = (values["x"] as? Double).map { String($0) } ?? "innerWidth / 2"
-        let y = (values["y"] as? Double).map { String($0) } ?? "innerHeight / 2"
-        let script = """
-        (() => {
-          const x = \(x), y = \(y);
-          const selector = \(selector);
-          const target = (selector ? document.querySelector(selector) : null) || document.elementFromPoint(x, y) || document.body;
-          if (!target) return JSON.stringify({ok:false, error:'guest tap found no target'});
-          // Script input is intentionally untrusted (@ref LLP 1020 D4;
-          // exact1 20260806-webview-frame-guest-click-delivery).
-          target.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, composed:true, clientX:x, clientY:y, button:0, buttons:1}));
-          target.dispatchEvent(new PointerEvent('pointerup', {bubbles:true, composed:true, clientX:x, clientY:y, button:0, buttons:0}));
-          target.dispatchEvent(new MouseEvent('click', {bubbles:true, composed:true, clientX:x, clientY:y, button:0}));
-          return JSON.stringify({ok:true});
-        })()
-        """
+        let script = GuestInput.tap(selector: values["selector"] as? String, x: values["x"] as? Double, y: values["y"] as? Double)
         switch guestResponse(request(entry, script: script), operation: "tap") {
         case .failure(let error):
             return ["error": error.message]
@@ -820,29 +844,8 @@ final class WebViews {
 
     func type(_ owner: NodeView, request values: [String: Any]) -> [String: Any] {
         guard let entry = entries[owner.id] else { return ["error": "iframe \(owner.id) is unavailable"] }
-        let selector = javascriptString(values["selector"] as? String)
         let key = values["key"] as? String
-        let text = values["text"] as? String ?? ""
-        let action: String
-        if let key {
-            action = "target.dispatchEvent(new KeyboardEvent('keydown', {key:\(javascriptString(key)), bubbles:true, composed:true})); target.dispatchEvent(new KeyboardEvent('keyup', {key:\(javascriptString(key)), bubbles:true, composed:true}));"
-        } else {
-            action = "if ('value' in target) target.value = \(javascriptString(text)); else target.textContent = \(javascriptString(text)); target.dispatchEvent(new InputEvent('input', {data:\(javascriptString(text)), inputType:'insertText', bubbles:true, composed:true})); target.dispatchEvent(new Event('change', {bubbles:true, composed:true}));"
-        }
-        let script = """
-        (() => {
-          const selector = \(selector);
-          const active = document.activeElement;
-          const editable = active && active.matches?.('input,textarea,[contenteditable]') ? active : null;
-          const target = (selector ? document.querySelector(selector) : null) || editable || document.querySelector('input,textarea,[contenteditable]');
-          if (!target) return JSON.stringify({ok:false, error:'guest type found no target'});
-          // Script input is intentionally isTrusted:false (@ref LLP 1020 D4).
-          target.focus();
-          \(action)
-          // A password's value is never agent output (#134): a fixed mark.
-          return JSON.stringify({ok:true, value:'value' in target ? (target.type === 'password' && target.value ? '•••' : target.value) : target.textContent});
-        })()
-        """
+        let script = GuestInput.type(selector: values["selector"] as? String, key: key, text: values["text"] as? String ?? "")
         let object: [String: Any]
         switch guestResponse(request(entry, script: script), operation: "type") {
         case .failure(let error):
@@ -909,16 +912,6 @@ final class WebViews {
       return JSON.stringify(out);
     })()
     """
-
-    private func javascriptString(_ value: String?) -> String {
-        guard let value,
-              let data = try? JSONSerialization.data(withJSONObject: [value]),
-              var text = String(data: data, encoding: .utf8)
-        else { return "null" }
-        text.removeFirst()
-        text.removeLast()
-        return text
-    }
 }
 
 extension ExactSession {

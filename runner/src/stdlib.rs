@@ -627,7 +627,7 @@ fn short_numeral(b: &[u8], mantissa_end: usize) -> String {
 }
 
 /// A `YYYY-MM-DD` date (years 0 through 9999, a real day of the month).
-fn iso_date(s: &str) -> Option<(i64, i64, i64)> {
+pub(crate) fn iso_date(s: &str) -> Option<(i64, i64, i64)> {
     let b = s.as_bytes();
     if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
         return None;

@@ -71,9 +71,10 @@ export const answer = (name: string, args: string[]): any => name === 'label' ? 
       const reply = await render(path, expected === 503 ? 500 : 10000);
       expect([reply.status, reply.settled], path).toEqual([expected, expected !== 503]);
       expect(reply.html).toContain('data-activate="eager"');
-      // A page at its deadline has every answer asked again; a settled one, only its open stream
+      // A page at its deadline has every answer asked again; a settled one, only its open stream, `live`'s answer, the
+      // first (`open` holds 0)
       expect(reply.html.includes('"revalidate":true'), path).toBe(expected === 503);
-      expect(reply.html).toContain(expected === 503 ? '"pending":["live"]' : '"pending":[],"open":["live"]');
+      expect(reply.html).toContain(expected === 503 ? '"pending":["live"]' : '"pending":[],"open":[0]');
       pages.set(path, reply);
     }
     site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -96,6 +97,187 @@ export const answer = (name: string, args: string[]): any => name === 'label' ? 
     // The label the page was rendered with stands: the browser asked it nothing while it subscribed again
     expect(await page.evaluate(() => document.querySelector('main')?.textContent)).toContain('Label');
     expect(labels).toBe(rendered);
+  } finally {
+    await browser?.close(); site?.stop(true); peer.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);
+
+test('a page holds each list element\'s answer, and the browser takes them and subscribes again to its open stream alone', async () => {
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/list-document-test-'));
+  const asked = [], kept = [], encoder = new TextEncoder(), connections = [], waiting = new Map();
+  let keptWaiting;
+  // Wait until `count()` reaches `n`; the counter's owner resolves `wait`, and 30 s is the limit
+  const reached = (count, n, wait, what) => {
+    const bound = setTimeout(() => wait.reject(new Error(`${what}: ${count()}, not ${n}`)), 30000);
+    if (count() >= n) { wait.resolve(); }
+    return wait.promise.finally(() => clearTimeout(bound));
+  };
+  const connected = n => { const wait = Promise.withResolvers(); waiting.set(n, wait); return reached(() => connections.length, n, wait, 'stream connections'); };
+  const keptCalls = n => { keptWaiting = { n, wait: Promise.withResolvers() }; return reached(() => kept.length, n, keptWaiting.wait, 'kept calls'); };
+  const peer = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, fetch(request) {
+    const u = new URL(request.url).pathname.slice(1);
+    if (u.startsWith('kept/')) {
+      kept.push(decodeURIComponent(u.slice(5)));
+      if (keptWaiting && kept.length >= keptWaiting.n) { keptWaiting.wait.resolve(); }
+      return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } });
+    }
+    asked.push(u);
+    if (u !== 's') { return Response.json(`got-${u}`, { headers: { 'access-control-allow-origin': '*' } }); }
+    const body = new ReadableStream({ start(controller) {
+      connections.push(controller);
+      waiting.get(connections.length)?.resolve();
+      controller.enqueue(encoder.encode('data: first\n\n'));
+    } });
+    return new Response(body, { headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' } });
+  } });
+  let browser, site;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'List Document', app: { id: 'test.list-document', name: 'List Document' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=request
+
+shape Done
+  ok: bool
+
+component App
+  state urls: string[] = ["a", "s", "b"]
+  resource first = echo("z") as shape string
+  resource heard = echo(u) for u in urls as shape string
+  resource last = echo("y") as shape string
+  mutation signed as shape Done
+  action drop
+    urls = urls.filter(u => u != "a")
+  action add
+    urls = urls.concat(["a"])
+  action sign
+    send signed = sign()
+  view
+    main
+      text heard.join(",") testId="heard"
+      text \`\${first} \${last}\`
+      button press=drop testId="drop"
+        text "Drop"
+      button press=add testId="add"
+        text "Add"
+      button press=sign testId="sign"
+        text "Sign in"
+`);
+    // `b`'s answer reads the store, and `sign` writes it
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = ${JSON.stringify(`net.fetch ${peer.url.origin}\nsecret.keep token`)};
+type Store = { get(name: string): string | null; set(name: string, value: string): void };
+export function answer(name: string, [u]: string[], store: Store): any {
+  if (name === 'sign') {
+    store.set('token', 'ada');
+    return { ok: true };
+  }
+  if (u === 'b') {
+    store.get('token');
+  }
+  return u === 's'
+    ? fetch('${peer.url.origin}/s', { exactStream: (event: any) => event.data } as RequestInit)
+    : fetch('${peer.url.origin}/' + u).then(response => response.json());
+}
+// The answers the page was rendered with, each told to the peer
+export const kept = (source: string, [u]: string[], value: string): void => { fetch('${peer.url.origin}/kept/' + encodeURIComponent(source + ' ' + u + ' ' + value)); };
+`);
+    const dist = resolve(dir, 'dist');
+    const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'list-document-test', '--out', dist, '--render', 'js'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
+    expect(status, stdout + stderr).toBe(0);
+    const { renderer } = await import('./render.mjs');
+    const render = renderer(dist); render.ahead = false;
+    const reply = await render('/', 10000);
+    expect([reply.status, reply.settled]).toEqual([200, true]);
+    // Each element's answer under the list's name, in the plan's order, with `s`'s stream open and `b`'s answer a
+    // store reader's
+    const written = /<script type="application\/vnd\.exact\.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1];
+    const checkpoint = JSON.parse(written);
+    expect(checkpoint.answers.map(([name, , args, value]) => [name, args, value])).toEqual([
+      ['first', ['z'], 'got-z'], ['heard', ['a'], 'got-a'], ['heard', ['s'], 'first'], ['heard', ['b'], 'got-b'], ['last', ['y'], 'got-y'],
+    ]);
+    const named = indices => (indices ?? []).map(k => checkpoint.answers[k][2][0]);
+    expect([checkpoint.pending, named(checkpoint.open), named(checkpoint.readers)]).toEqual([[], ['s'], ['b']]);
+    expect(reply.html).toContain('data-activate="eager"');
+    // The page with its elements' answers in the other order, and the page with the answers of `first` and `a` replaced
+    // by ones that no longer fit and `last`'s by another source's
+    const page = answers => {
+      const moved = { ...checkpoint, answers };
+      for (const field of ['open', 'readers']) { moved[field] = checkpoint[field].map(k => answers.indexOf(checkpoint.answers[k])); }
+      return reply.html.replace(written, JSON.stringify(moved));
+    };
+    const [first, a, s, b, last] = checkpoint.answers;
+    const pages = {
+      rendered: reply.html,
+      moved: page([first, b, s, a, last]),
+      misfit: page([['first', 'echo', ['z'], 7], ['heard', 'echo', ['a'], 7], s, b, ['last', 'other', ['y'], 'got-y']]),
+    };
+    let served = 'rendered';
+    site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/') { return new Response(pages[served], { headers: { 'content-type': 'text/html' } }); }
+      const asset = Bun.file(resolve(dist, path.slice(1)));
+      return await asset.exists() ? new Response(asset) : new Response(null, { status: 404 });
+    } });
+    browser = await suiteBrowser();
+    // Open the page served now, and wait until the stream is subscribed again and its next message shows
+    const visit = async () => {
+      const page = await browser.newPage();
+      // What the list shows, from before the runtime starts
+      await page.addInitScript(() => {
+        globalThis.__shown = [];
+        new MutationObserver(() => {
+          const text = document.querySelector('[data-testid="heard"]')?.textContent;
+          if (text !== undefined && text !== globalThis.__shown.at(-1)) { globalThis.__shown.push(text); }
+        }).observe(document, { subtree: true, childList: true, characterData: true });
+      });
+      asked.length = kept.length = 0;
+      const subscribed = connected(connections.length + 1);
+      await page.goto(site.url.href);
+      await subscribed;
+      connections.at(-1).enqueue(encoder.encode('data: second\n\n'));
+      await page.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'got-a,second,got-b');
+      return page;
+    };
+    const rendered = await visit();
+    expect(await rendered.evaluate(() => globalThis.__shown)).toEqual(['got-a,first,got-b', 'got-a,second,got-b']);
+    expect(asked).toEqual(['s']);
+    // An element that joins after the boot asks, though the page answered it
+    await rendered.click('[data-testid="drop"]');
+    await rendered.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'second,got-b');
+    await rendered.click('[data-testid="add"]');
+    await rendered.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'second,got-b,got-a');
+    expect(asked).toEqual(['s', 'a']);
+    // The module was given each answer the page used, once
+    await keptCalls(checkpoint.answers.length);
+    expect(kept.toSorted()).toEqual(['echo a got-a', 'echo b got-b', 'echo s first', 'echo y got-y', 'echo z got-z']);
+    served = 'moved';
+    const moved = await visit();
+    expect(await moved.evaluate(() => globalThis.__shown)).toEqual(['got-a,first,got-b', 'got-a,second,got-b']);
+    expect(asked).toEqual(['s']);
+    // An answer that no longer fits or names another source is asked, a declared resource's and an element's, as the
+    // runner asks them
+    served = 'misfit';
+    const fitting = await visit();
+    expect(await fitting.evaluate(() => globalThis.__shown)).toContain(',first,got-b');
+    await fitting.waitForFunction(() => document.querySelector('main')?.textContent.includes('got-z got-y'));
+    expect(asked.toSorted()).toEqual(['a', 's', 'y', 'z']);
+    // A store write asks again the element whose page answer read the store
+    await fitting.click('[data-testid="sign"]');
+    await fitting.waitForFunction(count => performance.getEntriesByType('resource').filter(e => e.name.endsWith('/b')).length === count, 1);
+    expect(asked.toSorted()).toEqual(['a', 'b', 's', 'y', 'z']);
+    // The rendered page, opened again on that device, whose store now holds the app's own entries, asks at boot the
+    // element whose page answer read the store, besides the open stream
+    served = 'rendered';
+    await fitting.waitForFunction(() => Object.keys(localStorage).some(key => key.startsWith('exact.secret.')));
+    asked.length = 0;
+    const subscribed = connected(connections.length + 1);
+    await fitting.goto(site.url.href);
+    await subscribed;
+    await fitting.waitForFunction(() => performance.getEntriesByType('resource').some(e => e.name.endsWith('/b')));
+    expect(asked.toSorted()).toEqual(['b', 's']);
   } finally {
     await browser?.close(); site?.stop(true); peer.stop(true);
     rmSync(dir, { recursive: true, force: true });

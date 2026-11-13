@@ -58,6 +58,11 @@ pub(crate) fn face_json_named(
         Some(l) => quote(l, &mut json),
         None => json.push_str("null"),
     }
+    // A tab's badge (LLP 1075.003 §9.9), its tab bar item's `badgeValue`.
+    if let Some(badge) = &face.badge {
+        json.push_str(",\"badge\":");
+        quote(badge, &mut json);
+    }
     json.push_str(",\"image\":");
     if let Some(image) = &face.image {
         json.push_str(&format!("{{\"view\":{},\"source\":", image.view));

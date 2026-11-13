@@ -478,9 +478,21 @@ extension CanvasesHost {
     @discardableResult
     func input(_ view: NodeView, _ event: [String: Any], timestamp: Double? = nil) -> Bool {
         guard let e = live(view.id), e.view === view, e.wantsInput,
-              event["t"] as? String == "blur" || (!view.disabled && !view.inert),
+              Self.ends(event) || (!view.disabled && !view.inert),
               let m = e.module else { return false }
         return input(e, m, event, timestamp: timestamp)
+    }
+
+    /// A blur, or the release of a key, button or touch the adapters hold:
+    /// a disabled or inert canvas still hears it, so its world is not left
+    /// holding input it can no longer release.
+    private static func ends(_ event: [String: Any]) -> Bool {
+        switch event["t"] as? String {
+        case "blur": return true
+        case "key": return event["down"] as? Bool == false
+        case "pointer": return ["up", "cancel"].contains(event["phase"] as? String ?? "")
+        default: return false
+        }
     }
 
     /// Already-owned surface/device identity, including a held key's final release.

@@ -60,12 +60,15 @@ public final class AgeRangeModule: ExactPackage {
     }
 
     /// Apple's rule for gates (D8): one to three whole ages, ascending, at least two years apart.
+    /// An age is at most `oldest`, which also keeps each gate within `Int` for the request.
     static func refused(_ gates: [Double]) -> String? {
-        guard (1...3).contains(gates.count), gates.allSatisfy({ $0 >= 0 && $0 == $0.rounded() }) else {
+        guard (1...3).contains(gates.count), gates.allSatisfy({ (0...oldest).contains($0) && $0 == $0.rounded() }) else {
             return "ageGates are one to three whole ages"
         }
         return zip(gates, gates.dropFirst()).allSatisfy({ $1 - $0 >= 2 }) ? nil : "ageGates ascend at least two years apart"
     }
+
+    static let oldest = 150.0
 
     private func queue(_ work: @escaping (@escaping () -> Void) -> Void) {
         waiting.append(work)

@@ -431,19 +431,18 @@ impl Visit for Envelope<'_> {
         Ok(self.other(Json::Array(values)))
     }
     fn object(self, members: &mut Members<'_, '_>) -> Result<json::Reply, Error> {
-        let mut fields = Object::new();
+        let mut fields = Vec::new();
         let mut value = None;
         while let Some(key) = members.key()? {
             if key == "value" {
                 value = Some(node_value(members, Node(Some(self.0), self.1, self.2))?);
             } else {
                 let key = key.to_owned();
-                let member = members.value(Tree)?;
-                fields.insert(key, member);
+                fields.push((key, members.value(Tree)?));
             }
         }
         Ok(json::Reply {
-            fields: Json::Object(fields),
+            fields: Json::Object(Object::of(fields)),
             value,
         })
     }

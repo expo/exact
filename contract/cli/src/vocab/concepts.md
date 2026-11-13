@@ -142,7 +142,7 @@ component App
 - Each option is one short `text` (or a symbol `image` with an `aria-label`); leave its
   look unsaid. A radio that paints itself (its own `background-color`, `border` or
   `border-radius`, LLP 1104 D2) makes the group your drawn control on every host, keys
-  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or long labels: a `select` (`contract vocab select`). A setting on or off: `input
+  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or labels that do not fit side by side at the largest text size (verify reads it): a `select` (`contract vocab select`). A setting on or off: `input
   type="checkbox" switch`.
 - An item checked off (a to-do, a shopping list) is a plain `input type="checkbox"`: on iOS
   the checklist's circle, as Reminders draws it, never a switch. Several of a fixed set (a
@@ -188,6 +188,9 @@ test "a course is picked"
 - In a test or a drive, `type` picks an option by its `value`; a tap does not open the menu.
 - An option whose `value` is `""` stands for none chosen ("None", "Choose…"). Two to five
   short options are a `choice` (a segmented control).
+- A `select` is no wider than what holds it (an implied `max-width: 100%`), however long its
+  options. Beside a label in a row it keeps its width until the row is full: let the row
+  wrap (`flex-wrap="wrap"`), or give the select `min-width=0` to shrink with the row.
 
 ## screen: a second screen, a list and its detail, and Back
 names: navigate, navigation, navigationBack, back, detail, route, routes, router, list-detail, master-detail, deep-link, deep link, protocol_handlers, openURL, url-scheme, react-router, back button, back-button, back title, backButtonDisplayMode, headerBackTitle, backButtonTitle, backBarButtonItem, navigationBackTitle, large title, large-title, largeTitle, prefersLargeTitles, navigation bar, navigation-bar, navbar, UINavigationBar, phase, stage, anchor, hashchange, location.hash
@@ -1227,8 +1230,9 @@ surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
 `"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's materials,
 `"dark"`, `"light"`, `"extra-light"`, `"regular"` and `"prominent"` its plain blurs (`UIBlurEffect`
 `.dark` and so on: no material's grey wash, as expo-blur's `tint="dark"`), and `"sidebar"`,
-`"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a blur that
-approximates each. A glass button is `buttonStyle="glass"` or
+`"menu"`, `"popover"`, `"hud-window"` the Mac's. On macOS, `"sidebar"` blends with the
+content behind the window. The node's own fill and content still paint above it.
+The web and Linux draw a blur that approximates each. A glass button is `buttonStyle="glass"` or
 `"prominent-glass"`, and `glassGroup=<points>` on a box merges the glass inside it as
 SwiftUI's `GlassEffectContainer` does. On iOS a glass a tap adds to a group grows out of the
 nearest glass within that spacing, and one it removes is drawn back into it.
@@ -1363,9 +1367,20 @@ component App
       button press=save testId="save"
         text "Save"
       if toast != ""
-        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 backgroundMaterial="thin" aria-live="polite" testId="toast"
+        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 text-align="center"
+          backgroundMaterial="thin" box-shadow="0 4px 16px rgba(0, 0, 0, 0.2)" pointer-events="none"
+          aria-live="polite" testId="toast"
 ```
 
+- A material takes the colour of what is behind it, so over a page of its own colour (a thin
+  material on a white page) only its shadow sets it apart; the shadow reads in both schemes.
+
+- In a tab app it stands above the tab bar: `bottom="calc(6rem + env(safe-area-inset-bottom))"`
+  clears the bar on every host at every text size (the web's bar is 3.5rem tall and grows
+  with the text; iOS 26's floating bar ends about 84 points above the screen's bottom).
+- `pointer-events="none"` lets taps through to what it lies over while it shows. verify
+  takes such an announcement (out of flow, `aria-live`, letting taps through) as lying over
+  the page by design, so a test may end while it shows.
 - The action the task runs clears the message whatever it reads: a gated task is armed at
   commits, not by the clock (docs/agent-pitfalls.md, "A gate reads state at commits").
 
@@ -1376,9 +1391,15 @@ Window Controls Overlay's `env(titlebar-area-x|y|width|height)` is the part of t
 bar the page may draw in, beside the window's controls. On the Mac, under
 `viewport-fit="cover"`, it is AppKit's title bar less the traffic lights: in a 900-point
 window `78 0 822×32` with a left-to-right title bar, `0 0 822×32` with a right-to-left one.
-It is all zero in full screen and while the window has a toolbar (an
-app with routes has one), and undefined elsewhere: in a browser tab, on iOS, Linux and
-Windows, and on a Mac window that does not cover its title bar. Give each a fallback.
+It is all zero in full screen and while the session's toolbar fills the title bar.
+Once navigation history retains a toolbar, it stays (LLP 1115.000, retention as built).
+In a single-location app, a root header can bring a toolbar before history retains
+one; it goes away when that header hides or its route says `navigationBar="none"`.
+With no stack, or before any route has shown a bar while all mounted routes say
+`navigationBar="none"`, navigation brings no toolbar. An authored toolbar or sidebar
+can still supply one.
+Elsewhere the area is undefined: in a browser tab, on iOS, Linux and Windows, and on a
+Mac window that does not cover its title bar. Give each a fallback.
 `"display_override": ["window-controls-overlay"]` in `app.json` gives a Mac window the
 platform's tall title row (an empty unified toolbar, about 52 points) while it shows no
 toolbar of its own, whatever `viewport-fit` says, and the area is that row beside the

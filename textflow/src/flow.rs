@@ -1,7 +1,9 @@
 //! @ref LLP 1043.000 §3 D6 — one band, multiple fragments, logical reading order.
 use crate::{
     bands::{append_intervals, Slot},
-    finite, Cursor, FlowShape, Prepared,
+    finite,
+    walker::FIT_EPSILON,
+    Cursor, FlowShape, Prepared,
 };
 
 /// One consumed source range positioned in a line band; bidi is the painter's job.
@@ -195,7 +197,9 @@ pub fn flow(
             let Some(line) = prepared.next_line(cursor, slot.width) else {
                 break;
             };
-            if !clear && line.width > slot.width {
+            // The walker fits a line within its tolerance; only one wider
+            // still is an overflow the slot refuses.
+            if !clear && line.width as f64 > slot.width as f64 + FIT_EPSILON {
                 continue;
             }
             out[write] = Fragment {

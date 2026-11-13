@@ -80,3 +80,36 @@ impl CacheMode {
         }
     }
 }
+
+impl super::Request {
+    /// Set the prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
+    pub fn prefetch(mut self) -> Self {
+        self.prefetch = true;
+        self
+    }
+
+    /// The executor also checks the request's read class at admission.
+    pub fn prefetch_refusal(&self) -> Option<&'static str> {
+        (self.prefetch && !self.is_plain_http())
+            .then_some("exactPrefetch requires a plain HTTP read")
+    }
+
+    /// Name a preload; on the web it is accepted and ignored (LLP 1162.000 D1).
+    pub fn preload(mut self, name: &str) -> Result<Self, String> {
+        self.preload = Some(name.into());
+        match self.preload_refusal() {
+            Some(why) => Err(why.into()),
+            None => Ok(self),
+        }
+    }
+
+    /// Refuse an invalid name even when a source set the field directly.
+    pub fn preload_refusal(&self) -> Option<&'static str> {
+        self.preload.as_ref().and_then(|name| {
+            let mut bytes = name.bytes();
+            (!(bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+                && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')))
+            .then_some("exactPreload must match ^[a-z][a-z0-9-]*$")
+        })
+    }
+}

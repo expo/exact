@@ -684,3 +684,45 @@ fn an_inactive_timeline_has_no_effect_and_a_missing_one_keeps_its_time() {
     e.advance(3.25).unwrap();
     assert!((opacity(&mut e).unwrap() - 0.25).abs() < 1e-9);
 }
+
+// A consumer whose timeline goes away is back on the clock: the engine
+// asks for frames again and paints one per advance, with the first-frame
+// rule or without it; a paused one stays put and asks for none.
+#[test]
+fn an_unbound_consumer_is_sampled_on_the_clock_again() {
+    const SCROLLER: u64 = 9;
+    let scroll = NamedTimeline::Scroll {
+        scroller: SCROLLER,
+        x: true,
+    };
+    for first_frame in [false, true] {
+        for paused in [false, true] {
+            let mut e = Engine::new();
+            e.set_start_on_frame(first_frame, 0.0).unwrap();
+            observe(&mut e, Property::Opacity, 1.0);
+            let text = if paused {
+                "fade 1s linear both paused"
+            } else {
+                "fade 1s linear both"
+            };
+            e.set_animations(NODE, &row(text)).unwrap();
+            e.set_animation_timeline(NODE, Some((scroll, [0.0, 100.0])));
+            e.set_scroll_offset(SCROLLER, 25.0, 0.0);
+            assert_eq!(opacity(&mut e), Some(0.25));
+            e.set_animation_timeline(NODE, None);
+            let case = format!("first frame {first_frame}, paused {paused}");
+            if paused {
+                assert!(e.quiescent(), "{case}");
+                continue;
+            }
+            assert!(!e.quiescent() && e.next_change().is_some(), "{case}");
+            if first_frame {
+                e.present_frame(0.0).unwrap();
+            }
+            for (t, want) in [(0.25, 0.5), (0.5, 0.75)] {
+                e.advance(t).unwrap();
+                assert_eq!(opacity(&mut e), Some(want), "{case}, at {t}");
+            }
+        }
+    }
+}

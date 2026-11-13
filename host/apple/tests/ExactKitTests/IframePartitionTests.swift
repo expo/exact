@@ -427,6 +427,45 @@ final class IframePartitionTests: XCTestCase {
         XCTAssert(seen.records.dropFirst(after).contains { $0.event == "navigatesuccess" })
     }
 
+    /// A navigation, a new source or `stopLoading` while a crash's recovery
+    /// is queued owns the frame: the recovery never loads the crashed page
+    /// over it.
+    func testWhatTakesTheFrameWhileRecoveryIsQueuedKeepsIt() throws {
+        let arm = try arm(), seen = Seen()
+        let (handle, web) = mount(arm, seen, configuration: ["partition": "memory-crash-taken"], src: "\(baseURL)/a")
+        defer { arm.destroy(handle) }
+        spin { self.events(seen).contains("navigatesuccess") }
+        let pid = { (web.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value ?? 0 }
+        let takers: [(name: String, take: () -> Void, shows: String?)] = [
+            ("navigate", { self.json(["op": "navigate", "url": "\(self.baseURL)/b"], arm.command, handle) }, "\(baseURL)/b"),
+            ("a new source", { self.send("\(self.baseURL)/c", arm.setSrc, handle) }, "\(baseURL)/c"),
+            ("stopLoading", { self.json(["op": "stopLoading"], arm.command, handle) }, nil),
+        ]
+        for taker in takers {
+            settle(seen)
+            let crashed = web.url?.absoluteString
+            let before = seen.records.count
+            spin { pid() > 0 }
+            kill(pid(), SIGKILL)
+            spin { seen.records.dropFirst(before).contains { $0.event == "navigateerror" && $0.record["error"] as? String == "crashed" } }
+            let after = seen.records.count
+            taker.take()
+            if let shows = taker.shows {
+                spin { seen.records.dropFirst(after).contains { $0.event == "navigatesuccess" && $0.record["url"] as? String == shows } }
+            }
+            // Past the longest recovery delay.
+            pause(1.5)
+            let later = seen.records.dropFirst(after)
+            let summary = "\(taker.name): \(later.map { "\($0.event) \($0.record["destination"] ?? "") \($0.record["url"] ?? "")" })"
+            if let shows = taker.shows {
+                XCTAssertFalse(later.contains { $0.event == "navigate" && $0.record["destination"] as? String == crashed }, summary)
+                XCTAssertEqual(later.last { $0.event == "navigatesuccess" }?.record["url"] as? String, shows, summary)
+            } else {
+                XCTAssertFalse(later.contains { $0.event == "navigate" }, summary)
+            }
+        }
+    }
+
     /// Stage 1's first measurement (D1, "Hidden tabs"): a partitioned web
     /// view under a hidden node view (`display: none`) still paints on
     /// request, with no private occlusion selector, so D7's capture of a
@@ -533,6 +572,7 @@ final class FramePages {
             switch path {
             case "/a": response = Self.page("Page A", head: "<link rel=icon href=/a.png>")
             case "/b": response = Self.page("Page B")
+            case "/c": response = Self.page("Page C")
             case "/redirect": response = "HTTP/1.1 302 Found\r\nLocation: /b\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             case "/slow": self.held.append(connection); return
             default: response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

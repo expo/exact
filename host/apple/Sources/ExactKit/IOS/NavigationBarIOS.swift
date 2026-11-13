@@ -26,8 +26,9 @@ struct HatchSource: Equatable {
 /// The delegate Exact gives each navigation controller it builds: Exact's
 /// own handling first, then the app's delegate, which receives straight
 /// anything Exact does not implement — a custom transition's animator
-/// (LLP 1075.003 §3.5). An animated push or pop is reconciled (LLP 1035.001
-/// D1, D2) in its coordinator's completion, after both have heard `didShow`.
+/// (LLP 1075.003 §3.5). A pop UIKit commits reaches the router at Exact's
+/// `willShow`, before the app's; a swipe, in its coordinator's completion,
+/// after both have heard `didShow` (LLP 1035.001 D1, D2).
 final class NavigationDelegateProxy: NSObject, UINavigationControllerDelegate {
     weak var host: NavigationHost?
     weak var app: UINavigationControllerDelegate?
@@ -318,26 +319,31 @@ final class BarPress: NSObject {
         // A popover that is no menu, named with no press of its own, opens
         // from the item (`MenuHost.openFromBar`); with a press, after it
         // (`MenuHost.invoke`).
-        if !node.handlers.contains("press"), let invocation = host.presenter.invocation(of: node), invocation.opensPopover,
-           !host.presenter.menus.pullsDown(invocation.target) {
-            _ = host.presenter.menus.openFromBar(node)
-            return
+        if !node.handlers.contains("press"), let invocation = host.presenter.invocation(of: node) {
+            if invocation.opensPopover, !host.presenter.menus.pullsDown(invocation.target) {
+                _ = host.presenter.menus.openFromBar(node)
+                return
+            }
+            // A dialog it shows modally, as its command says (`MenuHost.invoke`'s bar item).
+            if invocation.action == .showModal {
+                if !node.disabled { host.presenter.press(id) }
+                return
+            }
         }
         _ = host.act(id, 0)
     }
 }
 
 /// One stack Exact built: its delegate, whether its routes may show the bar (they may unless the
-/// app's `navigation` hatch says no; which of them shows it is each route's, LLP 1115.000 D5.3), its
-/// last written controllers, the tint it last gave the bar, its top route's accent (nil: none), and
-/// whether a hatch tinted the bar, which Exact then leaves alone.
+/// app's `navigation` hatch says no; which of them shows it is each route's, LLP 1115.000 D5.3), the
+/// tint it last gave the bar, its top route's accent (nil: none), and whether a hatch tinted the bar,
+/// which Exact then leaves alone.
 final class NavigationStack {
     let proxy = NavigationDelegateProxy()
     var showsBar: Bool
     let order: Int
     let label: String
     var hatched = false
-    var written: [ObjectIdentifier] = []
     var barTint: UIColor?, hatchTintsBar = false
     init(showsBar: Bool, order: Int) { (self.showsBar, self.order, label) = (showsBar, order, "#\(order)") }
 }
@@ -382,7 +388,15 @@ extension NavigationHost {
                 if reselect { sendReselect(tabsController, controller) } else if builtTabs.isEmpty { tabProxy.tabBarController(tabsController, didSelect: controller) }
                 return reply
             }
-            // Press a row of More's list's tab: the router selects it, which UIKit shows under More
+            // Pick the router's own tab, which More does not show (its list is on top), as a person picks its row:
+            // UIKit selects it and shows it under More, within the tap, as UIKit's layout applies the selection now
+            // rather than in a later turn (LLP 1075.003 §9.16)
+            if index == routerTab, let tabsController = tabController, let controller = tabStack(index), tabsController.selectedViewController !== controller {
+                tabsController.selectedViewController = controller
+                tabsController.view.layoutIfNeeded()
+                return reply
+            }
+            // Press any other row's tab: the router selects it, which UIKit shows under More
             pressTab(node, scrolling: reselectedRoot(index))
             return reply
         }
@@ -419,7 +433,9 @@ extension NavigationHost {
             case nil: return ["error": "unsupported: bar item #\(id) opens its menu as UIKit's pull-down from the bar, which only a real touch opens: under --touch platform `tap` opens it and `tap <row>` picks a row (LLP 1021 D4)"]
             }
         }
-        guard node.handlers.contains("press"), !node.disabled else { return ["error": "bar item #\(id) is disabled or presses nothing"] }
+        // A button with no press of its own that shows a dialog modally: its command, as `BarPress` runs it.
+        let showsModal = presenter.invocation(of: node)?.action == .showModal
+        guard node.handlers.contains("press") || showsModal, !node.disabled else { return ["error": "bar item #\(id) is disabled or presses nothing"] }
         presenter.press(node.id)
         return ["tapped": id, "pressed": id, "delivery": "host-activation", "native": "bar-button-item"]
     }
@@ -773,6 +789,7 @@ extension NavigationHost {
         control.accessibilityIdentifier = list?.props["testId"]
         control.segmentLabels = tabs.map(SegmentHost.segmentLabel)
         control.segmentIDs = tabs.map { $0.props["testId"] }
+        control.segmentOwners = tabs.map(\.id)
         control.segmentUnavailable = tabs.map { $0.disabled || $0.ariaUnavailable }
         for (index, tab) in tabs.enumerated() { control.setEnabled(!tab.disabled, forSegmentAt: index) }
         segments.fit(titles)

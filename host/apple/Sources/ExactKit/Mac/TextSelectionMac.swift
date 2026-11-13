@@ -54,6 +54,16 @@ package final class TextSelection {
         }
     }
 
+    /// A view renewed for another list item (LLP 1078, RenewMac.swift): its
+    /// paragraphs are that item's. A selection in a list is the items' and
+    /// is placed again (`structureChanged`); one held by the view itself
+    /// ends with its item, as it would with the view.
+    func renewed(_ node: NodeView) {
+        positions.removeValue(forKey: node.id)
+        guard list == nil, anchor === node || focus === node else { return }
+        anchor = nil; focus = nil
+    }
+
     init(_ presenter: Presenter) {
         self.presenter = presenter
         focusObservers = PageFacts.observe { [weak self] in self?.focusChanged() }

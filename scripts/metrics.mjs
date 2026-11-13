@@ -240,6 +240,9 @@ if (process.env.EXACT_DIAGNOSTIC_ROOT === ROOT) {
 }
 // Opt-in large workloads run in the existing metrics binary. No browser or
 // rebuild is needed to compare runner algorithms on one fixed machine.
+// Rust metrics binaries retain release: their runner, kernel and batch timings
+// measure production optimizations. The compile/bake rows share that profile;
+// developer rebuild timings below run the dev loop and its host-dev producers.
 if (process.argv.includes('--list-memory') && process.argv.includes('--collections')) {
   if (process.argv.includes('--scaling')) throw new Error('choose collections or scaling');
   const repeats = process.argv.includes('--repeats') ? Number(process.argv[process.argv.indexOf('--repeats') + 1]) : 3;
@@ -413,7 +416,7 @@ mkdirSync(profile, { recursive: true });
 const step = async (name, f) => { const t = Date.now(); const v = await f(); out[`_${name}_s`] = (Date.now() - t) / 1000; return v; };
 
 const NATIVE_ROWS = ['compile_ms', 'bake_ms', 'decode_ms', 'plan_bytes', 'baked_bytes', 'boot_ms', 'nodes', 'text_nodes', 'layout_ms', 'update_ms', 'inherit_ms', 'inherit_touched', 'tick_ms', 'web_boot_ms', 'web_first_batch_bytes', 'web_update_ms', 'web_update_batch_bytes'];
-// 1. Native pipeline numbers (a release bin; warm cache builds in ~1 s).
+// 1. Native pipeline numbers from the release bin.
 await step('native', () => {
   const source = resolve(app.dir, 'web/src/bin/metrics.rs');
   if (!existsSync(source)) {
@@ -817,7 +820,7 @@ await step('macos-boot', () => {
   floorRun();
 });
 
-// 7. Long: the macOS host's builds — a warm build (cargo release staticlib +
+// 7. Long: the macOS host's builds — a warm build (cargo host-dev staticlib +
 // swift), then the budget row "touch one line, rebuild that crate" for the
 // host crate — and the startup again on the fresh binary.
 if (long) {

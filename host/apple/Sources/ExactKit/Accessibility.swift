@@ -429,7 +429,8 @@ extension NodeView {
     /// come from `syncAccessibility`.
     func updateRoleAccessibility() {
         let role = props["accessibilityRole"]
-        if actsAsButton {
+        // A role over a paragraph writes over its text's (`updateTextAccessibility`).
+        if actsAsButton { lastAccessibilityWrite.text = nil
             setAccessibilityElement(true)
             if let checked = checkedRole { setAccessibilityChecked(checked.role, checked.checked) }
             else { setAccessibilityToggle(pressedState, else: buttonRole) }
@@ -438,15 +439,15 @@ extension NodeView {
             if accessibilityURL() != url { setAccessibilityURL(url) }
             setAccessibilitySelected(props["accessibilitySelected"] == "true")
             if let expanded = props["accessibilityExpanded"] { setAccessibilityExpanded(expanded == "true") }
-        } else if kind == "image" || role == "img" {
+        } else if kind == "image" || role == "img" { lastAccessibilityWrite.text = nil
             let labelled = authoredLabel != nil
             setAccessibilityElement(labelled)
             setAccessibilityRole(labelled ? .image : nil)
-        } else if let container = role.flatMap({ Self.containerRoles[$0] }) {
+        } else if let container = role.flatMap({ Self.containerRoles[$0] }) { lastAccessibilityWrite.text = nil
             setAccessibilityElement(true)
             if accessibilityRole() != container { setAccessibilityRole(container) }
             if accessibilitySubrole() != nil { setAccessibilitySubrole(nil) }
-        } else if let subrole = groupSubrole.map(NSAccessibility.Subrole.init(rawValue:)) {
+        } else if let subrole = groupSubrole.map(NSAccessibility.Subrole.init(rawValue:)) { lastAccessibilityWrite.text = nil
             // A live-region, dialog or region role as WebKit serves it (Core-AAM): a
             // group whose subrole is the role, named only by its author, a
             // paragraph's words its children (`textAccessibilityChildren`).
@@ -454,7 +455,7 @@ extension NodeView {
             if accessibilityRole() != .group { setAccessibilityRole(.group) }
             if accessibilitySubrole() != subrole { setAccessibilitySubrole(subrole) }
             if isParagraph, accessibilityValue() != nil { setAccessibilityValue(nil); setAccessibilityLabel(props["accessibilityLabel"]) }
-        } else if let range = rangeRole {
+        } else if let range = rangeRole { lastAccessibilityWrite.text = nil
             // A range role is one element, its value between its bounds and
             // its `aria-valuetext` the description, as WebKit serves a drawn
             // one (LLP 1116 D8). Only a change is written: each posts.
@@ -468,7 +469,7 @@ extension NodeView {
             if (accessibilityMaxValue() as? NSNumber) != high { setAccessibilityMaxValue(high) }
             let text = props["accessibilityValueText"].flatMap { $0.isEmpty ? nil : $0 }
             if accessibilityValueDescription() != text { setAccessibilityValueDescription(text) }
-        } else if let table = tableRole {
+        } else if let table = tableRole { lastAccessibilityWrite.text = nil
             // A table's or a description list's element (`TableAccessibility`).
             setAccessibilityElement(true)
             if accessibilityRole() != table.role { setAccessibilityRole(table.role) }

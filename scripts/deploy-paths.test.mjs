@@ -1,12 +1,14 @@
-// LLP 1091 §11: capture admission uses native paths, not POSIX spellings.
-// Only Contract compiler discovery below runs Cargo; no install, signing, publication or host process is needed here.
+// Deployment classification and source capture admission (LLP 1091 §11).
+// The build fixtures use Cargo; no native host process is needed here.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
+import { DirectoryOrigin, sha256 } from './origin.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, classify, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, snapshotOf, sourcePathspec, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
 import * as asyncLane from './async.mjs';
 import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
@@ -48,6 +50,64 @@ test('an explicit deploy platform omits unsupported targets before classificatio
   expect(table.dryRun).toBe(true);
   expect(table.rows).toEqual([{ kind: 'binary', platform: 'ios', compatibilityId: id, action: 'binary',
     reason: 'store.L=0: links no update store; deliver changes in the platform binary' }]);
+});
+
+test('the Swappable executor rename moves the cohort and refuses the old executor label', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-executor-cohort-'));
+  try {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const key = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64');
+    const app = { id: 'com.exact.executor', displayName: 'Executor', dir,
+      manifest: { deploy: { signing: { key: 'test', keys: { test: key } } } } };
+    const bundle = { plan: { bytes: Buffer.from('plan'), sha256: sha256(Buffer.from('plan')),
+      formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [] };
+    const previous = { version: 1, compat: { id: '', target: 'fixture' },
+      graph: { version: 1, artifacts: [{ name: 'app.plan', sha256: bundle.plan.sha256, bytes: bundle.plan.bytes.length }] },
+      binary: { sha256: '0'.repeat(64) } };
+    previous.compat.inputs = { app: app.id, platform: 'linux', store: { L: 'A', acceptedKinds: ['plan', 'assets', 'wasm'] },
+      executors: ['native', 'wasmtime'], keys: { test: key } };
+    previous.graph.sources = { count: { params: [], result: 'Int' } };
+    previous.graph.artifacts[0].requires = { sources: previous.graph.sources, executors: previous.compat.inputs.executors };
+    const compatibilityId = inputs => createHash('sha256').update('exact2 compatibility id v1\n')
+      .update(canonicalBytes(inputs)).digest('hex').slice(0, 32);
+    previous.compat.id = compatibilityId(previous.compat.inputs);
+    const candidate = structuredClone(previous);
+    candidate.compat.inputs.executors = ['native', 'wasmi'];
+    candidate.compat.id = compatibilityId(candidate.compat.inputs);
+    candidate.graph.artifacts[0].requires.executors = candidate.compat.inputs.executors;
+    candidate.binary.sha256 = '1'.repeat(64);
+    expect(candidate.compat.id).not.toBe(previous.compat.id);
+    const installed = cohortReceipt(previous);
+    expect(classifyArtifacts(previous, installed).bundle).toBe(true);
+    const old = classifyArtifacts(candidate, installed);
+    expect(old.binary).toBe(true);
+    expect(old.bundle).toBe(false);
+    expect(old.missing).toEqual(['app.plan: executors.wasmi']);
+    expect(classifyArtifacts(candidate, cohortReceipt(candidate))).toEqual({ binary: false, bundle: true, missing: [], warnings: [] });
+    const independent = structuredClone(candidate);
+    delete independent.graph.artifacts[0].requires.executors;
+    expect(classifyArtifacts(independent, installed).bundle).toBe(true);
+
+    const origin = new DirectoryOrigin(join(dir, 'origin'));
+    const stream = { channel: 'prod', compatibilityId: previous.compat.id };
+    const head = streamHead({ app, bundle, stream, seq: 1, release: 'old' });
+    head.cohort = installed;
+    head.signature = { keyId: 'test', ed25519: cryptoSign(null, canonicalBytes(head), privateKey).toString('base64') };
+    await origin.putHead(stream, Buffer.from(JSON.stringify(head)), { previousDigest: null });
+    const table = await classify({ app, opts: { platform: ['linux'] }, origin, channel: 'prod',
+      snapshot: { commit: 'executor', dirty: false, changes: [], repo: dir }, release: 'new', bundle,
+      compat: { linux: candidate.compat }, builds: { linux: candidate }, platforms: ['linux'], wantOrigin: false });
+    const oldRow = table.rows.find(row => row.kind === 'stream' && row.compatibilityId === previous.compat.id);
+    expect(oldRow.action).toBe('binary');
+    expect(oldRow.reason).toBe('app.plan: executors.wasmi');
+    expect(oldRow.cohort.E).toEqual(['native', 'wasmtime']);
+    expect(table.rows.find(row => row.kind === 'stream' && row.compatibilityId === candidate.compat.id).action).toBe('bundle');
+    const binary = table.rows.find(row => row.kind === 'binary');
+    expect(binary.compatibilityId).toBe(candidate.compat.id);
+    expect(binary.reason).toContain(`compatibility id moves to ${candidate.compat.id}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('deploy refuses unsupported requested platforms before capturing or building', () => {
@@ -100,19 +160,19 @@ test('async keeps a failure only when it was not found again and nothing ran to 
   retainSkippedFailures(['optional: failed'], other, {}, new Set(['optional']));
   expect(other.failures).toEqual(['optional: failed']);
   // A check that ran a part keeps the failures of the rest, and those it cannot place, until a run covers them.
-  const was = {'test: -p exact-linux --lib a::b': ['cargo:exact-linux'], 'test: -p exact-kernel --lib c': ['cargo:exact-kernel'], 'glue: d': ['bun:host/web/d.test.mjs'], 'glue: twice': ['bun:a.test.mjs', 'bun:b.test.mjs']};
+  const was = {'test: -p exact-painted --lib a::b': ['cargo:exact-painted'], 'test: -p exact-kernel --lib c': ['cargo:exact-kernel'], 'glue: d': ['bun:host/web/d.test.mjs'], 'glue: twice': ['bun:a.test.mjs', 'bun:b.test.mjs']};
   const part = {checks:{test:{status:0, covers:['cargo:exact-kernel']}, glue:{status:1, covers:['bun:a.test.mjs']}}, failures:['glue: e'], owners:{}};
   retainSkippedFailures([...Object.keys(was), 'glue: exit 1 (see log)'], part, was);
-  expect(part.failures).toEqual(['glue: e', 'test: -p exact-linux --lib a::b', 'glue: d', 'glue: twice', 'glue: exit 1 (see log)']);
+  expect(part.failures).toEqual(['glue: e', 'test: -p exact-painted --lib a::b', 'glue: d', 'glue: twice', 'glue: exit 1 (see log)']);
   expect(part.owners['glue: twice']).toEqual(['bun:a.test.mjs', 'bun:b.test.mjs']);
   // Found again, a failure is not kept a second time; a full run keeps none.
-  const again = {checks:{test:{status:101, covers:['cargo:exact-kernel']}}, failures:['test: -p exact-linux --lib a::b']};
-  retainSkippedFailures(['test: -p exact-linux --lib a::b'], again, was);
-  expect(again.failures).toEqual(['test: -p exact-linux --lib a::b']);
+  const again = {checks:{test:{status:101, covers:['cargo:exact-kernel']}}, failures:['test: -p exact-painted --lib a::b']};
+  retainSkippedFailures(['test: -p exact-painted --lib a::b'], again, was);
+  expect(again.failures).toEqual(['test: -p exact-painted --lib a::b']);
   // Keep what a check that stopped early held (a crate did not compile), whatever parts it was given
-  const stopped = {checks:{test:{status:101, covers:['cargo:exact-kernel'], complete:false}}, failures:['test: exact-linux (lib test) does not compile']};
+  const stopped = {checks:{test:{status:101, covers:['cargo:exact-kernel'], complete:false}}, failures:['test: exact-painted (lib test) does not compile']};
   retainSkippedFailures(['test: -p exact-kernel --lib c'], stopped, was);
-  expect(stopped.failures).toEqual(['test: exact-linux (lib test) does not compile', 'test: -p exact-kernel --lib c']);
+  expect(stopped.failures).toEqual(['test: exact-painted (lib test) does not compile', 'test: -p exact-kernel --lib c']);
   // Judge a run by its own stops, not one kept from an earlier run: a part it finished drops the earlier failures it
   // no longer finds, in either order
   const stop = 'test: exact-web (lib test) does not compile', owned = {...was, [stop]: ['cargo:exact-web']};
@@ -122,7 +182,7 @@ test('async keeps a failure only when it was not found again and nothing ran to 
     expect(later.failures).toEqual([stop]);
   }
   const full = {checks:{test:{status:0}}, failures:[], full:true};
-  retainSkippedFailures(['test: -p exact-linux --lib a::b', 'ios: failed'], full, was);
+  retainSkippedFailures(['test: -p exact-painted --lib a::b', 'ios: failed'], full, was);
   expect(full.failures).toEqual([]);
 });
 
@@ -142,7 +202,7 @@ test("async's changed paths name both of a rename's", () => {
 test('async names the suites of each failure its log attributes', () => {
   const glue = ['bun test v1.4.2 (744846f84) 2x PARALLEL', 'host/web/a.test.mjs:', '(fail) a fails [0.44ms]', './scripts/b.test.mjs:', '(fail) group > b fails [1.20ms]', '(fail) a fails [3ms]', ' 3 fail'].join('\n');
   expect(owners('glue', glue, ['glue: a fails', 'glue: group > b fails'])).toEqual({'glue: a fails': ['bun:host/web/a.test.mjs', 'bun:scripts/b.test.mjs'], 'glue: group > b fails': ['bun:scripts/b.test.mjs']});
-  expect(owners('test', '', ['test: -p exact-linux --lib a::b', 'test: exact-web (lib test) does not compile'])).toEqual({'test: -p exact-linux --lib a::b': ['cargo:exact-linux'], 'test: exact-web (lib test) does not compile': ['cargo:exact-web']});
+  expect(owners('test', '', ['test: -p exact-painted --lib a::b', 'test: exact-web (lib test) does not compile'])).toEqual({'test: -p exact-painted --lib a::b': ['cargo:exact-painted'], 'test: exact-web (lib test) does not compile': ['cargo:exact-web']});
   // Name and own a build script that failed, a binary that failed with no failing test (it crashed) and a Bun file
   // whose code threw outside its tests
   const cargo = ['error: failed to run custom build command for `exact-svg v0.1.0 (/x/svg)`', '     Running unittests src/lib.rs (target/debug/deps/a)',
@@ -162,18 +222,18 @@ test('async names the suites of each failure its log attributes', () => {
 test('async runs a check only for the suites selected, its Rust tests built as a full run builds them', () => {
   const none = asyncLane.nothing();
   expect(asyncLane.checks('new', 'old', none).map(([name]) => name)).toEqual(['build', 'clippy', 'fmt', 'caps', 'boot', 'web-bytes', 'lean', 'vm-extract', 'difftest', 'difftest-js', 'metrics']);
-  const selection = {...none, cargo:['exact-linux'], conform:['caltrain'], ios:true, glue:['./host/web/a.test.mjs'], lane:['a_lane_test']};
+  const selection = {...none, cargo:['exact-painted'], conform:['caltrain'], ios:true, glue:['./host/web/a.test.mjs'], lane:['a_lane_test']};
   const some = asyncLane.checks('new', 'old', selection);
   const step = name => some.find(([n]) => n === name);
   // (The lane's own runner, which a commit it checks may predate.)
   const runner = resolve(import.meta.dir, 'affected.mjs');
-  expect(step('test')[2]).toEqual(expect.arrayContaining(['bun', runner, '--cargo-tests', 'exact-linux']));
-  expect(step('lane').slice(1)).toEqual(['bun', [runner, '--cargo-tests', 'exact-linux', '--', '--ignored', 'a_lane_test']]);
+  expect(step('test')[2]).toEqual(expect.arrayContaining(['bun', runner, '--cargo-tests', 'exact-painted']));
+  expect(step('lane').slice(1)).toEqual(['bun', [runner, '--cargo-tests', 'exact-painted', '--', '--ignored', 'a_lane_test']]);
   for (const name of ['conform', 'conform-firefox', 'conform-webkit']) expect(step(name)[2].slice(0, 3)).toEqual(['host/web-js/conform.mjs', 'caltrain', '--synthetic']);
   expect(step('glue')[2].at(-1)).toContain('./host/web/a.test.mjs');
   for (const name of ['prepare', 'ios']) expect(step(name)).toBeDefined();
-  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion']) expect(step(name)).toBeUndefined();
-  expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-linux']);
+  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
+  expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-painted']);
   expect(asyncLane.covers('conform-webkit', selection)).toEqual(['conform:caltrain']);
   expect(asyncLane.covers('ios', selection)).toBe(null);
   // The iOS classes its test files reach run alone, and a failure of one is that class's
@@ -186,11 +246,35 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   expect(ranTwo.failures).toEqual(['ios: ExactKitTests.CTests testC failed', 'ios: exit 65 (see log)']);
   const full = asyncLane.checks('new', 'old', {lane:[], glue:['./x.test.mjs']});
   expect(full.find(([n]) => n === 'test')[2]).toEqual(expect.arrayContaining(['cargo', 'test', '--workspace']));
-  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion']) expect(full.some(([n]) => n === name)).toBe(true);
+  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(full.some(([n]) => n === name)).toBe(true);
   // A parity leg builds its gallery's Linux host, then drives the smoke on a fresh web build
   expect(full.find(([n]) => n === 'parity-svg').slice(1)).toEqual(['sh', ['-c', 'cargo build --profile host-dev -p svg-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs svg --hosts linux']]);
   // What a selection can leave out is what a full run has and an empty selection has not.
-  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-firefox', 'conform-webkit', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-firefox', 'conform-webkit', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+});
+
+test('async runs each module drive whole and keeps its failure until it runs again', () => {
+  const drives = [
+    ['moduleSeams', 'module-seams', ['contract/cli/tests/bell/seams.mjs']],
+    ['notificationsWeb', 'notifications-web', ['packages/notifications/test/drive.mjs', 'web']],
+  ];
+  const daily = asyncLane.laneSelection([], { full: true, root: import.meta.dir });
+  for (const [flag, name, args] of drives) {
+    const command = ['env', ['EXACT_REQUIRED=1', 'bun', ...args]];
+    const step = selection => asyncLane.checks('new', 'old', selection).find(([n]) => n === name);
+    expect(step({ ...asyncLane.nothing(), [flag]: true }).slice(1)).toEqual(command);
+    expect(step({ ...daily, lane: [], glue: [] }).slice(1)).toEqual(command);
+    expect(asyncLane.covers(name, { ...asyncLane.nothing(), [flag]: true })).toBe(null);
+    const found = failures(name, 'FAIL web permission: denied\n', 1);
+    expect(found).toEqual([`${name}: web permission`]);
+    expect(failures(name, 'browser is missing\n', 1)).toEqual([`${name}: exit 1 (see log)`]);
+    const skipped = { checks: {}, failures: [] };
+    retainSkippedFailures(found, skipped);
+    expect(skipped.failures).toEqual(found);
+    const ran = { checks: { [name]: { status: 0, complete: true } }, failures: [] };
+    retainSkippedFailures(found, ran);
+    expect(ran.failures).toEqual([]);
+  }
 });
 
 test('async compiles tvOS per commit with no simulator, and tier 2 installs it', () => {
@@ -480,3 +564,34 @@ test.skipIf(!caseMode.available)('actual case-sensitive stage and STAGE are dist
   expect(() => assertCapturedContractSources(graph(inside), lower)).not.toThrow();
   expect(() => assertCapturedContractSources(graph(outside), lower)).toThrow('outside the captured snapshot');
 });
+
+test('unchanged production web roots stay current and source edits publish', async () => {
+  const root = resolve(import.meta.dir, '..');
+  mkdirSync(join(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(join(root, 'target/web-reproducible-'));
+  try {
+    const app = { id: 'test.reproducible', displayName: 'Reproducible', dir, manifest: {} };
+    writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: app.displayName, app: { id: app.id, name: app.displayName } }));
+    const source = join(dir, 'app.contract');
+    writeFileSync(source, 'component App\n  view\n    text "Before"\n');
+    const origin = new DirectoryOrigin(join(dir, 'origin'));
+    const build = name => {
+      const out = join(dir, name);
+      const run = spawnSync(process.execPath, ['host/web-js/build.mjs', 'reproducible', '--out', out, '--production', '--render', 'none'],
+        { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+      expect(run.status, run.stdout + run.stderr).toBe(0);
+      return out;
+    };
+    const classifyRoot = async web => (await classify({ app, opts: {}, origin, channel: 'prod',
+      snapshot: { commit: 'fixture', dirty: false, changes: [] }, release: 'fixture', web, compat: {}, platforms: [], wantOrigin: true })).rows[0];
+    const first = build('first');
+    await publishRoot({ origin, row: {}, web: first });
+    const again = build('second');
+    expect(await classifyRoot(again)).toMatchObject({ action: 'current', files: { changed: [], new: [], removed: [] } });
+    const data = JSON.parse(readFileSync(join(again, '.exact/install.json')));
+    expect(data.build).toMatchObject({ builtAt: null, source: null, dirty: null, mode: 'Release build' });
+    expect(data.build.id).toMatch(/^[0-9a-f]{64}$/);
+    writeFileSync(source, 'component App\n  view\n    text "After"\n');
+    expect(await classifyRoot(build('changed'))).toMatchObject({ action: 'publish' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 300000);

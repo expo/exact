@@ -1,5 +1,5 @@
 use super::*;
-use exact_linux::app::{boot_presenter, Config};
+use exact_painted::app::{boot_presenter, Config};
 use exact_runner::DataSource;
 use exact_runner::{DataError, Value};
 use exact_update::{sha256_hex, Client, Outcome};
@@ -296,13 +296,13 @@ fn a_second_instance_boots_the_update_the_first_runs() {
     let mut first = selected_config(&dir, &baked, staged);
     let (mut first, error) = boot_presenter::<Named>(&mut first, (390.0, 844.0)).unwrap();
     assert!(error.is_none(), "{error:?}");
-    assert!(exact_linux::agent::handle(&mut first, "{\"op\":\"tree\"}").contains("selected"));
+    assert!(exact_painted::agent::handle(&mut first, "{\"op\":\"tree\"}").contains("selected"));
 
     let second = Client::open_at(&dir, &dir, UPDATE_COMPAT, &baked, Some(ORIGIN)).unwrap();
     let mut second = selected_config(&dir, &baked, second);
     let (mut second, error) = boot_presenter::<Named>(&mut second, (390.0, 844.0)).unwrap();
     assert!(error.is_none(), "{error:?}");
-    assert!(exact_linux::agent::handle(&mut second, "{\"op\":\"tree\"}").contains("selected"));
+    assert!(exact_painted::agent::handle(&mut second, "{\"op\":\"tree\"}").contains("selected"));
     let delivery = second.host().runner().delivery();
     assert_eq!(delivery.stream, "prod/fixture00000000");
     assert_eq!(delivery.seq, 1);
@@ -478,11 +478,11 @@ fn activation_refuses_carried_layout_without_advancing_then_commits_after_repair
     let client = checked(&dir, &baked, &candidate, &[], true);
     let record = client.dir().join("record.json");
     let (mut presenter, error) =
-        exact_linux::Presenter::boot(&baked, Named, (390.0, 844.0), 1.0, dir.clone()).unwrap();
+        exact_painted::Presenter::boot(&baked, Named, (390.0, 844.0), 1.0, dir.clone()).unwrap();
     assert!(error.is_none(), "{error:?}");
     assert!(presenter.set_delivery_from_compat(UPDATE_COMPAT).is_none());
     presenter.set_updates(Some(Box::new(Updates::from_client(client).unwrap())));
-    let view = |p: &exact_linux::Presenter<Named>, name: &str| {
+    let view = |p: &exact_painted::Presenter<Named>, name: &str| {
         let kernel = p.host().kernel();
         kernel
             .node_by_key(kernel.find_by_test_id(name)[0])
@@ -512,7 +512,7 @@ fn activation_refuses_carried_layout_without_advancing_then_commits_after_repair
         serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
     assert_eq!(saved["failures"], 1);
     let shot = dir.join("activated.png");
-    let reply = exact_linux::agent::handle(
+    let reply = exact_painted::agent::handle(
         &mut presenter,
         &serde_json::json!({"op":"screenshot", "path":shot}).to_string(),
     );
@@ -525,13 +525,13 @@ fn activation_refuses_carried_layout_without_advancing_then_commits_after_repair
     // A successful frame's unchanged delivery facts must leave presentation idle.
     // Repeated reads still check first pixel and must not request another paint.
     assert!(!presenter.dirty());
-    let tree = exact_linux::agent::handle(&mut presenter, r#"{"op":"tree"}"#);
+    let tree = exact_painted::agent::handle(&mut presenter, r#"{"op":"tree"}"#);
     let record_after = std::fs::read(&record).unwrap();
     for _ in 0..3 {
         presenter.first_pixel();
         assert!(!presenter.dirty());
         assert_eq!(
-            exact_linux::agent::handle(&mut presenter, r#"{"op":"tree"}"#),
+            exact_painted::agent::handle(&mut presenter, r#"{"op":"tree"}"#),
             tree
         );
         assert!(!presenter.dirty());
@@ -573,7 +573,7 @@ fn verified_launch_refusals_are_demoted_after_failed_launches() {
                 .host()
                 .agent("{\"op\":\"tree\"}")
                 .contains("baked"));
-            let _ = exact_linux::agent::handle(&mut presenter, "{\"op\":\"layout\"}");
+            let _ = exact_painted::agent::handle(&mut presenter, "{\"op\":\"layout\"}");
             let saved: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
             assert_eq!(
@@ -646,7 +646,7 @@ fn a_crash_during_selected_app_construction_is_counted_before_it_happens() {
     assert!(config.entry.is_none());
     let (mut presenter, error) = boot_presenter::<Named>(&mut config, (390.0, 844.0)).unwrap();
     assert!(error.is_none(), "{error:?}");
-    assert!(exact_linux::agent::handle(&mut presenter, "{\"op\":\"tree\"}").contains("baked"));
+    assert!(exact_painted::agent::handle(&mut presenter, "{\"op\":\"tree\"}").contains("baked"));
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
     assert_eq!(saved["bad"].as_array().unwrap().len(), 1);
@@ -908,14 +908,14 @@ fn signed_rust_pair_is_deferred_and_failed_live_replacement_keeps_the_old_genera
         0,
         "boot only verifies and defers the module"
     );
-    let reply = exact_linux::agent::handle(
+    let reply = exact_painted::agent::handle(
         &mut presenter,
         &serde_json::json!({"op":"screenshot", "path":dir.join("first.png")}).to_string(),
     );
     assert!(!reply.contains("error"), "{reply}");
     assert_eq!(RUST_ACTIVATIONS.load(SeqCst), 1);
     let tree = presenter.host().agent("{\"op\":\"tree\"}");
-    let refused = exact_linux::delivery::Module {
+    let refused = exact_painted::delivery::Module {
         receipt: String::from_utf8(receipt).unwrap(),
         bytes: b"fails".to_vec(),
     };
@@ -931,7 +931,7 @@ fn signed_rust_pair_is_deferred_and_failed_live_replacement_keeps_the_old_genera
         .unwrap();
     assert_eq!(RUST_VALIDATIONS.load(SeqCst), 2);
     assert_eq!(RUST_ACTIVATIONS.load(SeqCst), 1);
-    let reply = exact_linux::agent::handle(
+    let reply = exact_painted::agent::handle(
         &mut presenter,
         &serde_json::json!({"op":"screenshot", "path":dir.join("second.png")}).to_string(),
     );
@@ -1072,7 +1072,7 @@ fn a_live_rust_swap_refuses_before_loading_while_a_request_is_pending() {
     let plan = contract::compile("shape Reply\n  value: string\ncomponent App\n  mutation reply as shape Reply\n  action start\n    send reply = write()\n  view\n    button press=start testId=\"start\"\n      text \"send\"\n").unwrap().encode();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let source = Held(calls.clone());
-    let (mut presenter, _) = exact_linux::Presenter::boot(
+    let (mut presenter, _) = exact_painted::Presenter::boot(
         &plan,
         source.clone(),
         (390.0, 844.0),
@@ -1088,7 +1088,7 @@ fn a_live_rust_swap_refuses_before_loading_while_a_request_is_pending() {
     presenter.tap(button).unwrap();
     let pending = presenter.host().runner().pending();
     assert!(!pending.is_empty());
-    let module = exact_linux::delivery::Module {
+    let module = exact_painted::delivery::Module {
         receipt: String::new(),
         bytes: Vec::new(),
     };
@@ -1096,7 +1096,7 @@ fn a_live_rust_swap_refuses_before_loading_while_a_request_is_pending() {
         .reload_module(&plan, source, Some(module), false)
         .unwrap_err();
     assert!(
-        matches!(error, exact_linux::host::HostError::RequestsPending),
+        matches!(error, exact_painted::host::HostError::RequestsPending),
         "{error}"
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);

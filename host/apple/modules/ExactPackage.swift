@@ -499,7 +499,7 @@ public final class ExactTransfers {
 /// a region, and the store, which is the truth. A crossing is written to
 /// the store as the region's undelivered transition, then offered to the
 /// implementation that added the region as `woke(_:)` of kind `region`, its
-/// keys the regions' names; a transition stays until `delivered(name:)`,
+/// keys the regions' names; a transition stays until `delivered(name:pending:)`,
 /// and is offered again at each later launch. macOS hears crossings only
 /// while the app runs.
 public final class ExactRegions {
@@ -516,8 +516,11 @@ public final class ExactRegions {
     public func list() -> [[String: Any]] { callFn("list", [:]) as? [[String: Any]] ?? [] }
     /// The undelivered transition of `name`: `{event: "enter"|"leave", timestamp}`, ms since the epoch.
     public func pending(name: String) -> [String: Any]? { callFn("pending", ["name": name]) as? [String: Any] }
-    /// The transition of `name` was delivered: the store forgets it.
-    public func delivered(name: String) { _ = callFn("delivered", ["name": name]) }
+    /// The transition `pending` read was delivered: the store forgets it,
+    /// unless a later crossing has replaced it.
+    public func delivered(name: String, pending: [String: Any]) {
+        _ = callFn("delivered", ["name": name, "event": pending["event"] ?? NSNull(), "timestamp": pending["timestamp"] ?? NSNull()])
+    }
 }
 
 /// The app's remote-notification registration (LLP 1133.004 §9 P3): the
@@ -799,13 +802,14 @@ public final class ExactPads {
         let t = Self.table
         return (0..<t.count).first { t[$0] as AnyObject === pad }
     }
-    /// `pad`'s slot: the one it holds, else `at` when free, else the lowest
-    /// free one; nil when all are taken.
+    /// `pad`'s slot: the one it holds, else `at` when it is a slot and free,
+    /// else the lowest free one; nil when all are taken.
     public func take(_ pad: AnyObject, at wanted: Int? = nil) -> Int? {
         if let held = index(of: pad) { return held }
         let t = Self.table
         let free = (0..<t.count).filter { t[$0] is NSNull }
-        let index = wanted.flatMap { w in w >= t.count || t[w] is NSNull ? w : nil } ?? free.first ?? t.count
+        let slot = wanted.flatMap { w in (0..<Self.most).contains(w) && (w >= t.count || t[w] is NSNull) ? w : nil }
+        let index = slot ?? free.first ?? t.count
         guard index < Self.most else { return nil }
         while t.count <= index { t.add(NSNull()) }
         t[index] = pad

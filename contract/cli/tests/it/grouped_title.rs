@@ -112,6 +112,36 @@ fn a_button_holding_the_title_is_the_title_and_the_later_text_its_value() {
     );
 }
 
+/// A mark shown by `if` before the button, or a name the button chooses
+/// with `if`, leaves the button the title, as a literal one does.
+#[test]
+fn a_title_chosen_by_if_is_still_the_title() {
+    let r = boot(
+        r#"list appearance="auto" testId="list" flex=1
+  section
+    row testId="item" gap=8 align-items="center"
+      if 1 > 0
+        image "symbol:star"
+      button press=go testId="toggle" display="flex" min-height=44
+        if 1 > 0
+          text "Bananas" testId="name"
+        else
+          image "symbol:star"
+      text "× 1" testId="qty""#,
+    );
+    let k = r.kernel();
+    let frame = |t: &str| k.node(id(&r, t)).unwrap().frame;
+    let (row, button, qty) = (frame("item"), frame("toggle"), frame("qty"));
+    assert!(
+        row.x + row.width - (qty.x + qty.width) <= 17.0 && qty.width < row.width / 4.0,
+        "the value trails: {qty:?} in {row:?}"
+    );
+    assert!(
+        button.x + button.width >= qty.x - 9.0,
+        "the title grows to the value: {button:?}, {qty:?}"
+    );
+}
+
 /// A row of columns its author sized (`flex=1` each, event-rsvp's counts
 /// over captions, round 21) is laid out as CSS lays it: no column is
 /// squeezed under its caption's width, so no caption runs into the next.

@@ -4,7 +4,7 @@ import { tsGrantSet } from './admission-data.js';
 import { answering, files, ownSignal } from './ts-fetch.js';
 
 // `exactBodyFrom` (LLP 1108 D6 R2), with Hermes's checks and words
-// (js/src/prelude.js): the app file at that path is the body, read from the
+// (js/src/binary.js `fileRefusal`): the app file at that path is the body, read from the
 // page's store as a Blob (a picked file is its own File; nothing becomes a
 // string), under `fs.read`, at most 64 MiB. A refusal is a FetchError before
 // anything is sent. `files.appId` is the module's, set by ts-data.js.

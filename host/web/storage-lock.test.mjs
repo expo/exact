@@ -77,6 +77,45 @@ test('a lock asks the timers it is given for its own bound alone, one per wait, 
   } finally { await browser.close(); server.stop(true); }
 }, 60_000);
 
+// The SQLite worker (storage-worker.js) that two clients share: B waits on the lock A holds, and is disposed. Its wait
+// ends with it, so A's close, which releases the lock, and C's open of another file do not wait for the lock's
+// 10-second bound.
+test('a disposed client\'s pending open neither holds the lock\'s holder nor another client', async () => {
+  const sqlite = resolve(import.meta.dirname, '../../node_modules/@sqlite.org/sqlite-wasm/dist');
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/sqlite3.mjs') return new Response(readFileSync(resolve(sqlite, 'index.mjs')), {headers: {'content-type': 'text/javascript'}});
+    if (path === '/sqlite3.wasm') return new Response(readFileSync(resolve(sqlite, 'sqlite3.wasm')), {headers: {'content-type': 'application/wasm'}});
+    if (path.endsWith('.js')) return new Response(readFileSync(resolve(import.meta.dirname, path.slice(1))), {headers: {'content-type': 'text/javascript'}});
+    return new Response('<!doctype html>');
+  }});
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}`);
+    const result = await page.evaluate(async () => {
+      const worker = new Worker('/storage-worker.js', {type: 'module'}), replies = new Map();
+      worker.onmessage = ({data}) => replies.get(`${data.client}:${data.id}`)?.(data);
+      const ask = (client, id, op, args) => new Promise(resolve => {
+        replies.set(`${client}:${id}`, resolve);
+        worker.postMessage({client, id, op, args, appId: 'dispose-waiter'});
+      });
+      const a = await ask(1, 1, 'open', ['app:/data/a.db']);
+      void ask(2, 1, 'open', ['app:/data/a.db']);
+      while (!(await navigator.locks.query()).pending.length) await new Promise(resolve => setTimeout(resolve, 0));
+      worker.postMessage({client: 2, op: 'dispose'});
+      const started = performance.now();
+      const [closed, other] = await Promise.all([ask(1, 2, 'close', [a.value]), ask(3, 1, 'open', ['app:/data/c.db'])]);
+      const ms = performance.now() - started;
+      await ask(3, 2, 'close', [other.value]);
+      return {opened: a.error ?? 'ok', closed: closed.error ?? 'ok', other: other.error ?? 'ok', ms, locks: await navigator.locks.query()};
+    });
+    expect([result.opened, result.closed, result.other]).toEqual(['ok', 'ok', 'ok']);
+    expect(result.ms).toBeLessThan(5000);
+    expect(result.locks).toEqual({held: [], pending: []});
+  } finally { await browser.close(); server.stop(true); }
+}, 60_000);
+
 test('a queued page retry cannot cross another tab’s protected secret update', async () => {
   const loader = glueDeclarations(readFileSync(new URL('./glue.js', import.meta.url), 'utf8'), ['loadAfterPaint']);
   const server = Bun.serve({hostname: '127.0.0.1', port: 0, fetch(request) {

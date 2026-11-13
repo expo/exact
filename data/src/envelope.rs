@@ -180,7 +180,9 @@ fn error_json(error: &DataError) -> Json {
     let (kind, message) = match error {
         DataError::UnknownSource(m) => ("UnknownSource", m),
         DataError::BadArguments(m) => ("BadArguments", m),
-        DataError::DeferredAtBake(m) => ("DeferredAtBake", m),
+        DataError::DeferredAtBake { message, warning } => {
+            return json!({"kind": "DeferredAtBake", "message": message, "warning": warning});
+        }
         DataError::Unavailable(m) | DataError::Interface(m) => ("Unavailable", m),
         // Transient: a peer that predates it reads it as `Unavailable` (`error_from`'s catch-all).
         DataError::Overrun(m) => ("Overrun", m),
@@ -197,7 +199,10 @@ fn error_from(error: &Json) -> DataError {
     match error["kind"].as_str() {
         Some("UnknownSource") => DataError::UnknownSource(message),
         Some("BadArguments") => DataError::BadArguments(message),
-        Some("DeferredAtBake") => DataError::DeferredAtBake(message),
+        Some("DeferredAtBake") => DataError::DeferredAtBake {
+            message,
+            warning: error["warning"] == Json::Bool(true),
+        },
         Some("Overrun") => DataError::Overrun(message),
         Some("Failed") => match error["code"].as_str().and_then(FailureCode::from_name) {
             Some(code) => {
@@ -235,6 +240,8 @@ fn request_json(request: &Request) -> Json {
         "body_to": request.body_to,
         "redirect": (request.redirect != Redirect::Follow).then(|| request.redirect.name()),
         "cache": (request.cache != CacheMode::Unspecified).then(|| request.cache.name()),
+        "preload": request.preload,
+        "prefetch": request.prefetch,
         "held": request.held.then_some(true),
         "due_ms": request.due_ms,
         "wake_ms": request.wake_ms,
@@ -264,6 +271,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         .transpose()?
         .unwrap_or_default();
     let request = Request {
+        module: None,
         surface: None,
         // The runner stamps who asked when the request goes out.
         reach: Default::default(),
@@ -349,12 +357,25 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
             .map_err(|_| unavailable("turn reply: an invalid redirect mode"))?,
         cache: CacheMode::parse(json["cache"].as_str())
             .map_err(|_| unavailable("turn reply: an invalid cache mode"))?,
+        preload: match &json["preload"] {
+            Json::Null => None,
+            Json::String(name) => Some(name.as_str().into()),
+            _ => return Err(unavailable("exactPreload must match ^[a-z][a-z0-9-]*$")),
+        },
+        prefetch: match &json["prefetch"] {
+            Json::Null => false,
+            Json::Bool(value) => *value,
+            _ => return Err(unavailable("exactPrefetch is true or false")),
+        },
         held: json["held"].as_bool().unwrap_or(false),
         due_ms: json["due_ms"].as_u64(),
         wake_ms: json["wake_ms"].as_u64(),
         fetch: json["fetch"].as_u64(),
     };
     request.check_protocols().map_err(unavailable)?;
+    if let Some(why) = request.prefetch_refusal().or(request.preload_refusal()) {
+        return Err(unavailable(why));
+    }
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.
     match request
         .long_poll_refusal()
@@ -378,6 +399,69 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preload_and_prefetch_types_are_checked_at_the_envelope() {
+        let request = Request::get("https://example.test");
+        for (key, why) in [
+            ("preload", "exactPreload must match ^[a-z][a-z0-9-]*$"),
+            ("prefetch", "exactPrefetch is true or false"),
+        ] {
+            for value in [json!(7), json!([]), json!({}), json!(true), json!("true")] {
+                if (key == "prefetch" && value.is_boolean())
+                    || (key == "preload" && value.is_string())
+                {
+                    continue;
+                }
+                let mut wire = request_json(&request);
+                wire[key] = value;
+                assert_eq!(request_from(&wire).unwrap_err(), unavailable(why));
+            }
+            for value in [None, Some(Json::Null)] {
+                let mut wire = request_json(&request);
+                wire.as_object_mut().unwrap().remove(key);
+                if let Some(value) = value {
+                    wire[key] = value;
+                }
+                assert_eq!(request_from(&wire).unwrap(), request);
+            }
+        }
+        let mut wire = request_json(&request);
+        wire["prefetch"] = json!(false);
+        wire["preload"] = json!("feed-2");
+        assert_eq!(
+            request_from(&wire).unwrap(),
+            request.preload("feed-2").unwrap()
+        );
+    }
+
+    #[test]
+    fn preload_names_cross_a_module_turn_and_invalid_names_are_refused() {
+        let request = Request::get("https://example.test")
+            .preload("feed-2")
+            .unwrap();
+        let mut wire = request_json(&request);
+        assert_eq!(wire["preload"], "feed-2");
+        assert_eq!(request_from(&wire).unwrap(), request);
+        wire["preload"] = Json::String("Bad".into());
+        assert!(request_from(&wire)
+            .unwrap_err()
+            .to_string()
+            .contains("exactPreload"));
+    }
+
+    #[test]
+    fn prefetch_crosses_a_module_turn_and_non_http_is_refused() {
+        let request = Request::get("https://example.test").prefetch();
+        let mut wire = request_json(&request);
+        assert_eq!(wire["prefetch"], true);
+        assert_eq!(request_from(&wire).unwrap(), request);
+        wire["stream"] = Json::Bool(true);
+        assert!(request_from(&wire)
+            .unwrap_err()
+            .to_string()
+            .contains("exactPrefetch"));
+    }
 
     #[test]
     fn every_cache_mode_crosses_a_module_turn() {
@@ -488,6 +572,17 @@ mod tests {
             matches!(older, DataError::Unavailable(ref m) if m == why),
             "{older:?}"
         );
+    }
+
+    #[test]
+    fn a_bake_deferral_keeps_its_warning_class_across_the_envelope() {
+        for warning in [false, true] {
+            let error = DataError::DeferredAtBake {
+                message: "deferred call".into(),
+                warning,
+            };
+            assert_eq!(error_from(&error_json(&error)), error);
+        }
     }
 
     #[test]

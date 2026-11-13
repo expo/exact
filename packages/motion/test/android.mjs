@@ -8,6 +8,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker, makeFixture, root } from './fixture.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const { app } = makeFixture(), name = basename(app);
 const { check, failed } = checker();
@@ -15,7 +16,7 @@ const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_O
 try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the APK builds, compiling Motion.kt', built.status === 0, (built.stdout + built.stderr).slice(-2000));
-  const generated = resolve(root, 'host/android/app/build', name, 'extensions/exact/app/ExactExtensions.kt');
+  const out = apkBuildDir(app), generated = resolve(out, 'extensions/exact/app/ExactExtensions.kt');
   const roster = existsSync(generated) ? readFileSync(generated, 'utf8') : '';
   check('android', 'the roster names the motion module', roster.includes('exact.motion.MotionModule'), roster || `no ${generated}`);
 } finally {

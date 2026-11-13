@@ -44,7 +44,10 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
     if request.idle_timeout_ms.is_some() {
         return Some("an idle timeout is unavailable on the web's wasm host");
     }
-    (request.ceiling_refusal())
+    request
+        .prefetch_refusal()
+        .or(request.preload_refusal())
+        .or(request.ceiling_refusal())
         .or(request.timeout_refusal())
         .or(request.protocols_refusal())
         .or(request.body_from_refusal())
@@ -558,6 +561,42 @@ impl Batch {
         self.ops.push(s);
     }
 
+    /// Ask the page to finish layout before resolving a capture's backing.
+    pub fn canvas_capture_prepare(&mut self, ticket: u64) {
+        self.ops.push(format!(
+            "{{\"op\":\"canvasCapturePrepare\",\"ticket\":{ticket}}}"
+        ));
+    }
+
+    /// `{"op":"canvasCapture","ticket","id","lifetime","generation","w","h","scale","path","scope"}`:
+    /// the page writes the canvas's bitmap as a PNG (`exact_runner::canvas_capture`).
+    pub fn canvas_capture(
+        &mut self,
+        ticket: u64,
+        c: &exact_runner::canvas_capture::CanvasCapture,
+        scope: Option<&str>,
+    ) {
+        let mut s = text!(
+            "{{\"op\":\"canvasCapture\",\"ticket\":{},\"id\":{},\"lifetime\":{},\"generation\":{},\"sequence\":{},\"w\":{},\"h\":{},\"scale\":{},\"path\":",
+            ticket,
+            c.view,
+            c.lifetime,
+            c.generation,
+            c.sequence,
+            c.width,
+            c.height,
+            Shortest(c.scale)
+        );
+        quote(&c.path, &mut s);
+        s.push_str(",\"scope\":");
+        match scope {
+            Some(scope) => quote(scope, &mut s),
+            None => s.push_str("null"),
+        }
+        s.push('}');
+        self.ops.push(s);
+    }
+
     /// `{"op":"request","ticket":N,"target":…,"method":…,"url":…,"headers":[[k,v]…],"body":"<base64>","cache":"default"|"reload"}`
     /// — a request the runner handed the host to run (LLP 1016 D2); the
     /// reply comes back through `exact_fulfill`.
@@ -566,7 +605,10 @@ impl Batch {
             self.refuse(r.ticket, &message);
             return;
         }
-        if let Some(message) = request_refusal(&r.request) {
+        if let Some(message) = (r.request.prefetch && r.class != exact_runner::RequestClass::Read)
+            .then_some("exactPrefetch requires a plain HTTP read")
+            .or(request_refusal(&r.request))
+        {
             self.refuse(r.ticket, message);
             return;
         } else if let Some(work) = r.request.surface.as_deref() {
@@ -574,6 +616,12 @@ impl Batch {
                 exact_runner::SurfaceRequest::Capture { name } => ("capture", name, None),
                 exact_runner::SurfaceRequest::Restore { name, bytes } => {
                     ("restore", name, Some(bytes.as_slice()))
+                }
+                // The host hands a canvas capture to the page itself
+                // (`Host::emit_request`); none reaches a GPU surface.
+                exact_runner::SurfaceRequest::Canvas { .. } => {
+                    self.refuse(r.ticket, "a canvas capture is not GPU surface work");
+                    return;
                 }
             };
             let mixed = r.request.continuation.is_some()

@@ -78,8 +78,8 @@ public struct Batch {
     public var journal: [String] = []
     package var frameWorkTiming: FrameWorkTiming?
     /// It may change the screen when it applies: it has ops, a control's
-    /// viewless contents, page facts or the orientation lock. An error is only logged.
-    package var changesScreen: Bool { !ops.isEmpty || controls || facts || orientation != nil }
+    /// viewless contents or page facts. The presenter resolves an orientation request separately.
+    package var changesScreen: Bool { !ops.isEmpty || controls || facts }
     package init(ops: [BatchOp], timers: Bool, motion: Bool, clock: Double?, error: String?, timerDueMs: Double? = nil, pending: Bool = false, busy: Bool = false) {
         self.ops = ops; self.timers = timers; self.motion = motion; self.clock = clock
         self.error = error; self.timerDueMs = timerDueMs; self.pending = pending
@@ -226,6 +226,11 @@ package final class Runtime {
     package func useNativeTimers(_ enabled: Bool) {
         on { () -> Void in _ = exact_native_timers(rt, enabled ? 1 : 0) }
     }
+    /// Rebind retiring list rows to new items (LLP 1078): the presenter
+    /// resets what it keeps by view on each `renew`.
+    package func useRowReuse(_ on: Bool) {
+        self.on { () -> Void in _ = exact_row_reuse(rt, on ? 1 : 0) }
+    }
     /// The wake for a request's reply (LLP 1016 D2), on the executor's thread.
     package func setWake(_ wake: ExactWakeFn?, ctx: UnsafeMutableRawPointer?) {
         let ctx = UInt(bitPattern: ctx)
@@ -274,6 +279,8 @@ package final class Runtime {
             return read(exact_canvas_image(rt, n, UInt32(max(0, width)), UInt32(max(0, height)), ok ? 1 : 0))
         }
     }
+    /// The presenter let a decoded Canvas 2D image handle go (LLP 1056 D9).
+    package func canvasImageReleased(_ src: String) { on { exact_canvas_image_released(rt, write(src)) } }
     /// A 2D canvas's replay is behind or caught up (LLP 1056 D5).
     package func canvasHeld(_ view: UInt32, _ held: Bool) { on { exact_canvas_held(rt, view, held ? 1 : 0) } }
     /// The Canvas 2D text measurer (LLP 1056 D8), with the measurer's context.
@@ -377,6 +384,14 @@ package final class Runtime {
         }
     }
     package func requestActive(_ ticket: UInt64) -> Bool { on(busy: false) { exact_request_active(rt, ticket) != 0 } }
+    /// The replay queue waits here: copying and marking share the runtime owner's
+    /// turn, so unmount cannot retire the job between them. Encoding runs afterward.
+    package func snapshotCanvas(_ ticket: UInt64, copy: () -> Bool) -> Bool {
+        on(busy: false) {
+            guard exact_request_active(rt, ticket) != 0, copy() else { return false }
+            return exact_canvas_snapshotted(rt, ticket) != 0
+        }
+    }
     package func fulfillSurface(_ ticket: UInt64, kind: UInt32, body: Data = Data(), now: Double) -> Batch {
         return on {
             let n = write(body)

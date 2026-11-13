@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cargoEnvironment, developmentBuildEnv } from './app.mjs';
+import { bakeTarget, cargoEnvironment, developmentBuildEnv } from './app.mjs';
 import { webOnly } from './app-cli.mjs';
 import { appleCargo } from './cargo-check.mjs';
 import { cargoInputPaths, packageDirectories, watchedDigest } from './cargo-dep-info.mjs';
@@ -40,8 +40,7 @@ export const appleBakeToolArgs = (host, cargoArgs = ['--profile', 'host-dev']) =
  * build script runs again when a variable it reads differs (cc's `CXXFLAGS`, the deployment targets). The
  * executable. */
 export function appleBakeTool(env, cargoArgs) {
-  const host = /^host: (\S+)$/m.exec(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout ?? '')?.[1];
-  if (!host) throw new Error('rustc did not report its host target');
+  const host = bakeTarget('macos');
   const args = [...appleBakeToolArgs(host, cargoArgs), '-q', '--message-format=json-render-diagnostics'];
   const built = spawnSync(...appleCargo('cargo', args, { cwd: ROOT, env: { ...cargoEnvironment(env), CARGO_TARGET_DIR: TOOL_TARGET }, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   if (built.status !== 0) throw new Error(`the bake tool did not build (cargo ${args.join(' ')})`);
@@ -156,10 +155,13 @@ export const linkedPlanArgs = (dir) => !dir ? [] : [...[['__exact_plan', 'app.pl
   .flatMap(([section, file]) => ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', section, '-Xlinker', resolve(dir, file)]),
   '-Xlinker', '-sectalign', '-Xlinker', '__TEXT', '-Xlinker', '__exact_hbc', '-Xlinker', '0x10'];
 
+/** `outputs` are the build's (app.mjs `buildOutputs`), Cargo's configured build directory among them. */
+const watchOutputs = (dir, env, outputs = []) => [dir, env.CARGO_TARGET_DIR, env.CARGO_BUILD_BUILD_DIR, env.EXACT_BAKE_OUTPUT, ...outputs].filter(Boolean).map(path => resolve(path));
+
 /** Explicit producer files (a signed GPU library) remain inputs under output roots.
  * The bake's own directory is always excluded, including through aliases. */
-function inputDigests(paths, dir, env, {since = Infinity, known = new Set()} = {}) {
-  const outputs = [dir, env.CARGO_TARGET_DIR, env.CARGO_BUILD_BUILD_DIR, env.EXACT_BAKE_OUTPUT].filter(Boolean).map(path => resolve(path));
+function inputDigests(paths, dir, env, {since = Infinity, known = new Set(), outputs: built = []} = {}) {
+  const outputs = watchOutputs(dir, env, built);
   return new Map(paths.map(path => {
     let file = false; try { file = statSync(path).isFile(); } catch { /* missing watch */ }
     return [path, watchedDigest([path], file ? [dir] : outputs, {since:known.has(path) ? Infinity : since})];
@@ -175,10 +177,10 @@ function pairOf(dir) {
 
 /** Whether the bake `record` describes is the one its inputs would make now,
  * and the plan and compat.json beside it are the pair it made. */
-function fresh(record, dir, env, tool) {
+function fresh(record, dir, env, tool, outputs) {
   if (record?.version !== 2 || record.tool !== tool || !record.pair || record.pair !== pairOf(dir)) return false;
   if (Object.entries(record.env).some(([name, value]) => (env[name] ?? null) !== value)) return false;
-  return record.digest != null && record.digest === inputDigest(record.paths, dir, env);
+  return record.digest != null && record.digest === inputDigest(record.paths, dir, env, {outputs});
 }
 
 /** Bakes `app` for `platform` and `target` into its linked bake directory,
@@ -189,7 +191,7 @@ function fresh(record, dir, env, tool) {
  * (`appleBakeTool`).
  * The caller holds the app's build claim (host/apple/build.mjs `appleBuildLock`), the one
  * writer of the directory. */
-export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs } = {}) {
+export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs, outputs = [] } = {}) {
   const dir = linkedBakeDir(env, platform, target), at = resolve(dir, 'inputs.json');
   let executable, args = [app.dir, '--cargo', platform, target, dir], cwd = app.dir, runEnv = cargoEnvironment(env);
   const rust = existsSync(resolve(app.dir, 'data/Cargo.toml'));
@@ -209,9 +211,9 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
   // one line where the first was, as `contract build` says them (18 of them every euxy build).
   const warn = (warnings) => { for (const line of bakeWarnings(app.name, warnings ?? [])) console.error(line); };
   let record = null; try { record = JSON.parse(readFileSync(at, 'utf8')); } catch { /* none yet */ }
-  if (fresh(record, dir, runEnv, tool)) { warn(record.warnings); return dir; }
+  if (fresh(record, dir, runEnv, tool, outputs)) { warn(record.warnings); return dir; }
   const watched = record?.paths ?? (rust ? cargoInputPaths(readFileSync(resolve(dir, 'rust-output.txt'), 'utf8'), cwd) : []);
-  const before = inputDigests(watched, dir, runEnv);
+  const before = inputDigests(watched, dir, runEnv, {outputs});
   rmSync(at, { force: true });
   const started = Date.now();
   const r = spawnSync(executable, args, { cwd, env: runEnv, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -226,9 +228,9 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
   const paths = cargoInputPaths(r.stdout ?? '', cwd);
   // New watches have no pre-bake digest. Their change times must precede the read;
   // known watches compare bytes so touching an unchanged input does not invalidate it.
-  const after = inputDigests(paths, dir, runEnv, {since:started, known:new Set(watched)});
+  const after = inputDigests(paths, dir, runEnv, {since:started, known:new Set(watched), outputs});
   const stable = [...after].every(([path, digest]) => !before.has(path) || before.get(path) === digest);
-  record = { version: 2, at: started, tool, pair: pairOf(dir), warnings: said('warning'), env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])), paths, digest:stable ? digestOf(after) : null, missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths) };
+  record = { version: 2, at: started, tool, pair: pairOf(dir), warnings: said('warning'), env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])), paths, digest:stable ? digestOf(after) : null, missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
   renameSync(`${at}.${process.pid}.tmp`, at);
@@ -237,7 +239,7 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
 
 /** Publish the watches of a Rust bake bootstrapped or refreshed by Cargo.
  * A first build must have this record before its driver checks freshness. */
-export function recordRustBake(env) {
+export function recordRustBake(env, outputs = []) {
   const dir = env.EXACT_BAKED;
   if (!dir || !existsSync(resolve(dir, 'rust-baker.json'))) return;
   const baker = JSON.parse(readFileSync(resolve(dir, 'rust-baker.json'), 'utf8'));
@@ -251,7 +253,7 @@ export function recordRustBake(env) {
   const record = { version: 2, at: baker.started, tool, pair, warnings: said('warning'),
     env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])),
     // Cargo's bootstrap predates this call: never certify inputs changed since its read.
-    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.started}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths) };
+    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.started, outputs}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
   writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
   renameSync(`${at}.${process.pid}.tmp`, at);
 }

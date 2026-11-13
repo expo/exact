@@ -77,6 +77,9 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn app_id(&self) -> &str {
         self.0.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.0.launch()
+    }
     fn preloads(&self) -> &[exact_runner::request::Preload] {
         self.0.preloads()
     }
@@ -195,6 +198,23 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn take_logs(&mut self) -> Vec<String> {
         self.0.take_logs()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.0
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.0.module_identity(source)
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.0.take_aborted()
     }

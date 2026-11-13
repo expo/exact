@@ -102,9 +102,35 @@ pub(crate) fn names_case(decl: &str, value: &str) -> bool {
         .is_some_and(|cases| cases.split('|').any(|c| c.trim() == value))
 }
 
-/// Whether a value of type `ty` is what declaration `decl` names. A
-/// declaration the check does not read (`handle<track>`) admits anything.
+/// Whether a value of type `ty` is what declaration `decl` names, as a
+/// prop's value given where the package declares the prop. A declaration
+/// the check does not read (`handle<track>`) admits anything.
 pub(crate) fn fits(decl: &str, ty: &Ty) -> bool {
+    agrees(decl, ty, Flow::Given)
+}
+
+/// Whether an action parameter of type `ty` can hold every value of
+/// declaration `decl`, as a declared event's argument it receives.
+pub(crate) fn receives(ty: &Ty, decl: &str) -> bool {
+    agrees(decl, ty, Flow::Received)
+}
+
+/// Which way a value crosses between Contract and a package's declaration.
+#[derive(Clone, Copy)]
+enum Flow {
+    /// A Contract value of the type, given where the declaration is.
+    Given,
+    /// A value of the declaration, received where the type is.
+    Received,
+}
+
+/// The cases `enum<a|b>` names.
+fn cases(decl: &str) -> Option<Vec<&str>> {
+    let cases = decl.strip_prefix("enum<")?.strip_suffix('>')?;
+    Some(cases.split('|').map(str::trim).collect())
+}
+
+fn agrees(decl: &str, ty: &Ty, flow: Flow) -> bool {
     let decl = decl.trim();
     if *ty == Ty::Unknown || decl.starts_with("handle<") {
         return true;
@@ -114,21 +140,29 @@ pub(crate) fn fits(decl: &str, ty: &Ty) -> bool {
         .and_then(|d| d.strip_suffix('>'))
     {
         return match ty {
-            Ty::Option(t) => fits(inner, t),
-            t => fits(inner, t),
+            Ty::Option(t) => agrees(inner, t, flow),
+            t => agrees(inner, t, flow),
         };
     }
     let list = (decl.strip_suffix("[]"))
         .or_else(|| decl.strip_prefix("list<").and_then(|d| d.strip_suffix('>')));
     if let Some(inner) = list {
-        return matches!(ty, Ty::List(t) if fits(inner, t));
+        return matches!(ty, Ty::List(t) if agrees(inner, t, flow));
     }
-    match ty {
-        Ty::String => decl == "string",
-        Ty::Enum(_) => decl == "string" || decl.starts_with("enum<"),
-        Ty::Number => decl == "number",
-        Ty::Bool => decl == "bool",
-        Ty::Record(name) => decl == name,
+    match (ty, flow) {
+        (Ty::String, _) => decl == "string",
+        // Every case the value can take is one the receiving side names.
+        (Ty::Enum(values), Flow::Given) => {
+            decl == "string"
+                || cases(decl)
+                    .is_some_and(|cases| values.iter().all(|v| cases.contains(&v.as_str())))
+        }
+        (Ty::Enum(values), Flow::Received) => {
+            cases(decl).is_some_and(|cases| cases.iter().all(|c| values.iter().any(|v| v == c)))
+        }
+        (Ty::Number, _) => decl == "number",
+        (Ty::Bool, _) => decl == "bool",
+        (Ty::Record(name), _) => decl == name,
         _ => false,
     }
 }
@@ -194,7 +228,7 @@ impl Lowerer<'_> {
             );
         }
         for (p, d) in params.iter().zip(args) {
-            if *p == Ty::Unknown || !fits(d, p) {
+            if *p == Ty::Unknown || !receives(p, d) {
                 return err(
                     "lower-handler-type",
                     format!("`{name}` takes `{p}` where `{tag}`'s `{event}` carries `{d}`"),
@@ -210,7 +244,7 @@ impl Lowerer<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fits, names_case};
+    use super::{fits, names_case, receives};
     use contract_types::Ty;
 
     #[test]
@@ -234,5 +268,40 @@ mod tests {
         assert!(names_case("enum<plain|buy>", "plain"));
         assert!(!names_case(kinds, "rent"));
         assert!(!names_case("string", "order"));
+    }
+
+    /// A prop takes an enum whose every case it declares; an action
+    /// parameter takes an event's enum when it holds every case the event
+    /// carries. Both hold under `option` and `list`.
+    #[test]
+    fn an_enum_agrees_with_a_declaration_by_its_cases() {
+        let cases = |cs: &[&str]| Ty::Enum(cs.iter().map(|c| c.to_string()).collect());
+        let plain_buy = cases(&["plain", "buy"]);
+        let rent = cases(&["rent"]);
+        let rent_order = cases(&["rent", "order"]);
+        let wrap = |t: &Ty| {
+            [
+                (t.clone(), "enum<rent|order>"),
+                (Ty::Option(Box::new(t.clone())), "option<enum<rent|order>>"),
+                (Ty::List(Box::new(t.clone())), "enum<rent|order>[]"),
+            ]
+        };
+        for (t, decl) in wrap(&plain_buy) {
+            assert!(!fits(decl, &t), "{t} given as {decl}");
+            assert!(!receives(&t, decl), "{decl} received as {t}");
+        }
+        for (t, decl) in wrap(&rent) {
+            assert!(fits(decl, &t), "{t} given as {decl}");
+            assert!(!receives(&t, decl), "{decl} received as {t}");
+        }
+        for (t, decl) in wrap(&cases(&["rent", "order", "late"])) {
+            assert!(!fits(decl, &t), "{t} given as {decl}");
+            assert!(receives(&t, decl), "{decl} received as {t}");
+        }
+        assert!(fits("enum<order|rent>", &rent_order));
+        assert!(receives(&rent_order, "enum<order|rent>"));
+        // A string prop takes any enum; an enum parameter takes no string.
+        assert!(fits("string", &plain_buy));
+        assert!(!receives(&plain_buy, "string"));
     }
 }

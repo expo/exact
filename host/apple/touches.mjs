@@ -10,6 +10,7 @@
 //
 // Simulator only so far; a phone is LLP 1080.000 stage 4.
 import { spawn, spawnSync } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
@@ -19,6 +20,7 @@ import { iosTriple } from './build.mjs';
 import { claimLive } from '../../scripts/app.mjs';
 import { phoneBridge } from './devices.mjs';
 import { watchCloak } from './cloak.mjs';
+import { retainCleanupError, simulatorDisplay } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -214,6 +216,20 @@ async function keptRunner(udid, appId, key) {
 // session needs all three on (without them a kept runner's tap never finishes and a menu's rows are not found), so
 // it turns them on and puts them back at its end; a write takes effect at the next launch, with no reboot.
 const AX = 'com.apple.Accessibility', AX_KEYS = ['AutomationEnabled', 'AccessibilityEnabled', 'ApplicationAccessibilityEnabled'];
+const accessibilityLocks = new AsyncLocalStorage();
+// Launch failure can close its touch session while still holding the display lock.
+// Work deferred past that launch must acquire the lock again.
+function withAccessibilityLock(udid, fn) {
+  const held = accessibilityLocks.getStore() ?? [];
+  if (held.some(owner => owner.udid === udid && owner.active)) return fn();
+  return simulatorDisplay(udid, () => {
+    const owner = { udid, active: true };
+    return accessibilityLocks.run([...held, owner], async () => {
+      try { return await fn(); }
+      finally { owner.active = false; }
+    });
+  });
+}
 /** `defaults <args>` in simulator `udid`, asynchronously: each spawn costs about 0.35 s, so a session runs them
  * together. One that has not answered in 10 s is killed, and fails: the device's lock waits on it. */
 const simDefaults = (udid, args) => new Promise((done) => {
@@ -225,6 +241,30 @@ const simDefaults = (udid, args) => new Promise((done) => {
   p.on('error', (e) => { clearTimeout(timer); done({ status: -1, out, err: String(e) }); });
   p.on('close', (status, signal) => { clearTimeout(timer); done({ status: signal ? -1 : status, out, err: signal ? 'no answer in 10 s' : err }); });
 });
+/** Hold the simulator's shared launch lock through AX setup, launch and restoration.
+ * The loaded runtime stays with the process. Ordinary drives perform no defaults reads or writes. */
+export async function withAccessibilityRuntime(udid, enabled, launch, run = simDefaults) {
+  return withAccessibilityLock(udid, async () => {
+    if (!enabled) return launch();
+    const key = 'ApplicationAccessibilityEnabled', args = [AX, key];
+    const before = await run(udid, ['read', ...args]);
+    if (before.status !== 0 && !/does not exist|not found/.test(before.err)) throw new Error(`simulator accessibility: ${before.err}`);
+    if (before.status === 0 && before.out.trim() === '1') return launch();
+    const set = await run(udid, ['write', ...args, '-bool', 'true']);
+    if (set.status !== 0) throw new Error(`simulator accessibility: ${set.err}`);
+    let carrier;
+    try { carrier = await launch(); return carrier; }
+    finally {
+      try {
+        const restored = await run(udid, before.status === 0 ? ['write', ...args, '-bool', 'false'] : ['delete', ...args]);
+        if (restored.status !== 0) throw new Error(`simulator accessibility could not be restored: ${restored.err}`);
+      } catch (error) {
+        try { await carrier?.close(); } catch (failure) { retainCleanupError(error, failure); }
+        throw error;
+      }
+    }
+  });
+}
 /** The three keys as simulator `udid` has them (`'1'`, `'0'`, or undefined when unset), or null when it could not say. */
 async function accessibilityKeys(udid) {
   const r = await simDefaults(udid, ['read', AX]);
@@ -243,14 +283,16 @@ export async function foundAccessibility(udid, record, read = accessibilityKeys)
  * all three on (a person sets ApplicationAccessibilityEnabled alone, for `tree --ax`), so they go back to unset.
  * Resolves with what failed, or null. */
 export async function restoreAccessibility(udid, found, run = simDefaults) {
-  const left = found.AutomationEnabled === '1';
-  const failed = (await Promise.all(AX_KEYS.map(async (k) => {
-    const v = left ? undefined : found[k];
-    const r = await run(udid, v == null ? ['delete', AX, k] : ['write', AX, k, '-bool', v === '1' ? 'true' : 'false']);
-    // Deleting a key or domain that is not there fails, and leaves what was wanted.
-    return r.status === 0 || (v == null && /Could not find key|not found/.test(r.err)) ? null : `${k}: ${r.err.trim() || `exit ${r.status}`}`;
-  }))).filter(Boolean);
-  return failed.length ? failed.join('; ') : null;
+  return withAccessibilityLock(udid, async () => {
+    const left = found.AutomationEnabled === '1';
+    const failed = (await Promise.all(AX_KEYS.map(async (k) => {
+      const v = left ? undefined : found[k];
+      const r = await run(udid, v == null ? ['delete', AX, k] : ['write', AX, k, '-bool', v === '1' ? 'true' : 'false']);
+      // Deleting a key or domain that is not there fails, and leaves what was wanted.
+      return r.status === 0 || (v == null && /Could not find key|not found/.test(r.err)) ? null : `${k}: ${r.err.trim() || `exit ${r.status}`}`;
+    }))).filter(Boolean);
+    return failed.length ? failed.join('; ') : null;
+  });
 }
 
 /**

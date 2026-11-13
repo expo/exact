@@ -134,3 +134,17 @@ fn a_negative_or_percentage_slop_is_refused() {
         assert!(contract::compile(&source).is_err(), "`{value}` compiled");
     }
 }
+
+/// LLP 1123 D9: a slop that reads the safe area where the box is reaches as
+/// far as its owner's inset, not the document's 0.
+#[test]
+fn a_slop_reads_the_boxes_own_inset() {
+    let mut r = boot(
+        "      box id=\"small\" position=\"absolute\" left=40 top=40 width=20 height=20 -exact-hit-slop-top=\"var(--exact-safe-area-inset-top)\"\n",
+    );
+    let page = r.roots()[0];
+    let local = Some([12.0, 0.0, 0.0, 0.0]);
+    r.kernel_mut().set_local_insets(page, local).unwrap();
+    assert_eq!(hit(&r, 50.0, 30.0), at("small"), "12 above it");
+    assert_eq!(hit(&r, 50.0, 27.0), at("page"), "and no further");
+}

@@ -60,8 +60,9 @@ function descendants(path) {
 // lock. Unrelated files remain usable; replacing an open database or moving its
 // parent fails instead of silently discarding SQLite's later commit.
 // `timers`: the realm's own; a module Worker's are taken before its prelude takes the module's (module-worker.js).
+// `cancel`: a signal that ends the wait when whoever asked has gone (storage-worker.js, a disposed client).
 const ownTimers = { set: (f, ms) => setTimeout(f, ms), clear: id => clearTimeout(id) };
-export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimers) {
+export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimers, cancel = null) {
   if (!globalThis.navigator?.locks) throw failure('Web Locks are unavailable');
   const requested = new Map();
   for (let path of paths) {
@@ -75,11 +76,14 @@ export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimer
   const held = [];
   const abort = new AbortController();
   const timer = timers.set(() => abort.abort(), timeout);
+  const cancelled = () => abort.abort();
   async function release() {
     for (const lock of held) lock.release();
     await Promise.all(held.map(lock => lock.done));
   }
   try {
+    if (cancel?.aborted) throw failure('storage was let go before its lock was acquired');
+    cancel?.addEventListener('abort', cancelled, { once: true });
     for (const [path, mode] of [...requested].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
       let unlock;
       const lifetime = new Promise(resolve => { unlock = resolve; });
@@ -91,8 +95,8 @@ export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimer
           acquired();
           await lifetime;
         });
-      void done.catch(error => refused(abort.signal.aborted
-        ? failure(`storage is busy after ${timeout} ms: ${path}; close the other database or tab and retry`, 'EBUSY')
+      void done.catch(error => refused(cancel?.aborted ? failure('storage was let go before its lock was acquired')
+        : abort.signal.aborted ? failure(`storage is busy after ${timeout} ms: ${path}; close the other database or tab and retry`, 'EBUSY')
         : failure(error.message)));
       await ready;
       held.push({ release: unlock, done });
@@ -101,7 +105,10 @@ export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimer
   } catch (error) {
     await release();
     throw error;
-  } finally { timers.clear(timer); }
+  } finally {
+    timers.clear(timer);
+    cancel?.removeEventListener('abort', cancelled);
+  }
 }
 function requireBelowRoot(path) {
   if (rootPaths.includes(path)) throw failure('operation needs a path below the app root');
@@ -242,10 +249,11 @@ export function createFileStore(appId) {
     },
     // Trusted host only: a picked file's entry, backed by the browser's File
     // rather than bytes read into memory (LLP 1069.002 D5).
-    putBlob(path, blob) {
+    putBlob(path, blob, refusal = () => undefined) {
       path = normalizePath(path);
       requireBelowRoot(path);
       return run(true, (records, changes) => {
+        const refused = refusal(); if (refused) throw refused;
         directory(records, parentOf(path));
         const previous = records.get(path);
         if (previous && previous.kind !== 'file') throw failure('write needs a regular file', 'EISDIR');
@@ -501,7 +509,7 @@ export async function bodyTarget(appId, grants, path) {
     // Until the file starts to be replaced, the request's end refuses the write: `refusal()`, asked just before, says
     // whether the request has ended and with what, and `ended` aborts when it may have, rejecting the write at once.
     // Once the file starts to be replaced the write waits for it, so a request never fails while its file changes.
-    async put(response, limit, ended, refusal = () => undefined) {
+    async put(response, limit, ended, refusal = () => undefined, publishRefusal) {
       try {
         // A browser rejects the read with its own words, so the overflow is kept to say why.
         let size = 0, over = null;
@@ -515,7 +523,7 @@ export async function bodyTarget(appId, grants, path) {
           refused = refusal();
           if (refused) throw refused;
           replacing = true;
-          return store.putBlob(normalized, blob);
+          return store.putBlob(normalized, blob, publishRefusal);
         }).catch(error => { throw error === refused ? error : named(error.message, error.code); });
         if (ended) {
           await new Promise((done, failed) => {

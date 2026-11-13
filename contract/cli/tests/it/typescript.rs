@@ -142,8 +142,13 @@ impl Drop for Fixture {
 /// which the default checks skip: an Ibex refresh once replaced the
 /// declaration with the engine's positional binding and nothing failed.
 #[test]
-fn generated_request_init_names_every_fetch_cache_mode() {
+fn generated_request_init_names_cache_modes_and_preloads() {
     let declarations = contract::typescript(&contract::compile(CONTRACT).unwrap()).unwrap();
+    assert!(declarations.contains("exactPreload?: string;"));
+    assert!(declarations.contains("exactPrefetch?: boolean;"));
+    assert!(declarations.contains(
+        "Checked on every host; the request is made as written. No host holds its reply yet."
+    ));
     assert!(declarations.contains("cache?: \"default\" | \"no-store\" | \"reload\" | \"no-cache\" | \"force-cache\" | \"only-if-cached\";"));
 }
 
@@ -241,6 +246,88 @@ const wrong: Result<'board'> = [{ id: 'mv', name: 'Mountain View', zone: 4, dist
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "async lane: typechecks mixed providers with tsc"]
+fn mixed_providers_require_only_the_typescript_half() {
+    let plan = contract::compile(CONTRACT).unwrap();
+    let fixture = Fixture::new();
+    let rust = vec!["save".into(), "search".into()];
+    let declarations = contract::typescript_exporting(&plan, None, &rust).unwrap();
+    fixture.write("app.contract.d.ts", &declarations);
+    let mixed = r#"
+import type { TypeScriptAnswer, TypeScriptSources, Args, Sources } from './app.contract.d.ts';
+const sources: TypeScriptSources = { find: () => null };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
+const rustArgs: Args<'save'> = ['Palo', true];
+declare const complete: Sources;
+complete.save(rustArgs, {} as any, {} as any);
+// @ts-expect-error Rust sources remain outside the TypeScript dispatcher
+answer('save', rustArgs, {} as any, {} as any);
+"#;
+    let output = fixture.check(mixed);
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary = declarations.split("\n\n").next().unwrap();
+    assert!(summary.contains("//   find:"));
+    assert!(!summary.contains("//   save:") && !summary.contains("//   search:"));
+    for (bad, missing) in [
+        (mixed.replace("{ find: () => null }", "{}"), "find"),
+        (
+            mixed.replace("sources: TypeScriptSources", "sources: Sources"),
+            "search",
+        ),
+    ] {
+        let output = fixture.check(&bad);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(missing));
+    }
+    fixture.write(
+        "app.contract.d.ts",
+        &contract::typescript_exporting(&plan, None, &["search".into()]).unwrap(),
+    );
+    let output = fixture.check(mixed);
+    assert!(
+        !output.status.success(),
+        "moving save to TypeScript must require it"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("save"));
+
+    fixture.write("app.contract.d.ts", &contract::typescript(&plan).unwrap());
+    let output = fixture.check(
+        &VALID
+            .split("\ndeclare const store:")
+            .next()
+            .unwrap()
+            .replace("Sources", "TypeScriptSources")
+            .replace("Answer", "TypeScriptAnswer"),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    fixture.write(
+        "app.contract.d.ts",
+        &contract::typescript_exporting(
+            &plan,
+            None,
+            &["save".into(), "search".into(), "find".into()],
+        )
+        .unwrap(),
+    );
+    let output = fixture.check("import type { TypeScriptSource, TypeScriptSources, Sources } from './app.contract.d.ts';\nconst sources: TypeScriptSources = {};\n// @ts-expect-error all sources belong to Rust\nconst source: TypeScriptSource = 'find';\n// @ts-expect-error Sources still requires every provider\nconst complete: Sources = {};\n");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

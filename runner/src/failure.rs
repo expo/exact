@@ -67,7 +67,7 @@ impl FailureCode {
     }
 
     /// What a TypeScript module let through, by the class its seam names
-    /// (`failure` in js/src/prelude.js `fail`) and the `reason` its error
+    /// (`failure` in js/src/reply.js `fail`) and the `reason` its error
     /// carried: `Failed`, or `Unavailable` for its own error that names no
     /// reason.
     pub fn seam_error(failure: Option<&str>, message: String, reason: Option<&str>) -> DataError {
@@ -125,7 +125,7 @@ impl Failure {
                 DataError::UnknownSource(s)
                 | DataError::BadArguments(s)
                 | DataError::Unavailable(s)
-                | DataError::DeferredAtBake(s)
+                | DataError::DeferredAtBake { message: s, .. }
                 | DataError::Interface(s)
                 | DataError::Overrun(s) => (FailureCode::Error, s.clone(), String::new()),
             },

@@ -162,7 +162,16 @@ impl Parser {
         for step in &steps {
             let refused = match step {
                 Step::Perf { .. } | Step::ExpectPerf { .. } => Some("a `perf` block measures steps; its `expect perf` lines follow it, and blocks do not nest".to_string()),
-                Step::Clock { arg, .. } if arg.ends_with(" real") => Some(format!("`clock {arg}` lets the wall clock run, so the counts would depend on the machine's speed; step the agent's clock (`clock +N`, `clock data`, `clock settle`)")),
+                // `clock +N real`, `clock held` and `clock until` let real
+                // time pass while the agent's clock stands.
+                Step::Clock { arg, .. }
+                    if arg.ends_with(" real")
+                        || arg == "held"
+                        || arg.starts_with("held ")
+                        || arg.starts_with("until ") =>
+                {
+                    Some(format!("`clock {arg}` lets the wall clock run, so the counts would depend on the machine's speed; step the agent's clock (`clock +N`, `clock data`, `clock settle`)"))
+                }
                 s if !launch_word(s).is_empty() => Some(format!("`{}` is a launch line and leads the test, not a `perf` block", launch_word(s))),
                 _ => None,
             };
@@ -1164,29 +1173,33 @@ impl Parser {
                     }
                     "state" => {
                         let name = self.state_path()?;
-                        self.expect_punct("==")?;
-                        // `-3` is a number (drums R7). Other expressions stay refused.
-                        let value = match self.expr()? {
-                            Expr::Unary(UnOp::Neg, inner, span) if matches!(*inner, Expr::Number(..)) => {
-                                let Expr::Number(n, _) = *inner else { unreachable!() };
-                                Expr::Number(-n, span)
-                            }
-                            other => other,
+                        let comparison = if self.eat_punct("==") {
+                            StateComparison::Equal
+                        } else if self.eat_punct(">=") {
+                            StateComparison::AtLeast
+                        } else if self.eat_punct("<=") {
+                            StateComparison::AtMost
+                        } else if self.at_ident("in") {
+                            self.next();
+                            StateComparison::In
+                        } else {
+                            return self.err("syntax-expected-step", "`expect state` takes `==`, `>=`, `<=`, or `in`");
                         };
-                        let empty = matches!(&value, Expr::List(items, _) if items.is_empty());
-                        if !empty
-                            && !matches!(
-                                value,
-                                Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_)
-                            )
-                        {
-                            return Err(SyntaxError {
-                                id: "syntax-expected-step",
-                                message: "`expect state name ==` takes a number, a string, a bool, `none`, or `[]`".into(),
-                                span,
-                            });
+                        let value = match comparison {
+                            StateComparison::AtLeast | StateComparison::AtMost => Expr::Number(self.step_number("a numeric bound")?, span),
+                            StateComparison::In => {
+                                let mut values = vec![self.state_literal()?];
+                                while !matches!(self.peek_kind(), TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof) {
+                                    values.push(self.state_literal()?);
+                                }
+                                Expr::List(values, span)
+                            }
+                            StateComparison::Equal => self.state_literal()?,
+                        };
+                        if !matches!(self.peek_kind(), TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof) {
+                            return self.err("syntax-expected-step", "`expect state` compares literals, not expressions");
                         }
-                        Step::ExpectState { name, value, span }
+                        Step::ExpectState { name, comparison, value, span }
                     }
                     other => {
                         // r32 t1 tried `expect value` for a field.
@@ -1307,4 +1320,32 @@ fn iso_date(s: &str) -> bool {
             }
         })
         && (b.len() == 10 || b[10] == b'T')
+}
+
+impl Parser {
+    fn state_literal(&mut self) -> R<Expr> {
+        let span = self.peek().span;
+        if self.at_punct("-") || matches!(self.peek_kind(), TokenKind::Number(_)) {
+            return self
+                .step_number("a literal number")
+                .map(|n| Expr::Number(n, span));
+        }
+        let token = self.next();
+        match token.kind {
+            TokenKind::Str(value) => Ok(Expr::Str(value, span)),
+            TokenKind::Ident(word) if word == "true" || word == "false" => {
+                Ok(Expr::Bool(word == "true", span))
+            }
+            TokenKind::Ident(word) if word == "none" => Ok(Expr::None(span)),
+            TokenKind::Punct("[") => {
+                self.expect_punct("]")?;
+                Ok(Expr::List(Vec::new(), span))
+            }
+            _ => Err(SyntaxError {
+                id: "syntax-expected-step",
+                message: "`expect state` takes a number, a string, a bool, `none`, or `[]`".into(),
+                span,
+            }),
+        }
+    }
 }

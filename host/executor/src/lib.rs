@@ -206,6 +206,7 @@ struct Shared {
     #[cfg(test)]
     queued_deadlines: Arc<AtomicUsize>,
     abort: AbortController,
+    http_cache: std::sync::OnceLock<SharedHttpCache>,
     /// Where the app's files are, as the host names them; unset on a host or
     /// drive that has none.
     root_paths: std::sync::OnceLock<[std::path::PathBuf; 3]>,
@@ -270,6 +271,15 @@ pub struct Core {
 /// Makes the host (and its transport) an owner or a stream fetches
 /// through: the platform's, unless the embedder names another.
 pub type StreamHost = Arc<dyn Fn() -> ibex2::host::Host + Send + Sync>;
+
+// With no I/O grants there is nothing to endow. Refusal must not wait
+// for platform initialization, including the default stores' bundle identity.
+fn independent_bindings(grants: &str, host: &StreamHost) -> Option<ibex2::host::Bindings> {
+    ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+        .ok()
+        .filter(|grants| !grants.is_empty())
+        .map(|grants| host().endow(grants))
+}
 
 /// The ordered owner (the boot's bindings) and the independent ones. The
 /// boot endowed its bindings with the data module's grants, before the plan
@@ -396,6 +406,7 @@ impl Core {
             #[cfg(test)]
             queued_deadlines: Arc::default(),
             abort: AbortController::new(),
+            http_cache: std::sync::OnceLock::new(),
             root_paths: std::sync::OnceLock::new(),
             roots: std::sync::OnceLock::new(),
             sockets: Mutex::default(),
@@ -410,7 +421,7 @@ impl Core {
         };
         let budget = budget.live();
         let reserved = budget
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n + count <= MAX_WORKERS).then_some(n + count)
             })
             .is_ok();
@@ -753,11 +764,8 @@ impl WorkerBudget {
     }
 }
 
-/// Wake the workers when one of them has something to do: a queued job (it
-/// may now fit its bytes) or work to destroy. With neither, nothing a worker
-/// waits for has changed, and none is woken: `forget` runs after every commit
-/// and woke all seven for nothing (1-2 ms/s each through a list's fling).
-/// Retirement wakes them itself.
+/// Forgetting runs after every commit; an idle core needs no worker wake
+/// unless queued jobs or disposal can make progress.
 fn rouse(shared: &Shared, state: &State) {
     if !state.discard.is_empty() || state.jobs.iter().any(|lane| !lane.is_empty()) {
         #[cfg(test)]
@@ -994,6 +1002,7 @@ fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str>
         request.grants.as_ref().map_or(0, String::capacity),
         request.body_from.as_ref().map_or(0, String::capacity),
         request.body_to.as_ref().map_or(0, String::capacity),
+        request.preload.as_ref().map_or(0, |name| name.len()),
         request.storage.as_ref().map_or(0, Vec::capacity),
         request
             .headers
@@ -1056,7 +1065,7 @@ fn worker(
 ) {
     let parsed = || ibex2::grant::GrantSet::parse(&exact_runner::io_grants(&grants));
     let bindings = if lane == 1 && bindings.is_none() {
-        parsed().ok().map(|g| host().endow(g))
+        independent_bindings(&grants, &host)
     } else {
         bindings
     };
@@ -1092,9 +1101,8 @@ fn worker(
                     break next;
                 }
                 let delay = state.cache.as_ref().and_then(|cache| {
-                    cache
-                        .preload_definitions_due
-                        .map(|due| due.saturating_duration_since((cache.clock)()))
+                    let now = (cache.clock)();
+                    preload::pending_due(cache).map(|due| due.saturating_duration_since(now))
                 });
                 state = match delay {
                     Some(delay) => shared.ready.wait_timeout(state, delay).unwrap().0,
@@ -1286,11 +1294,30 @@ fn execute(
     if let Some(outcome) = ended() {
         return outcome;
     }
+    let shared_cache = cache_job.0.http_cache.get();
     if let Some(outcome) =
-        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced)
-            .or_else(|| cache::missing(&request, forced))
+        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced).or_else(|| {
+            if shared_cache.is_none() {
+                cache::missing(&request, forced)
+            } else {
+                None
+            }
+        })
     {
         return outcome;
+    }
+    let mode = if forced && request.cache != exact_runner::CacheMode::NoStore {
+        exact_runner::CacheMode::Reload
+    } else {
+        request.cache
+    };
+    if shared_cache.is_some() {
+        if let Err(outcome) = cache::granted(files.grants, &request) {
+            return outcome;
+        }
+        if let Err(error) = reach::admit_cached(&request) {
+            return fetch_failure(error, abort);
+        }
     }
     let mut req = fetch_request(request, forced);
     cache::observe(cache_job.0, &mut req);
@@ -1301,7 +1328,11 @@ fn execute(
     // deadline over 60 s is not cut short by it.
     req.timeout = timeout.map(|ms| std::time::Duration::from_millis(u64::from(ms) + 1_000));
     let retry = cache::retry_request(cache_job.0, cache_job.1, &req);
-    let result = fetch.stream(req, &abort.signal()).and_then(check_headers);
+    let result = match shared_cache {
+        Some(cache) => cache.stream(&fetch, req, mode, &abort.signal()),
+        None => fetch.stream(req, &abort.signal()),
+    }
+    .and_then(check_headers);
     let redirected_conditional = result.as_ref().is_ok_and(|r| {
         cache::retry(
             &mut cache_job.0.state.lock().unwrap(),
@@ -1378,6 +1409,8 @@ mod body_to;
 
 mod admission;
 mod cache;
+mod shared_cache;
+pub use shared_cache::SharedHttpCache;
 pub mod preload;
 pub mod pump;
 mod reads;

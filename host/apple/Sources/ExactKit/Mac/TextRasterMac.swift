@@ -195,7 +195,9 @@ final class TextRasterizer {
     func replaceVisible(_ nodes: [NodeView], wait: TimeInterval) -> Bool {
         var jobs: [Paint] = []
         var deferred = false
-        for node in nodes where node.needsTextRaster && node.canRasterText && (node.textRaster != nil || node.textRasterUsesStrips) {
+        // Only a paragraph that has pixels to replace, asked first: most near the port are drawn by AppKit, and
+        // `canRasterText` is the costly question.
+        for node in nodes where (node.textRaster != nil || node.textRasterUsesStrips) && node.needsTextRaster && node.canRasterText {
             let key = key(node)
             if node.textRasterKey == key {
                 if node.textRasterReady && node.textRasterPending { node.presentTextRaster() }
@@ -271,6 +273,22 @@ final class TextRasterizer {
 }
 
 extension NodeView {
+    /// Every canvas's overlay (`NodeView.init`): with none, no view is
+    /// painted through a canvas, and `canvasAbove`, which the text pass asks
+    /// of each paragraph near the port, takes no walk to the window.
+    static let canvasOverlays = NSHashTable<FlippedView>.weakObjects()
+    /// The canvas this node is painted through, if any: the nearest canvas
+    /// above whose overlay holds it.
+    package var canvasAbove: NodeView? {
+        guard Self.canvasOverlays.count > 0 else { return nil }
+        var v: NSView = self
+        while let s = v.superview {
+            if let c = s as? NodeView, c.overlay === v { return c }
+            v = s
+        }
+        return nil
+    }
+
     /// Whether this paragraph's text is a rasterized surface rather than
     /// something `draw` paints. Asked by AppKit through `wantsUpdateLayer`.
     var rastersText: Bool { canRasterText && !textRasterUsesStrips }
@@ -300,7 +318,11 @@ extension NodeView {
     /// paragraphs too large to paint at once. HDR text is never small: only a
     /// raster's layers follow `dynamic-range-limit` (LLP 1100 D8).
     var textIsSmall: Bool {
-        let scale = pixelScale ?? 2
+        // The page's scale (the window's backing, the page zoom), not
+        // `pixelScale`: this is a threshold asked of every visible paragraph
+        // on every text refresh, where the walk to the window that
+        // `pixelScale` takes was the costliest question.
+        let scale = window.map { $0.backingScaleFactor * (presenter?.viewport.magnification ?? 1) } ?? 2
         guard bounds.width * bounds.height * scale * scale < TextRasterizer.minPixels else { return false }
         return !(isParagraph && paragraphHeadroom(drawing: true) > 1)
     }

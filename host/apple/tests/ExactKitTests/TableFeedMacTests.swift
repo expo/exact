@@ -102,9 +102,12 @@ final class TableFixture {
         return try Data(contentsOf: dir.appendingPathComponent("app.plan"))
     }
 
-    init(count: Int, size: CGSize = CGSize(width: 480, height: 600), table: Bool = true, source: String? = nil) throws {
+    /// `reuse: false` builds every row that enters the window anew, where
+    /// the Mac otherwise rebinds a retiring one (LLP 1078, RenewMac.swift).
+    init(count: Int, size: CGSize = CGSize(width: 480, height: 600), table: Bool = true, source: String? = nil, reuse: Bool = true) throws {
         _ = NSApplication.shared
         session = ExactApp.shared.makeSession(label: "table-feed")
+        session.runtime.useRowReuse(reuse)
         // A vertical list is a table unless its rows are to be painted, as the driver's own chrome paints them.
         session.presenter.tables.painted = !table
         view = ExactView(session: session)
@@ -151,6 +154,9 @@ final class TableFixture {
     }
     /// The item a mounted row shows: the number in its key.
     func item(_ row: NodeView) -> Int { Int((row.props["listItemKey"] ?? "").drop { !$0.isNumber && $0 != "-" }) ?? .min }
+    /// Whether a runner's row is mounted and still shows `item`: one that
+    /// left the window was destroyed or rebound to another item (LLP 1078).
+    func shows(_ row: NodeView, item: Int) -> Bool { presenter.views[row.id] === row && self.item(row) == item }
     /// A view's frame in the list's document.
     func inDocument(_ view: NSView) -> NSRect { view.convert(view.bounds, to: document) }
 }
@@ -208,7 +214,8 @@ final class TableFeedMacTests: XCTestCase {
             try check(f, "at \(y)")
         }
         XCTAssertLessThan(f.mounted.count, 120)
-        XCTAssertNil(before[0].flatMap { f.presenter.views[$0.id] }, "the first row was destroyed when it left the window")
+        let first = try XCTUnwrap(before[0])
+        XCTAssertFalse(f.shows(first, item: 0), "the first row left the window: its view was destroyed or rebound to another item")
         XCTAssertLessThan(f.presenter.views.count, 1_500, "views are the window's, not ten thousand rows'")
         for y in stride(from: CGFloat(6_000), through: 6_400, by: 7) {
             f.scroll(to: y)
@@ -236,6 +243,16 @@ final class TableFeedMacTests: XCTestCase {
         let row = f.table.rows(in: f.table.convert(port, from: f.document)).location
         let node = try XCTUnwrap(f.cells[row]?.row, "the port's first row is mounted")
         return (row, f.item(node), f.inDocument(node).minY - port.minY)
+    }
+
+    /// The list's name is the table's, renamed by a batch that moves no row.
+    func testTheTableTakesTheListsNameWhenNoRowMoves() throws {
+        let f = try TableFixture(count: 200)
+        fixture = f
+        f.presenter.apply(wireBatch([["op": "props", "id": Int(f.list.id), "set": ["accessibilityLabel": "Notes"]]]))
+        XCTAssertEqual(f.table.accessibilityLabel(), "Notes")
+        f.presenter.apply(wireBatch([["op": "props", "id": Int(f.list.id), "set": ["accessibilityLabel": "Archive"]]]))
+        XCTAssertEqual(f.table.accessibilityLabel(), "Archive")
     }
 
     func testARowIsAsTallAsLayoutMakesItAndStaysSoWhenItChanges() throws {

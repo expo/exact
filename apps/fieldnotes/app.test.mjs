@@ -139,3 +139,70 @@ test('Fieldnotes text remains readable in both schemes', async () => {
     rmSync(cache, { recursive: true, force: true });
   }
 }, 30000);
+
+test('the JS target backs up through Rust and restores through TypeScript', async () => {
+  let session;
+  try {
+    session = await open({ host: 'web', app: 'fieldnotes', storage: 'rust-backup',
+      env: { EXACT_AGENT_STORAGE_FRESH: '1', EXACT_AGENT_EPHEMERAL_PORT: '1' } });
+    await session.clock('settle');
+    await session.carrier.evaluate(`(() => {
+      const answer = exact.data.answer, fetch = exact.data.fetch;
+      globalThis.backupCalls = [];
+      exact.data.answer = function(name, ...args) {
+        const result = answer.call(this, name, ...args);
+        backupCalls.push({ name, rust: !!result?.req?.storage, typescript: !!result?.promise });
+        return result;
+      };
+      if (fetch) exact.data.fetch = function(request, ...args) {
+        if (globalThis.failBackup && request.storage) {
+          globalThis.failBackup = false;
+          return Promise.resolve({ storage: new TextEncoder().encode(JSON.stringify({ error: 'Backup disk full.' })) });
+        }
+        return fetch.call(this, request, ...args);
+      };
+    })()`);
+    await session.type('note-title', 'Field 🌿 東京');
+    await session.type('note-body', 'Café, naïve, 🦀\nA second line.');
+    await session.tap('save-note');
+    await session.clock('settle');
+    await session.tap('backups');
+    await session.tap('save-backup');
+    await session.clock('settle');
+    expect(await session.carrier.evaluate('backupCalls.find(c => c.name === "backupNotes")'))
+      .toEqual({ name: 'backupNotes', rust: true, typescript: false });
+    let state = await session.state();
+    expect(state.slots.status).toMatchObject({ revision: 2, message: 'Backup saved with 1 notes.', failed: false });
+    const backup = JSON.parse(state.slots.status.backupText);
+    expect(backup.notes).toEqual([{ id: state.derives.editingId, title: 'Field 🌿 東京',
+      body: 'Café, naïve, 🦀\nA second line.', pinned: false }]);
+    await session.type('import-text', JSON.stringify({ version: 1, notes: [] }));
+    await session.tap('restore-backup');
+    await session.tap('confirm-restore');
+    await session.clock('settle');
+    expect((await session.state()).slots.status).toMatchObject({ message: 'Restored 0 notes.', failed: false });
+    await session.type('import-text', '');
+    await session.tap('restore-backup');
+    await session.tap('confirm-restore');
+    await session.clock('settle');
+    state = await session.state();
+    expect(state.slots.status).toMatchObject({ message: 'Restored 1 notes.', failed: false });
+    expect(await session.carrier.evaluate('backupCalls.filter(c => ["saveNote", "restoreNotes"].includes(c.name))')).toEqual([
+      { name: 'saveNote', rust: false, typescript: true },
+      { name: 'restoreNotes', rust: false, typescript: true },
+      { name: 'restoreNotes', rust: false, typescript: true },
+    ]);
+    const denial = await session.carrier.evaluate(`(async () => {
+      const result = await exact.data.fetch({ storage: JSON.stringify({ version: 1, op: 'fs.readFile', args: { path: 'app:/tmp/shared/no.txt' } }) });
+      return JSON.parse(new TextDecoder().decode(result.storage));
+    })()`);
+    expect(denial.error).toContain('denied');
+    await session.carrier.evaluate('globalThis.failBackup = true');
+    await session.tap('save-backup');
+    await session.clock('settle');
+    expect((await session.state()).slots.status).toMatchObject({ message: 'Backup disk full.', failed: true, backupText: '' });
+    await session.tap('save-backup');
+    await session.clock('settle');
+    expect((await session.state()).slots.status).toMatchObject({ revision: 6, message: 'Backup saved with 1 notes.', failed: false });
+  } finally { await session?.close(); }
+}, 30000);

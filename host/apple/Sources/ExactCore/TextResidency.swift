@@ -21,12 +21,18 @@ package enum TextMetricKey {
         if r.indent != 0 || r.hang { h.combine(r.indent); h.combine(r.hang) }
         // An image's box (LLP 1011.002), as its request's hashes.
         if let b = r.box { h.combine(b) }
+        edges(Float(r.inlineStart), Float(r.inlineEnd), &h)
+    }
+    /// A run's inline edges, where it has any, as a request's hash them.
+    private static func edges(_ start: Float, _ end: Float, _ h: inout Hasher) {
+        if start != 0 || end != 0 { h.combine(start); h.combine(end) }
     }
     private static func fields(_ r: ExactTextRun, _ h: inout Hasher) {
         fields(CGFloat(r.font_size), Int(r.font_weight), Int(r.font_family), r.italic != 0,
                r.has_line_height != 0 ? CGFloat(r.line_height) : nil, CGFloat(r.letter_spacing),
                Int(r.font_variant_numeric), Int(r.font_variant_ligatures), CGFloat(r.font_stretch), FontAxis.of(r), FontFeature.of(r), &h)
         if let b = InlineBox(r) { h.combine(b) }
+        edges(r.inline_start, r.inline_end, &h)
     }
     package static func hash(_ spec: Spec) -> Int {
         var h = Hasher()
@@ -85,6 +91,7 @@ package enum TextMetricKey {
             && FontAxis.of(raw) == owned.variations
             && FontFeature.of(raw) == owned.features
             && InlineBox(raw) == owned.box
+            && CGFloat(raw.inline_start) == owned.inlineStart && CGFloat(raw.inline_end) == owned.inlineEnd
     }
     package static func matches(_ request: ExactMeasureRequest, _ geometry: Spec) -> Bool {
         // An expanded Markdown request has more runs than its one source run;
@@ -162,8 +169,12 @@ extension Spec {
             value.runs[i].background = nil
             value.runs[i].backgroundBox = 0
             value.runs[i].backgroundRadii = []
+            value.runs[i].backgroundBefore = 0
+            value.runs[i].backgroundAfter = 0
+            value.runs[i].outerBackgrounds = []
             value.runs[i].shadow = nil
             value.runs[i].stroke = nil
+            value.runs[i].atomIcon = nil
         }
         if var strut = value.strut {
             strut.text = ""; strut.color = nil; strut.decoration = ""; strut.href = ""; strut.background = nil
@@ -188,19 +199,25 @@ package struct TextPaint: Hashable {
         let background: [Double]?
         let backgroundBox: UInt32
         let backgroundRadii: [InlineRadius]
+        let backgroundReach: [CGFloat]
+        let outerBackgrounds: [OuterBackground]
         let shadow: [Double]?
         let stroke: [Double]?
+        let atomIcon: AtomIconRun?
         init(_ r: Run) {
             hidden = r.hidden; fixedInk = r.fixedInk; color = r.color; decoration = r.decoration
             underlineColor = r.underlineColor; strikeColor = r.strikeColor; href = r.href
             background = r.background; backgroundBox = r.backgroundBox; backgroundRadii = r.backgroundRadii
-            shadow = r.shadow; stroke = r.stroke
+            backgroundReach = [r.backgroundBefore, r.backgroundAfter]; outerBackgrounds = r.outerBackgrounds
+            shadow = r.shadow; stroke = r.stroke; atomIcon = r.atomIcon
         }
         func apply(to run: inout Run) {
             run.hidden = hidden; run.fixedInk = fixedInk; run.color = color; run.decoration = decoration
             run.underlineColor = underlineColor; run.strikeColor = strikeColor; run.href = href
             run.background = background; run.backgroundBox = backgroundBox; run.backgroundRadii = backgroundRadii
-            run.shadow = shadow; run.stroke = stroke
+            (run.backgroundBefore, run.backgroundAfter) = (backgroundReach[0], backgroundReach[1])
+            run.outerBackgrounds = outerBackgrounds
+            run.shadow = shadow; run.stroke = stroke; run.atomIcon = atomIcon
         }
     }
     package let color: [Double]

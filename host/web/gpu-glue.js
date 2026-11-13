@@ -581,6 +581,12 @@ function live(view) {
   const entry = surfaces.get(view);
   return entry?.id && exact.views.get(view) === entry.host && entry.el.isConnected ? entry : null;
 }
+// A terminal surface keeps its world, its input and its asset delivery for a later swap,
+// but answers no agent request: it has no renderer (LLP 1139.003 D1).
+function answering(view) {
+  const entry = live(view);
+  return entry?.terminal ? null : entry;
+}
 function performanceRecord(entry) {
   if (!entry.performance || !entry.id || entry.terminal || live(entry.view) !== entry || publishers.get(entry.name) !== entry) return;
   const metrics = gpu.gpu_performance?.(entry.id, performance.now());
@@ -816,7 +822,7 @@ function listen(entry) {
   queueMicrotask(() => { if (live(entry.view) === entry && (!document.activeElement || document.activeElement === document.body)) el.focus({ preventScroll: true }); });
 }
 function agent(view, request) {
-  const entry = live(view);
+  const entry = answering(view);
   if (!entry) return null;
   const { w, h, s } = size(entry.host);
   if (trapped()) return trapped();
@@ -869,12 +875,14 @@ const api = {
   settled,
   async surfaceWork(name, mode, bytes, active) {
     await ready;
-    const matches=[...surfaces.values()].filter(e=>e.name===name&&live(e.view)===e);
+    const matches=[...surfaces.values()].filter(e=>e.name===name&&answering(e.view)===e);
     if(matches.length!==1)throw Object.assign(new Error(`surface ${name}: expected one live surface, found ${matches.length}`),{kind:2});
     const entry=matches[0], id=entry.id;
-    await settled();
-    if(!active()||live(entry.view)!==entry||entry.id!==id)throw Object.assign(new Error(`surface ${name}: request retired or surface replaced`),{kind:4});
+    const pending = await settled();
+    if(!active()||answering(entry.view)!==entry||entry.id!==id)throw Object.assign(new Error(`surface ${name}: request retired or surface replaced`),{kind:4});
     if(!id)throw Object.assign(new Error(`surface ${name}: module unavailable`),{kind:3});
+    if (pending.length) throw Object.assign(
+      new Error(`surface ${name}: GPU is not settled: ${pending.map(item=>item.name).join(', ')}`), {kind:3});
     if(mode==="capture"){
       const out=gpu.gpu_carry(id);
       if(out===undefined)throw Object.assign(new Error(`surface ${name}: carries no state`),{kind:3});
@@ -908,11 +916,11 @@ const api = {
     return names.length === 1 ? names[0] : names.length ? {error:`post: ${names.length} worlds are live (${names.join(", ")}); name one: post <surface> <text>`} : undefined;
   },
   waiting: (name) => posts.has(name),
-  wantsInput: (view) => live(view)?.wantsInput === true,
+  wantsInput: (view) => answering(view)?.wantsInput === true,
   answers: (request) => request.entity !== undefined || request.world === true || request.contact !== undefined,
   handle(request, ask, tagged) {
     if (trapped()) return trapped();
-    const entry = live(request.id);
+    const entry = answering(request.id);
     if (!entry) return surfaces.get(request.id)?.refused ?? surfaces.get(request.id)?.unsupported ?? refusal(`view ${request.id} has no world`, "canvas");
     if (request.op === "tap" && request.contact !== undefined) {
       entry.resampleHeld?.();
@@ -1200,6 +1208,7 @@ async function swap(version) {
   await recoveringDevice;
   if (loaded && version === api.version) return { ms: 0, errors: [] };
   const start = performance.now(), next = guardedModule(await loadModule(version)), staged = [];
+  let lost = false;
   const carrier = { worldCarry: exact.worldCarry };
   try {
     next.gpu_tier?.(tierCode);
@@ -1213,7 +1222,8 @@ async function swap(version) {
     // canvases; the old canvases and their worlds remain untouched until commit.
     // No await from carry through cutover; input cannot arrive between them.
     for (const old of surfaces.values()) {
-      const entry = { ...old, el: replacementCanvas(old), id: 0, observer: null, unlisten: null, terminal: false };
+      const entry = { ...old, el: replacementCanvas(old), id: 0, observer: null, unlisten: null, terminal: false, fallbackApplied: false };
+      delete entry.refusalPage; delete entry.unsupported; delete entry.refused;
       delete entry.restoreError; delete entry.attemptedCarry;
       delete entry.pendingRestore; delete entry.restoreReported;
       staged.push([old, entry]);
@@ -1222,7 +1232,10 @@ async function swap(version) {
       restorePending(entry, next, carrier);
       const {w,h,s} = size(old.host);
       supplyChildren(entry, next, true);
-      if (next.gpu_render(entry.id, w, h, s, clockFor(frameAt ?? performance.now())) === 2) throw new Error(`surface ${entry.name}: render: ${next.gpu_error()}`);
+      const result = next.gpu_render(entry.id, w, h, s, clockFor(frameAt ?? performance.now()));
+      if (result === 2) throw new Error(`surface ${entry.name}: render: ${next.gpu_error()}`);
+      entry.wants = result === 1;
+      lost ||= result === 3;
     }
     if (!next.gpu_flush()) throw new Error(`surfaces: flush: ${next.gpu_error()}`);
   } catch (error) {
@@ -1235,12 +1248,15 @@ async function swap(version) {
   if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
   const oldModule = gpu;
   for (const [old, entry] of staged) {
+    old.refusalPage?.remove();
     installCanvas(old, entry);
     if (publishers.get(old.name) === old) publishers.set(old.name, entry);
     surfaces.set(entry.view, entry);
     if (old.id) { retainEdits(old, oldModule); oldModule.gpu_destroy(old.id); }
   }
   oldModule?.gpu_unload(); gpu = next; loaded = true; resetRecovery();
+  // The replacement has its own device: the failure of the one it replaced no longer describes it.
+  delete api.recovery;
   for (const [old, entry] of staged) {
     for (const row of old.children ?? []) if (!entry.children?.some(next => next.el === row.el)) restoreChild(row);
     placeChildren(entry);
@@ -1252,6 +1268,8 @@ async function swap(version) {
   try { for (const [,entry] of staged) attach(entry); }
   finally { exact.applyDepth = depth; drainRecords(); }
   const errors = staged.flatMap(([,e]) => e.restoreError ? [e.restoreError] : []);
+  // A staged render that found the new device already lost recovers it now that it is the module.
+  if (lost) recoverDevice();
   return { ms: performance.now() - start, errors };
 }
 const t0 = performance.now();

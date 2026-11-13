@@ -14,10 +14,12 @@ test = false
 bench = false
 
 [dependencies]
+canvas-gallery-data = { path = "../data" }
 exact-logic = { path = "../../../logic" }
 exact-web = { path = "../../../host/web" }
 exact-web-capabilities = { path = "../../../host/web-capabilities" }
 exact-js-web = { path = "../../../js/web" }
 
 [build-dependencies]
+canvas-gallery-data = { path = "../data" }
 exact-js-bake = { path = "../../../js/bake" }

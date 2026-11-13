@@ -1,0 +1,1379 @@
+//! One native primary contact; property-specific policy stays in its helper.
+use super::*;
+use exact_kernel::{NodeKey, TransformDragBinding};
+use exact_motion::{HoldEnd, HoldStart, Value, VelocityTracker};
+
+#[derive(Clone, Copy)]
+pub(super) enum Candidate {
+    Arrange(exact_runner::ReorderBinding),
+    /// A grip in a list with a `reorderGroup` (LLP 1094 D6).
+    Group(exact_runner::ReorderBinding),
+    Swipe(NodeKey),
+    Pan(NodeKey),
+    Transform(TransformDragBinding),
+    Height {
+        handle: NodeKey,
+        target: NodeKey,
+    },
+}
+impl Candidate {
+    fn node(&self) -> NodeKey {
+        match *self {
+            Candidate::Arrange(b) | Candidate::Group(b) => b.handle,
+            Candidate::Transform(b) => b.handle,
+            Candidate::Height { handle, .. } => handle,
+            Candidate::Swipe(key) | Candidate::Pan(key) => key,
+        }
+    }
+    /// The candidate's own axis rule, at the slop (LLP 1057.001 §1).
+    fn accepts(&self, dx: f64, dy: f64) -> bool {
+        match self {
+            Candidate::Arrange(_) | Candidate::Height { .. } => dy.abs() > dx.abs(),
+            Candidate::Swipe(_) => dx.abs() > dy.abs(),
+            // A grouped row lifts in any direction (LLP 1094 D6).
+            Candidate::Transform(_) | Candidate::Pan(_) | Candidate::Group(_) => true,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(super) enum HeldKind {
+    Arrange(exact_runner::ReorderToken),
+    Transform {
+        binding: TransformDragBinding,
+        pair: exact_motion::TransformHold,
+        revision: u64,
+    },
+    Swipe {
+        companions: [Option<HoldStart>; 2],
+        ways: super::swipe::Ways,
+    },
+    Height {
+        handle: NodeKey,
+        target: NodeKey,
+    },
+}
+pub(super) struct Hold {
+    pub(super) primary: HoldStart,
+    pub(super) velocity: VelocityTracker,
+    pub(super) kind: HeldKind,
+}
+pub(super) struct Contact {
+    hit: NodeKey,
+    candidate: Option<Candidate>,
+    /// The candidates after `candidate`, in precedence order, until the slop.
+    rest: Vec<Candidate>,
+    origin: (f32, f32),
+    position: (f32, f32),
+    last_ms: f64,
+    event_ms: f64,
+    pub(super) hold: Option<Hold>,
+    /// A grouped row lifted: its ghost follows (`group.rs`).
+    group: bool,
+    panning: bool,
+    /// Every sample since down, for a pan's release velocity (LLP 1057 §10.6).
+    pan_velocity: VelocityTracker,
+    retained: Option<super::retained_action::RetainedContact>,
+    feedback: Option<(NodeKey, PaintedBox)>,
+    /// Keep the activation route chosen at down when feedback gains or loses paint.
+    press_activates: bool,
+    /// Mouse focus was decided on down; its prior focus, possibly none.
+    focus_before_down: Option<Option<ViewId>>,
+    focus_blocked: bool,
+    /// The canvas that owns this contact and sees its down, moves and up.
+    canvas: Option<ViewId>,
+    /// The axes the `touch-action` under the down keeps from the platform's
+    /// panning ([`Presenter::touch_kept`]), read once, as a browser reads it
+    /// at the touch's start.
+    touch: (bool, bool),
+    /// Whether a finger stays the page's past the slop, decided at its
+    /// first move past it and kept, as the reader decides once whose the
+    /// drag is.
+    kept: Option<bool>,
+}
+impl<D: DataSource> Presenter<D> {
+    pub(super) fn input_live(&self, key: NodeKey) -> bool {
+        let Some(node) = self.host.kernel().node_by_key(key) else {
+            return false;
+        };
+        if !self.alert_allows(node.id)
+            || self.host.route_visibility(node.id).1
+            || self.brush.region_blocks_action(node.id)
+        {
+            return false;
+        }
+        let mut at = Some(node.id);
+        while let Some(id) = at {
+            let Some(node) = self.host.kernel().node(id) else {
+                return false;
+            };
+            if node.props.bool(PropId::Disabled) == Some(true) {
+                return false;
+            }
+            at = node.parent;
+        }
+        true
+    }
+    /// Whether a contact that went down on `hit` is still canvas `canvas`'s
+    /// input: the contact's own, and each other finger's on Android.
+    pub(crate) fn canvas_input_live(&self, hit: NodeKey, canvas: ViewId) -> bool {
+        self.input_live(hit)
+            && (self.host.kernel().node_by_key(hit))
+                .is_some_and(|n| self.input_surface(n.id) == Some(canvas))
+    }
+    fn contact_live(&self, contact: &Contact) -> bool {
+        if let Some(canvas) = contact.canvas {
+            return self.canvas_input_live(contact.hit, canvas);
+        }
+        if contact.group {
+            return self.group_live();
+        }
+        if let Some(retained) = &contact.retained {
+            return self.retained_contact_live(retained)
+                && contact
+                    .hold
+                    .as_ref()
+                    .is_none_or(|h| self.host.has_hold(h.primary.token));
+        }
+        match &contact.hold {
+            Some(held) => {
+                self.host.has_hold(held.primary.token)
+                    && match held.kind {
+                        HeldKind::Arrange(token) => self.arrange_live(token),
+                        HeldKind::Transform {
+                            binding,
+                            pair,
+                            revision,
+                        } => {
+                            self.host.transform_hold_live(pair, binding)
+                                && self.transform_revision(binding) == Some(revision)
+                        }
+                        HeldKind::Height { handle, target } => {
+                            self.input_live(handle)
+                                && self.host.height_drag_target(handle) == Some(target)
+                        }
+                        HeldKind::Swipe { .. } => {
+                            matches!(contact.candidate, Some(Candidate::Swipe(key)) if self.input_live(key))
+                        }
+                    }
+            }
+            None => {
+                self.input_live(contact.hit)
+                    && contact
+                        .feedback
+                        .filter(|_| contact.press_activates)
+                        .is_none_or(|(key, _)| {
+                            self.input_live(key)
+                                && self.host.kernel().node_by_key(key).is_some_and(|n| {
+                                    n.props.link().is_some()
+                                        || (self.host.runner().handlers_of(n.id))
+                                            .contains(&EventKind::Press)
+                                })
+                        })
+                    && match contact.candidate {
+                        Some(Candidate::Pan(key)) => {
+                            self.input_live(key)
+                                && self.host.kernel().node_by_key(key).is_some_and(|n| {
+                                    self.host
+                                        .runner()
+                                        .handlers_of(n.id)
+                                        .contains(&EventKind::Pan)
+                                })
+                        }
+                        _ => true,
+                    }
+            }
+        }
+    }
+    fn pointer_sample(&self, x: f32, y: f32, now_ms: f64) -> Result<(), String> {
+        if !x.is_finite()
+            || !y.is_finite()
+            || !now_ms.is_finite()
+            || now_ms < self.host.now()
+            || self.contact.as_ref().is_some_and(|c| now_ms < c.last_ms)
+        {
+            Err("invalid pointer sample or clock".into())
+        } else {
+            Ok(())
+        }
+    }
+    /// Retire after commits even when the target itself was untouched.
+    pub(super) fn retire_pointer(&mut self) {
+        if self.pointer_walking {
+            return;
+        }
+        #[cfg(any(target_os = "android", test))]
+        self.retire_fingers(self.pointer_now());
+        if self.contact.as_ref().is_some_and(|c| !self.contact_live(c)) {
+            if self.contact.as_ref().is_some_and(|c| c.retained.is_some()) {
+                // Cancel only our token, at the already accepted Host time. An
+                // invalid future sample must not strand a hold or advance time.
+                let contact = self.contact.take().unwrap();
+                if let Some(held) = contact.hold {
+                    if let Err(error) = self.end_contact(&held, HoldEnd::Cancel, self.host.now()) {
+                        self.host.log(error);
+                    }
+                }
+                self.set_collection_interaction(None);
+                return;
+            }
+            if let Err(error) = self.pointer_cancel(self.pointer_now()) {
+                self.host.log(error);
+            }
+        }
+    }
+    /// Only after a successful, matching, current-origin picture installation.
+    /// Same-A repaints retain their contact; foreign/duplicate ACKs never enter.
+    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    pub(super) fn retire_acknowledged_pointer(&mut self) {
+        let stale = self
+            .contact
+            .as_ref()
+            .and_then(|c| c.retained.as_ref())
+            .is_some_and(|c| !self.retained_contact_picture_current(c));
+        if stale {
+            let contact = self.contact.take().unwrap();
+            if let Some(held) = contact.hold {
+                match self.host.snap_retained_motion(held.primary.token) {
+                    Ok(changed) => self.dirty |= changed,
+                    Err(error) => self.host.log(error),
+                }
+            }
+            self.set_collection_interaction(None);
+        }
+        self.retire_retained_motion_picture();
+    }
+    pub(super) fn pointer_now(&self) -> f64 {
+        self.contact
+            .as_ref()
+            .map_or(self.host.now(), |c| self.host.now().max(c.last_ms))
+    }
+    /// The node the held contact went down on.
+    pub(super) fn contact_hit(&self) -> Option<NodeKey> {
+        self.contact.as_ref().map(|contact| contact.hit)
+    }
+    /// The node a live contact presses now: its press, while it is inside
+    /// the box it had when pressed.
+    pub(super) fn contact_press(&self) -> Option<NodeKey> {
+        let c = self.contact.as_ref()?;
+        let (key, box_) = c.feedback.as_ref()?;
+        box_.contains(c.position.0, c.position.1).then_some(*key)
+    }
+    /// Where the held contact is, if one is held.
+    pub fn contact_position(&self) -> Option<(f32, f32)> {
+        (self.contact.as_ref().map(|c| c.position))
+            .or_else(|| self.stage_contact().map(|(at, _)| at))
+    }
+    /// The agent's contact phase is done: its press lands at once (LLP
+    /// 1061 D2, D7), the clock unmoved.
+    pub(crate) fn land_presses(&mut self) {
+        self.host.land_presses();
+        self.brush.ripples.land(self.host.now());
+        self.land_bar_ripple();
+        self.dirty = true;
+    }
+    pub(crate) fn contact_event_ms(&self) -> Option<f64> {
+        (self.contact.as_ref().map(|c| c.event_ms))
+            .or_else(|| self.stage_contact().map(|(_, ms)| ms))
+    }
+    pub(crate) fn delay_contact_event(&mut self, ms: f64) {
+        if let Some(contact) = &mut self.contact {
+            contact.event_ms += ms;
+        }
+        self.stage_delay_contact(ms);
+    }
+    /// A held Arrange's preview again where the contact is, after an edge
+    /// scroll moved the list under it (the page's `sampleMove` after its
+    /// scroll): no pointer event, and no second edge step.
+    pub(super) fn resample_arrange(&mut self, now_ms: f64) -> Result<bool, String> {
+        let Some(mut contact) = self.contact.take() else {
+            return Ok(false);
+        };
+        let Some(held) = contact
+            .hold
+            .as_mut()
+            .filter(|h| matches!(h.kind, HeldKind::Arrange(_)))
+        else {
+            self.contact = Some(contact);
+            return Ok(false);
+        };
+        let dy = contact.position.1 as f64 - contact.origin.1 as f64;
+        let result = self.sample_arrange(held, dy, contact.position, now_ms);
+        if self.contact_live(&contact) {
+            self.contact = Some(contact);
+        } else {
+            let _ = self.end_contact(contact.hold.as_ref().unwrap(), HoldEnd::Cancel, now_ms);
+        }
+        result
+    }
+
+    /// Every candidate of a contact on `hit`: innermost first, then reorder >
+    /// transform > height > pan > swipe on one node (LLP 1057.001 §1).
+    pub(super) fn candidates(&self, hit: NodeKey) -> Vec<Candidate> {
+        let ranked = [
+            self.arrange_candidate(hit),
+            self.transform_candidate(hit),
+            self.height_candidate(hit),
+            self.pan_candidate(hit),
+            self.swipe_candidate(hit).map(Candidate::Swipe),
+        ];
+        let mut found: Vec<_> = ranked
+            .into_iter()
+            .enumerate()
+            .filter_map(|(rank, c)| Some((self.depth(hit, c?.node())?, rank, c?)))
+            .collect();
+        found.sort_by_key(|&(depth, rank, _)| (depth, rank));
+        found.into_iter().map(|(_, _, c)| c).collect()
+    }
+    pub(super) fn depth(&self, hit: NodeKey, candidate: NodeKey) -> Option<usize> {
+        let kernel = self.host.kernel();
+        let mut at = kernel.node_by_key(hit);
+        let mut steps = 0;
+        while let Some(node) = at {
+            if node.key == candidate {
+                return Some(steps);
+            }
+            at = node.parent.and_then(|id| kernel.node(id));
+            steps += 1;
+        }
+        None
+    }
+    // @ref LLP 1043.000 §3 D8 — ordinary commits move layout, not a motion hold.
+    // Nearest explicit pan handler owns one contact; an editor boundary stops
+    // it. A press between keeps the contact only within the slop (the pan
+    // that begins takes the press), as a draggable element hears a drag that
+    // starts on a button inside it (LLP 1057.001 rule 3; kanban F6).
+    fn pan_candidate(&self, hit: NodeKey) -> Option<Candidate> {
+        let mut at = self.host.kernel().node_by_key(hit).map(|n| n.id);
+        while let Some(id) = at {
+            let n = self.host.kernel().node(id)?;
+            let handlers = self.host.runner().handlers_of(id);
+            if self.input_live(n.key) && handlers.contains(&EventKind::Pan) {
+                return Some(Candidate::Pan(n.key));
+            }
+            if n.node_type == NodeType::TextInput {
+                return None;
+            }
+            at = n.parent;
+        }
+        None
+    }
+
+    /// Record the pointer before any handler can move focus. Android also
+    /// hides the current ring when a finger or pen enters touch mode.
+    pub(crate) fn touched(&mut self) {
+        self.brush.pointer_modality = true;
+        if self.brush.touch_mode && self.contact_is_direct() {
+            let ringless = self.focus.and_then(|id| self.unringed(id));
+            self.dirty |= self.brush.ringless != ringless;
+            self.brush.ringless = ringless;
+        }
+    }
+
+    /// Whether the web host prevents pointerdown's default focus for this hit.
+    /// Swipe and reorder prevent moves, not the down.
+    pub(crate) fn pointerdown_prevents_focus(&self, hit: ViewId) -> bool {
+        let kernel = self.host.kernel();
+        let Some(hit_key) = kernel.node(hit).map(|n| n.key) else {
+            return true;
+        };
+        let (mut editor, mut press, mut button) = (None, None, None);
+        let (mut retain, mut interactive, mut height) = (false, false, false);
+        let mut at = Some(hit);
+        while let Some(id) = at {
+            let Some(n) = kernel.node(id) else { break };
+            let kind = exact_kernel::ControlKind::of(n.node_type, n.props);
+            let field = n.node_type == NodeType::TextInput
+                || kind.is_some_and(|kind| {
+                    !matches!(
+                        kind,
+                        exact_kernel::ControlKind::Button
+                            | exact_kernel::ControlKind::Progress
+                            | exact_kernel::ControlKind::ProgressBar
+                    )
+                });
+            if field && editor.is_none() {
+                editor = Some(n.key);
+            }
+            let control = n.node_type == NodeType::Pressable
+                || kind == Some(exact_kernel::ControlKind::Button);
+            interactive |= field || control;
+            if control && n.props.str(PropId::Href).is_none() && button.is_none() {
+                button = Some(id);
+            }
+            if press.is_none()
+                && (control
+                    || self
+                        .host
+                        .runner()
+                        .handlers_of(id)
+                        .contains(&EventKind::Press))
+            {
+                press = Some(n.key);
+            }
+            retain |= n.props.bool(PropId::RetainFocus) == Some(true);
+            // Unlike transform drag, height drag does not exclude an inner
+            // generic press handler; only HTML controls and editors exclude it.
+            height |= self.input_live(n.key) && self.host.height_drag_target(n.key).is_some();
+            at = n.parent;
+        }
+        if retain && editor.is_none() {
+            return true;
+        }
+        if let Some(button) = button.filter(|_| kernel.has_prop(PropId::ContextTarget)) {
+            for preview in kernel.preorder_where(&kernel.roots(), |_, props| {
+                props.str(PropId::ContextTarget).is_some()
+            }) {
+                let mut at = kernel.node(preview).and_then(|n| n.parent);
+                while let Some(id) = at {
+                    let Some(n) = kernel.node(id).filter(|n| n.parent.is_some()) else {
+                        break;
+                    };
+                    if n.layout_position() == exact_kernel::PositionType::Absolute {
+                        if self.is_inside(button, id) {
+                            return true;
+                        }
+                        break;
+                    }
+                    at = n.parent;
+                }
+            }
+        }
+        if !interactive && (height || self.transform_candidate(hit_key).is_some()) {
+            return true;
+        }
+        if let Some(Candidate::Pan(pan)) = self.pan_candidate(hit_key) {
+            let inside = |key| self.depth(key, pan).is_some_and(|depth| depth > 0);
+            let own_editor = editor == Some(pan)
+                && kernel.node_by_key(pan).is_some_and(|n| {
+                    exact_kernel::ControlKind::of(n.node_type, n.props)
+                        != Some(exact_kernel::ControlKind::Select)
+                });
+            return !own_editor && !editor.is_some_and(inside) && !press.is_some_and(inside);
+        }
+        false
+    }
+    /// Primary down shared by evdev, VNC, and explicitly labeled agent
+    /// synthesis; then the node's `pointerdown` (LLP 1005 §3), which the
+    /// contact never waits for.
+    pub fn pointer_down(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.brush.ripples.input(now_ms);
+        // A finger of an earlier touch whose up never came.
+        #[cfg(any(target_os = "android", test))]
+        self.cancel_fingers(now_ms);
+        self.touched();
+        if self.stage_down(x, y, now_ms) {
+            return Ok(true);
+        }
+        if self.overlay_pointer(0, x, y, now_ms) || self.scrollbar_pointer(0, x, y) {
+            return Ok(true);
+        }
+        // A hatch observes after this dispatch, and claims nothing
+        // (LLP 1075.003.000.001 §2.2.2); so for a move, an up and a cancel.
+        // Under an open surface of the top layer the page takes no touch.
+        if self.alert_pointer(x, y, now_ms) || self.top_takes_pointer(now_ms) {
+            return Ok(false);
+        }
+        let mark = self.hatch_pointer_mark(crate::hatches::Phase::Down, x, y);
+        let result = match self.contact_down(x, y, now_ms) {
+            Ok(taken) => {
+                // Keep the down target's identity before its handler can remove it.
+                let focus = self.contact.as_ref().and_then(|c| {
+                    let node = self.host.kernel().node_by_key(c.hit)?;
+                    let field = node.node_type == NodeType::TextInput;
+                    (c.canvas.is_none()
+                        && c.retained.is_none()
+                        && !crate::fields::hosts(&node)
+                        && (field || (c.candidate.is_none() && !c.group)))
+                        .then_some((c.hit, c.origin, field))
+                });
+                let from = self.commands.len();
+                match self.pointer_pressed(x, y, now_ms) {
+                    Some(error) => Err(error),
+                    None => {
+                        let blocked = self.prevented_since(from);
+                        if let Some(contact) = &mut self.contact {
+                            contact.focus_blocked = blocked;
+                        }
+                        if let Some((key, point, field)) = focus {
+                            self.focus_on_down(key, point, now_ms, field);
+                        }
+                        if let Some(key) = self.contact.as_ref().and_then(|c| {
+                            (c.canvas.is_none() && c.retained.is_none()).then_some(c.hit)
+                        }) {
+                            self.begin_range_drag(key, (x, y));
+                        }
+                        Ok(taken)
+                    }
+                }
+            }
+            Err(e) => Err(e),
+        };
+        self.refresh_feedback();
+        self.hatch_pointer(mark, crate::hatches::Phase::Down, x, y);
+        // A contact that may drag a sheet is taken, whatever it presses.
+        result.map(|taken| taken || self.stage_drag_pending())
+    }
+    /// A desktop mouse down with the shell's platform click count.
+    pub fn pointer_down_with_clicks(
+        &mut self,
+        x: f32,
+        y: f32,
+        now_ms: f64,
+        clicks: u32,
+    ) -> Result<bool, String> {
+        let before = self.hit(x, y).and_then(|id| {
+            let node = self.host.kernel().node(id)?;
+            (node.node_type == NodeType::TextInput)
+                .then(|| (node.key, self.field_text(id), self.field_selection(id)))
+        });
+        let result = self.pointer_down(x, y, now_ms);
+        if result.is_ok() && !self.contact_is_direct() {
+            let target = self
+                .contact
+                .as_ref()
+                .filter(|c| {
+                    c.focus_before_down.is_some()
+                        && !c.focus_blocked
+                        && c.canvas.is_none()
+                        && c.retained.is_none()
+                })
+                .map(|c| c.hit);
+            if let Some(key) = target {
+                self.begin_field_drag(key, (x, y), clicks, before);
+            }
+        }
+        result
+    }
+    fn focus_on_down(&mut self, key: NodeKey, point: (f32, f32), now_ms: f64, field: bool) {
+        if self.contact_is_direct() || self.menu.is_some() {
+            return;
+        }
+        let hit = self.host.kernel().node_by_key(key).map(|n| n.id);
+        if let Some(contact) = self.contact.as_mut().filter(|c| c.hit == key) {
+            contact.focus_before_down = Some(self.focus);
+            if contact.focus_blocked {
+                return;
+            }
+        }
+        let editing = self
+            .focus
+            .and_then(|id| self.host.kernel().node(id))
+            .is_some_and(|node| node.node_type == NodeType::TextInput);
+        if hit.is_some_and(|id| {
+            self.pointerdown_prevents_focus(id) || (editing && self.control_target(id).is_some())
+        }) {
+            return;
+        }
+        if hit.is_none_or(|id| {
+            field
+                && (!self.input_live(key)
+                    || !self.focusable(id)
+                    || self.focus_refusal(id).is_some())
+        }) {
+            // A field hidden, disabled or removed by pointerdown still blurs
+            // the old editor. Keep any surviving contact for up or cancellation.
+            if let Some(error) = self.set_focus(None, now_ms) {
+                eprintln!("exact: {error}");
+            }
+            self.queue_collections();
+            return;
+        }
+        self.focus_for_press(hit.unwrap(), point, now_ms, false);
+    }
+    fn contact_down(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.pointer_sample(x, y, now_ms)?;
+        if self.host.content_region().is_some() {
+            if let Some(view) = self
+                .hit(x, y)
+                .filter(|id| self.brush.region_blocks_action(*id))
+            {
+                let Some(hit) = self.host.kernel().node(view).map(|n| n.key) else {
+                    return Ok(false);
+                };
+                let Some(retained) = self.retained_down(hit) else {
+                    self.retire_pointer();
+                    return Ok(false);
+                };
+                self.cancel_before_down(now_ms)?;
+                // Cancellation may run layout/effects; it must not rebind A.
+                if !self.retained_contact_live(&retained) {
+                    return Ok(false);
+                }
+                let candidate = retained.swipe_target().map(|t| Candidate::Swipe(t.key));
+                self.contact = Some(Contact {
+                    hit,
+                    candidate,
+                    rest: Vec::new(),
+                    origin: (x, y),
+                    position: (x, y),
+                    last_ms: now_ms,
+                    event_ms: now_ms,
+                    hold: None,
+                    group: false,
+                    retained: Some(retained),
+                    feedback: None,
+                    press_activates: false,
+                    focus_before_down: None,
+                    focus_blocked: false,
+                    canvas: None,
+                    touch: (false, false),
+                    kept: None,
+                    panning: false,
+                    pan_velocity: VelocityTracker::new(),
+                });
+                self.set_collection_interaction(Some(view));
+                return Ok(true);
+            }
+        }
+        self.cancel_before_down(now_ms)?;
+        let Some(hit) = self
+            .hit(x, y)
+            .and_then(|id| self.host.kernel().node(id).map(|n| n.key))
+        else {
+            if let Some(error) = self.set_focus(None, now_ms) {
+                return Err(error);
+            }
+            self.queue_collections();
+            return Ok(false);
+        };
+        if !self.input_live(hit) {
+            return Ok(false);
+        }
+        let mut rest = self.candidates(hit);
+        // A swipe yields the edge the system's own gesture starts from.
+        if self.in_gesture_edge(x) {
+            rest.retain(|c| !matches!(c, Candidate::Swipe(_)));
+        }
+        let arrange = rest
+            .iter()
+            .find(|c| matches!(c, Candidate::Arrange(_)))
+            .copied();
+        self.prepare_arrange_down(arrange)?;
+        let Some(view) = self.host.kernel().node_by_key(hit).map(|n| n.id) else {
+            return Ok(false);
+        };
+        // A canvas holds the contact itself: it sees the down now and every
+        // move until the up, so a drag (mouse look) reaches its world.
+        let canvas = if rest.is_empty() {
+            self.canvas_contact_target(view)
+        } else {
+            None
+        };
+        if let Some(canvas) = canvas.filter(|_| self.canvas_contact_down(view, x, y, now_ms)) {
+            self.contact = Some(Contact {
+                hit,
+                candidate: None,
+                rest,
+                origin: (x, y),
+                position: (x, y),
+                last_ms: now_ms,
+                event_ms: now_ms,
+                hold: None,
+                group: false,
+                panning: false,
+                pan_velocity: VelocityTracker::new(),
+                retained: None,
+                feedback: None,
+                press_activates: false,
+                focus_before_down: None,
+                focus_blocked: false,
+                canvas: Some(canvas),
+                touch: (false, false),
+                kept: None,
+            });
+            return Ok(true);
+        }
+        // A link with no `press` shows its press too (LLP 1121 D8, as amended),
+        // and is followed by the lift's hit as before.
+        let pressed = self.press_target(view);
+        // `-exact-press-haptic` plays at the press, the host's own as the
+        // scale and paint below are (LLP 1077 D14; LLP 1061 D7).
+        if let Some(id) = pressed {
+            self.press_haptic(id);
+        }
+        let feedback = pressed.and_then(|id| {
+            let node = self.host.kernel().node(id)?;
+            let (key, origin) = (node.key, node.style.transform_origin.clone());
+            self.box_of(id).map(|b| (key, b.unpressed(origin)))
+        });
+        // A pressed box that shows its press (a scale shrinks it) activates
+        // where the lift is in the box it had unpressed, a link as a press.
+        let press_activates = feedback.is_some_and(|(key, _)| {
+            self.host
+                .kernel()
+                .node_by_key(key)
+                .is_some_and(|node| crate::host::press::shows(&node))
+        });
+        if let Some((key, _)) = feedback {
+            self.host.press_feedback(key, true, now_ms);
+            self.dirty = true;
+        }
+        let candidate = (!rest.is_empty()).then(|| rest.remove(0));
+        let mut pan_velocity = VelocityTracker::new();
+        pan_velocity.push(now_ms / 1000., Value::new(x as f64, y as f64));
+        self.contact = Some(Contact {
+            hit,
+            candidate,
+            rest,
+            origin: (x, y),
+            position: (x, y),
+            last_ms: now_ms,
+            event_ms: now_ms,
+            hold: None,
+            group: false,
+            panning: false,
+            pan_velocity,
+            retained: None,
+            feedback,
+            press_activates,
+            focus_before_down: None,
+            focus_blocked: false,
+            canvas: None,
+            touch: self.touch_kept(hit),
+            kept: None,
+        });
+        self.set_collection_interaction(Some(view));
+        Ok(true)
+    }
+    /// The canvas holding the contact, if one does.
+    pub(crate) fn contact_canvas(&self) -> Option<u32> {
+        self.contact.as_ref().and_then(|c| c.canvas)
+    }
+    pub(super) fn contact_has_gesture(&self) -> bool {
+        self.contact
+            .as_ref()
+            .is_some_and(|c| c.hold.is_some() || c.group || c.panning)
+    }
+    /// The canvas a free pointer at a viewport point is over, where a press
+    /// there would be the canvas's own.
+    pub(crate) fn hover_canvas(&mut self, x: f32, y: f32) -> Option<u32> {
+        let hit = self.hit(x, y)?;
+        self.canvas_contact_target(hit)
+    }
+    /// Recognize one dominant axis. Recognition has zero displacement at catch.
+    pub fn pointer_move(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.pointer_move_at(x, y, now_ms, now_ms)
+    }
+    // Agent events have timestamps for pan velocity while dispatch and held
+    // motion use the frozen runner clock, as on the page.
+    pub(crate) fn pointer_move_at(
+        &mut self,
+        x: f32,
+        y: f32,
+        now_ms: f64,
+        event_ms: f64,
+    ) -> Result<bool, String> {
+        if self.brush.winui_focus {
+            self.brush.pointer_modality = true;
+        }
+        // A sheet's scrim, or its drag once past the slop (`stage/touch.rs`).
+        if self.stage_move(x, y, event_ms) {
+            return Ok(true);
+        }
+        if self.overlay_pointer(2, x, y, now_ms) || self.scrollbar_pointer(2, x, y) {
+            return Ok(true);
+        }
+        let mark = self.hatch_pointer_mark(crate::hatches::Phase::Move, x, y);
+        let moved = self.pointer_moved(x, y, now_ms, event_ms);
+        // The device's motion belongs to this move alone, sent or not.
+        self.clear_raw_motion();
+        // A node's `pointermove` (LLP 1056 §3 stage 3), as pan's, per move.
+        let over = match moved.is_ok() {
+            true => self.pointer_moved_over(x, y, now_ms),
+            false => None,
+        };
+        self.refresh_feedback();
+        self.hatch_pointer(mark, crate::hatches::Phase::Move, x, y);
+        over.map_or(moved, Err)
+    }
+    fn pointer_moved(
+        &mut self,
+        x: f32,
+        y: f32,
+        now_ms: f64,
+        event_ms: f64,
+    ) -> Result<bool, String> {
+        self.retire_pointer();
+        // A finger hovers nothing, down or lifted (LLP 1115.001 D7.4): what
+        // a mouse hovered before it came is left.
+        let at = (!self.direct()).then_some((x, y));
+        if let Some(error) = self.hover_at(at, now_ms) {
+            return Err(error);
+        }
+        if self.contact.is_none() {
+            // A canvas under a free pointer sees it move, as the web's
+            // pointermove (mouse look, hover aims).
+            if let Some(canvas) = self.hover_canvas(x, y) {
+                self.canvas_pointer(canvas, "move", 0, x, y, now_ms);
+            }
+            return Ok(false);
+        }
+        self.pointer_sample(x, y, now_ms)?;
+        let mut contact = self.contact.take().unwrap();
+        contact.last_ms = now_ms;
+        contact.event_ms = event_ms;
+        if self.drag_field(x, y) || self.drag_range((x, y)) {
+            contact.position = (x, y);
+            self.contact = Some(contact);
+            return Ok(true);
+        }
+        if let Some(canvas) = contact.canvas {
+            // At the screen's edge the position stops; the device's motion does not.
+            let moved = (x, y) != contact.position || self.has_raw_motion();
+            contact.position = (x, y);
+            self.contact = Some(contact);
+            return Ok(!moved || self.canvas_pointer(canvas, "move", 1, x, y, now_ms));
+        }
+        contact
+            .pan_velocity
+            .push(event_ms / 1000., Value::new(x as f64, y as f64));
+        if let Some((key, box_)) = contact.feedback {
+            self.host.press_feedback(key, box_.contains(x, y), now_ms);
+            self.dirty = true;
+        }
+        let (dx, dy) = (
+            x as f64 - contact.origin.0 as f64,
+            y as f64 - contact.origin.1 as f64,
+        );
+        let slop = self.slop;
+        if contact.hold.is_none()
+            && !contact.group
+            && !contact.panning
+            && dx.abs().max(dy.abs()) > slop
+        {
+            // The first candidate whose axis rule accepts begins; the ones
+            // before it fall away (LLP 1057.001 §1).
+            let rest = std::mem::take(&mut contact.rest);
+            if let Some(next) = contact
+                .candidate
+                .into_iter()
+                .chain(rest)
+                .find(|c| c.accepts(dx, dy))
+            {
+                contact.candidate = Some(next);
+            }
+        }
+        if let Some(Candidate::Pan(key)) = contact.candidate {
+            let from = if contact.panning {
+                contact.position
+            } else {
+                contact.origin
+            };
+            let dx = x as f64 - from.0 as f64;
+            let dy = y as f64 - from.1 as f64;
+            contact.position = (x, y);
+            if contact.panning || dx.abs().max(dy.abs()) > slop {
+                contact.panning = true;
+                if let Some((key, _)) = contact.feedback.take() {
+                    self.host.press_feedback(key, false, now_ms);
+                }
+                let view = self.host.kernel().node_by_key(key).unwrap().id;
+                let error = if dx != 0. || dy != 0. {
+                    self.host
+                        .dispatch_at(view, Event::Pan(dx, dy), now_ms)
+                        .or(self.after_commit())
+                } else {
+                    None
+                };
+                self.dirty = true;
+                if self.contact_live(&contact) {
+                    self.contact = Some(contact);
+                } else {
+                    self.set_collection_interaction(None);
+                }
+                return error.map_or(Ok(true), Err);
+            }
+            self.contact = Some(contact);
+            return Ok(false);
+        }
+        contact.position = (x, y);
+        if contact.group {
+            let moved = self.move_group((x, y));
+            if self.group_live() {
+                self.contact = Some(contact);
+            } else {
+                let _ = self.end_group(false, now_ms);
+            }
+            return moved;
+        }
+        if contact.hold.is_none() {
+            let dx = x as f64 - contact.origin.0 as f64;
+            let dy = y as f64 - contact.origin.1 as f64;
+            if dx.abs().max(dy.abs()) <= slop {
+                self.contact = Some(contact);
+                return Ok(false);
+            }
+            if contact.candidate.is_some() {
+                if let Some((key, _)) = contact.feedback.take() {
+                    self.host.press_feedback(key, false, now_ms);
+                }
+            }
+            if let Some(Candidate::Group(binding)) = contact.candidate {
+                return match self.begin_group(binding, contact.origin, now_ms) {
+                    Ok(true) => {
+                        contact.group = true;
+                        let moved = self.move_group((x, y));
+                        self.contact = Some(contact);
+                        moved
+                    }
+                    Ok(false) => {
+                        self.set_collection_interaction(None);
+                        Ok(false)
+                    }
+                    Err(error) => {
+                        self.set_collection_interaction(None);
+                        Err(error)
+                    }
+                };
+            }
+            let begin = match contact.candidate {
+                Some(Candidate::Arrange(binding)) if dy.abs() > dx.abs() => {
+                    self.begin_arrange(binding, now_ms)
+                }
+                Some(Candidate::Transform(binding)) => self.begin_transform_drag(binding, now_ms),
+                Some(Candidate::Height { handle, target }) if dy.abs() > dx.abs() => {
+                    self.begin_height_drag(handle, target, now_ms)
+                }
+                Some(Candidate::Swipe(key))
+                    if dx.abs() > dy.abs()
+                        && (contact.retained.is_some() || self.input_live(key)) =>
+                {
+                    let ways = match &contact.retained {
+                        Some(retained) => retained.swipe_ways(),
+                        None => self.swipe_ways(key),
+                    };
+                    // A start against the node's ways is its only while a
+                    // caught hold returns that way.
+                    if !ways.starts(dx, 0.) {
+                        self.tick(now_ms);
+                        if contact
+                            .retained
+                            .as_ref()
+                            .is_some_and(|r| !self.retained_contact_live(r))
+                        {
+                            self.set_collection_interaction(None);
+                            return Ok(false);
+                        }
+                        let view = self.host.kernel().node_by_key(key).unwrap().id;
+                        if !ways.starts(dx, self.host.presented(view).translate.0 as f64) {
+                            self.set_collection_interaction(None);
+                            return Ok(false);
+                        }
+                    }
+                    self.begin_swipe(key, ways, now_ms)
+                }
+                _ => {
+                    // A finger is the platform's to pan with past the slop,
+                    // except along an axis its `touch-action` keeps; which,
+                    // by its first move past it, for the rest of the touch.
+                    let touch = contact.touch;
+                    let kept = *contact
+                        .kept
+                        .get_or_insert_with(|| match dx.abs() > dy.abs() {
+                            true => touch.0,
+                            false => touch.1,
+                        });
+                    if (contact.press_activates && contact.feedback.is_some())
+                        || (contact.candidate.is_none()
+                            && contact.retained.is_none()
+                            && (!self.contact_is_direct() || kept))
+                    {
+                        self.contact = Some(contact);
+                    } else {
+                        if let Some((key, _)) = contact.feedback {
+                            self.host.press_feedback(key, false, now_ms);
+                            self.dirty = true;
+                        }
+                        self.set_collection_interaction(None);
+                    }
+                    return Ok(false);
+                }
+            };
+            match begin {
+                Ok(Some(held)) => {
+                    if let Some(target) = contact.retained.as_ref().and_then(|c| c.swipe_target()) {
+                        if !self.begin_retained_motion(target, held.primary.token) {
+                            self.end_contact(&held, HoldEnd::Cancel, self.host.now())?;
+                            self.set_collection_interaction(None);
+                            return Ok(false);
+                        }
+                    }
+                    contact.hold = Some(held);
+                    contact.origin = (x, y);
+                }
+                Ok(None) => {
+                    self.set_collection_interaction(None);
+                    return Ok(false);
+                }
+                Err(error) => {
+                    self.set_collection_interaction(None);
+                    return Err(error);
+                }
+            }
+        }
+        let held = contact.hold.as_mut().unwrap();
+        let result = match held.kind {
+            HeldKind::Arrange(_) => self.move_arrange(
+                held,
+                y as f64 - contact.origin.1 as f64,
+                (x, y),
+                now_ms,
+                event_ms,
+            ),
+            HeldKind::Transform { .. } => self.move_transform_drag(
+                held,
+                Value {
+                    x: x as f64 - contact.origin.0 as f64,
+                    y: y as f64 - contact.origin.1 as f64,
+                    ..Value::ZERO
+                },
+                now_ms,
+            ),
+            HeldKind::Height { .. } => {
+                self.move_height_drag(held, contact.origin.1 as f64 - y as f64, now_ms)
+            }
+            HeldKind::Swipe { .. } => {
+                self.move_swipe(held, x as f64 - contact.origin.0 as f64, now_ms)
+            }
+        };
+        if self.contact_live(&contact) {
+            self.contact = Some(contact);
+        } else {
+            let _ = self.end_contact(contact.hold.as_ref().unwrap(), HoldEnd::Cancel, now_ms);
+            if !matches!(contact.hold.as_ref().unwrap().kind, HeldKind::Arrange(_)) {
+                self.set_collection_interaction(None);
+            }
+        }
+        result
+    }
+    /// Accepted final sample, typed action while held, end once, pin released last.
+    pub fn pointer_up(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.pointer_up_at(x, y, now_ms, now_ms)
+    }
+    pub(crate) fn pointer_up_at(
+        &mut self,
+        x: f32,
+        y: f32,
+        now_ms: f64,
+        event_ms: f64,
+    ) -> Result<bool, String> {
+        self.brush.ripples.input(now_ms);
+        if self.stage_up(x, y, now_ms, event_ms) {
+            return Ok(true);
+        }
+        if self.overlay_pointer(1, x, y, now_ms) || self.scrollbar_pointer(1, x, y) {
+            return Ok(true);
+        }
+        let mark = self.hatch_pointer_mark(crate::hatches::Phase::Up, x, y);
+        let result = self.pointer_lift(x, y, now_ms, event_ms);
+        self.field_drag = None;
+        self.forget_range_drag();
+        self.refresh_feedback();
+        self.hatch_pointer(mark, crate::hatches::Phase::Up, x, y);
+        result
+    }
+    fn pointer_lift(&mut self, x: f32, y: f32, now_ms: f64, event_ms: f64) -> Result<bool, String> {
+        // The physical release target precedes authored pointerup mutations.
+        // The retained pointerup path is not the mouse's hit at release.
+        let click = (!self.contact_is_direct())
+            .then(|| self.mouse_click_target(x, y))
+            .flatten();
+        // DOM's order: the node's `pointerup`, then any click.
+        if let Some(error) = self.pointer_lifted(Some((x, y)), now_ms) {
+            return Err(error);
+        }
+        self.retire_pointer();
+        if self.contact.is_some() {
+            self.pointer_sample(x, y, now_ms)?;
+        }
+        let accepted = match self.pointer_move_at(x, y, now_ms, event_ms) {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                let _ = self.pointer_cancel(now_ms);
+                return Err(error);
+            }
+        };
+        // A range's `change` precedes the click, as HTML's does.
+        self.end_range_drag();
+        let Some(contact) = self.contact.take() else {
+            return Ok(false);
+        };
+        if let Some(canvas) = contact.canvas {
+            return Ok(self.canvas_pointer(canvas, "up", 0, x, y, now_ms));
+        }
+        if let Some((key, _)) = contact.feedback {
+            self.host.press_feedback(key, false, now_ms);
+            self.dirty = true;
+        }
+        let arranged = contact.group
+            || contact
+                .hold
+                .as_ref()
+                .is_some_and(|h| matches!(h.kind, HeldKind::Arrange(_)));
+        let result = if contact.group {
+            // Up anywhere drops on the sticky target (LLP 1094 D8).
+            self.end_group(true, now_ms)
+        } else if let Some(held) = contact.hold {
+            if !accepted {
+                self.end_contact(&held, HoldEnd::Cancel, now_ms)
+                    .map(|_| false)
+            } else {
+                match held.kind {
+                    HeldKind::Arrange(_) => self.end_arrange(&held, true, now_ms),
+                    HeldKind::Height { .. } => self.finish_height_drag(&held, now_ms),
+                    HeldKind::Transform { .. } => self.finish_transform_drag(&held, now_ms),
+                    HeldKind::Swipe { ways, .. } => {
+                        let current = self
+                            .host
+                            .engine()
+                            .value(held.primary.token.node(), held.primary.token.property())
+                            .unwrap_or(Value::ZERO)
+                            .x;
+                        let mut error = None;
+                        if let Some(kind) = ways
+                            .completes(current)
+                            .filter(|_| self.host.has_hold(held.primary.token))
+                        {
+                            if let Some(retained) = &contact.retained {
+                                let delivered = match retained.swipe_for(kind) {
+                                    Some(target) => self.retained_swipe_dispatch(
+                                        target,
+                                        held.primary.token,
+                                        now_ms,
+                                    ),
+                                    None => Ok(false),
+                                };
+                                match delivered {
+                                    Ok(false) => {
+                                        let ended =
+                                            self.end_swipe(&held, HoldEnd::Cancel, self.host.now());
+                                        self.set_collection_interaction(None);
+                                        return ended.map(|_| false);
+                                    }
+                                    Err(e) => error = Some(e),
+                                    Ok(true) => {}
+                                }
+                            } else {
+                                error = self
+                                    .host
+                                    .dispatch_held(held.primary.token, kind, now_ms)
+                                    .err();
+                                error = error.or(self.after_commit());
+                            }
+                        }
+                        let velocity = held.velocity.estimate(now_ms / 1000.);
+                        let ended = self.end_swipe(&held, HoldEnd::Release { velocity }, now_ms);
+                        error.map_or(ended.map(|_| true), Err)
+                    }
+                }
+            }
+        } else if contact.panning {
+            // The last delta went out above; then the release, once.
+            let velocity = contact.pan_velocity.estimate(event_ms / 1000.);
+            match contact.candidate {
+                Some(Candidate::Pan(key)) => self
+                    .release_pan(key, (velocity.x, velocity.y), now_ms)
+                    .map_or(Ok(true), Err),
+                _ => Ok(true),
+            }
+        } else if !self.contact_is_direct() && contact.retained.is_none() {
+            if let Some(hit) = click
+                .filter(|_| self.menu_press(x, y).is_none())
+                .and_then(|key| self.host.kernel().node_by_key(key))
+            {
+                let (id, key) = (hit.id, hit.key);
+                // Click targeting does not change the focus decided on down.
+                let focus = contact
+                    .focus_before_down
+                    .or_else(|| (key != contact.hit).then_some(self.focus));
+                self.press_hit_after_down(id, (x, y), now_ms, focus, true);
+            }
+            Ok(false)
+        } else if let Some((key, box_)) = contact.feedback.filter(|_| contact.press_activates) {
+            let hit = self.host.kernel().node_by_key(contact.hit).map(|n| n.id);
+            let visible = |id| {
+                self.host.kernel().node(id).is_some_and(|n| {
+                    n.computed_row(exact_kernel::StyleId::Visibility, |s| s.visibility)
+                        == exact_kernel::Visibility::Visible
+                })
+            };
+            if box_.contains(x, y) && self.input_live(key) {
+                if let Some(id) = self
+                    .host
+                    .kernel()
+                    .node_by_key(key)
+                    .filter(|n| {
+                        // A hidden ancestor still hears a visible descendant's click.
+                        self.focus_refusal(n.id).is_none()
+                            && (visible(n.id)
+                                || hit.is_some_and(|hit| {
+                                    visible(hit)
+                                        && self.focus_refusal(hit).is_none()
+                                        && self.is_inside(hit, n.id)
+                                }))
+                    })
+                    .map(|n| n.id)
+                {
+                    // Focus is decided from what the finger touched, as
+                    // `press_at` decides it: a `retainFocus` child counts.
+                    let hit = hit.unwrap_or(id);
+                    self.note_press_from(hit, contact.focus_before_down.unwrap_or(self.focus));
+                    if contact.focus_before_down.is_none()
+                        && !contact.focus_blocked
+                        && !self.pointerdown_prevents_focus(hit)
+                    {
+                        self.focus_for_press(hit, (x, y), now_ms, self.contact_is_direct());
+                    }
+                    self.press_point = Some((x, y));
+                    // Read before the press, whose handler may remove it: a
+                    // link is followed after its press, as `press_at` has it.
+                    let link = self.link_at(hit, x, y);
+                    self.activate(id, now_ms);
+                    if let Some(href) = link {
+                        self.follow(hit, &href, now_ms);
+                    }
+                }
+            }
+            Ok(false)
+        } else {
+            let at = self
+                .hit(x, y)
+                .and_then(|id| self.host.kernel().node(id).map(|n| n.key));
+            if at == Some(contact.hit) {
+                if let Some(retained) = &contact.retained {
+                    if let Some(target) = &retained.press {
+                        self.retained_press_target(target, now_ms);
+                    }
+                } else {
+                    let finger = self.direct();
+                    self.press_at_after_down(x, y, now_ms, contact.focus_before_down, finger);
+                }
+            }
+            Ok(false)
+        };
+        if !arranged {
+            self.set_collection_interaction(None);
+        }
+        result
+    }
+    fn mouse_click_target(&mut self, x: f32, y: f32) -> Option<NodeKey> {
+        if self
+            .field_drag
+            .as_ref()
+            .is_some_and(|drag| drag.moved((x, y)))
+        {
+            return None;
+        }
+        let contact = self.contact.as_ref()?;
+        if contact.canvas.is_some()
+            || contact.retained.is_some()
+            || contact.group
+            || contact.panning
+            || contact.hold.is_some()
+        {
+            return None;
+        }
+        let down = contact.hit;
+        let up = self.hit_after_pointerdown(x, y)?;
+        if self.brush.region_blocks_action(up) {
+            return None;
+        }
+        let kernel = self.host.kernel();
+        // A removed down node cancels the click; there is no surviving-parent
+        // fallback. Walk from the original node, including it, toward the root.
+        let mut at = Some(kernel.node_by_key(down)?.id);
+        while let Some(id) = at {
+            if id == up || self.is_inside(up, id) {
+                return kernel.node(id).map(|n| n.key);
+            }
+            at = kernel.node(id)?.parent;
+        }
+        None
+    }
+    fn end_contact(&mut self, held: &Hold, end: HoldEnd, now_ms: f64) -> Result<(), String> {
+        match held.kind {
+            HeldKind::Arrange(_) => self.end_arrange(held, false, now_ms).map(|_| ()),
+            HeldKind::Transform { pair, .. } => self.end_transform_drag(pair, None, now_ms),
+            HeldKind::Height { .. } => self.height_end(held.primary.token, end, now_ms).map(|_| ()),
+            HeldKind::Swipe { .. } => self.end_swipe(held, end, now_ms),
+        }
+    }
+    /// The device's pointer is gone or abandoned (Escape, a lost device, a
+    /// dropped report, a refused mapping): its contact and every button.
+    pub fn pointer_lost(&mut self, now_ms: f64) -> Result<(), String> {
+        self.cancel_aux(self.contact_canvas(), now_ms);
+        self.pointer_cancel(now_ms)
+    }
+    /// Escape, wheel takeover, disconnection, or invalidated binding: no
+    /// release event, except a pan that began, which releases at rest.
+    pub fn pointer_cancel(&mut self, now_ms: f64) -> Result<(), String> {
+        self.brush.ripples.input(now_ms);
+        self.stage_cancel(now_ms);
+        self.overlay_pointer_cancel();
+        self.field_drag = None;
+        self.end_range_drag();
+        self.forget_range_drag();
+        self.brush.scrollbars.drag = None;
+        self.brush.scrollbars.pressed = false;
+        let at = self.contact_position().or(self.pointer).unwrap_or((0., 0.));
+        let mark = self.hatch_pointer_mark(crate::hatches::Phase::Cancel, at.0, at.1);
+        let result = self.pointer_abandon(now_ms);
+        self.cancel_ripple();
+        self.refresh_feedback();
+        self.hatch_pointer(mark, crate::hatches::Phase::Cancel, at.0, at.1);
+        result
+    }
+    fn pointer_abandon(&mut self, now_ms: f64) -> Result<(), String> {
+        #[cfg(any(target_os = "android", test))]
+        self.cancel_fingers(now_ms);
+        let contact = if self.contact.is_some() {
+            self.pointer_sample(0., 0., now_ms)?;
+            self.contact.take()
+        } else {
+            None
+        };
+        // A cancel is an up (LLP 1005 §3).
+        let at = contact.as_ref().map(|contact| contact.position);
+        let mut result = self.pointer_lifted(at, now_ms).map_or(Ok(()), Err);
+        let Some(contact) = contact else {
+            return result;
+        };
+        if let Some(canvas) = contact.canvas {
+            let (x, y) = contact.position;
+            self.cancel_canvas(canvas, x, y, now_ms);
+        }
+        if let Some((key, _)) = contact.feedback {
+            self.host.press_feedback(key, false, now_ms);
+            self.dirty = true;
+        }
+        let ended = contact.hold.as_ref().map_or(Ok(()), |held| {
+            self.end_contact(held, HoldEnd::Cancel, now_ms)
+        });
+        result = result.and(ended);
+        if contact.group {
+            result = result.and(self.end_group(false, now_ms).map(|_| ()));
+        }
+        if let (true, Some(Candidate::Pan(key))) = (contact.panning, contact.candidate) {
+            if let Some(error) = self.release_pan(key, (0., 0.), now_ms) {
+                result = result.and(Err(error));
+            }
+        }
+        if !contact.group
+            && !contact
+                .hold
+                .as_ref()
+                .is_some_and(|h| matches!(h.kind, HeldKind::Arrange(_)))
+        {
+            self.set_collection_interaction(None);
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+#[path = "precedence_tests.rs"]
+mod precedence_tests;
+
+#[cfg(test)]
+#[path = "press_paint_tests.rs"]
+mod press_paint_tests;

@@ -1,6 +1,19 @@
 //! Authored tests: a `test` block and its steps (LLP 1017 P7).
 use crate::{Expr, Span, TapForm};
 
+/// The literal comparison in an authored `expect state` step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateComparison {
+    /// Structural literal equality.
+    Equal,
+    /// A numeric lower bound, inclusive.
+    AtLeast,
+    /// A numeric upper bound, inclusive.
+    AtMost,
+    /// Membership in a list of literal alternatives.
+    In,
+}
+
 /// `test "name"` with steps: the agent API's own operations (LLP 1012) and
 /// `expect` lines that read their replies — compiled to a script the agent
 /// driver runs against the real hosts; never a second evaluator (LLP 1017 P7).
@@ -329,14 +342,16 @@ pub enum Step {
         /// Where.
         span: Span,
     },
-    /// `expect state name == literal`: a slot, derive, or resource from the
+    /// `expect state name <comparison> literal`: a slot, derive, or resource from the
     /// `state` reply, or a field of one (`name.field.field`, feed F10), or a
     /// list index (`rows.0`, drums R7), compared to a number (negative
     /// included), string, bool, or `none`.
     ExpectState {
         /// The declaration's name, then fields and list indexes, joined by `.`.
         name: String,
-        /// The literal.
+        /// The comparison.
+        comparison: StateComparison,
+        /// The literal, or a list of alternatives for `in`.
         value: Expr,
         /// Where.
         span: Span,

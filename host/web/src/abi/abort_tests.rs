@@ -100,3 +100,48 @@ fn an_abort_heard_between_batches_is_collected_cancelled_and_answered() {
         "its answer resumed aborted"
     );
 }
+
+#[test]
+fn an_abort_heard_in_a_batch_that_ends_in_an_error_waits_for_the_next() {
+    crate::link::link_for_tests();
+    let plan = contract::compile(APP).unwrap().encode();
+    let source = Held::default();
+    let (aborted, answered) = (source.aborted.clone(), source.answered_aborted.clone());
+    let mut bridge = Bridge::new();
+    let len = bridge.boot(&plan, source, 400., 400., "/");
+    assert_eq!(output(&bridge, len)["error"], Json::Null);
+    let host = bridge.host.as_mut().unwrap();
+    let k = host.runner().kernel();
+    let hold = k.node_by_key(k.find_by_test_id("hold")[0]).unwrap().id;
+    let batch: Json =
+        serde_json::from_str(&host.dispatch(hold, exact_runner::Event::Press)).unwrap();
+    let ticket = batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "request")
+        .map(|op| op["ticket"].as_u64().unwrap())
+        .expect("the POST goes out");
+    let cancels = |batch: &Json| {
+        batch["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["op"] == "abort" && op["ticket"] == ticket)
+    };
+    aborted.store(true, Ordering::SeqCst);
+    // A host call refused before its batch ends: the batch answers nothing.
+    let batch: Json =
+        serde_json::from_str(&host.scroll_into_view(hold, "row", "sideways", "nearest")).unwrap();
+    assert_ne!(batch["error"], Json::Null, "{batch}");
+    assert!(!cancels(&batch), "unanswered, it is not cancelled: {batch}");
+    assert!(!answered.load(Ordering::SeqCst));
+    let len = bridge.collect_aborts();
+    let batch = output(&bridge, len);
+    assert_eq!(batch["error"], Json::Null, "{batch}");
+    assert!(cancels(&batch), "the next batch cancels it: {batch}");
+    assert!(
+        answered.load(Ordering::SeqCst),
+        "its answer resumed aborted"
+    );
+}

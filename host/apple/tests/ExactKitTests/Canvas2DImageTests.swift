@@ -43,6 +43,40 @@ final class Canvas2DImageTests: XCTestCase {
         return [bytes[offset + 2], bytes[offset + 1], bytes[offset], bytes[offset + 3]]
     }
 
+    /// Past the budget the handle drawn least recently is let go, and the
+    /// runtime told; one let go while a draw in flight used it is decoded again.
+    func testDecodedHandlesPastTheBudgetAreLetGoLeastRecentlyDrawnFirst() throws {
+        let budget = Canvas2DHost.imageBudget, recently = Canvas2DHost.drawnRecently
+        defer { Canvas2DHost.imageBudget = budget; Canvas2DHost.drawnRecently = recently }
+        Canvas2DHost.drawnRecently = 0
+        let host = Canvas2DHost(), bytes = try jpeg(orientation: nil)
+        host.assetBytes = { _ in bytes }
+        var decoded: [String] = [], released: [String] = []
+        host.onRelease = { released.append($0) }
+        func load(_ src: String) throws {
+            let loaded = expectation(description: "\(src) decoded")
+            host.onImage = { src, image in XCTAssertNotNil(image); decoded.append(src); loaded.fulfill() }
+            host.load([src])
+            wait(for: [loaded], timeout: 10)
+        }
+        try load("a")
+        let one = try XCTUnwrap(host.canvasImage("a")).bytesPerRow * 20
+        Canvas2DHost.imageBudget = 2 * one
+        try load("b")
+        XCTAssertEqual(released, [], "two fit")
+        host.drew(["a"], missed: [])
+        try load("c")
+        XCTAssertEqual(released, ["b"], "the one drawn least recently")
+        XCTAssertNotNil(host.canvasImage("a"))
+        XCTAssertNil(host.canvasImage("b"))
+        let again = expectation(description: "b decoded again")
+        host.onImage = { src, _ in decoded.append(src); again.fulfill() }
+        host.drew([], missed: ["b"])
+        wait(for: [again], timeout: 10)
+        XCTAssertEqual(decoded, ["a", "b", "c", "b"])
+        XCTAssertNotNil(host.canvasImage("b"))
+    }
+
     func testImageHandlesReportAndDrawAllExifOrientationsAtFullSize() throws {
         let quadrants = [[0, 1, 2, 3], [0, 1, 2, 3], [1, 0, 3, 2], [3, 2, 1, 0], [2, 3, 0, 1],
                          [0, 2, 1, 3], [2, 0, 3, 1], [3, 1, 2, 0], [1, 3, 0, 2]]

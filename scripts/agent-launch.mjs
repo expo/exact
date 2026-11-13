@@ -6,21 +6,24 @@ import { widgetArguments, validateWidget } from './agent-widget.mjs';
 import { missingValue } from './help.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { slashRelative, within } from './paths.mjs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { types as utilTypes } from 'node:util';
 import { filesystemLock } from './filesystem.mjs';
 import { boundSettings, settingChanges, settingInputs, settingLines } from '../js/bake/src/__exact_env.mjs';
-import { backendOriginSelection, literalBackendOrigin } from '../js/bake/src/typescript.mjs';
+import { backendOriginSelection, literalBackendOrigin, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
-import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
-import { directoryInputSnapshot, packageTests } from './cargo-dep-info.mjs';
+import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, readBuilds, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
+import { directoryInputSnapshot, packageTests, watchedTree, watchOutput } from './cargo-dep-info.mjs';
 import { HOST_CRATES } from './cargo-check.mjs';
+import { webSourceRoots } from '../host/web/build.mjs';
+import { CONFIG_JSON, DECLARATIONS, MODULE_FILE, moduleGraph } from './module-graph.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -326,6 +329,16 @@ export async function exclusiveWebStore(options, launch) {
   }
 }
 
+/** Remove a throwaway named store: its profile and its lock directory. A store whose `browser-owner` record
+ * remains is kept, and false returned: exclusiveWebStore keeps that record while its Chrome's exit is unconfirmed,
+ * and a reset of the profile it guards would hand a live browser's store to the next drive. */
+export async function removeDriveStore(store, storage) {
+  const locks = resolve(store.base + '-locks', storage);
+  if (existsSync(resolve(locks, 'browser-owner'))) return false;
+  try { await removeBrowserProfile(store.profile); } finally { rmSync(locks, {recursive: true, force: true}); }
+  return true;
+}
+
 /** The one port a web drive's page is served on, `--port <n>` else `EXACT_PORT`, or null for the default (a free port;
  * a named store's from its hash). Builders on a shared machine must keep every listener in an assigned range (app farm
  * wave 1: 21 builds could not). A test run serves its tests on it one at a time. A named store's data is its origin's,
@@ -561,7 +574,7 @@ export function parseFlags(argv) {
     if (argv[i] === '--json') flags.json = true;
     else if (argv[i] === '--world') flags.world = resolve(value());
     else if (argv[i] === '--plan') flags.plan = resolve(value());
-    else if (argv[i] === '--backend') { const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error('--backend <url>: name the backend origin'); process.env.EXACT_BACKEND_ORIGIN = value; }
+    else if (argv[i] === '--backend') selectBackendOrigin(argv[++i]);
     else if (argv[i] === '--app') flags.app = value();
     else if (argv[i] === '--browser') flags.browser = value();
     else if (argv[i] === '--size') {
@@ -576,16 +589,16 @@ export function parseFlags(argv) {
     else if (argv[i] === '--open') (flags.open ??= []).push(resolve(value()));
     else if (argv[i] === '--url') flags.url = value();
     else if (argv[i] === '--device') flags.device = true;
-    // Android: the app on the Canvas reader (its APK), not the Linux host headless. Said as the variable
-    // `agent-android.mjs` reads, as `--sim` is said as EXACT_SIM: the driver's own file is at its line cap.
-    else if (argv[i] === '--reader') { flags.reader = true; process.env.EXACT_ANDROID_READER = '1'; }
+    // Android: the app on the Canvas reader (its APK), not the Linux host headless (`open`'s `reader`).
+    else if (argv[i] === '--reader') flags.reader = true;
     // `--headless`: the Linux host under adb shell, which an `exact new` app's `agent android` asks for with it (app-cli.mjs).
-    else if (argv[i] === '--headless') { flags.reader = false; delete process.env.EXACT_ANDROID_READER; }
+    else if (argv[i] === '--headless') flags.reader = false;
     else if (argv[i] === '--seed') flags.seed = Number(value());
     else if (argv[i] === '--locale') flags.locale = value();
     else if (argv[i] === '--format-locale') flags.formatLocale = value();
     else if (argv[i] === '--time-zone') flags.timeZone = value();
     else if (argv[i] === '--epoch') flags.epoch = value();
+    else if (argv[i] === '--live') flags.live = true;
     else if (argv[i] === '--timing') flags.timing = value();
     else if (argv[i] === '--touch') flags.touch = value();
     else if (argv[i] === '--chrome') flags.chrome = value();
@@ -756,11 +769,11 @@ export function launchEnvironment(facts) {
 // A build older than what it was made from is refused before launch
 // (LLP 1012.001.000 D1), so a drive never verifies yesterday's app. Each build
 // answers from its own record of its inputs: Cargo's dep-info, the Apple
-// receipt, and for the web's `dist/` (which names none) the sources its build
-// reads. These detect staleness; passing them is not proof of freshness. A
+// receipt, and the web marker's source digests and dependency roots.
+// These detect staleness; passing them is not proof of freshness. A
 // binary the caller names (EXACT_LINUX_BIN, EXACT_MAC_BIN) is the caller's
 // own: the driver says it did not check. A served page (--url) is its server's.
-const shown = path => path.startsWith(ROOT + '/') ? relative(ROOT, path) : path;
+const shown = path => within(ROOT, path) ? relative(ROOT, path) : path;
 const listed = changed => changed.slice(0, 3).join(', ') + (changed.length > 3 ? ` and ${changed.length - 3} more` : '');
 
 /** Throws when `changed` names anything: what, since which build, and the command that rebuilds it. */
@@ -794,90 +807,83 @@ export function depInfoInputs(bin, info = `${bin}.d`, base = process.cwd()) {
 // build reruns that script with other variables (the web build does, for its
 // render pass) without its sources changing; those sources are in the dep-info
 // themselves, so they, not the output, decide. A bake made before Cargo for a
-// linked plan (`….baked/`, scripts/linked-plan.mjs) names its own in its record.
-const GENERATED = /\/build\/[^/]+\/out\/|\.baked\//;
+// linked plan (`….baked/`, scripts/linked-plan.mjs) names its own in its record,
+// and so decides for the copy of it Cargo compiles (`bake-compiled/<digest>/`,
+// `compiledBakeDir`), which the first build of those bytes writes after its start.
+const GENERATED = /\/build\/[^/]+\/out\/|\.baked\/|\/bake-compiled\/[0-9a-f]+\//;
 // Bare dep-info records optional directories even while absent and carries no
 // entry types. A receipt's inventory distinguishes a deleted extensionless file.
 const DIRECTORY_WATCH = /\/[^./]+$/;
 /** Dep-info's inputs modified after `since`, or gone, generated outputs and absent optional directories aside. */
-export function depInfoNewer(since, bin, info, base, directories = [], products = new Map()) {
+export function depInfoNewer(since, bin, info, base, directories = [], products = new Map(), outputs = []) {
   const files = new Set(directories.flatMap(({path, entries}) => (entries ?? []).filter(e => !e.directory).map(e => resolve(path, e.name))));
   const paths = depInfoInputs(bin, info, base).filter(p => !GENERATED.test(p)
-    && (existsSync(p) || !DIRECTORY_WATCH.test(p) || files.has(p)));
-  return watchedNewer(since, paths, directories, products);
+    && (existsSync(p) || !DIRECTORY_WATCH.test(p) || files.has(p) || directories.some(directory => directory.path === p)));
+  return watchedNewer(since, paths, directories, products, outputs);
 }
 
-/** Of `paths`, files and the directories a build script watches whole, those modified after `since`, or gone. */
-export function watchedNewer(since, paths, directories = [], products = new Map()) {
-  const skips = new Map();
+/** Watched sources share the receipt's output exclusions, membership and link traversal. */
+export function watchedNewer(since, paths, directories = [], products = new Map(), outputs = []) {
   const inventory = new Map(directories.map(snapshot => [snapshot.path, snapshot]));
-  // Directory scans omit output, installed packages and hidden trees, and a package's top-level tests.
-  // Within an app they also omit what its other freshness checks skip (`notBuildInput` and `newerThan`),
-  // outside the trees a build takes files from. An explicitly listed file remains an input.
-  const skipFor = dir => {
-    let app = dir;
+  const skips = new Map();
+  const skipFor = root => {
+    let app = root;
     while (!existsSync(resolve(app, 'app.json')) && !existsSync(resolve(app, 'package.json')) && dirname(app) !== app) app = dirname(app);
-    if (!existsSync(resolve(app, 'app.json')) && existsSync(resolve(app, 'package.json'))) {
-      const tests = packageTests(dir);
-      return (path, isDir) => isDir && (UNWATCHED_TREE.test(basename(path)) || path === tests);
-    }
-    if (!existsSync(resolve(app, 'app.json'))) return (path, isDir) => isDir && UNWATCHED_TREE.test(basename(path));
+    if (!existsSync(resolve(app, 'app.json'))) return () => false;
     if (!skips.has(app)) {
       const ignored = notBuildInput(app);
-      skips.set(app, (path, isDir) => !INPUT_TREE.test(relative(app, path))
-        && (isDir ? UNWATCHED_TREE.test(basename(path)) || ignored(path) : ignored(path) || NOT_INPUT.test(basename(path))));
+      skips.set(app, (path, directory) => !INPUT_TREE.test(relative(app, path))
+        && (ignored(path) || (directory ? basename(path).startsWith('.') : NOT_INPUT.test(basename(path)))));
     }
     return skips.get(app);
   };
-  return [...new Set(paths.flatMap(p => {
-    let stat;
-    try { stat = statSync(p); } catch { return [shown(p)]; }
-    if (!stat.isDirectory()) return stat.mtimeMs > since ? [shown(p)] : [];
-    const dir = resolve(p);
-    // A recorded product is judged by its bytes (receiptChanges), so its entry in a directory's inventory is not.
-    return watchedChanges(since, dir, (path, isDir) => products.has(path) || skipFor(dir)(path, isDir), inventory, Boolean(packageTests(dir)));
-  }))];
+  const changed = [];
+  for (const root of paths) {
+    const output = watchOutput(outputs, [root]);
+    const ignored = skipFor(root), skip = (path, directory) => products.has(path) || ignored(path, directory);
+    const filtered = snapshot => ({...snapshot,
+      entries:snapshot.entries?.filter(({name, directory}) => !skip(resolve(snapshot.path, name), directory)) ?? null});
+    // Captured entries already exclude outputs. Resolving them against today's
+    // links would erase a source that has since been retargeted into an output.
+    const previousRoot = inventory.get(root);
+    let rootLink; try { rootLink = readlinkSync(root); } catch { /* not a link */ }
+    if (previousRoot && previousRoot.link !== rootLink) changed.push(shown(root));
+    for (const node of watchedTree([root], {outputs, skip})) {
+      const {path, info, link, snapshot, error, cycle} = node;
+      if (error) {
+        const previous = inventory.get(dirname(path))?.entries?.find(entry => entry.name === basename(path));
+        if (previous?.error !== error.code || previous?.link !== link) changed.push(shown(path));
+      } else if (snapshot) {
+        const previous = inventory.get(path);
+        if (previous) {
+          if (JSON.stringify(filtered(snapshot)) !== JSON.stringify(filtered(previous))) changed.push(shown(path));
+        } else if (info.mtimeMs > since) {
+          // Without an inventory, a skipped entry's birth can explain a directory's newer mtime.
+          let created = -Infinity;
+          for (const entry of directoryInputSnapshot(path).entries ?? []) {
+            const child = resolve(path, entry.name);
+            if (skip(child, entry.directory) || output(child, entry.directory)) {
+              try { created = Math.max(created, statSync(child).birthtimeMs || -Infinity); } catch { /* gone */ }
+            }
+          }
+          if (packageTests(path) || info.mtimeMs > created + 1) changed.push(shown(path));
+        }
+      } else if (!cycle && ((inventory.has(path) && inventory.get(path).error !== 'ENOTDIR') || info.mtimeMs > since)) changed.push(shown(path));
+      if (link !== undefined && !inventory.has(path) && lstatSync(path).mtimeMs > since) changed.push(shown(path));
+    }
+  }
+  return [...new Set(changed)];
 }
 
-const UNWATCHED_TREE = /^(target|node_modules|\..*)$/;
-/** Package directories compare filtered entry inventories, so creating or deleting tests cannot mask a production
- * entry change. Without an inventory their directory mtimes are conservative. App watches also excuse a generated
- * entry's birth: writing `app.contract.d.ts` after a native build moves the app directory's mtime without changing
- * that build. A later write to such an entry explains nothing; a filesystem without birth times excuses nothing. */
-function watchedChanges(since, dir, skip, inventory, packaged) {
-  const out = [];
-  const walk = at => {
-    const previous = inventory.get(at);
-    let entries;
-    if (previous) {
-      const current = directoryInputSnapshot(at);
-      const filtered = snapshot => ({...snapshot,
-        entries:snapshot.entries?.filter(({name, directory}) => !skip(resolve(at, name), directory)) ?? null});
-      if (JSON.stringify(filtered(current)) !== JSON.stringify(filtered(previous))) out.push(shown(at));
-      entries = current.entries;
-      if (!entries) return;
-    } else {
-      try { entries = readdirSync(at, {withFileTypes:true}); } catch { return; }
-    }
-    let created = -Infinity;
-    for (const e of entries) {
-      const path = resolve(at, e.name);
-      let stat; try { stat = statSync(path); } catch { continue; }
-      const isDir = stat.isDirectory();
-      if (skip(path, isDir)) created = Math.max(created, stat.birthtimeMs || -Infinity);
-      else if (isDir) walk(path);
-      else if (stat.mtimeMs > since) out.push(shown(path));
-    }
-    // The directory's mtime lands a few microseconds after the entry's birth.
-    const mtime = statSync(at).mtimeMs;
-    if (!previous && mtime > since && (packaged || mtime > created + 1)) out.push(shown(at));
-  };
-  walk(dir);
-  return out;
+/** Cargo's dep-info uses the matching completed bake's inventories and output roots when available. */
+export function depInfoChanges(bin, app = null) {
+  if (!existsSync(bin)) return [];
+  const build = app ? readBuilds(app).find(build => build.products?.some(product => resolve(product.path) === resolve(bin) && product.sha256 === fileDigest(bin))) : null;
+  const directories = [...(build?.watchedDirectories ?? []), ...(build?.linkedInputs?.watchedDirectories ?? [])];
+  const products = new Map((build?.products ?? []).map(product => [resolve(product.path), product.sha256]));
+  const outputs = build?.binary?.watchOutputs ?? (app ? [app.target, bakeOutput(app)] : []);
+  return depInfoNewer(statSync(bin).mtimeMs, bin, undefined, app?.workspace, directories, products, outputs);
 }
-
-/** Cargo's dep-info beside a binary: every source input newer than the binary, or gone. */
-export const depInfoChanges = bin => existsSync(bin) ? depInfoNewer(statSync(bin).mtimeMs, bin) : [];
 
 /** The settings the native build `bin` of `app` inlined (LLP 1153 D4) whose sources give them otherwise now, as
  * `import.meta.env.NAME`: a change no file shows, which only a rebuild takes in. What it inlined is the record bound to
@@ -923,7 +929,7 @@ function packagedProductChanges(build, directory, app) {
 
 /** The plans a development bake of this app left a source map beside (LLP 1012.001.000 D6), as `sourceMapReader` locators: the Linux binary's own (its dep-info names the plan in OUT_DIR) and each platform's in the bake output (Apple, web). Which one describes the running plan is the reply's digest's to say. */
 export function bakedPlans(linuxBin, bakeDir) {
-  const out = depInfoInputs(linuxBin).filter(p => p.endsWith('/out/app.plan'));
+  const out = depInfoInputs(linuxBin).filter(p => /[\\/]out[\\/]app\.plan$/.test(p));
   try { for (const f of readdirSync(bakeDir)) if (f.endsWith('.plan.map.json')) out.push(resolve(bakeDir, f.slice(0, -'.map.json'.length))); } catch {}
   return out.filter(p => existsSync(p + '.map.json'));
 }
@@ -958,7 +964,14 @@ export function newerThan(since, roots, skip = () => false) {
       else if (e.isFile() && statSync(path).mtimeMs > since) out.push(shown(path));
     }
   };
-  for (const root of roots) typeof root === 'string' ? walk(root, true) : walk(root.shallow, false);
+  for (const root of roots) {
+    if (root.file) {
+      const info = statSync(root.file, { throwIfNoEntry: false });
+      // A recorded file now gone is a change by its digest (webChanges), not by its time.
+      if (info?.mtimeMs > since) out.push(shown(root.file));
+    } else if (typeof root === 'string') walk(root, true);
+    else walk(root.shallow, false);
+  }
   return out;
 }
 
@@ -974,9 +987,9 @@ export function gitIgnored(dir, keep = []) {
   const paths = listed.status === 0 ? listed.stdout.split('\0').filter(Boolean).map(p => resolve(dir, p)) : [];
   if (!paths.length) return () => false;
   // Files, not directories: an ignored directory is still walked for what the bake captures in it.
-  const under = (path, roots) => roots.some(p => path === p || path.startsWith(p + '/'));
+  const under = (path, roots) => roots.some(p => within(p, path));
   return path => under(path, paths) && !under(path, keep) &&
-    !statSync(path, { throwIfNoEntry: false })?.isDirectory() && !BUILD_SOURCE.test(relative(dir, path));
+    !statSync(path, { throwIfNoEntry: false })?.isDirectory() && !BUILD_SOURCE.test(slashRelative(dir, path));
 }
 
 // What an agent leaves in an app as it works — a screenshot, a log, notes, a
@@ -999,43 +1012,6 @@ const TEST_FILE = /(^|\/)[^/]*\.test\.(?:m?js|ts|rs|contract)$/;
 // fresh is worse than a rebuild.
 const HELPER = /\.(?:sh|ops)$/;
 const SCRIPT_TREE = /^(logic|data|gpu|render|art|assets|deck|modules)(\/|$)/;
-// What app.ts reaches (LLP 1116.003 D1.1). The bake captures every TypeScript
-// and JSON file but type-checks and bundles from the entry alone (its tsconfig's
-// `files` is `__exact_entry.ts`, which imports app.ts: js/bake/src/typescript.mjs),
-// so a file app.ts never imports — a backend the app reaches only over HTTP
-// (round 5's book-club `server/index.ts`), a script — is no build's input. Read
-// by scanning each source's module specifiers (type-only imports and references
-// included) and taking every file a relative one can resolve to as the bake's
-// resolution would, a `typescript.sources` mount as if beside app.ts under its
-// name: over-inclusion costs only a rebuild. Null (every TypeScript file counts)
-// without an app.ts, or when tsconfig maps bare specifiers (`paths`, `baseUrl`).
-const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*|<reference\s+path\s*=\s*)(['"])([^'"\n]+)\1/g;
-export const MODULE_FILE = /\.(tsx?|[cm]?js|json)$/;
-export const CONFIG_JSON = /^(app|package|jsconfig|tsconfig[^/]*)\.json$/;
-/** The declarations the bake writes beside app.ts: its output, never an input. */
-export const DECLARATIONS = 'app.contract.d.ts';
-/** The files app.ts imports, transitively (and itself), by path; or null. */
-export function moduleGraph(dir, manifest) {
-  const entry = resolve(dir, 'app.ts');
-  if (!existsSync(entry)) return null;
-  try { if (/"(paths|baseUrl)"\s*:/.test(readFileSync(resolve(dir, 'tsconfig.json'), 'utf8'))) return null; } catch {}
-  const mounts = Object.entries(manifest?.typescript?.sources ?? {}).map(([name, path]) => [resolve(dir, name), resolve(dir, String(path))]);
-  const disk = path => { for (const [at, real] of mounts) if (path === at || path.startsWith(at + '/')) return real + path.slice(at.length); return path; };
-  const graph = new Set(), seen = new Set(), queue = [entry];
-  while (queue.length) {
-    const at = queue.pop(), file = disk(at);
-    let isFile = false; try { isFile = statSync(file).isFile(); } catch {}
-    if (seen.has(at) || !isFile) continue;
-    seen.add(at); graph.add(file);
-    if (!/\.(tsx?|[cm]?js)$/.test(file)) continue;
-    for (const [, , spec] of readFileSync(file, 'utf8').matchAll(SPECIFIER)) {
-      if (!spec.startsWith('.')) continue;
-      const base = resolve(dirname(at), spec), stem = base.replace(/\.(m?js|jsx)$/, '');
-      queue.push(base, ...['.ts', '.tsx', '.d.ts', '.json', '/index.ts', '/index.tsx', '/index.d.ts'].map(end => base + end), ...['.ts', '.tsx', '.mts', '.d.ts'].map(end => stem + end));
-    }
-  }
-  return graph;
-}
 
 /** A skip for an app's own files that no build reads. A file a build can
  * read always counts, ignored by Git or not: what the bake captures, anything
@@ -1043,24 +1019,27 @@ export function moduleGraph(dir, manifest) {
  * app's Rust crates (which can `include_bytes!` any file beside them), and
  * what `app.json` names (an icon). Shots, tools, repros and test files never
  * count (LLP 1012: a drive refuses a stale build, not an agent's notes), nor
- * TypeScript or JSON app.ts never imports (`moduleGraph`). Of the rest, a
+ * TypeScript or JSON app.ts never imports (`moduleGraph`), nor, given the
+ * `.contract` files a build compiled (`contracts`, its receipt's), another
+ * one: the compiler compiles what app.contract reaches. Of the rest, a
  * helper script outside a script tree, a gitignored file, or a picture, log,
  * note, export or saved world is not an input. */
-export function notBuildInput(dir, keep = []) {
+export function notBuildInput(dir, keep = [], contracts = null) {
   const ignored = gitIgnored(dir, keep);
-  const under = (path, roots) => roots.some(p => path === p || path.startsWith(p + '/'));
+  const under = (path, roots) => roots.some(p => within(p, path));
   let manifest = ''; try { manifest = readFileSync(resolve(dir, 'app.json'), 'utf8'); } catch {}
   let parsed = {}; try { parsed = JSON.parse(manifest); } catch {}
   const graph = moduleGraph(dir, parsed);
   const inCrate = path => {
-    for (let at = dirname(path); at.startsWith(dir + '/'); at = dirname(at)) if (existsSync(resolve(at, 'Cargo.toml'))) return true;
+    for (let at = dirname(path); at !== dir && within(dir, at); at = dirname(at)) if (existsSync(resolve(at, 'Cargo.toml'))) return true;
     return false;
   };
   return path => {
-    const rel = relative(dir, path);
+    const rel = slashRelative(dir, path);
     if ((AGENT_TREE.test(rel) && !under(path, keep)) || TEST_FILE.test(rel) || rel === DECLARATIONS) return true;
     const native = INPUT_TREE.test(rel) || under(path, keep) || inCrate(path) || manifest.includes(rel);
     if (graph && MODULE_FILE.test(rel) && !CONFIG_JSON.test(rel) && !native && !graph.has(path)) return true;
+    if (contracts && rel.endsWith('.contract') && rel !== 'app.contract' && !native && !contracts.has(path)) return true;
     if (BUILD_SOURCE.test(rel) || native) return false;
     if (HELPER.test(rel) && !SCRIPT_TREE.test(rel)) return true;
     return OUTPUT.test(rel) || ignored(path);
@@ -1119,7 +1098,9 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   // A file edited while the build ran is newer than what it read, though older than the receipt written at its end
   // (LLP 1116.008 D2): the build's own start bounds it, else (an older receipt) the receipt's time.
   const since = Math.min(statSync(receipt).mtimeMs, Date.parse(started) || Infinity);
-  const ignored = notBuildInput(app.dir, shaderWatchRoots(app));
+  // A Contract file the build did not compile (one no `use` reaches) is no input of it; a receipt without the list keeps all.
+  const compiled = build?.graph?.contractSources;
+  const ignored = notBuildInput(app.dir, shaderWatchRoots(app), compiled?.length ? new Set(compiled.map(path => resolve(path))) : null);
   // A game's proof, pins and helper scripts are not native inputs either
   // (game/proof.mjs shares gameNonInput). A non-game keeps every real source.
   const game = path => Boolean(app.manifest?.game) && gameNonInput(relative(app.dir, path));
@@ -1138,7 +1119,7 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   const info = infos.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   // It names every source the bake captured (its rerun-if-changed): of the app's own, those the
   // walk above skips are no input here either (a backend app.ts never imports); one gone still counts.
-  const skipped = path => { const at = resolve(ROOT, path); return at.startsWith(app.dir + '/') && existsSync(at) && skip(at); };
+  const skipped = path => { const at = resolve(ROOT, path); return within(app.dir, at) && existsSync(at) && skip(at); };
   // A file the build wrote and then read (a game's generated shells, declarations and baked assets; the GPU dylib it
   // signs beside Cargo's) postdates the build's start by construction. The receipt records the bytes the host compile
   // read or the bundle captured (captureAppleProduct): those decide, not its time. Every other input keeps the
@@ -1151,6 +1132,7 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   // (`linkedInputs`) what it read. Its `inputs.json` is the latest bake's, which may be a later, failed build's.
   // A receipt without that copy says nothing of what its bake read: the build is stale.
   let baked = [], missing = [], unread = [], directories = build?.watchedDirectories ?? [];
+  const outputs = build?.binary?.watchOutputs ?? [app.target];
   if (build?.linkedPlan) {
     const record = build.linkedInputs;
     if (record) {
@@ -1161,41 +1143,41 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   }
   // Absence recorded by Cargo or the linked bake is unchanged while absent; first creation counts even at an old mtime.
   const absent = new Set([...(build?.binary?.missing ?? []), ...missing]), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
-  const tools = info ? [...depInfoNewer(since, null, info, app.workspace, directories, products), ...watchedNewer(since, baked, directories, products)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
+  const tools = info ? [...depInfoNewer(since, null, info, app.workspace, directories, products, outputs), ...watchedNewer(since, baked, directories, products, outputs)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
   return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build) : []), ...own.filter(path => !products.has(resolve(ROOT, path))), ...tools, ...unread, ...replaced])];
 }
 
-/** A web `dist/`: app and shared runtime sources newer than its build marker.
- * Both are build inputs and both refuse a drive; the split makes diagnostics
- * and tests able to say which side changed without weakening that rule. */
-/** Whether a path inside a game (relative to its directory) is not a build input:
- * its proof, pins, documents, tests, shots, tools, repros, and helper scripts
- * outside the built trees. The proof's input digest (game/proof.mjs), the web
- * staleness check and a game's native receipt share it. */
 /** What a web build of `app` reads, modified after `since` (every file by default):
- * the app's own files and the shared host/runtime roots, as shown paths. */
-export function webInputs(app, js, since = -Infinity) {
+ * the app's own files and the build's Cargo dependency roots, as shown paths. */
+export function webInputs(app, js, since = -Infinity, roots = webSourceRoots(app, js)) {
+  // Each package is a root of its own; an enclosing package does not consume its other nested crates.
+  const dependencies = () => newerThan(since, roots, path => existsSync(resolve(path, 'Cargo.toml')));
   if (app.manifest?.game) {
     const files = proofInputFiles(ROOT, app.dir).map(file => resolve(ROOT, file));
     const admitted = since === -Infinity ? files : files.filter(file => statSync(file).mtimeMs > since);
-    return {app:admitted.filter(file => file.startsWith(app.dir + '/')), shared:admitted.filter(file => !file.startsWith(app.dir + '/'))};
+    const extra = dependencies().map(file => resolve(ROOT, file));
+    const all = [...new Set([...admitted, ...extra])];
+    return {app:all.filter(file => within(app.dir, file)), shared:all.filter(file => !within(app.dir, file))};
   }
-  const roots = js ? ['host/web-js', 'contract', 'plan', 'kernel/tables', { shallow: 'host/web' }, 'host/web/navigation'] : ['host/web', 'runner', 'kernel', 'svg-filter', 'plan', 'motion', 'num', 'contract'];
   const ignored = notBuildInput(app.dir, shaderWatchRoots(app));
   const notInput = path => Boolean(app.manifest?.game) && gameNonInput(relative(app.dir, path));
   const backend = resolve(app.dir, '.exact/backend-origin');
   const hosts = otherHosts(app, ['web']);
   const appFiles = newerThan(since, [app.dir], path => hosts(path) || ignored(path) || notInput(path));
-  const shared = newerThan(since, roots.map(r => typeof r === 'string' ? resolve(ROOT, r) : { shallow: resolve(ROOT, r.shallow) }));
+  const extra = dependencies();
+  // A file the compiler or a build script recorded reading is an input whatever its name (`include_str!` of a `.txt`).
+  const recorded = new Set(roots.filter(root => root.file).map(root => resolve(root.file)));
+  appFiles.push(...extra.filter(path => within(app.dir, resolve(ROOT, path)) && (recorded.has(resolve(ROOT, path)) || !ignored(resolve(ROOT, path)))));
+  const shared = extra.filter(path => !within(app.dir, resolve(ROOT, path)));
   // Absence is an input too: removing a selection must invalidate its bake.
-  appFiles.push(backend);
-  return { app: appFiles, shared };
+  if (since === -Infinity || statSync(backend, { throwIfNoEntry: false })?.mtimeMs > since) appFiles.push(backend);
+  return { app: [...new Set(appFiles)], shared: [...new Set(shared)] };
 }
 const contentDigest = path => { try { return createHash('sha1').update(readFileSync(resolve(ROOT, path))).digest('hex'); } catch { return null; } };
 /** Content digests of every input of a web build, recorded in its marker, with each setting app.json declares
  * (`import.meta.env.NAME`: its value and source, LLP 1153 D4). */
-export function webInputDigests(app, js) {
-  const { app: own, shared } = webInputs(app, js);
+export function webInputDigests(app, js, roots) {
+  const { app: own, shared } = webInputs(app, js, -Infinity, roots);
   return {...Object.fromEntries([...own, ...shared].map(path => [path, contentDigest(path)])), EXACT_BACKEND_ORIGIN: process.env.EXACT_BACKEND_ORIGIN ?? null, PORT: process.env.PORT ?? null, ...settingsOf(app)};
 }
 const setting = key => key.startsWith('import.meta.env.');
@@ -1206,19 +1188,24 @@ const settingsOf = app => settingInputs(app, process.env, app.manifest?.env?.len
 export const builtSettingLines = dist => { try { return settingLines(JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')).env); } catch { return []; } };
 /** Inputs whose content changed since the build in `dist`. Modification times only
  * nominate candidates; a checkout that rewrote a file with its own bytes is not a
- * change. A marker without digests (an older build) trusts the times. */
+ * change. A marker without digests (the dev loop's) trusts the times, over the roots
+ * the build would read now: recording them would cost each of its rebuilds a Cargo query. */
 export function webChanges(dist, app) {
   const marker = resolve(dist, '.exact-build.json');
   if (!existsSync(marker)) return { app: [], shared: [], all: [] };
   const built = JSON.parse(readFileSync(marker, 'utf8'));
+  if (built.inputs && !built.inputRoots) return { app: [], shared: [shown(marker)], all: [shown(marker)] };
   const changed = path => !built.inputs || built.inputs[path] !== contentDigest(path);
   // Candidates: what changed since the build read its inputs (`inputsAt`, as it started, less the file
   // system's clock grain), else since its marker.
   const since = typeof built.inputsAt === 'number' ? built.inputsAt - 2000 : statSync(marker).mtimeMs;
-  const { app: own, shared: roots } = webInputs(app, built.target === 'js', since);
+  let inputRoots = built.inputRoots;
+  // A root query that fails (Cargo's lock, a manifest) leaves the build unverified: the build says why.
+  if (!inputRoots) try { inputRoots = webSourceRoots(app, built.target === 'js'); } catch { return { app: [], shared: [shown(marker)], all: [shown(marker)] }; }
+  const { app: own, shared: roots } = webInputs(app, built.target === 'js', since, inputRoots);
   const appChanges = own.filter(changed), shared = roots.filter(changed);
   // A file the build read that is gone since (a source deleted) is a change too: absence is an input.
-  for (const path of Object.keys(built.inputs ?? {})) if (!['EXACT_BACKEND_ORIGIN', 'PORT'].includes(path) && !setting(path) && built.inputs[path] !== null && !appChanges.includes(path) && !existsSync(resolve(ROOT, path))) (resolve(ROOT, path).startsWith(`${app.dir}/`) ? appChanges : shared).push(path);
+  for (const path of Object.keys(built.inputs ?? {})) if (!['EXACT_BACKEND_ORIGIN', 'PORT'].includes(path) && !setting(path) && built.inputs[path] !== null && !appChanges.includes(path) && !existsSync(resolve(ROOT, path))) (within(app.dir, resolve(ROOT, path)) ? appChanges : shared).push(path);
   if ((built.inputs?.EXACT_BACKEND_ORIGIN ?? null) !== (process.env.EXACT_BACKEND_ORIGIN ?? null)) appChanges.push('EXACT_BACKEND_ORIGIN');
   if ((built.inputs?.PORT ?? null) !== (process.env.PORT ?? null)) appChanges.push('PORT');
   // A setting whose value or source moved, one the build read and is no longer declared, or one declared since.

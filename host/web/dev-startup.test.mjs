@@ -6,7 +6,7 @@ import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
-import { stopBuildTree } from './dev-startup.mjs';
+import { claimDevLoop, stopBuildTree } from './dev-startup.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 afterEach(() => stopAll());
@@ -57,7 +57,9 @@ mock.module(${JSON.stringify(resolve(root, 'host/web/dev-startup.mjs'))}, () => 
 }));
 mock.module(${JSON.stringify(resolve(root, 'scripts/rust.mjs'))}, () => ({ ...rust, rustInputs: () => [] }));
 mock.module(${JSON.stringify(resolve(root, 'host/web/serve.mjs'))}, () => ({ ...serve,
-  syncStaticTree: () => false, applyShaderTreeChange: () => {},
+  syncStaticTree: () => false,
+  // The resident checks the served shaders at startup, reaching the reflect tool's build when it is missing.
+  applyShaderTreeChange: (app, target, validate) => { if (process.env.FIXTURE_PHASE === 'reflect') validate(target); },
 }));
 mock.module('node:child_process', () => ({ ...children,
   spawn(command, args, options) {
@@ -67,16 +69,20 @@ mock.module('node:child_process', () => ({ ...children,
     else if (args[0]?.endsWith('/scripts/rust.mjs')) kind = 'rust';
     else if (args.includes('inspect-table')) kind = 'inspect';
     else if (command === 'cargo' && args.includes('exact-js-bake')) kind = 'module-build';
+    else if (command.endsWith('/exact-js-bake')) kind = 'module';
     else if (command === 'cargo' && args.includes('exact-web-js')) kind = 'reader';
+    else if (command === 'cargo' && args.includes('exact-gpu-reflect')) kind = 'reflect';
     else if (command === 'cargo' && args.some(a => /-gpu(?:-extra)?$/.test(a))) kind = 'gpu';
     else if (command === 'cargo' && args[0] === 'run') kind = 'producer';
     if (!kind) throw new Error('unexpected tool: ' + command + ' ' + args.join(' '));
+    if (kind.startsWith('module')) writeFileSync(process.env.FIXTURE_DIR + '/.' + kind + '.json', JSON.stringify({ command, args }));
     const child = spawn(process.execPath, [process.env.FIXTURE_TOOL, kind, ...args], options);
     appendFileSync(process.env.FIXTURE_DIR + '/.pids', child.pid + '\\n');
     return child;
   },
   spawnSync(command, args, options) {
     if (command === 'cargo' && args.includes('exact-js-bake')) return spawnSync(process.execPath, [process.env.FIXTURE_TOOL, 'module-build'], options);
+    if (command === 'cargo' && args.includes('exact-gpu-reflect')) return spawnSync(process.execPath, [process.env.FIXTURE_TOOL, 'reflect'], options);
     if (command !== 'cargo' || (args[0] !== 'metadata' && !args.includes('sources'))) return spawnSync(command, args, options);
     const value = args[0] === 'metadata' ? { packages: [] } : { sources: [], consulted: [], packages: [] };
     return { status: 0, stdout: JSON.stringify(value), stderr: '' };
@@ -92,6 +98,8 @@ import { replaceBuild } from ${JSON.stringify(resolve(root, 'host/web/serve.mjs'
 const dir = process.env.FIXTURE_DIR, dist = process.env.EXACT_WEB_DIST;
 const kind = process.argv[2];
 appendFileSync(resolve(dir, '.pids'), process.pid + '\\n');
+if (kind === 'module-build' && process.env.FIXTURE_PHASE === 'module') process.exit(0);
+if (kind === 'reflect' && process.env.FIXTURE_PHASE !== 'reflect') process.exit(0);
 if (kind === 'host' && !existsSync(resolve(dir, '.built'))) {
   mkdirSync(dist, { recursive: true });
   writeFileSync(resolve(dist, 'bake.json'), JSON.stringify({ version: 1, graph: { version: 1, sources: {} },
@@ -174,13 +182,13 @@ async function until(pass, what) {
   }
 }
 
-for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer', 'rebuild', 'module-build', 'mixed', 'reader', 'reader-handoff', 'queued-edit', 'inspect', 'gpu']) {
+for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer', 'rebuild', 'module-build', 'module', 'mixed', 'reader', 'reader-handoff', 'queued-edit', 'inspect', 'gpu', 'reflect']) {
   test(`shutdown on ${signal} during ${phase} owns its descendants and keeps dist`, async () => {
     const dir = mkdtempSync(resolve(root, 'dev-shutdown-')), dist = resolve(dir, 'dist');
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Shutdown', app: { id: 'test.shutdown', name: 'Shutdown' },
       ...(phase === 'mixed' ? { rust: { module: { package: 'fixture' } } } : {}),
       ...(phase === 'gpu' ? { gpu: { modules: { extra: ['extra'] } } } : {}) }));
-    if (['module-build', 'mixed'].includes(phase)) writeFileSync(resolve(dir, 'app.ts'), 'export const value = 1;');
+    if (['module-build', 'module', 'mixed'].includes(phase)) writeFileSync(resolve(dir, 'app.ts'), 'export const value = 1;');
     if (phase === 'gpu') for (const name of ['shared.rs', 'runtime.rs']) writeFileSync(resolve(dir, name), '// fixture\n');
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "shutdown"\n');
     writeFileSync(resolve(dir, 'preload.mjs'), preload);
@@ -220,6 +228,14 @@ for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer
       const ready = phase === 'reader-handoff' ? '.handoff' : phase === 'queued-edit' ? '.queued-signal'
         : '.ready-' + (phase === 'rebuild' ? 'host' : phase === 'mixed' ? 'module-build' : phase);
       await until(() => existsSync(resolve(dir, ready)) && (phase !== 'producer' || output.includes('TEST delay')), () => output + ' pids: ' + pids() + ' exit: ' + dev.exitCode + '/' + dev.signalCode);
+      if (phase === 'module') {
+        const build = JSON.parse(readFileSync(resolve(dir, '.module-build.json')));
+        expect(build.args).toContain('--profile');
+        expect(build.args[build.args.indexOf('--profile') + 1]).toBe('host-dev');
+        expect(build.args).not.toContain('--release');
+        const producer = JSON.parse(readFileSync(resolve(dir, '.module.json')));
+        expect(producer.command).toBe(resolve(env.CARGO_TARGET_DIR, 'host-dev/exact-js-bake'));
+      }
       if (phase === 'mixed') await until(() => existsSync(resolve(dir, '.ready-rust')), () => output);
       if (!['reader-handoff', 'queued-edit'].includes(phase)) dev.kill(signal);
       await until(() => dev.exitCode !== null || dev.signalCode !== null, () => output);
@@ -239,3 +255,20 @@ for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer
     }
   }, 40_000);
 }
+
+test('a frontend claim names its live owner, separates targets, and releases after a crash', async () => {
+  const dir=mkdtempSync(resolve(root,'dev-loop-claim-'));
+  let owner, wasm, next, child;
+  try {
+    owner=claimDevLoop(dir,'js'); owner.url('http://127.0.0.1:9876');
+    expect(()=>claimDevLoop(dir,'js')).toThrow(`already runs at http://127.0.0.1:9876 (pid ${process.pid})`);
+    wasm=claimDevLoop(dir,'wasm'); wasm.close(); owner.close();
+    const script=`import {claimDevLoop} from ${JSON.stringify(resolve(root,'host/web/dev-startup.mjs'))}; const claim=claimDevLoop(process.argv[1],'js'); claim.url('http://127.0.0.1:9877'); console.log('claimed'); setInterval(()=>{},1000);`;
+    child=spawnOwned(process.execPath,['-e',script,dir],{stdio:['ignore','pipe','pipe']});
+    await new Promise(ok=>child.stdout.once('data',ok));
+    expect(()=>claimDevLoop(dir,'js')).toThrow(`http://127.0.0.1:9877 (pid ${child.pid})`);
+    const exit=new Promise(ok=>child.once('exit',ok)); child.kill('SIGKILL'); await exit;
+    next=claimDevLoop(dir,'js'); next.url('http://127.0.0.1:9878');
+    expect(JSON.parse(readFileSync(resolve(dir,'.exact/web-js-loop.json'),'utf8')).url).toBe('http://127.0.0.1:9878');
+  } finally { next?.close(); wasm?.close(); owner?.close(); rmSync(dir,{recursive:true,force:true}); }
+});

@@ -169,6 +169,15 @@ extension NodeView {
         if old == nil { rules.name = "exact-column-rules"; host.insertSublayer(rules, at: 0) }
         rules.frame = host.bounds
         let c = channels("column_rule_color") ?? channels("text_color") ?? [0, 0, 0, 255]
+        // The records are where the kernel puts the columns' boxes; AppKit
+        // draws those boxes `kernelDocumentOrigin` to the left of that (its
+        // scroller is on the right where Taffy's right-to-left gutter is on
+        // the left), and the rules move with them.
+        #if os(macOS)
+        let dx = scroll?.kernelDocumentOrigin.x ?? 0
+        #else
+        let dx: CGFloat = 0
+        #endif
         rules.sublayers = zip(columns, columns.dropFirst()).compactMap { a, b in
             guard a.holds && b.holds else { return nil }
             // The gap's middle, whichever side the next column is on.
@@ -176,7 +185,7 @@ extension NodeView {
             let h = max(a.rect.height, b.rect.height)
             let y = rules.contentsAreFlipped() ? a.rect.minY : host.bounds.height - a.rect.minY - h
             let rule = CALayer()
-            rule.frame = CGRect(x: (left + right - width) / 2, y: y, width: width, height: h)
+            rule.frame = CGRect(x: (left + right - width) / 2 - dx, y: y, width: width, height: h)
             rule.backgroundColor = TextEngine.color(c).cgColor
             return rule
         }

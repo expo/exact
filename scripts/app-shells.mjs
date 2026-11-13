@@ -9,7 +9,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cargoEnvironment, pathFrom, patchLines } from './app.mjs';
 import { nativePackages } from './package-libraries.mjs';
@@ -18,8 +18,40 @@ import { APPLE_BUILD_SCRIPT, appleBuildScript } from './linked-plan.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
-/** The platforms a manifest can name, each with the crate that serves it. */
-export const PLATFORMS = { ios: 'apple', macos: 'apple', tvos: 'apple', linux: 'linux', android: 'android', windows: 'windows' };
+/** The platforms a manifest can name, each with the crate that serves it. An Apple TV build has no key of its own: it
+ * takes `host.ios` (scripts/app.schema.json). */
+export const PLATFORMS = { ios: 'apple', macos: 'apple', linux: 'linux', android: 'android', windows: 'windows' };
+/** SDK dependencies whose names app and game crates may not take. */
+export const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-painted', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
+
+/** Authored host crates own their identity. Otherwise package.json keeps the scaffold's prefix across directory
+ * and display-name changes; a caller's name or the folder supplies it for an app without a package manifest. */
+export function appCrateName(dir, fallback = basename(dir), title = null) {
+  const kinds = ['web', ...new Set(Object.values(PLATFORMS)), 'ios', 'macos', 'tvos'];
+  for (const kind of kinds) {
+    const file = resolve(dir, kind, 'Cargo.toml');
+    if (!existsSync(file)) continue;
+    try {
+      const name = Bun.TOML.parse(readFileSync(file, 'utf8')).package?.name;
+      if (name?.endsWith(`-${kind}`)) return name.slice(0, -kind.length - 1);
+    } catch { /* Cargo reports an invalid authored manifest. */ }
+  }
+  let name = fallback;
+  const pkg = resolve(dir, 'package.json');
+  if (existsSync(pkg)) {
+    const declared = JSON.parse(readFileSync(pkg, 'utf8')).name;
+    if (typeof declared === 'string' && declared.trim()) { name = declared; title = null; }
+  }
+  const normalize = value => {
+    const slug = value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app';
+    return /^[a-z]/.test(slug) ? slug : `app-${slug}`;
+  };
+  const collides = prefix => kinds.some(kind => SDK_CRATES.has(`${prefix}-${kind}`));
+  name = normalize(name);
+  if (collides(name) && title !== null) name = normalize(title);
+  return collides(name) ? `${name}-app` : name;
+}
 /** The platforms that hold an update store, so a stream (scripts/deploy.mjs), and Windows, whose host refuses every
  * store level but "0" (it has no update store yet, LLP 1115.004 D15) while an absent key reads as "A". */
 const STORED = ['ios', 'macos', 'linux', 'windows'];
@@ -174,6 +206,7 @@ include!(concat!(env!("OUT_DIR"), "/host.rs"));
     'Cargo.toml': `${header(`[[bin]]\nname = "${name}-linux"\npath = "src/main.rs"`)}ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
 exact-linux = ${dep('host/linux')}
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -187,7 +220,7 @@ ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { hatches: exact_hatches(), packages: exact_packages() };
+    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, composed));
 }
 `,
@@ -198,7 +231,7 @@ fn main() {
 [target.'cfg(target_os = "android")'.dependencies]
 ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
-exact-linux = ${dep('host/linux')}
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -224,7 +257,7 @@ mod android {
     ${module(false).replace(/\n(?=.)/g, '\n    ')}    include!(concat!(env!("OUT_DIR"), "/logic.rs"));
     include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
-    exact_linux::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
+    exact_painted::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
 }
 `,
   };
@@ -232,8 +265,8 @@ mod android {
     'Cargo.toml': `${header(`[[bin]]\nname = "${name}-windows"\npath = "src/main.rs"\ntest = false\nbench = false`)}ibex2-sqlite = ${dep('vendor/ibex/crates/ibex2-sqlite')}
 exact-logic = ${dep('logic')}
 exact-windows = ${dep('host/windows')}
-# The packages' Windows implementations name \`exact_linux::package\` (LLP 1133.022 D10 item 5).
-exact-linux = ${dep('host/linux')}
+# The packages' Windows implementations name \`exact_painted::package\` (LLP 1133.022 D10 item 5).
+exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 
 ${build}`,
@@ -250,7 +283,7 @@ ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { hatches: exact_hatches(), packages: exact_packages() };
+    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_windows::run_composed::<AppData>(${JSON.stringify(title)}, window(), PLAN, COMPAT, composed));
 }
 `,
@@ -268,6 +301,12 @@ export const authoredCrate = (dir, kind, name, title) =>
 export const copiedBuildScripts = () => Object.fromEntries(Object.values(PLATFORMS).concat('web').filter((kind, i, all) => all.indexOf(kind) === i)
   .map(kind => [kind, ['../../..', '..'].map(app => crateFiles(kind, { name: 'app', title: 'App', app, dep: () => '' })['build.rs'])]));
 
+/** How a generated workspace at `from` names a path in this checkout: always relative, with `/`. Unlike an authored
+ * workspace's (`pathFrom`), it is rewritten when the app or the checkout moves (its stamp names both), and a deploy's
+ * capture keeps the two trees' relative places, where a path into the live checkout would leave the capture. */
+const pathWithin = (from, to) =>
+  (relative(realpathSync(from), existsSync(to) ? realpathSync(to) : resolve(to)) || '.').split(sep).join('/');
+
 const titleOf = name => name.split('-').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
 const stampOf = (shells) => { try { return JSON.parse(readFileSync(resolve(shells, '.stamp.json'), 'utf8')); } catch { return null; } };
 
@@ -283,24 +322,23 @@ function writeChanged(path, text) {
  * checkout's path and the files the workspace copies from it, and this module. Returns the workspace directory and
  * whether anything was written. The lock is exact2's, re-resolved offline for these members; one this machine's cache
  * cannot resolve is left as the copy for the first build, which fetches (scripts/app.mjs `checkOutsideLock`).
- * The crates are `<name>-<kind>`: `name` is the one the app's exact.mjs passes, which another checkout of the app in a
- * folder of another name (a git worktree) shares; without one, the folder's. */
+ * The crates are `<name>-<kind>`, with the prefix `appCrateName` reads. */
 export function ensureShells(dir, manifest = readManifest(dir), name = null) {
   dir = realpathSync(dir);
-  name ??= basename(dir);
+  name = appCrateName(dir, name ?? basename(dir));
   const shells = shellsDir(dir), title = manifest.app?.name ?? manifest.name ?? titleOf(name);
   // The package that fills the native slot (LLP 1154 D3); the bake refuses two.
   const crates = shellCrates(manifest), native = nativePackages(dir).map(p => p.name);
-  // The paths written are relative where the two trees share a directory (`pathFrom`), which reads real directories.
+  // The paths written are relative (`pathWithin`), which reads real directories.
   for (const kind of crates) mkdirSync(resolve(shells, kind), { recursive: true });
   const copied = ['rust-toolchain.toml', '.cargo/config.toml'].map(file => [file, readFileSync(resolve(ROOT, file), 'utf8')]);
-  const patches = patchLines(shells);
-  // The inputs whose change rewrites the workspace: the checkout's path and commit, the templates (this module), the
-  // files copied from the checkout, its patch table and its lock (a dependency the SDK moved), the manifest's platforms,
-  // the app's name and the package that fills the native slot.
+  const patches = patchLines(shells, pathWithin);
+  // The inputs whose change rewrites the workspace: the app's path, the checkout's and its commit, the templates (this
+  // module), the files copied from the checkout, its patch table and its lock (a dependency the SDK moved), the
+  // manifest's platforms, the app's name and the package that fills the native slot.
   const commit = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() ?? '';
   const stamp = {
-    exact2: ROOT, commit, name, title, crates, native,
+    exact2: ROOT, app: dir, commit, name, title, crates, native,
     ...(Object.keys(manifest.preload ?? {}).length ? { preload: true } : {}),
     inputs: createHash('sha256').update([readFileSync(fileURLToPath(import.meta.url), 'utf8'), APPLE_BUILD_SCRIPT, ...copied.map(([, text]) => text), ...patches, readFileSync(resolve(ROOT, 'Cargo.lock'), 'utf8')].join('\0')).digest('hex'),
   };
@@ -325,7 +363,7 @@ ${patches.join('\n')}
 `);
   for (const [file, text] of copied) wrote = writeChanged(resolve(shells, file), text) || wrote;
   for (const kind of crates) {
-    const files = crateFiles(kind, { name, title, native: native.length > 0, preload: Object.keys(manifest.preload ?? {}).length > 0, app: '../../..', dep: path => `{ path = ${JSON.stringify(pathFrom(resolve(shells, kind), resolve(ROOT, path)))} }` });
+    const files = crateFiles(kind, { name, title, native: native.length > 0, preload: Object.keys(manifest.preload ?? {}).length > 0, app: '../../..', dep: path => `{ path = ${JSON.stringify(pathWithin(resolve(shells, kind), resolve(ROOT, path)))} }` });
     for (const [file, text] of Object.entries(files)) wrote = writeChanged(resolve(shells, kind, file), text) || wrote;
   }
   // A crate for a platform no longer named goes with its platform.
@@ -347,13 +385,13 @@ ${patches.join('\n')}
 /** What a native verb does before its build (LLP 1153 D1.2): when the manifest does not name `platform`, check that
  * platform's setup rows (`report`: the rows, or `{ error }` when they could not be read) and stop on a missing one,
  * nothing written; then name it, writing an app.json the app lacked. Then keep the generated workspace current unless
- * the app authored one, its crates named `name` (`ensureShells`). Returns the lines to say, or `{ refused }`. */
+ * the app authored one (`ensureShells`). Returns the lines to say, or `{ refused }`. */
 export async function bringPlatform(dir, platform, { report = null, os = process.platform, name = null } = {}) {
   const lines = [], verb = `bun exact.mjs ${platform === 'macos' ? 'mac' : platform}`;
   const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;
   if (!namesPlatform(manifest ?? {}, platform)) {
     if (platform === 'ios' && !['darwin', 'linux'].includes(os)) return { refused: `${verb}: iOS builds need macOS or Linux (use WSL on Windows); nothing was written` };
-    if (['macos', 'tvos'].includes(platform) && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
+    if (platform === 'macos' && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
     if (platform === 'windows' && os !== 'win32') return { refused: `${verb}: a Windows build needs Windows with the MSVC Rust target; nothing was written` };
     if (report?.error) return { refused: `${verb}: the setup report could not be read, so nothing was written: ${report.error}` };
     const missing = (report ?? []).filter(row => !row.ok);

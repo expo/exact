@@ -38,7 +38,7 @@ impl Lowerer<'_> {
                 let Expr::Number(ms, _) = &t.timer.0 else {
                     return Err(err_one(
                         "lower-timer-literal",
-                        format!("`{word}` needs a literal number of milliseconds (`{word}(1000, …)`). For a computed wait, gate an `every(frame, check)` task on waiting and have `check` compare `performanceNow()` with the wait; one that follows the tempo follows the transport (docs/contract-for-agents.md, \"Following the transport\")"),
+                        format!("`{word}` needs a literal number of milliseconds (`{word}(1000, …)`). For bounded retry backoff, use one gated task per step: `task retry1 when waiting and attempt == 1` with `after(250, again)`, then steps with `after(500, again)` and `after(1000, again)` (docs/contract-for-agents.md, \"Retry backoff\"). For a wait that follows a continuous value, gate an `every(frame, check)` task and compare `performanceNow()` with the wait; a tempo follows the transport (\"Following the transport\")"),
                         t.timer.2,
                     ));
                 };

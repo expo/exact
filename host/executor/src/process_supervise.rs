@@ -665,7 +665,10 @@ pub(crate) fn exec_file(
     }
 }
 
-/// An `execFile`'s answer, as js/src/process.js reads it.
+/// An `execFile`'s answer, as js/src/process.js reads it. Output is base64
+/// whatever its encoding, which the reader decodes: as JSON text a control
+/// byte takes six (`\u0000`), and a full pipe would pass the ceiling its
+/// request reserved for `maxBuffer` bytes.
 pub(crate) fn exec_reply(
     spec: &Spec,
     stdout: &[u8],
@@ -678,17 +681,11 @@ pub(crate) fn exec_reply(
         .into_iter()
         .find(|(_, bytes)| bytes.len() > spec.max_buffer)
         .map(|(name, _)| name);
-    let cut = |bytes: &[u8]| bytes[..bytes.len().min(spec.max_buffer)].to_vec();
-    let text = |bytes: Vec<u8>| {
-        if spec.utf8 {
-            json!(String::from_utf8_lossy(&bytes))
-        } else {
-            json!(exact_runner::agent::base64(&bytes))
-        }
-    };
+    let text =
+        |bytes: &[u8]| exact_runner::agent::base64(&bytes[..bytes.len().min(spec.max_buffer)]);
     super::reply(json!({
-        "stdout": text(cut(stdout)),
-        "stderr": text(cut(stderr)),
+        "stdout": text(stdout),
+        "stderr": text(stderr),
         "code": code,
         "signal": signal,
         "timedOut": timed_out,
@@ -731,5 +728,42 @@ mod tests {
         assert_eq!(decoder.flush(), "\u{fffd}");
         assert_eq!(decoder.flush(), "");
         assert_eq!(decoder.decode("valid €".as_bytes()), "valid €");
+    }
+
+    /// Two full pipes of any bytes answer within the ceiling the request
+    /// reserved (`data/src/process.rs`, `js/src/process.js`), in either
+    /// encoding and at the largest `maxBuffer`. As JSON text a control byte
+    /// took six (`\u0000`), and the reply was refused.
+    #[test]
+    fn two_full_pipes_of_any_bytes_answer_within_the_ceiling() {
+        for (max, bytes) in [
+            (100_000usize, &[0u8, b'"', 0xff, b'a'][..]),
+            (16 << 20, &[0u8][..]),
+        ] {
+            let ceiling = (2 * (4 * max.div_ceil(3)) + 65_536).min(64 << 20);
+            for encoding in ["utf8", "buffer"] {
+                let body = serde_json::json!({
+                    "kind": "execFile", "program": "path:t", "encoding": encoding, "maxBuffer": max,
+                });
+                let spec = super::super::Spec::parse(body.to_string().as_bytes(), None).unwrap();
+                for &byte in bytes {
+                    let out = vec![byte; max];
+                    let reply = super::exec_reply(&spec, &out, &out, Some(0), None, false);
+                    let reply = crate::outcome::bounded_outcome(reply, ceiling);
+                    let exact_runner::Outcome::Response(reply) = reply else {
+                        panic!("{max} bytes of {byte:#x} as {encoding}: {reply:?}");
+                    };
+                    let j: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+                    for pipe in ["stdout", "stderr"] {
+                        let wire = exact_runner::agent::unbase64(j[pipe].as_str().unwrap());
+                        assert!(wire.as_deref() == Some(&out[..]), "{pipe}");
+                    }
+                    assert_eq!(
+                        (j["code"].as_i64(), &j["overflow"]),
+                        (Some(0), &serde_json::Value::Null)
+                    );
+                }
+            }
+        }
     }
 }

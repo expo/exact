@@ -870,20 +870,56 @@ final class WindowToolbarHost: NSObject, NSToolbarDelegate, NSToolbarItemValidat
         return available(node)
     }
 
-    /// Standard items have no `view`. Their exposed elements are the
-    /// toolbar's children, in item order, with spaces/separators omitted.
-    /// Set only accessibility state; AppKit's item stays enabled for input.
-    private func syncAccessibility() {
-        guard let window, let toolbar,
-              let bar = window.accessibilityChildren()?.compactMap({ $0 as? NSAccessibilityProtocol })
-                .first(where: { $0.accessibilityRole() == .toolbar }) else { return }
+    /// Only this session's installed toolbar is an inspection root.
+    var accessibilityRoot: NSView? {
+        guard let window, let toolbar, window.toolbar === toolbar else { return nil }
+        return window.accessibilityChildren()?.compactMap { $0 as? NSView }.first { $0.accessibilityRole() == .toolbar }
+    }
+
+    /// Standard items have no `view`. AppKit exposes their objects in item order,
+    /// omitting spaces and separators. Join by the projection's membership, never by a label.
+    var accessibilityItems: [(object: AnyObject, id: UInt32)] {
+        guard let toolbar, let bar = accessibilityRoot else { return [] }
         let spaces: Set<NSToolbarItem.Identifier> = [.space, .flexibleSpace, .sidebarTrackingSeparator, Self.listSeparatorIdentifier]
         let visible = (toolbar.visibleItems ?? toolbar.items).filter { !spaces.contains($0.itemIdentifier) }
-        let children = (bar.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityProtocol }
-        guard children.count == visible.count else { return }
+        let children = bar.accessibilityChildren() ?? []
+        guard children.count == visible.count else { return [] }
+        var joined: [(AnyObject, UInt32)] = []
+        if projected, let owner { joined.append((bar, owner.id)) }
         for (item, child) in zip(visible, children) {
-            guard let id = UInt32(exactly: item.tag), let node = presenter.views[id], items[id] === item,
-                  child.accessibilityLabel() == item.label else { continue }
+            let object = child as AnyObject
+            if item === segments.item, let list = segments.tablist {
+                joined.append((object, list))
+                var container = object
+                // The group's native radio group is behind its viewer and cell.
+                for _ in 0..<4 {
+                    guard let facts = Presenter.axFacts(container) else { break }
+                    if facts.role == NSAccessibility.Role.radioGroup.rawValue {
+                        if facts.children.count == segments.tabs.count {
+                            joined += zip(facts.children, segments.tabs).map { ($0 as AnyObject, $1) }
+                        }
+                        break
+                    }
+                    guard facts.children.count == 1 else { break }
+                    container = facts.children[0] as AnyObject
+                }
+            } else if item === search.item, let node = search.node {
+                joined.append((object, node.id))
+            } else if let id = items.first(where: { $0.value === item })?.key {
+                // By the item itself: a status readout's item carries no tag. An item with a view (a readout) is
+                // exposed as AppKit's viewer group around that view; the view is the authored element.
+                joined.append((item.view ?? object, id))
+            }
+        }
+        return joined
+    }
+
+    private func syncAccessibility() {
+        for (object, id) in accessibilityItems {
+            guard let node = presenter.views[id] else { continue }
+            let identifier = node.props["testId"]
+            if let element = object as? NSAccessibilityProtocol { element.setAccessibilityIdentifier(identifier) }
+            guard let item = items[id], let child = object as? NSAccessibilityProtocol else { continue }
             let enabled = item.isEnabled && !node.ariaUnavailable
             if child.isAccessibilityEnabled() != enabled { child.setAccessibilityEnabled(enabled) }
         }

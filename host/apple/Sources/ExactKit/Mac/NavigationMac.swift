@@ -245,6 +245,10 @@ final class NavigationHost {
     /// from (`Presenter.tabStart`). `aria-hidden` takes a node out of the
     /// accessibility tree only, and the focus stays, as in Chrome.
     func refreshInputGates(_ nodes: [NodeView]) {
+        // Nothing below changes what makes a node inert: the ancestors' answers are asked once, as a hit test asks them.
+        let outermost = NodeView.hitInert == nil
+        if outermost { NodeView.hitInert = [:] }
+        defer { if outermost { NodeView.hitInert = nil } }
         for node in nodes {
             let inert = node.inert
             let unreachable = inert || node.isHiddenOrHasHiddenAncestor
@@ -253,7 +257,9 @@ final class NavigationHost {
             let focused = responder.map { $0 === node || $0.isDescendant(of: node) || node.field?.currentEditor() === $0 } ?? false
             // The AX getter can traverse the legacy unsupported-attribute path
             // for non-elements; writing this property is cheaper than querying it.
-            node.setAccessibilityHidden(node.accessibilityInert || node.isHiddenOrHasHiddenAncestor || node.accessibilityHiddenByProp)
+            // Each write posts a notification, changed or not.
+            let hidden = node.accessibilityInert || node.isHiddenOrHasHiddenAncestor || node.accessibilityHiddenByProp
+            if node.accessibilityHiddenWritten != hidden { node.setAccessibilityHidden(hidden) }
             let enabled = !node.disabled && !inert
             if let field = node.field, field.isEnabled != enabled { field.isEnabled = enabled }
             let editable = enabled && node.props["editable"] != "false"

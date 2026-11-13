@@ -83,6 +83,10 @@ impl<D: DataSource> Host<D> {
                 self.run_dispatch(r, dispatch);
             }
         }
+        // A request the runner let go (newer arguments, a refresh, a target
+        // answered now) is never released; one it keeps for its effects is.
+        let runner = &self.runner;
+        self.requests.parked.retain(|_, r| runner.holds(r.ticket));
     }
 
     fn run_dispatch(&mut self, r: RequestOut, dispatch: Dispatch) {
@@ -114,5 +118,71 @@ impl<D: DataSource> Host<D> {
             committed |= matches!(self.runner.fulfill(ticket, outcome), Ok(Some(_)));
         }
         committed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::host::{Host, Mode};
+    use exact_plan::Value;
+    use exact_runner::{Answer, DataError, DataSource, Dispatch, Outcome, Request, Store};
+
+    /// Holds every call it is asked for until `release` names one.
+    #[derive(Default)]
+    struct Holding {
+        asked: u64,
+        release: Option<u64>,
+    }
+
+    impl DataSource for Holding {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            self.asked += 1;
+            Ok(Answer::Later(Request::continuation(self.asked)))
+        }
+        fn dispatch(&mut self, _: u64, _: &Store) -> Dispatch {
+            Dispatch::Held
+        }
+        fn release(&mut self, _: &Store) -> Vec<(u64, Dispatch)> {
+            let token = self.release.take();
+            token
+                .map(|t| vec![(t, Dispatch::Again)])
+                .unwrap_or_default()
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            _: Outcome,
+        ) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::Number(1.0)))
+        }
+    }
+
+    /// A held request newer arguments replaced goes with them; the one still
+    /// in flight stays parked, and runs when its source releases it.
+    #[test]
+    fn a_held_request_the_runner_let_go_is_not_kept() {
+        let plan = contract::compile(
+            "component App\n  state n = 0\n  state m = 0\n  resource item = item(n) as shape number\n  action bump\n    n = n + 1\n  action nudge\n    m = m + 1\n  view\n    text `${n}`\n",
+        )
+        .unwrap();
+        let mut host = Host::boot(plan, Holding::default(), Mode::Inline, 20, 4).unwrap();
+        assert_eq!(host.requests.parked.len(), 1);
+        for _ in 0..3 {
+            host.act("bump");
+        }
+        assert_eq!(host.runner.data().asked, 4);
+        let parked: Vec<u64> = host.requests.parked.keys().copied().collect();
+        assert_eq!(parked, [4], "only the request in flight is parked");
+        // A commit that changes nothing it reads keeps it, until released.
+        host.act("nudge");
+        assert!(host.requests.parked.contains_key(&4));
+        host.runner.data().release = Some(4);
+        host.act("nudge");
+        assert!(host.requests.parked.is_empty(), "a request released runs");
     }
 }

@@ -131,13 +131,14 @@ async function saveQuietly(id: string): Promise<Session> {
   return { ok: true, username: id, error: "saved" };
 }
 
-// One controller for every fetch (review r4a 7): a browser realm's fetch
-// watches its signal with a listener it removes when the fetch settles;
-// Hermes's watches through Ibex's own abort hooks and adds none.
+// A reused controller must not retain listeners after a fetch. Browser realms
+// listen on dependent signals; Hermes uses hooks and freezes the intrinsic,
+// so count only listeners on the supplied signal there.
 const reusedController = new AbortController();
 const listening = { added: 0, removed: 0 };
 {
-  const signal = reusedController.signal as any, add = signal.addEventListener, remove = signal.removeEventListener;
+  const signal = (Object.isFrozen(AbortSignal.prototype) ? reusedController.signal : AbortSignal.prototype) as any;
+  const add = signal.addEventListener, remove = signal.removeEventListener;
   signal.addEventListener = function (...args: unknown[]) { listening.added++; return add.apply(this, args); };
   signal.removeEventListener = function (...args: unknown[]) { listening.removed++; return remove.apply(this, args); };
 }
@@ -388,6 +389,21 @@ function answer(source: string, args: unknown[], store: Store): unknown {
     case "held": return fetch("https://api.castle.xyz/changes", (args[0] === "stream" || args[0] === "yes-stream"
       ? { exactHeld: args[0] === "stream" ? true : "yes", exactStream: (event: unknown) => event }
       : { exactHeld: args[0] === "true" ? true : args[0] === "false" ? false : args[0] }) as RequestInit).then(r => r.text(), (e: Error) => `refused: ${e.message}`);
+    case "prefetched": return fetch("https://api.castle.xyz/feed", {
+      ...(args[0] === "stream" ? { exactStream: (event: unknown) => event } : {}),
+      ...(args[0] === "file" ? { exactBodyTo: "app:/data/reply" } : {}),
+      ...(args[0] === "independent" ? { exactIndependentHttp: { maxResponseBytes: 1024 } } : {}),
+      get exactPrefetch() {
+        if (args[0] === "throws") throw new Error("prefetch getter");
+        return args[0] === "absent" ? undefined : args[0] === "false" ? false : args[0] === "number" ? 7 : args[0] === "null" ? null : true;
+      },
+    } as RequestInit).then(r => r.text(), (e: Error) => `${e instanceof TypeError ? "TypeError" : "Error"}: ${e.message}`);
+    case "preloaded": return fetch("https://api.castle.xyz/feed", args[0] === "absent" ? {} : {
+      get exactPreload() {
+        if (args[0] === "throws") throw new Error("preload getter");
+        return args[0] === "number" ? 7 : args[0] === "null" ? null : args[0];
+      },
+    } as RequestInit).then(r => r.text(), (e: Error) => `${e instanceof TypeError ? "TypeError" : "Error"}: ${e.message}`);
     case "cached": return fetch("https://api.castle.xyz/cache", args[0] === "absent" ? {} : {
       get cache() {
         if (args[0] === "throws") throw new Error("cache getter");

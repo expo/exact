@@ -96,7 +96,7 @@ final class Adapter: ExactSessionDelegate {
             case "light": app.appearance = NSAppearance(named: .aqua)
             default: app.appearance = ExactEnv.fixedAppearance
             }
-        case "openURL": open(args.first as? String ?? "", from: session) { session.answerOpenURL(args, opened: $0) }
+        case "openURL": open(args.first as? String ?? "", from: session, answer: session.openURLAnswer(args))
         // `window.close()` (studio diary R17): the window this session
         // shows, without asking its `beforeunload` again.
         case "close": windows.first { $0.session === session }?.close()
@@ -949,7 +949,7 @@ nonisolated(unsafe) var planRefusal: String?
 func agentReady() {
     guard agentReadable, !readySent else { return }
     readySent = true
-    Agent.reply(["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? NSNull()])
+    Agent.reply(["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? session.nativeArtifactFailure ?? NSNull()])
     Agent.startStdio(sessions: [("main", session)])
 }
 app.run()

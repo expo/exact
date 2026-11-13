@@ -5,7 +5,7 @@
 //! builder writes no Cargo manifest of its own.
 
 use super::readers::{self, Battery};
-use exact_linux::package::{json, Json};
+use exact_painted::package::{json, Json};
 use exact_windows::windows;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};

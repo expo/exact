@@ -420,14 +420,15 @@ fn an_authored_min_height_reaches_the_presenter() {
 
 /// A percentage minimum has no basis for an in-flow grouped row: its
 /// containing block is its section's card, as tall as its rows, so the
-/// kernel lays the row out as it would without one (CSS 2.2 §10.7), and the
+/// kernel treats it as zero (CSS 2.2 §10.7), replacing the sheet's row
+/// floor. The Mac's block padding can hide that difference. The
 /// host, reading the crossed percentage against 0, leaves UIKit's cell its
 /// own height.
 #[test]
 fn a_percentage_min_height_on_a_list_row_has_no_basis() {
-    let frame = |min: &str| {
+    let frame = |min: &str, padding: &str| {
         let plan = contract::compile(&format!(
-            "component App\n  view\n    column height=\"100%\"\n      list appearance=\"auto\" listStyle=\"inset-grouped\" height=400\n        section\n          button \"Row\" {min}testId=\"row\"\n"
+            "component App\n  view\n    column height=\"100%\"\n      list appearance=\"auto\" listStyle=\"inset-grouped\" height=400\n        section\n          button \"Row\" {min}{padding}testId=\"row\"\n"
         ))
         .unwrap();
         let (host, first) = Host::boot(
@@ -442,10 +443,19 @@ fn a_percentage_min_height_on_a_list_row_has_no_basis() {
         let crossed = op(&first, row).contains("\"min_height\":{\"pct\":50}");
         (host.runner().kernel().node(row).unwrap().frame, crossed)
     };
-    let (none, _) = frame("");
-    let (half, crossed) = frame("min-height=\"50%\" ");
-    assert_eq!(half, none, "laid out as it is without a minimum");
-    assert!(crossed, "the percentage crosses as written");
+    for padding in ["", "padding=0 "] {
+        let (none, _) = frame("", padding);
+        let (zero, _) = frame("min-height=0 ", padding);
+        let (half, crossed) = frame("min-height=\"50%\" ", padding);
+        assert_eq!(half, zero, "an unresolved percentage minimum is zero");
+        assert!(crossed, "the percentage crosses as written");
+        if !padding.is_empty() {
+            assert!(
+                half.height < none.height,
+                "the authored row replaces the platform floor"
+            );
+        }
+    }
 }
 
 #[test]

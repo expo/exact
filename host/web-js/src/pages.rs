@@ -2,16 +2,24 @@
 //! tells the renderers and the runtime about a route before any answer.
 use exact_plan::Plan;
 
-/// The locations rendered at build (`render=build` routes without parameters,
-/// and the not-found page), as JSON (LLP 1048.003 D5).
+/// Build routes: their locations or enumeration calls, as JSON (LLP 1048.003 D5).
 pub(super) fn build_pages(plan: &Plan) -> String {
     let rows: Vec<String> = plan
         .routes
         .iter()
-        .filter(|r| {
-            r.render == exact_plan::RenderPolicy::Build && !plan.str(r.pattern).contains(':')
-        })
+        .filter(|r| r.render == exact_plan::RenderPolicy::Build)
         .map(|r| {
+            if !plan.str(r.pages).is_empty() {
+                let args = exact_plan::Value::from_bytes(plan.bytes(r.pages_args)).unwrap();
+                let mut json = String::new();
+                exact_runner::instance::value_json(&args, &mut json);
+                return format!(
+                    "{{\"name\":{},\"pattern\":{},\"source\":{},\"args\":{json}}}",
+                    serde_json::to_string(plan.str(r.name)).unwrap(),
+                    serde_json::to_string(plan.str(r.pattern)).unwrap(),
+                    serde_json::to_string(plan.str(r.pages)).unwrap(),
+                );
+            }
             let location = if r.notfound {
                 "/404"
             } else {

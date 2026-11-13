@@ -126,6 +126,7 @@ test('tamber help lists every binding language', () => {
 });
 
 test('each verb\'s help names exactly the flags its script parses, in a short text', () => {
+  assert.match(helpText('android'), /--write-locks/, 'Android authors need the lock-writing command after a graph change');
   // The verbs' scripts and the flags each parses, read as caps.mjs reads them before a push (help-parity.mjs).
   for (const [verb, flags] of scriptFlags(ROOT)) assert.deepEqual([...knownFlags(verb).keys()].sort(), flags, `${verb}: the help's flags (documented and internal) against its script's`);
   for (const verb of Object.keys(HELP)) {

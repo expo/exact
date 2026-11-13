@@ -7,7 +7,8 @@
  * `#[ignore = "async lane: …"]`, every web host unit test found by one glob
  * and the script capture fixtures,
  * the web host's app-building document test in its own step, the web JS target's conformance run
- * (`host/web-js/conform.mjs --strict`), the separate game workspace and in-repo game tests,
+ * (`host/web-js/conform.mjs --strict`), the module seam and notifications web drives,
+ * the separate game workspace and in-repo game tests,
  * the UIKit XCTests on a simulator and the tvOS and watchOS compiles (`build.mjs
  * --tvos --no-install`, `--watchos --no-install`), the SVG and motion parity smokes' Linux legs, the
  * Contract semantics (`semantics/README.md`) as four checks — the Lean proofs,
@@ -52,7 +53,7 @@
  *
  * --newest makes the first lane coalesce the same way. Main outruns a check
  * that takes an hour (some 500 first-parent commits in 3.5 days, 2026-10-06),
- * so the lane on the mini runs `--newest --interval 3600` (Charlie, 2026-10-06).
+ * so the lane runs `--newest --interval 3600` (Charlie, 2026-10-06).
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
@@ -153,16 +154,21 @@ export function laneSelection(changed, { root = WT, full = false, repo } = {}) {
     webAx: WEB_AX.some(file => ids.has(`bun:${file.slice(2)}`)),
     conform: WEB_APPS.filter(app => ids.has(`conform:${app}`)),
     parity: PARITY.filter(smoke => ids.has(`parity:${smoke}`)),
+    moduleSeams: ids.has('drive:module-seams'), notificationsWeb: ids.has('drive:notifications-web'),
     ios: ids.has('xctest:ios'), iosOnly, touch: ids.has('touch:ios'), tvos: ids.has('compile:tvos'), watchos: ids.has('compile:watchos'),
   };
 }
 const WEB_AX = ['./host/web/tests/accessibility-tree.test.mjs', './host/web/tests/presence-preload.test.mjs', './host/web/tests/zero-viewport.test.mjs'];
 /** Every suite (a full run), as `laneSelection` gives it; `glue` is computed when it is not given. */
 export function everything(root = WT, glue) {
-  return { full: true, ids: [], cargo: [], game: true, glue: glue ?? glueTests(root), webBuild: true, webAx: true, conform: WEB_APPS, parity: PARITY, ios: true, iosOnly: null, touch: true, tvos: true, watchos: true };
+  return { full: true, ids: [], cargo: [], game: true, glue: glue ?? glueTests(root), webBuild: true, webAx: true,
+    conform: WEB_APPS, parity: PARITY, moduleSeams: true, notificationsWeb: true,
+    ios: true, iosOnly: null, touch: true, tvos: true, watchos: true };
 }
 /** No suite: what runs whatever changed. */
-export const nothing = () => ({ full: false, ids: [], cargo: [], game: false, glue: [], webBuild: false, webAx: false, conform: [], parity: [], ios: false, iosOnly: null, touch: false, tvos: false, watchos: false, lane: [] });
+export const nothing = () => ({ full: false, ids: [], cargo: [], game: false, glue: [], webBuild: false, webAx: false,
+  conform: [], parity: [], moduleSeams: false, notificationsWeb: false,
+  ios: false, iosOnly: null, touch: false, tvos: false, watchos: false, lane: [] });
 /** The checks a selection can leave out: a full run's that no suite's selection runs. */
 export const gated = () => {
   const names = selection => new Set(checks('', null, selection).map(([name]) => name));
@@ -237,6 +243,10 @@ export function checks(sha, since, selection = {}) {
     // The web build's JS target against the wasm runner, step by step (LLP
     // 1071 §4; Charlie, 2026-09-28): minutes and a network, so never blocking.
     ...when(conform.length, [['conform', 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--build', '--linux', '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--out', resolve(STATE_DIR, 'conform')]]]),
+    // These drives build their own external fixtures and launch the pinned Chromium (notifications needs its full
+    // build). Missing build tools or browsers fail the step; neither drive skips an unavailable prerequisite.
+    ...when(selection.moduleSeams, [['module-seams', 'env', [...required, 'bun', 'contract/cli/tests/bell/seams.mjs']]]),
+    ...when(selection.notificationsWeb, [['notifications-web', 'env', [...required, 'bun', 'packages/notifications/test/drive.mjs', 'web']]]),
     // `tree --ax` against Chrome's own tree (LLP 1080.002 §3), and the wasm
     // host's presence preload and zero-viewport recovery, over this commit's
     // Caltrain dists; a missing dist fails it.
@@ -275,13 +285,24 @@ export const changedPaths = (sha, since, diff) => diff(['diff', '-z', '--name-on
 // of skipping it.
 const required = ['EXACT_REQUIRED=1'];
 const DIST_DIR = resolve(STATE_DIR, 'dists');
+// The dists are made read-only once built, and the directory that holds them too. Every step that reads one shares
+// it, so a test that writes over one (a build or dev loop given the lane's EXACT_WEB_DIST) fails itself, by name, at
+// the build's lock beside the dist, instead of every test that reads the dist after it (2026-11-13: a JS build over
+// caltrain-wasm mid-glue failed some 30 tests as a "stale receipt"). A drive's lease beside a dist
+// (host/web/generations.mjs) is a reader's write, so each dist's `.leases` directory stays writable.
+const DISTS = ['caltrain-wasm', 'caltrain-js', 'fieldnotes'];
 export const prepareCheck = ['prepare', 'sh', ['-c', [
+  `if [ -d ${JSON.stringify(DIST_DIR)} ]; then chmod -R u+w ${JSON.stringify(DIST_DIR)}; fi`,
   `rm -rf ${JSON.stringify(DIST_DIR)} && mkdir -p ${JSON.stringify(DIST_DIR)}`,
   `EXACT_WEB_LINK=all EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'caltrain-wasm'))} bun host/web/build.mjs caltrain-web --wasm`,
   `EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'caltrain-js'))} bun host/web/build.mjs caltrain-web`,
-  `EXACT_WEB_LINK=all EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'fieldnotes'))} bun host/web/build.mjs fieldnotes-web`,
+  // apps/fieldnotes/web/tests/worker.rs drives a wasm build (its app.module.json and bake.json).
+  `EXACT_WEB_LINK=all EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'fieldnotes'))} bun host/web/build.mjs fieldnotes-web --wasm`,
   // The bounded feed's data, which host/web-js/lower-equal.test.mjs requires (LLP 1071.001 part B, B5).
   'bench/dioxus/prepare.sh',
+  `chmod -R a-w ${DISTS.map(d => JSON.stringify(resolve(DIST_DIR, d))).join(' ')}`,
+  `mkdir -p ${DISTS.map(d => JSON.stringify(resolve(DIST_DIR, `${d}.leases`))).join(' ')}`,
+  `chmod a-w ${JSON.stringify(DIST_DIR)}`,
 ].join(' && ')]];
 /** The dists a step reads, as its variables (`LANE_DISTS`). */
 const distsOf = step => LANE_DISTS.filter(d => d.steps.includes(step)).map(d => `${d.name}=${resolve(DIST_DIR, d.dist)}`);
@@ -399,8 +420,13 @@ export function failures(name, log, status) {
   // metrics rows: a VIOLATION, or a measurement whose build FAILED.
   if (name === 'metrics' || name === 'web-bytes') for (const m of log.matchAll(/^[ \t]+(\S[^\n]*?)[ \t]{2,}(?:FAILED\b|[^\n]*\bVIOLATION\b)/gm)) found.add(`${name}: ${m[1]} ${/\bVIOLATION\b/.test(m[0]) ? 'VIOLATION' : 'FAILED'}`);
   for (const m of log.matchAll(/Test Case '-\[(\S+) (\S+)\]' failed/g)) found.add(`${name}: ${m[1]} ${m[2]} failed`);
-  // xcodebuild's parallel testing names a failure by class and method only.
-  for (const m of log.matchAll(/^Test case '(\w+)\.(\w+)\(\)' failed on /gm)) found.add(`${name}: ExactKitTests.${m[1]} ${m[2]} failed`);
+  // xcodebuild's parallel testing names a failure by class and method only. A test it reports failed in 0.000 s did
+  // not run: its test process had crashed, and xcodebuild fails each test that process still held (2026-11-12: 377
+  // of them for 15 crashes in XCTest's own launch, "bundleProxyForCurrentProcess is nil"). Those are one failure, the
+  // crash; its xcresult says what crashed.
+  for (const m of log.matchAll(/^Test case '(\w+)\.(\w+)\(\)' failed on [^\n]*?(?:\((\d+\.\d+) seconds\))?$/gm)) {
+    found.add(m[3] !== undefined && Number(m[3]) === 0 ? `${name}: a test process crashed` : `${name}: ExactKitTests.${m[1]} ${m[2]} failed`);
+  }
   // Swift diagnostics by file and message: line numbers move with every edit.
   for (const m of log.replace(/\x1b\[[0-9;]*m/g, '').matchAll(/(?:^|\/)Sources\/(\S+?\.swift):\d+:\d+: error: (.+)$/gm)) found.add(`${name}: ${m[1]}: ${m[2].trim()}`);
   for (const m of log.matchAll(/^Diff in (\S+?):\d+:/gm)) found.add(`${name}: ${m[1].replace(WT + '/', '')} is not formatted`);

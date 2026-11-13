@@ -11,7 +11,9 @@
 // - Under the agent it is its own substitute (D8 item 4, §7): the item is
 //   kept in memory, never given to the browser.
 // - A later write supersedes one still reading its file or decoding, which
-//   fails `AbortError` (D2).
+//   fails `AbortError` (D2), and one waiting its turn at the browser: the
+//   browser is given one write at a time, in order, since the clipboard
+//   holds whichever of two overlapping writes settles last.
 
 const MOST_FILE = 64 * 1024 * 1024, MOST_BYTES = 2 * 1024 * 1024, MOST_PIXELS = 64_000_000, MOST_TEXT = 1024 * 1024;
 const TYPES = ['text/plain', 'image/png'];
@@ -41,7 +43,7 @@ const hex = buffer => [...new Uint8Array(buffer)].map(b => b.toString(16).padSta
 
 export function implementation({ agent, log, files }) {
   const say = line => log?.(`clipboard: ${line}`);
-  let latest = 0, inFlight = null, writes = 0, last = null, shownNumber = 0;
+  let latest = 0, inFlight = null, writes = 0, last = null, shownNumber = 0, browser = Promise.resolve();
   const refused = (error, message) => { say(`write refused: ${error} (${message})`); return { error, message }; };
 
   /** A new PNG of `bytes`' pixels, or a refusal. */
@@ -101,14 +103,23 @@ export function implementation({ agent, log, files }) {
       png = source ? await sanitized(source) : null;
       const stop = ended();
       if (stop) return stop;
+      if (png?.error) return png;
+      if (!agent) {
+        const data = {};
+        if (png) data['image/png'] = png.blob;
+        if (text != null) data['text/plain'] = new Blob([text], { type: 'text/plain' });
+        // After the browser write before it settles; a write superseded while it waits is never given to the browser.
+        const before = browser;
+        let settled;
+        browser = new Promise(ok => { settled = ok; });
+        try {
+          await before;
+          const stop = ended();
+          if (stop) return stop;
+          await navigator.clipboard.write([new ClipboardItem(data)]);
+        } catch (e) { return refused(e?.name ?? 'NotAllowedError', e?.message ?? String(e)); } finally { settled(); }
+      }
     } finally { if (inFlight === mine) inFlight = null; }
-    if (png?.error) return png;
-    if (!agent) {
-      const data = {};
-      if (png) data['image/png'] = png.blob;
-      if (text != null) data['text/plain'] = new Blob([text], { type: 'text/plain' });
-      try { await navigator.clipboard.write([new ClipboardItem(data)]); } catch (e) { return refused(e?.name ?? 'NotAllowedError', e?.message ?? String(e)); }
-    }
     writes++;
     const shown = { types: [...(text != null ? ['text/plain'] : []), ...(png ? ['image/png'] : [])], pasteboard: agent ? 'memory' : 'navigator.clipboard' };
     if (text != null) shown.text = text.slice(0, 200);

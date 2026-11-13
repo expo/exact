@@ -15,10 +15,13 @@ import { chromium as installed, suiteBrowser } from '../../../scripts/agent-laun
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
 import { need } from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
+import { hostFixtureFile } from './glue-fixture.mjs';
+import { webAudioSession } from '../../../scripts/web-head.mjs';
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const glue = readFileSync(resolve(WEB, 'sound-glue.js'), 'utf8');
 const page = session => `<!doctype html><meta charset="utf-8"><div id="exact-root"${session ? ` data-audio-session="${session}"` : ''}></div><button id="press">press</button>
+${webAudioSession({ audio_session: session })}
 <script type="module">
   import './sound-glue.js';
   // A 48 kHz 16-bit mono WAV of \`frames\` frames, every sample \`value\`.
@@ -91,8 +94,35 @@ async function browser(name) {
 }
 afterAll(async () => { for (const b of launched.values()) await (await b.catch(() => null))?.close(); });
 
-async function serve(session) {
+async function serve(session, target = null) {
   const server = createServer((req, res) => {
+    const path = new URL(req.url, 'http://localhost').pathname;
+    if (path === '/audio-session.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, 'audio-session.js'), 'utf8')); return; }
+    if (target && path.endsWith('.js')) {
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      let source;
+      if (name === 'navigation.js' || path === '/wasm/glue.js') source = hostFixtureFile(resolve(WEB, name), 'utf8');
+      else if (name === 'names.js') source = 'export const sourceTypes = {};';
+      else if (path.startsWith('/js/')) {
+        const own = resolve(WEB, '../web-js', name);
+        if (!existsSync(own)) { res.writeHead(302, { location: `/web/${name}` }); res.end(); return; }
+        source = readFileSync(own, 'utf8');
+      } else source = readFileSync(resolve(WEB, path.replace(/^\/(?:web|wasm)\//, '')), 'utf8');
+      res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(source); return;
+    }
+    if (path === '/navigation.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(hostFixtureFile(resolve(WEB, 'navigation.js'), 'utf8')); return; }
+    if (target) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><div id="exact-root"${session ? ` data-audio-session="${session}"` : ''}><video></video><audio></audio><canvas></canvas></div>${webAudioSession({ audio_session: session })}
+        <script type="module">
+          try {
+            const runtime = await import('./${target}/${target === 'js' ? 'rt' : 'glue'}.js');
+            ${target === 'js' ? 'runtime.mount(() => {});' : ''}
+          } catch (e) { window.failure = String(e); }
+          window.ready = true;
+        </script>`);
+      return;
+    }
     if (req.url.startsWith('/sound-glue.js')) { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(glue); return; }
     res.writeHead(200, { 'content-type': 'text/html' }); res.end(page(req.url.includes('playback') ? 'playback' : session));
   });
@@ -100,25 +130,52 @@ async function serve(session) {
   return { url: `http://127.0.0.1:${server.address().port}/`, close: () => server.close() };
 }
 
+for (const target of ['js', 'wasm']) engineTest.chromium(`${target}: the page initializes its audio session without sound output`, async () => {
+  const b = await browser('chromium');
+  if (!b) throw new Error('chromium did not launch');
+  try {
+    for (const api of [true, false]) for (const [session, expected] of [['ambient', 'ambient'], ['playback', 'playback'], ['playback-mix', 'ambient'], [null, 'auto']]) {
+      const server = await serve(session, target), p = await b.newPage();
+      try {
+        await p.addInitScript(({ api }) => {
+          Object.defineProperty(navigator, 'audioSession', { value: api ? { type: 'auto' } : undefined, configurable: true });
+          window.contexts = 0;
+          window.AudioContext = class { constructor() { window.contexts++; throw new Error('unexpected sound output'); } };
+          // Policy initialization precedes the wasm runner and its sound table.
+          WebAssembly.instantiateStreaming = () => new Promise(() => {});
+        }, { api });
+        await p.goto(server.url);
+        await p.waitForFunction(() => window.ready);
+        expect(await p.evaluate(() => window.failure ?? null)).toBeNull();
+        expect(await p.evaluate(() => ({
+          type: navigator.audioSession?.type ?? null,
+          manifest: document.getElementById('exact-root').dataset.audioSession ?? null,
+          contexts, sound: typeof globalThis.exact?.installSound,
+        }))).toEqual({ type: api ? expected : null, manifest: session, contexts: 0, sound: 'undefined' });
+      } finally { await p.close(); server.close(); }
+    }
+  } finally { await b.close(); }
+}, 60_000);
+
 for (const engine of engines) {
   engineTest[engine](`${engine}: manifest audio sessions map to browser types without changing the root`, async () => {
     const b = await browser(engine);
     if (!b) throw new Error(`${engine} did not launch`);
-    const server = await serve();
     try {
       const p = await b.newPage();
-      await p.goto(server.url);
-      await p.waitForFunction(() => window.ready);
-      const got = await p.evaluate(() => ['ambient', 'playback', 'playback-mix'].map(value => {
-        const root = document.getElementById('exact-root');
-        root.dataset.audioSession = value;
-        offline(1, {});
-        return { manifest: root.dataset.audioSession, type: navigator.audioSession?.type ?? null };
-      }));
+      const got = [];
+      for (const session of ['ambient', 'playback', 'playback-mix']) {
+        const configured = await serve(session);
+        try {
+          await p.goto(configured.url);
+          await p.waitForFunction(() => window.ready);
+          got.push(await p.evaluate(() => ({ manifest: document.getElementById('exact-root').dataset.audioSession, type: navigator.audioSession?.type ?? null })));
+        } finally { configured.close(); }
+      }
       expect(got.map(row => row.manifest)).toEqual(['ambient', 'playback', 'playback-mix']);
       if (engine === 'webkit' || got[0].type !== null) expect(got.map(row => row.type)).toEqual(['ambient', 'playback', 'ambient']);
       else expect(got.map(row => row.type)).toEqual([null, null, null]);
-    } finally { await b.close(); server.close(); }
+    } finally { await b.close(); }
   }, 60_000);
 
   engineTest[engine](`${engine}: voices render at the frames runner time maps to`, async () => {

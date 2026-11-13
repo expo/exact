@@ -573,14 +573,17 @@ pub struct Replaced {
 }
 
 /// The app's own atomic write replaced kept files (D4): each is the file it
-/// wrote now, read through the same folder.
-pub fn carry(owner: u64, replaced: Replaced) {
+/// wrote now, read through the same folder. An error is the set not saved,
+/// for the write to fail with: this session keeps the new file, as the
+/// replaced one is gone, but a relaunch would not until a later save writes
+/// the set. Writing the file again carries it again.
+pub fn carry(owner: u64, replaced: Replaced) -> Result<(), String> {
     let Some((after, false)) = Identity::at(&replaced.directory, &replaced.relative) else {
-        return;
+        return Ok(());
     };
     let mut all = stores();
     let Some((_, store)) = store_of(&mut all, owner) else {
-        return;
+        return Ok(());
     };
     for r in store
         .records
@@ -589,7 +592,12 @@ pub fn carry(owner: u64, replaced: Replaced) {
     {
         r.identity = after;
     }
-    let _ = save(store);
+    save(store).map_err(|e| {
+        format!(
+            "storage: the file was written, but the kept documents could not be saved ({e}), \
+             so a relaunch would not reopen it; write it again to keep it"
+        )
+    })
 }
 
 /// `<n>` was minted for `app`'s session: its counter passes it, for good.

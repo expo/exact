@@ -28,7 +28,7 @@ impl Game for Lights {
     }
 }
 fn feed(scene: &mut Scene, w: &World) {
-    scene.feed(w, true, true, true, false);
+    scene.feed(w, true, true, true, None);
 }
 fn names(scene: &Scene, w: &World) -> Vec<String> {
     scene
@@ -72,6 +72,24 @@ fn seventeen_lights_all_draw_exclude_zero_and_match_continuous_seek_restore() {
     assert_eq!(names(&restored, sim.world()), expected);
 }
 #[test]
+fn a_parent_edit_elsewhere_keeps_the_camera_interpolating() {
+    let mut sim = Sim::<Lights>::new(()).unwrap();
+    sim.run(1000. / 60.);
+    let mut chains = ParentChanges::default();
+    chains.begin(sim.world());
+    chains.commit();
+    let mut scene = Scene::default();
+    feed(&mut scene, sim.world());
+    // Another light is parented to a third while the camera moves on.
+    let (a, b) = (sim.world().named("light-00"), sim.world().named("light-01"));
+    sim.world_mut().insert(b.unwrap(), Parent(a.unwrap()));
+    sim.run(1000. / 60.);
+    chains.begin(sim.world());
+    scene.feed(sim.world(), true, true, false, Some(&chains));
+    let (camera, _) = scene.camera.unwrap();
+    assert!(camera.prev.position.x < camera.curr.position.x, "it blends");
+}
+#[test]
 fn twelve_lights_all_contribute_and_zero_intensity_edits_reselect() {
     let mut sim = Sim::<Lights>::new(()).unwrap();
     for i in 12..17 {
@@ -85,10 +103,10 @@ fn twelve_lights_all_contribute_and_zero_intensity_edits_reselect() {
     assert_eq!(f.lights.len(), 12);
     assert!(f.lights.iter().all(|p| p.intensity > 0.));
     sim.world().require_mut::<PointLight>("light-00").intensity = 0.;
-    scene.feed(sim.world(), false, false, false, false);
+    scene.feed(sim.world(), false, false, false, None);
     assert_eq!(scene.lights_for_test().len(), 11);
     sim.world().require_mut::<PointLight>("off").intensity = 1.;
-    scene.feed(sim.world(), false, false, false, false);
+    scene.feed(sim.world(), false, false, false, None);
     assert_eq!(scene.lights_for_test().len(), 12);
     assert_eq!(names(&scene, sim.world())[0], "off");
 }
@@ -138,7 +156,7 @@ fn saved_light_spring_samples_frame_time_and_clamps_negative_overshoot() {
     spring.start_velocity = 200.;
     sim.world_mut().insert(e, Lit(spring));
     assert!(sim.world().require::<Lit>(e).0.value(now) > 0.);
-    scene.feed(sim.world(), false, false, false, false);
+    scene.feed(sim.world(), false, false, false, None);
     assert_eq!(
         scene
             .frame(sim.world(), 0., glam::Vec2::ONE, false)
@@ -228,7 +246,7 @@ fn light_churn_preserves_survivor_interpolation_and_snaps_new_arrivals() {
     for &e in &entities {
         w.get_mut::<Transform>(e).unwrap().position.x += 1.;
     }
-    scene.feed(&w, true, true, false, false);
+    scene.feed(&w, true, true, false, None);
     w.remove::<PointLight>(entities[0]);
     w.remove::<PointLight>(entities[2]);
     w.remove::<Transform>(entities[4]);
@@ -236,7 +254,7 @@ fn light_churn_preserves_survivor_interpolation_and_snaps_new_arrivals() {
     let replacement = w.spawn((Transform::at(-3., 0., 0.), light(99)));
     assert_eq!(replacement.index(), entities[1].index());
     assert_ne!(replacement, entities[1]);
-    scene.feed(&w, false, true, true, false);
+    scene.feed(&w, false, true, true, None);
     assert_eq!(
         points(&mut scene, &w, 0.5),
         [(99., -3.), (3., 6.5), (5., 10.5)]
@@ -245,7 +263,7 @@ fn light_churn_preserves_survivor_interpolation_and_snaps_new_arrivals() {
     w.insert(entities[0], light(0));
     w.insert(entities[2], light(2));
     w.insert(entities[4], Transform::at(9., 0., 0.));
-    scene.feed(&w, false, true, true, false);
+    scene.feed(&w, false, true, true, None);
     assert_eq!(
         points(&mut scene, &w, 0.),
         [

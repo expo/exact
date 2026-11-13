@@ -131,13 +131,40 @@ impl Env {
 /// `DOMMatrix`'s 2D members, detached: what `get_transform` returns.
 pub type DomMatrix = Matrix;
 
+/// A `letterSpacing` or `wordSpacing`: the authored text, and its length as
+/// `px` plus `em` of the font in force when text is measured or drawn, as
+/// Chrome resolves a font-relative spacing again when the font changes.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Spacing {
+    pub(crate) text: String,
+    pub(crate) px: f64,
+    pub(crate) em: f64,
+}
+
+impl Default for Spacing {
+    fn default() -> Self {
+        Spacing {
+            text: "0px".into(),
+            px: 0.0,
+            em: 0.0,
+        }
+    }
+}
+
+impl Spacing {
+    /// Its length in px under a font of `size` px.
+    pub(crate) fn used(&self, size: f64) -> f64 {
+        self.px + self.em * size
+    }
+}
+
 /// The text attributes (LLP 1056 D8): what shapes a run, and where it goes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TextState {
     pub(crate) font: Font,
-    /// `letterSpacing` and `wordSpacing`: the authored text and px.
-    pub(crate) letter_spacing: (String, f64),
-    pub(crate) word_spacing: (String, f64),
+    /// `letterSpacing` and `wordSpacing`.
+    pub(crate) letter_spacing: Spacing,
+    pub(crate) word_spacing: Spacing,
     pub(crate) kerning: u8,
     pub(crate) rendering: u8,
     pub(crate) align: u8,
@@ -150,8 +177,8 @@ impl Default for TextState {
     fn default() -> Self {
         TextState {
             font: Font::default(),
-            letter_spacing: ("0px".into(), 0.0),
-            word_spacing: ("0px".into(), 0.0),
+            letter_spacing: Spacing::default(),
+            word_spacing: Spacing::default(),
             kerning: 0,
             rendering: 0,
             align: 0,

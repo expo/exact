@@ -116,7 +116,7 @@ fn unlinked() -> InstanceError {
     )
 }
 
-mod errors;
+pub(crate) mod errors;
 pub use errors::InstanceError;
 
 /// One realized node.
@@ -898,7 +898,8 @@ impl NodeInst {
             colour_moved: false,
             around: u.theme.tuple,
         };
-        inst.emit_bindings(u, frames, true)?;
+        inst.emit_bindings(u, frames, true)
+            .map_err(|e| e.at_view(view, node))?;
         // Its children are created in what it sets: nothing to visit again.
         inst.colour_moved = false;
         let saved = inst.enter(u, inst.tuple);
@@ -915,7 +916,9 @@ impl NodeInst {
             Ok(())
         })();
         u.theme = saved;
-        realized.map(|()| inst)
+        realized
+            .map_err(|e: InstanceError| e.at_view(view, node))
+            .map(|()| inst)
     }
 
     fn emit_bindings(
@@ -1181,8 +1184,10 @@ impl NodeInst {
         }) {
             let s = plan.surface(surface);
             let mut values = Vec::with_capacity(s.args.len as usize);
-            for a in s.args.iter() {
-                values.push(u.eval(plan.surface_arg(a).expr, frames)?);
+            for (k, a) in s.args.iter().enumerate() {
+                values.push(u.eval_named(plan.surface_arg(a).expr, frames, || {
+                    format!("surface argument {}", k + 1)
+                })?);
             }
             if self.rare.as_ref().and_then(|r| r.last_surface.as_ref()) != Some(&values) {
                 u.surfaces.push(SurfaceUpdate {
@@ -1218,11 +1223,12 @@ impl NodeInst {
     fn update(&mut self, u: &mut Update<'_>, frames: &[Frame]) -> Result<(), InstanceError> {
         u.work.nodes_visited += 1;
         let before = self.tuple;
-        self.emit_bindings(u, frames, false)?;
+        self.emit_bindings(u, frames, false)
+            .map_err(|e| e.at_view(self.view, self.node))?;
         let saved = self.enter(u, before);
         let updated = self.update_children(u, frames);
         u.theme = saved;
-        updated
+        updated.map_err(|e| e.at_view(self.view, self.node))
     }
 
     fn update_children(

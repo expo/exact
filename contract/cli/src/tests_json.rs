@@ -374,17 +374,26 @@ fn step_json(step: &Step, s: &mut String) {
         }
         // @ref LLP 1125 §4 — the driver's `prefer midi.*` and `tap midi`, and `state.midi.sent`.
         Step::Midi { step, .. } => midi_step(step, s),
-        Step::ExpectState { name, value, .. } => {
+        Step::ExpectState {
+            name,
+            comparison,
+            value,
+            ..
+        } => {
             s.push_str("{\"op\":\"expect-state\",\"name\":");
             q(name, s);
+            s.push_str(",\"comparison\":");
+            q(
+                match comparison {
+                    contract_syntax::StateComparison::Equal => "equal",
+                    contract_syntax::StateComparison::AtLeast => "at-least",
+                    contract_syntax::StateComparison::AtMost => "at-most",
+                    contract_syntax::StateComparison::In => "in",
+                },
+                s,
+            );
             s.push_str(",\"value\":");
-            match value {
-                Expr::Number(n, _) => s.push_str(&format!("{n}")),
-                Expr::Str(t, _) => q(t, s),
-                Expr::Bool(b, _) => s.push_str(&format!("{b}")),
-                Expr::List(items, _) if items.is_empty() => s.push_str("[]"),
-                _ => s.push_str("null"),
-            }
+            state_literal(value, s);
         }
         Step::Perf { steps, .. } => {
             s.push_str("{\"op\":\"perf\",\"steps\":");
@@ -588,5 +597,24 @@ fn property_value(v: &contract_syntax::PropertyValue, s: &mut String) {
         V::None => s.push_str("{\"kind\":\"none\"}"),
         V::Some => s.push_str("{\"kind\":\"some\"}"),
         V::EmptyList => s.push_str("{\"kind\":\"empty-list\"}"),
+    }
+}
+
+fn state_literal(value: &Expr, s: &mut String) {
+    match value {
+        Expr::Number(n, _) => s.push_str(&format!("{n}")),
+        Expr::Str(t, _) => q(t, s),
+        Expr::Bool(b, _) => s.push_str(&format!("{b}")),
+        Expr::List(items, _) => {
+            s.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                state_literal(item, s);
+            }
+            s.push(']');
+        }
+        _ => s.push_str("null"),
     }
 }

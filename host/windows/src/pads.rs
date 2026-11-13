@@ -25,9 +25,9 @@ pub(crate) fn read(slot: u8) -> Option<Raw> {
 }
 
 /// A slot's change, told to the pad registry a package reads
-/// (`exact_linux::pads`): the same pads by index as the canvas's.
+/// (`exact_painted::pads`): the same pads by index as the canvas's.
 pub(crate) fn register(slot: u8, connected: bool, buttons: [f32; 17], axes: [f32; 4]) {
-    use exact_linux::pads;
+    use exact_painted::pads;
     if !connected {
         return pads::disconnect(slot);
     }
@@ -39,7 +39,7 @@ pub(crate) fn register(slot: u8, connected: bool, buttons: [f32; 17], axes: [f32
         };
         pads::connect(slot, identity, Some(Box::new(Motors(slot))));
     }
-    pads::read(slot, exact_linux::gamepad::Reading { buttons, axes });
+    pads::read(slot, exact_painted::gamepad::Reading { buttons, axes });
 }
 
 /// A slot's two motors: XInput's left is the low-frequency (strong) one
@@ -47,7 +47,7 @@ pub(crate) fn register(slot: u8, connected: bool, buttons: [f32; 17], axes: [f32
 /// <https://learn.microsoft.com/windows/win32/api/xinput/nf-xinput-xinputsetstate>
 struct Motors(u8);
 
-impl exact_linux::pads::Output for Motors {
+impl exact_painted::pads::Output for Motors {
     fn rumble(&mut self, strong: f32, weak: f32, _ms: u32) -> bool {
         let speed = |m: f32| (m.clamp(0., 1.) * f32::from(u16::MAX)) as u16;
         set(self.0, speed(strong), speed(weak))
