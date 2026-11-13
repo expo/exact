@@ -864,6 +864,32 @@ final class NavigationMoreIOSTests: XCTestCase {
         return (session, tabs, more, root, try node(session, "back-deeper").id)
     }
 
+    /// The router's own selection of Five while another tab shows, with
+    /// Full, which hides the tab bar, over Five's root in More: Exact selects
+    /// More, as a tap on More does, and More keeps Full. Five's own
+    /// controller selected in code would pop More to its list and drop Full
+    /// (LLP 1075.003 §9.16).
+    func testTheRoutersSelectionOfATabWhoseRoutesMoreHoldsKeepsThem() throws {
+        let (session, tabs, more) = try moreFixture("more-select-held")
+        let navigation = session.presenter.navigation
+        tapTab(tabs, of: tabs.moreNavigationController)
+        pickRow(tabs, 4)
+        waitFor("the router follows Five, whose root More holds") { navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil }
+        try tapNode(session, "open-full")
+        waitFor("Full pushed onto More") { more.stackRoutes.count == 2 && more.transitionCoordinator == nil && !navigation.changing }
+        let full = try XCTUnwrap(more.topViewController as? RouteController)
+        XCTAssertTrue(full.hidesBottomBarWhenPushed, "Full hides the tab bar")
+        // The app's own selection of Home, then of Five again
+        session.presenter.press(try node(session, "tab-home").id)
+        waitFor("the router and UIKit on Home") { navigation.routerTab == 0 && tabs.selectedViewController === tabs.tabControllers?[0] && !navigation.inTransition }
+        session.presenter.press(try node(session, "tab-five").id)
+        waitFor("the router on Five") { navigation.routerTab == 4 && !navigation.inTransition }
+        waitForMainQueue()
+        XCTAssertTrue(more.topViewController === full, "More keeps Full: More holds \(more.stackRoutes.map { ($0 as? RouteController)?.key ?? "?" })")
+        XCTAssertEqual(navigation.selectedKey, full.key, "and the router stays on it")
+        XCTAssertNil(navigation.restDifference, "UIKit and the router agree")
+    }
+
     /// An app that sets More's delegate itself takes More's calls from Exact:
     /// a pop of More reaches the router in the turn after the next sync, and
     /// holds no sync after that.
