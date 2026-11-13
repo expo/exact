@@ -695,3 +695,38 @@ fn a_break_before_no_break_glue_after_a_space_stays() {
     assert_eq!(exact_textflow::line_breaks(text, &[]), [6, text.len()]);
     assert_eq!(exact_textflow::line_breaks("a\u{a0}b c", &[]), [5, 6]);
 }
+
+/// Chrome breaks before a full-width opening bracket after a letter or digit
+/// (UAX #14 LB30) and before an opening or after a closing quotation mark
+/// between East Asian characters (Unicode 15.1 LB19a): `|` must be an
+/// opportunity, `/` must not.
+#[test]
+fn east_asian_brackets_and_quotes_break_as_chrome() {
+    for marked in [
+        "iPhone|（アイフォーン）",
+        "2024|（令和6年）",
+        "他说|“你好”|然后",
+        "他说：|“你好。”",
+        "abc/“def/”ghi",
+        "a/“本/”a",
+        "日「/“本",
+        "日“本”/。",
+    ] {
+        let text: String = marked.chars().filter(|c| !matches!(c, '|' | '/')).collect();
+        let found = exact_textflow::line_breaks(&text, &[]);
+        let mut at = 0;
+        for ch in marked.chars() {
+            match ch {
+                '|' => assert!(
+                    found.contains(&at),
+                    "no break at {at} in {marked:?}: {found:?}"
+                ),
+                '/' => assert!(
+                    !found.contains(&at),
+                    "break at {at} in {marked:?}: {found:?}"
+                ),
+                _ => at += ch.len_utf8(),
+            }
+        }
+    }
+}

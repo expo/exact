@@ -754,7 +754,8 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
             } else if latin1(previous) && latin1(ch) && !(previous == '-' && !ch.is_ascii()) {
                 chrome::breaks(previous, ch)
             } else {
-                listed
+                let next = text[at + ch.len_utf8()..].chars().next();
+                listed || east_asian_break(before_before, previous, ch, next)
             };
             if open {
                 result.push(at);
@@ -765,6 +766,68 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
     }
     result.push(text.len());
     result
+}
+
+/// Breaks Chrome takes that `unicode-linebreak`'s Unicode 15.0 pair table,
+/// blind to East_Asian_Width, misses: before a full-width opening bracket after
+/// a letter or digit (UAX #14 LB30), and before an opening or after a closing
+/// quotation mark between East Asian characters (Unicode 15.1 LB19a). Never
+/// where either side's class forbids a break. `before_before` is `'\0'` at the
+/// start of the text, `next` is `None` at its end.
+fn east_asian_break(before_before: char, previous: char, ch: char, next: Option<char>) -> bool {
+    use BreakClass::*;
+    let (left, right) = (break_property(previous as u32), break_property(ch as u32));
+    let glued = matches!(
+        left,
+        OpenPunctuation | NonBreakingGlue | WordJoiner | ZeroWidthJoiner | CombiningMark | Before
+    ) || matches!(
+        right,
+        ClosePunctuation
+            | CloseParenthesis
+            | Exclamation
+            | InfixSeparator
+            | Symbol
+            | NonStarter
+            | After
+            | Hyphen
+            | Inseparable
+            | NonBreakingGlue
+            | WordJoiner
+            | ZeroWidthJoiner
+            | CombiningMark
+    );
+    // The common quotation marks of general category Pi (`«‘‛“‟‹`) and Pf (`»’”›`).
+    let initial = |c: char| "\u{ab}\u{2018}\u{201b}\u{201c}\u{201f}\u{2039}".contains(c);
+    let last = |c: char| "\u{bb}\u{2019}\u{201d}\u{203a}".contains(c);
+    !glued
+        && ((matches!(left, Alphabetic | HebrewLetter | Numeric)
+            && right == OpenPunctuation
+            && wide(ch))
+            || (right == Quotation && initial(ch) && wide(previous) && next.is_some_and(wide))
+            || (left == Quotation && last(previous) && wide(before_before) && wide(ch)))
+}
+
+/// East_Asian_Width F, W or H by block: CJK, kana, Hangul, Yi, the CJK
+/// symbol, compatibility and full/half-width forms (not emoji).
+fn wide(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1100}'..='\u{115f}'
+            | '\u{2e80}'..='\u{303e}'
+            | '\u{3041}'..='\u{33ff}'
+            | '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{a000}'..='\u{a4cf}'
+            | '\u{a960}'..='\u{a97f}'
+            | '\u{ac00}'..='\u{d7a3}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{fe10}'..='\u{fe19}'
+            | '\u{fe30}'..='\u{fe6f}'
+            | '\u{ff00}'..='\u{ffdc}'
+            | '\u{ffe0}'..='\u{ffee}'
+            | '\u{1f200}'..='\u{1f2ff}'
+            | '\u{20000}'..='\u{3fffd}'
+    )
 }
 fn advance(n: f32) -> f32 {
     if n.is_finite() {
