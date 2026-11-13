@@ -410,7 +410,9 @@ impl<D: DataSource> Presenter<D> {
             let style = node.computed_style(exact_kernel::StyleMask::INHERITED);
             let popover = !modal && node.props.str(PropId::Popover).is_some();
             popover
-                .then(|| area::inset_point(&style, &self.host.kernel().env(), self.viewport))
+                .then(|| {
+                    area::inset_point(&style, &self.host.kernel().env_of(node.id), self.viewport)
+                })
                 .flatten()
         });
         if self.neutral_alerts() {

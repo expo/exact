@@ -447,11 +447,16 @@ impl Comparison {
     /// whichever argument it is in, or a text substituted is no value of its
     /// row (CSS Environment Variables 1 §3).
     pub(crate) fn undefined(&self, env: &Env) -> bool {
-        self.tree(|t| t.any(&|n| matches!(n, Node::Env(term) if term.value(env).is_none())))
-            .unwrap_or_else(|| {
-                self.substituted(env)
-                    .is_none_or(|d| d.undefined_segment(env))
-            })
+        // A local inset is always defined, and only a node's environment has it
+        let undefined = |n: &Node| match n {
+            Node::Env(EnvTerm::Local(_)) => false,
+            Node::Env(term) => term.value(env).is_none(),
+            _ => false,
+        };
+        self.tree(|t| t.any(&undefined)).unwrap_or_else(|| {
+            self.substituted(env)
+                .is_none_or(|d| d.undefined_segment(env))
+        })
     }
 
     /// The CSS text: a tree's as §10.13 serializes it, a text as written,

@@ -11,6 +11,50 @@ import { spawnOwned } from '../../scripts/test-children.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
+test('a media-only page applies its audio policy while activation waits and preserves a claim when the agent loads', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/audio-session-'));
+  const dist = resolve(dir, 'dist');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Media', app: { id: 'test.media', name: 'Media' }, audio_session: 'ambient', host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'routes nav\n  home "/" render=build activate=interaction\n\ncomponent App\n  view\n    column\n      audio controls=true\n');
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'media', '--out', dist, '--render', 'js'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8',
+    });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    const p = await browser.newPage(), errors = [], scripts = [];
+    p.on('pageerror', e => errors.push(e.message));
+    p.on('request', r => { if (r.url().endsWith('.js')) scripts.push(new URL(r.url()).pathname); });
+    await p.addInitScript(() => {
+      let type = 'auto';
+      window.sessionWrites = [];
+      Object.defineProperty(navigator, 'audioSession', { value: { get type() { return type; }, set type(value) { sessionWrites.push(value); type = value; } } });
+      window.contexts = 0;
+      window.AudioContext = class { constructor() { contexts++; throw new Error('unexpected sound output'); } };
+    });
+    await p.goto(server.url.href);
+    await p.locator('audio').click();
+    expect(await p.evaluate(() => ({ type: navigator.audioSession.type, ready: !!globalThis.exact?.ready, contexts }))).toEqual({ type: 'ambient', ready: false, contexts: 0 });
+    expect(scripts).toEqual(['/audio-session.js']);
+    await p.goto(new URL('shell.html', server.url).href);
+    await p.waitForFunction(() => globalThis.exact?.ready);
+    const agent = readdirSync(dist).find(name => /^agent-.*\.js$/.test(name));
+    expect(agent).toBeDefined();
+    expect(await p.evaluate(async agent => {
+      navigator.audioSession.type = 'play-and-record';
+      await import('./' + agent);
+      return { type: navigator.audioSession.type, writes: sessionWrites, contexts };
+    }, agent)).toEqual({ type: 'play-and-record', writes: ['ambient', 'play-and-record'], contexts: 0 });
+    expect(errors).toEqual([]);
+  } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);
+
 test.each([[false, false], [true, false], [true, true]])('a list first opened offline uses prepared chunks without evaluating them at boot (production: %s, interaction: %s)', async (production, interaction) => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/offline-list-'));

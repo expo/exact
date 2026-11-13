@@ -1,6 +1,7 @@
 # A byte stream ends `Refused` when 1 MiB waits for a busy module, instead of pausing the read
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Executor and web byte readers pause at the receive bound, preserve every byte, and stop when let go; the separate unsettled-mapper queue remains follow-up work.
 **Systems:** host/executor/src/bytes.rs (compiled by every native host), host/web/http-body.js
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -21,3 +22,11 @@ Checked by reading the code; not reproduced.
 ## Fix
 
 When `append` would overflow, wait (on the core's condition variable, woken when the runner takes the message) instead of returning `Overflow`, and read again once the queue has room; keep the 1 MiB as the most bytes held. A stream let go or retired while waiting ends as now. On the web, stop pulling the `ReadableStream` reader while the queue is full. Update the reference paragraph, and pin it with a test whose server writes 4 MiB at once to a runner that takes messages slowly.
+
+## Resolution scope
+
+The executor and web byte readers wait for room at the receive bound,
+resume in order, and stop when forgotten, aborted or retired. The separate
+native runner queue behind an unsettled mapper retains its existing limit;
+pausing that queue is follow-up work. No Apple asynchronous executor or
+transport implementation is changed here.

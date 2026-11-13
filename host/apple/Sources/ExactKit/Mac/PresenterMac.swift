@@ -925,6 +925,22 @@ package final class Presenter {
     /// In `reset`, from its first teardown (FocusEvents keeps the focus it last reported: ResetGate).
     private(set) var resetting = false
     private var pendingGeometry: (() -> Void)?
+    private var drainingGeometry = false
+
+    private func settleGeometry() {
+        guard !drainingGeometry else { return }
+        drainingGeometry = true
+        defer { drainingGeometry = false }
+        for _ in 0..<8 {
+            guard let geometry = pendingGeometry else { return }
+            pendingGeometry = nil
+            geometry()
+        }
+        if pendingGeometry != nil {
+            pendingGeometry = nil
+            session?.log("Geometry did not settle after 8 corrections")
+        }
+    }
 
     /// Window chrome can synchronously resize ExactView while an older batch
     /// is still being installed. Commit its geometry after that batch, so the
@@ -1079,11 +1095,9 @@ package final class Presenter {
             if outermost {
                 applying = false
                 videoVisibility?.changed()
-                let geometry = pendingGeometry
-                pendingGeometry = nil
                 let q = waiting
                 waiting = []
-                geometry?()
+                settleGeometry()
                 for (id, f) in q where textHost(id) != nil { f() }
                 let later = afterBatchWork
                 afterBatchWork = []

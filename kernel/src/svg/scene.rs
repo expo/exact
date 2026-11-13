@@ -253,7 +253,9 @@ pub struct Shape {
 /// the engine's also holds a native field's chrome.
 pub fn content_box(kernel: &Kernel, node: &NodeRef<'_>) -> (f32, f32, f32, f32) {
     let (pl, pt, pr, pb) = kernel.resolved_padding(node.key).unwrap_or_default();
-    let [bt, br, bb, bl] = node.style.border_widths_in(kernel.arena().env());
+    let [bt, br, bb, bl] = node
+        .style
+        .border_widths_in(&kernel.arena().env_of(node.key.index));
     let (left, top) = (pl + bl, pt + bt);
     let w = node.frame.width - left - pr - br;
     let h = node.frame.height - top - pb - bb;
@@ -276,16 +278,18 @@ pub fn resolve(
         content.2,
         content.3,
     );
+    // Its lengths may read the safe area where the `svg` is (LLP 1123 D9)
+    let env = kernel.arena().env_of(node.slot);
     let vp = match vb {
         Some(v) => Viewport {
             width: v.width,
             height: v.height,
-            env: kernel.arena().env(),
+            env: &env,
         },
         None => Viewport {
             width: content.2,
             height: content.3,
-            env: kernel.arena().env(),
+            env: &env,
         },
     };
     let clip =
@@ -494,6 +498,9 @@ impl<'k> Resolver<'k, '_> {
         if !node.node_type.is_svg_element() || !node.node_type.renders() {
             return None;
         }
+        // Each element's lengths may read the safe area where it is (LLP 1123 D9)
+        let env = self.kernel.arena().env_of(node.slot);
+        let vp = Viewport { env: &env, ..vp };
         if !self.budget.cost(budget::ITEM) {
             return None;
         }
@@ -695,6 +702,8 @@ impl<'k> Resolver<'k, '_> {
         style: &StyleProps,
         vp: Viewport,
     ) -> Option<(f32, f32, f32, f32)> {
+        let env = self.kernel.arena().env_of(node.slot);
+        let vp = Viewport { env: &env, ..vp };
         match node.node_type {
             NodeType::SvgGroup => {
                 let mut acc: Option<(f32, f32, f32, f32)> = None;

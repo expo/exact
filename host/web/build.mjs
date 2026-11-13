@@ -24,7 +24,7 @@ import { generatedInputFiles } from '../../game/inputs.mjs';
 // Developer builds bake development trust; EXACT_UPDATE_TRUST=production
 // requires signing keys, and the deploy verb always selects production.
 import { grantOrigins } from './navigation/grant-origins.js';
-import { buildHostGlue, gateAgent } from '../web-js/glue.mjs';
+import { buildHostGlue, gateAgent, modulePrelude } from '../web-js/glue.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -37,7 +37,7 @@ import { compilerWarnings, webInputDigests } from '../../scripts/agent-launch.mj
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
-import { webCspFile, webHead } from '../../scripts/web-head.mjs';
+import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
 import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp } from '../../scripts/app.mjs';
 import { buildEditor, buildFlow } from '../web-js/module.mjs';
@@ -265,10 +265,12 @@ const hostDir = resolve(stage, '.host');
 function copyHostFiles(group) {
   for (const [name, source] of Object.entries(webHostFiles(group))) {
     if (!name.endsWith('.js')) { copyFileSync(resolve(root, source), resolve(stage, name)); continue; }
+    // The module realm's prelude is joined from its scripts here: the module group is copied without the host glue's build.
+    const code = name === 'module-prelude.js' ? modulePrelude(root)
+      : readFileSync(source.startsWith('target/web-host/') ? resolve(hostDir, name) : resolve(root, source), 'utf8');
     // Production ships executable code, without source comments and long
     // local names. Keep exports and property names intact across modules.
-    const code = readFileSync(source.startsWith('target/web-host/') ? resolve(hostDir, name) : resolve(root, source), 'utf8');
-    const result = minifySync(name, production ? gateAgent(code, name) : code, { module: name !== 'module-prelude.js' && name !== 'module-binary.js' });
+    const result = minifySync(name, production ? gateAgent(code, name) : code, { module: !['module-prelude.js', 'module-binary.js', 'audio-session.js'].includes(name) });
     if (result.errors.length) throw new Error(`${name}: ${JSON.stringify(result.errors)}`);
     writeFileSync(resolve(stage, name), result.code);
   }
@@ -429,9 +431,9 @@ writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.h
   .replace('<title>Exact</title>', `<title>${escapeHtml(webManifest.name)}</title>`)
   // The manifest's favicons and Apple touch icon, else the shell's default favicon (LLP 1163 D7).
   .replace(/<link rel="icon"[^>]*>/, (link) => webIconLinks(app.manifest, app.dir, link))
-  // `app.json`'s `audio_session` (LLP 1096 D7), which sound-glue.js gives the Audio Session API where it exists, and
+  // `app.json`'s `audio_session` (LLP 1096 D7), applied by a separate page entry before the runtime, and
   // its `host.web.head` before the root, after the sheet, as the JS target writes it (LLP 1048.000 D3).
-  .replace('<div id="exact-root"></div>', `${webHead(app.manifest)}${app.manifest.audio_session ? `<div id="exact-root" data-audio-session="${escapeHtml(app.manifest.audio_session)}"></div>` : '<div id="exact-root"></div>'}`)
+  .replace('<div id="exact-root"></div>', `${webHead(app.manifest)}${app.manifest.audio_session ? `<div id="exact-root" data-audio-session="${escapeHtml(app.manifest.audio_session)}"></div>` : '<div id="exact-root"></div>'}${webAudioSession(app.manifest)}`)
   .replace(
     '<script type="module" src="./glue.js"></script>',
     `<link rel="alternate" type="application/vnd.exact.envelope+json" href="./exact.json">\n<link rel="manifest" href="./manifest.json">\n${webThemeColors(app.manifest).map((meta) => `${meta}\n`).join('')}${pageNative ? '<meta name="exact-native" content="./modules/index.js">\n' : ''}<script type="module" src="./glue.js"></script>`,

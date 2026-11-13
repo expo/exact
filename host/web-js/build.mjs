@@ -2,7 +2,7 @@ import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageC
 import { writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
-import { webCspFile, webHead } from '../../scripts/web-head.mjs';
+import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { fileIdentity, resourceIdentities } from '../apple/assets.mjs';
 import { launchModules } from '../../scripts/launch-modules.mjs';
 import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
@@ -499,11 +499,13 @@ writeFileSync(resolve(gen, 'main.js'), [
   // A prompt's Return, a grouped alert's message box and a menu row's popover (host/web): glue a plan with a dialog, an
   // alert, a menu or a popover needs on the page; until LLP 1047.002 commands.js carried them for every page.
   ...(dialogs ? ["import './prompt-glue.js'; import './alert-message.js'; import './menu-rows.js'; globalThis.exact?.menuRows?.();"] : []),
+  // Popovers placed as they open (navigation.js `placePopovers`): the plan's, and any a page module draws in the root.
+  ...(dialogs || pageModules ? ["import { placePopovers } from './navigation.js'; placePopovers();"] : []),
   // What this entry names from the runtime is what the bundle keeps (LLP 1047.002 D4). A production page names what
   // its own lines below use and what production glue reads from `globalThis.exact` (`journal`, `clock`: arrange.js;
   // `views`: media-glue.js; `viewId`: navigation.js; `After`: motion.js); the agent adapter, inspect and the dev
   // loop read the rest, so a development page names them too.
-  `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources, agentMode${production ? '' : ', advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
+  `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources${production ? '' : ', agentMode, advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
   `data.keepSurfaceAnswers = ${!tsGrantSet.keepsNoAnswers && !rustGrantSet.keepsNoAnswers};`,
   ...(production ? [] : ["import { develop } from './perf.js';"]),
   // A data module's answers, watched from before the app asks (seam.js).
@@ -551,8 +553,10 @@ writeFileSync(resolve(gen, 'main.js'), [
   "const fonts = faces.length ? Promise.race([Promise.all(faces.map(f => f.load().catch(() => {}))), new Promise(r => setTimeout(r, 100))]) : null;",
   "let booted; if (fonts) (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });",
   // What armed itself at module load (sounds' output, a native page module's connection) reads `clock.agent` in a
-  // callback that a font wait lets run before the first render, where `mount` sets it: set it now.
-  "if (fonts) clock.agent = agentMode();",
+  // callback that a font wait lets run before the first render, where `mount` sets it: set it now. A production page
+  // never enters agent mode (LLP 1069.007 D2): its entry leaves `clock.agent` false here and below, and holds no early
+  // animation.
+  ...(production ? [] : ["if (fonts) clock.agent = agentMode();"]),
   // A rendered page's sheet holds only what its document can match (LLP 1048.007 D4): the whole sheet comes first,
   // then the page's goes, before the first render (one that fails to load leaves the page's, and the render goes on).
   "const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
@@ -565,13 +569,13 @@ writeFileSync(resolve(gen, 'main.js'), [
   // the first render waits for the stream's module, which no other page loads before it needs storage.
   ...(ts && !production ? ["const seeded = agentMode() && !globalThis.__exactRender && import('./storage-environment.js').then(env => { const seed = env.agentSeed(); if (seed !== null) answering.entropy = Object.assign(env.agentStream(seed, 'typescript'), { seed }); });"] : ['const seeded = null;']),
   "const waits = [fonts, sheet, answers, seeded].filter(Boolean);",
-  "if ((sheet || answers || seeded) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; }); clock.agent = agentMode(); }",
+  `if ((sheet || answers || seeded) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });${production ? '' : ' clock.agent = agentMode();'} }`,
   "const go = f => waits.length ? Promise.all(waits).then(f) : f();",
   // Under the agent, an animation the first renders start (an indeterminate progress's turn) is held at the clock it
   // began at after each commit, before a frame shows it, until agent.js, which loads after the first render, takes it
   // (its `register`): never left on the browser's clock, nor turned on the compositor first (LLP 1069.001: a spinner
   // follows the agent's clock), as the wasm host holds each commit's at once.
-  "if (agentMode()) { const early = (globalThis.exact ??= {}).early = new WeakMap(); After.push(globalThis.exact.holdEarly = () => { for (const a of document.getAnimations()) if (!early.has(a) && a.playState === 'running' && (!a.timeline || a.timeline instanceof DocumentTimeline)) { early.set(a, clock.now); a.pause(); a.currentTime = 0; } }); }",
+  ...(production ? [] : ["if (agentMode()) { const early = (globalThis.exact ??= {}).early = new WeakMap(); After.push(globalThis.exact.holdEarly = () => { for (const a of document.getAnimations()) if (!early.has(a) && a.playState === 'running' && (!a.timeline || a.timeline instanceof DocumentTimeline)) { early.set(a, clock.now); a.pause(); a.currentTime = 0; } }); }"]),
   ...(rust ? [
     // Rust data: loaded after first pixel, asked synchronously once ready;
     // a plan with a resource that has no compiled value waits for it.
@@ -917,6 +921,7 @@ writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(analyze(base + css
 // The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
 const cspFile = webCspFile(manifest);
 if (cspFile) writeFileSync(resolve(gen, 'csp.json'), cspFile);
+if (manifest.audio_session) cpSync(resolve(root, 'host/web/audio-session.js'), resolve(out, 'audio-session.js'));
 // app.json's `host.web.head` goes after the sheet, where no search for the shell's places (its sheet, preloads and
 // title) can find a tag in an entry's text; every page composed over the shell keeps it (LLP 1048.000 D3).
 writeFileSync(resolve(out, 'index.html'), `<!doctype html>
@@ -928,7 +933,7 @@ writeFileSync(resolve(out, 'index.html'), `<!doctype html>
 ${colorSchemeMeta(interfaceStyle(manifest))}${icon}
 ${preloads}<style>${base}${css}</style>
 ${webHead(manifest)}<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
-${args.includes('--inline') ? `<script type="module">${readFileSync(resolve(out, 'app.js'), 'utf8').replaceAll('</script', '<\\/script')}</script>` : '<script type="module" src="./app.js"></script>'}
+${webAudioSession(manifest)}${args.includes('--inline') ? `<script type="module">${readFileSync(resolve(out, 'app.js'), 'utf8').replaceAll('</script', '<\\/script')}</script>` : '<script type="module" src="./app.js"></script>'}
 `);
 if (production && !opt('--plan')) {
   // No bake, so no envelope to link: the web manifest written above, as a bake's page links it.

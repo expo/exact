@@ -277,7 +277,7 @@ const native = Object.freeze({
 // person chose (`documents-glue.js`, the handles its pickers keep). Without
 // storage grants the same interface refuses, without fetching any adapters.
 // A refusal is `{kind: 'Unavailable', code, message}`, with Hermes's codes
-// (js/src/prelude.js `storageCode`; kanban F28): 'agent' for a drive with no
+// (js/src/storage.js `storageCode`; kanban F28): 'agent' for a drive with no
 // scratch store, 'denied' past the grants, the filesystem's POSIX name, else
 // 'failed'.
 const codedError = e => {
@@ -311,7 +311,7 @@ function landed(op, ok, value) {
   op.reject(error);
 }
 // A stream's mapper has no storage in any turn of its call (LLP 1016.000 D7), refused in Hermes's words
-// (js/src/prelude.js `storageCall`); null elsewhere.
+// (js/src/storage.js `storageCall`); null elsewhere.
 function inMapper(method) {
   if (!answering.mapperCall) return null;
   const error = codedError(new Error(`storage.${method}() called in a stream's mapper: it was never run. Start storage inside an answer`));
@@ -360,7 +360,7 @@ const DIRECTORIES = Object.freeze({ data: 'app:/data', cache: 'app:/cache', temp
 // it again once it adopts the page (render.mjs). The lowered bundles restore the
 // answer across `await`. Each answer has its own facade; its `owner` names
 // refusals when no answer is current, as in a plain `.then`.
-// `compressImage` and `transformImage` options, checked as the native prelude checks them (binary.js
+// `compressImage` and `transformImage` options, checked as the native prelude checks them (storage.js
 // `imageOptions`) before anything is asked of storage: the options to run with, or the TypeError a call rejects with.
 function imageOptions(method, from, to, options, limits) {
   const api = `storage.fs.${method}()`, out = { ...limits }, o = options ?? {};
@@ -490,7 +490,7 @@ function storageOf(grants) {
     openDatabases.add(handle);
     const wrapped = wrap(d, { execute: null, query: null, prepare: statement, transaction: null, close: null }, path);
     // A transaction's batch and options as they are at the call, not when the
-    // queue reaches it (js/src/prelude.js `batchNow`, `optionsNow`).
+    // queue reaches it (js/src/storage.js `batchNow`, `optionsNow`).
     const db = { ...wrapped, transaction: (commands, options) => {
       let args;
       try { args = [batchNow(commands), optionsNow(options)]; }

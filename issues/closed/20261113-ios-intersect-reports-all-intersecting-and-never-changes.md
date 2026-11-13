@@ -1,6 +1,7 @@
 # On iOS `intersect` reports every element intersecting at mount and fires nothing while the content scrolls
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Current UIKit owner placement reports route scrolling; simulator regressions pass for pages, paging markers and virtualized rows.
 **Systems:** host/apple/Sources/ExactKit/IOS/NavigationIOS.swift, host/apple/Sources/ExactKit/IOS/NodeViewIOS.swift, runner/src/runner/intersect.rs, runner/src/geometry/intersection.rs
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -23,3 +24,20 @@ Not run here: no simulator was started.
 ## Fix
 
 Reproduce on the iOS simulator with `scripts/fixtures/intersect.contract` placed in a pushed route whose page scrolls natively, and with the reference's paging marker. If the route's page is the gap, report its offset from `NavigationIOS.scrollViewDidScroll` as the other scrollers do. Extend `IntersectionIOSTests` with the fixture inside a navigation route, scrolled by its page, expecting one leave and one enter.
+
+## Verification
+
+Not reproduced on the current host, on an iPhone 17 Pro simulator running iOS
+27.0. `IntersectionIOSTests` covers the existing authored scrollers and a pushed
+route's native page under `interactive-widget="resizes-visual"`. Its offscreen
+paging marker initially reports false, enters once when scrolled into view and
+leaves once on return. A virtualized list's preloaded offscreen row also reports
+false, enters on scrolling and leaves on return.
+
+The route does report its scrolling: `RouteController.scrollViewDidScroll`
+calls `presenter.owners.publish()` (`NavigationIOS.swift`), and
+`OwnerBlocks.placement` carries `contentViewport.contentOffset` in the route's
+placement (`OwnersIOS.swift`). `OwnerBlocks.tell` sends that placement through
+`Runtime.blocks`; `Bridge.emit_work` wakes the executor for changed intersections
+(`host/apple/src/abi.rs`). A document-level `onScrolled(nil, …)` would describe a
+different scroll root. No runtime change is needed.

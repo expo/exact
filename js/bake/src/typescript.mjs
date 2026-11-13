@@ -754,8 +754,8 @@ export function replayCaptured(stage, allowed=[]) {
 }
 
 // Time and seeds are source arguments (LLP 1027.000): every executor refuses the clock, randomness and every
-// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/prelude.js,
-// js/src/binary.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
+// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/time.js,
+// js/src/crypto.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
 // build, by file and line, so a test that runs the module under Bun, which has no such guard, cannot hide it.
 const ambient=(api)=>api+' is unavailable in data sources; pass time or a random seed as an argument';
 const timers=(api)=>api+' is unavailable in data sources: an answer waits with setTimeout; pass time as an argument';

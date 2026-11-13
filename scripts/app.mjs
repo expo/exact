@@ -1,6 +1,6 @@
 import { capturePrivacyManifest } from '../host/apple/privacy.mjs';
 import { appleImplementations } from '../js/bake/src/typescript.mjs';
-import { webHostFiles, hostModuleSources } from '../host/web-js/glue.mjs';
+import { webHostFiles, hostModuleSources, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
 import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames } from './cargo-dep-info.mjs';
 export { compilerPaths, unitDepInfo } from './cargo-dep-info.mjs';
@@ -1097,7 +1097,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
       // The TS producer is a build dependency, outside the runtime Cargo graph.
       // Its canonical API declaration still determines the accepted app module.
       add(resolve(ROOT, 'vendor/ibex/crates/ibex2/src/bindings/storage.d.ts'));
-      for (const path of Object.values(webHostFiles('module'))) add(resolve(ROOT, path));
+      for (const path of [...Object.values(webHostFiles('module')).filter(path => !path.startsWith('target/web-host/')), ...MODULE_PRELUDE]) add(resolve(ROOT, path));
     }
     if (existsSync(resolve(app.dir, 'app.ts')) || /^\s*(?:fs\.|sqlite\.)/m.test(compat.inputs.grantCeiling ?? '')) {
       for (const path of [...Object.values(webHostFiles('storage')),

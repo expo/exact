@@ -100,7 +100,7 @@ impl Painter {
         // An ellipsized line changes in place.
         let roll = roll.filter(|_| Rc::ptr_eq(&shown, &paragraph));
         let backgrounds = text_backgrounds(kernel, node, self.dark, walk.reveal);
-        let backgrounds = shown.inline_backgrounds(&backgrounds, &kernel.env());
+        let backgrounds = shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id));
         let focus = walk
             .scene
             .focus
@@ -218,7 +218,7 @@ pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool
     let Some(node) = kernel.node(b.id) else {
         return false;
     };
-    let [t, r, bottom, l] = node.style.hit_slop(kernel.arena().env());
+    let [t, r, bottom, l] = node.style.hit_slop(&kernel.env_of(node.id));
     if t + r + bottom + l <= 0.0 || b.projective.is_some() {
         return false;
     }

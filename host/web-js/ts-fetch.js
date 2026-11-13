@@ -10,7 +10,7 @@ import { tsGrantSet } from './admission-data.js';
 // captured when called and starts after its source returns, so a refused
 // one never starts; a module with none fetches at once, as before.
 export const SOCKET_AND_FETCH = 'a mutation cannot both send on a socket and fetch';
-// `exactHeld` (LLP 1016.000 D9), with Hermes's words (js/src/prelude.js): the server may hold the reply. Each
+// `exactHeld` (LLP 1016.000 D9), with Hermes's words (js/src/fetch.js): the server may hold the reply. Each
 // fetch is counted on its answer, held (`call.held`) or not (`call.plain`), or as tied to no answer
 // (`answering.loose`); an answer with only held fetches out counts for no clock (held.js `counted`, whose
 // hooks the page's entry sets on `answering`, build.mjs).
@@ -190,7 +190,7 @@ function fetchOf(input, options, call, protocols) {
 export const files = { appId: null };
 
 // An answer that keeps coming (LLP 1016.000), with Hermes's words
-// (js/src/prelude.js): the stream is the answer's, so its fetch is made in one
+// (js/src/fetch.js): the stream is the answer's, so its fetch is made in one
 // of the answer's turns (`answering`, set by ts-data.js), which opens it. Its
 // promise never settles: the answer is what `exactStream` maps each event to.
 // `mapper`: a socket's mapper answering a frame, in its call's synchronous part, where it may send on that socket.
@@ -214,12 +214,12 @@ function stream(input, init, redirect, protocols) {
 
 // Time and seeds are source arguments (LLP 1027.000 D3): the app's modules see
 // these in place of the page's Date, Math, Intl, timers and performance, each
-// refusing what Hermes refuses with Hermes's words (js/src/prelude.js), so an
+// refusing what Hermes refuses with Hermes's words (js/src/time.js, crypto.js), so an
 // app that reads the clock fails on the web as it would on a device. An
 // explicit date, UTC arithmetic and an explicit timestamp's formatting work.
 const refuse = api => { throw new Error(`${api} is unavailable in data sources; pass time or a random seed as an argument`); };
 const noTimers = api => () => { throw new Error(`${api} is unavailable in data sources: an answer waits with setTimeout; pass time as an argument`); };
-// An answer's own timers (LLP 1027.000 D1 as amended 2026-10-28), with Hermes's rules (js/src/binary.js `timers`).
+// An answer's own timers (LLP 1027.000 D1 as amended 2026-10-28), with Hermes's rules (js/src/time.js `timers`).
 // Each is an entry of the page's clock (the driver's under the agent, whose `clock +N` and `clock settle` fire it)
 // that goes after the tasks due with it and is no commit (rt.js `advance`). It belongs to the answer that armed it:
 // one that has answered, or whose ticket was let go, never runs it. An answer with only timers out counts in no
@@ -286,7 +286,7 @@ export function ownSignal(signal) {
 }
 // A request carrying an `AbortSignal.timeout`, or a signal composed of one, takes the time the signal has left on the
 // page's clock as a real-time deadline (the browser's `setTimeout`, which `clock +N` does not move), as natively
-// (prelude.js `timers.left`, `expire`): the signal's own timer goes with its answer, but a POST let go runs on (LLP 1146
+// (time.js `timers`: `left`, `expire`): the signal's own timer goes with its answer, but a POST let go runs on (LLP 1146
 // D2), and another answer may carry the signal. An earlier `exactTimeout` (`before`) stays the deadline instead. A
 // `Request`'s own signal gives none: it is the browser's, following the one the Request was given.
 signalDeadline.arm = (signal, before) => {
@@ -467,7 +467,7 @@ const guarded = {
       if (overlaying.on) throw inOverlay('crypto.randomUUID()');
       const b = seeded(16);
       if (!b) return globalThis.crypto.randomUUID();
-      // The v4 bits and text of js/src/prelude.js `formatUuid`: one seed draws one id on every host.
+      // The v4 bits and text of js/src/crypto.js `formatUuid`: one seed draws one id on every host.
       b[6] = b[6] & 0x0f | 0x40; b[8] = b[8] & 0x3f | 0x80;
       return Array.from(b, (x, i) => (i === 4 || i === 6 || i === 8 || i === 10 ? '-' : '') + x.toString(16).padStart(2, '0')).join('');
     } }),

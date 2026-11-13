@@ -1236,7 +1236,7 @@ self.__exact_host = (op, name) => { if (op === 12 && name === 'listen') return '
 const storage = api.createStorage(self, { appId: 'test', grantSet: null }, () => context.owner, 'k');
 if (typeof api.bindAnswerStorage === 'function') api.bindAnswerStorage(self, storage, () => context.owner);
 eval(readFileSync(${JSON.stringify(resolve(ROOT, 'js/src/binary.js'))}, 'utf8'));
-eval(readFileSync(${JSON.stringify(resolve(ROOT, 'js/src/prelude.js'))}, 'utf8'));
+eval((await import(${JSON.stringify(resolve(ROOT, 'host/web-js/glue.mjs'))})).modulePrelude(${JSON.stringify(ROOT)}));
 self.__exact_storage = storage.capability;
 self.__exact_install_storage();
 self.__exact_main_thread();
@@ -1307,7 +1307,7 @@ try {
 // test says. `body` posts one verdict.
 async function realmVerdict(body) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-letgo-'));
-  const prelude = JSON.stringify(resolve(ROOT, 'js/src/prelude.js'));
+  const prelude = `(await import(${JSON.stringify(resolve(ROOT, 'host/web-js/glue.mjs'))})).modulePrelude(${JSON.stringify(ROOT)})`;
   writeFileSync(resolve(dir, 'worker.mjs'), `
 import { readFileSync } from 'node:fs';
 import * as api from './storage.js';
@@ -1332,7 +1332,7 @@ self.__exact_host = (op, name) => { if (op === 12 && name === 'listen') return '
 const storage = api.createStorage(self, { appId: 'test', grantSet: null }, () => context.owner, 'k');
 if (typeof api.bindAnswerStorage === 'function') api.bindAnswerStorage(self, storage, () => context.owner);
 eval(readFileSync(${JSON.stringify(resolve(ROOT, 'js/src/binary.js'))}, 'utf8'));
-eval(readFileSync(${prelude}, 'utf8'));
+eval(${prelude});
 self.__exact_storage = storage.capability;
 self.__exact_install_storage();
 self.__exact_main_thread();

@@ -162,7 +162,7 @@ test('a stream delivers every event of each read as one batch, then its end', as
 
 // LLP 1016.000's byte stream: reads that land before the page's next task
 // join into one ArrayBuffer; nothing is dropped; the end follows; a read past
-// the bound delivers what waits and refuses. Without `bytes` (a Rust
+// the bound pauses the read until delivery. Without `bytes` (a Rust
 // source) the body is the one answer.
 test('a TypeScript stream reads a body that is not events as joined bytes, then its end', async () => {
   const { request } = await import('./http-body.js');
@@ -191,10 +191,10 @@ test('a TypeScript stream reads a body that is not events as joined bytes, then 
   const over = [], o = open(8, { bytes: true }, over);
   await tick();
   o.push([1, 1, 1, 1, 1]); o.push([2, 2, 2, 2, 2]);
-  const refused = await o.done;
-  assert.deepEqual(over, [[1, 1, 1, 1, 1]]);
-  assert.equal(refused.kind, 2);
-  assert.equal(new TextDecoder().decode(refused.body), 'byte stream receive queue exceeds the response ceiling');
+  o.close();
+  const ended = await o.done;
+  assert.deepEqual(over, [[1, 1, 1, 1, 1], [2, 2, 2, 2, 2]]);
+  assert.equal(ended.kind, 1);
 
   // One browser read longer than the bound goes in pieces of it, at once.
   const big = [], b = open(8, { bytes: true }, big);
@@ -211,6 +211,54 @@ test('a TypeScript stream reads a body that is not events as joined bytes, then 
   w.push([9]); w.close();
   const answer = await w.done;
   assert.deepEqual([whole, answer.status, [...answer.body]], [[], 200, [9]]);
+});
+
+test('four MiB through a slow byte drain stays bounded and in order', async () => {
+  for (const bound of [1048576, 32768]) {
+    const expected = Uint8Array.from({ length: 4 << 20 }, (_, i) => i % 251), got = [];
+    let at = 0, waiting = 0, peak = 0, pulls = 0;
+    const body = new ReadableStream({ pull(c) {
+      pulls++;
+      if (at === expected.length) return c.close();
+      // Include a read larger than the bound, which only browsers can return.
+      const end = Math.min(at + 1500000, expected.length);
+      c.enqueue(expected.subarray(at, end)); at = end;
+    } }, { highWaterMark: 0 });
+    const end = await request({ method: 'GET', url: 'https://example.test/bytes', headers: [], stream: true, maxResponseBytes: bound }, {
+      grantSet: normalized('net.fetch https://example.test'), controllers: new Set(), protocol: { bytes: true },
+      moduleLoader: { claim: () => Promise.resolve(new Response(body)) },
+      message: async m => {
+        waiting += m.data.byteLength; peak = Math.max(peak, waiting);
+        assert.ok(waiting <= bound);
+        const before = pulls;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(pulls, before, 'no pull while delivery waits');
+        got.push(new Uint8Array(m.data)); waiting -= m.data.byteLength;
+      },
+    });
+    const actual = new Uint8Array(got.reduce((n, p) => n + p.length, 0));
+    let offset = 0;
+    for (const p of got) { actual.set(p, offset); offset += p.length; }
+    assert.deepEqual(actual, expected);
+    assert.ok(peak <= bound);
+    assert.equal(end.kind, 1);
+  }
+});
+
+test('abort releases a byte reader waiting for delivery', async () => {
+  const controller = new AbortController(), { promise: entered, resolve: enter } = Promise.withResolvers();
+  let cancelled = false, calls = 0;
+  const body = new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(16)); }, cancel() { cancelled = true; } }, { highWaterMark: 0 });
+  const done = request({ method: 'GET', url: 'https://example.test/bytes', headers: [], stream: true, maxResponseBytes: 8 }, {
+    grantSet: normalized('net.fetch https://example.test'), controllers: new Set(), controller, protocol: { bytes: true },
+    moduleLoader: { claim: () => Promise.resolve(new Response(body)) },
+    message: () => { calls++; enter(); return new Promise(() => {}); },
+  });
+  await entered;
+  controller.abort(); // Forgetting a source and retiring its host use this same signal.
+  assert.equal((await done).kind, 4);
+  assert.equal(cancelled, true);
+  assert.equal(calls, 1);
 });
 
 // A local WebSocket peer (LLP 1069.004 slice 3): `/three` sends `a`, then at

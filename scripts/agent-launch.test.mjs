@@ -126,18 +126,18 @@ import { timeReporter } from '../host/web/navigation/environment.js';
 // The Snapback device checks need the Snapback client (snapback4/), which this repository does not ship.
 const hasSnapback = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url));
 
-// LLP 1107 D1: `--reader` is a flag of the drive, said to the Android carrier as the variable it reads
-// (agent-android.mjs `androidBinary`), and never an op.
-test('--reader names the Canvas reader to the Android carrier', () => {
+// LLP 1107 D1: `--reader` and `--headless` are flags of the drive, which `main` hands to `open` as `reader`, and never
+// ops; neither sets EXACT_ANDROID_READER, which is how a script that opens a drive says it.
+test('--reader and --headless name the Android carrier as drive flags', () => {
   const before = process.env.EXACT_ANDROID_READER;
   try {
     delete process.env.EXACT_ANDROID_READER;
     expect(parseFlags(['android', '--app', 'shelf', 'tree']).flags.reader).toBeUndefined();
-    expect(process.env.EXACT_ANDROID_READER).toBeUndefined();
     const { flags, rest } = parseFlags(['android', '--reader', '--app', 'shelf', 'tree']);
     expect(flags.reader).toBe(true);
     expect(rest).toEqual(['android', 'tree']);
-    expect(process.env.EXACT_ANDROID_READER).toBe('1');
+    expect(parseFlags(['android', '--headless', 'tree']).flags.reader).toBe(false);
+    expect(process.env.EXACT_ANDROID_READER).toBeUndefined();
   } finally {
     if (before === undefined) delete process.env.EXACT_ANDROID_READER; else process.env.EXACT_ANDROID_READER = before;
   }

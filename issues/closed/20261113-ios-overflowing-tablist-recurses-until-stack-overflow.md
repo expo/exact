@@ -1,6 +1,7 @@
 # On iOS, a root tablist wider than the screen crashes the app at launch with nested applies through the navigation covers
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Authored tab overflow adds no safe-area cover outside the viewport, and navigation covers drain without recursive delivery.
 **Systems:** host/apple/Sources/ExactKit/IOS/NavigationCoversIOS.swift, host/apple/Sources/ExactKit/IOS/PresenterIOS.swift, host/apple/Sources/ExactKit/Session.swift
 **Severity:** P1
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

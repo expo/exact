@@ -473,7 +473,8 @@ impl Kernel {
             return None;
         }
         let node = self.node(view)?;
-        let (s, f, env) = (node.style, node.frame, self.arena.env());
+        let env = self.arena.env_of(node.key.index);
+        let (s, f, env) = (node.style, node.frame, &*env);
         let used = self.host_block_size(view)?;
         // The end margins as laid out: the used size clamps a negative one.
         let tree = self.layout.as_deref().and_then(LayoutMirror::tree_ref);

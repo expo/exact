@@ -439,7 +439,7 @@ pub(super) fn scroll_padding(kernel: &exact_kernel::Kernel, view: ViewId) -> [f6
     let Some(node) = kernel.node(view) else {
         return [0.0; 4];
     };
-    let env = kernel.arena().env();
+    let env = &*kernel.arena().env_of(node.key.index);
     let r = &node.style.rare;
     let sides = [
         r.scroll_padding_top.clone(),
@@ -481,7 +481,8 @@ pub(super) fn scroll_margin(kernel: &exact_kernel::Kernel, view: ViewId) -> [f64
     let Some(node) = kernel.node(view) else {
         return [0.0; 4];
     };
-    let (env, r) = (kernel.arena().env(), &node.style.rare);
+    let env = kernel.arena().env_of(node.key.index);
+    let (env, r) = (&*env, &node.style.rare);
     let sides = [
         r.scroll_margin_top.clone(),
         r.scroll_margin_right.clone(),

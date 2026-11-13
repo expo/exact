@@ -52,8 +52,9 @@ import { copyStaticTreeIfPresent } from '../host/web/serve.mjs';
 export const ANDROID_TARGET = 'aarch64-linux-android';
 /** The oldest Android the binary runs on (the NDK's clang wrapper names it). */
 const API = ANDROID_MIN_API;
-/** What a drive runs: the app's Linux host built for the phone, or with `--reader` (EXACT_ANDROID_READER) its APK. */
-export const androidBinary = (app, bin) => process.env.EXACT_ANDROID_READER ? readerApk(app)
+/** What a drive runs: the app's Linux host built for the phone, or on the Canvas reader (`reader`; unsaid,
+ * EXACT_ANDROID_READER decides) its APK. */
+export const androidBinary = (app, bin, reader = !!process.env.EXACT_ANDROID_READER) => reader ? readerApk(app)
   : resolve(app.target, ANDROID_TARGET, HOST_DEV, bin ?? app.crate('linux'));
 export const androidBuild = (app, bin = null) => [...linuxBuild(app, bin), '--target', ANDROID_TARGET];
 

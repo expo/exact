@@ -30,7 +30,7 @@ struct ButtonNode {
 
 impl ButtonInputs {
     pub(crate) fn matches(&self, arena: &NodeArena, slot: u32) -> bool {
-        if self.env != *arena.env()
+        if self.env != *arena.env_of(slot)
             || self.neutral_tab_root != arena.neutral_tab_root(slot)
             || self.neutral_bar_symbol != arena.neutral_bar_symbol(slot)
             || self.neutral_role_floor != arena.neutral_role_floor(slot)
@@ -300,7 +300,7 @@ impl NodeArena {
 
     pub(crate) fn button_inputs(&self, slot: u32) -> ButtonInputs {
         ButtonInputs {
-            env: self.env.clone(),
+            env: self.env_of(slot).into_owned(),
             neutral_tab_root: self.neutral_tab_root(slot),
             neutral_bar_symbol: self.neutral_bar_symbol(slot),
             neutral_role_floor: self.neutral_role_floor(slot),
@@ -328,7 +328,7 @@ impl NodeArena {
     pub(crate) fn button_face_style(&self, slot: u32) -> Option<ButtonFaceStyle> {
         let mut face = self.button_face_style_unresolved(slot)?;
         face.resolve_geometry(
-            self.env(),
+            &self.env_of(slot),
             self.button_bases.get(&slot).copied().flatten(),
             self.frame(slot),
         );

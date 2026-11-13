@@ -1,5 +1,5 @@
 // Firefox and WebKit carrier for scripts/agent.mjs. Chrome deliberately stays
-// in agent.mjs on its direct CDP pipe; importing Playwright is deferred until
+// in agent-web.mjs on its direct CDP pipe; importing Playwright is deferred until
 // one of these browsers is selected.
 import { MalformedOperation, keyArguments } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
@@ -85,7 +85,8 @@ async function files({ plan, pageURL, app, webDist, port, env }) {
     if (b.status !== 0) { rmSync(planBuild, { recursive: true, force: true }); throw new Error(`--plan ${plan}: its JS build failed: ${(b.stderr ?? '').trim().split('\n').slice(-3).join(' ')}`); }
     served = planBuild;
   }
-  // The drive's build, leased while its server runs (host/web/generations.mjs; agent.mjs's carrier does the same).
+  // The drive's build, leased while its server runs (host/web/generations.mjs; agent-web.mjs's Chrome carrier does
+  // the same).
   const pinned = js ? await bootedGeneration(served) : null, release = pinned ? leaseGeneration(served, pinned) : () => {};
   const server = createServer((req, res) => {
     if (req.url === '/__plan' && plan) { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(readFileSync(plan)); return; }
@@ -231,7 +232,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
   if (reuse) await reuse.close(); // Chrome reuse is intentionally not crossed with another engine.
   const hosted = await files({ plan, pageURL, app, webDist, port, env });
   let browserServer, browser, context, page, poolKey;
-  // Only Chrome keeps a named store's profile between drives (agent.mjs `openWeb`); here it is this drive's own.
+  // Only Chrome keeps a named store's profile between drives (agent-web.mjs `openWeb`); here it is this drive's own.
   const hostLines = [...pageURL ? [] : builtSettingLines(resolve(webDist ?? defaultWebDist(resolveApp(app)))), ...storage === undefined ? [] : [`${name}: --storage ${storage} is this drive's own profile, emptied when it ends; Chrome keeps a store between drives`]];
   // Why a page never booted: its last 20 lines when the wait gave up, as a hangup's report (agent-wire.mjs).
   const neverBooted = what => () => `${what}; ${hostLines.slice(-20).join('\n')}`;
@@ -297,7 +298,8 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         await page.setViewportSize({ width: pair[0], height: pair[1] }); await frame();
         return { resized: pair, viewport: await page.evaluate(() => [innerWidth, innerHeight]), delivery: 'browser-viewport' };
       }
-      // The tab closed with its `beforeunload` run (agent.mjs's Chrome carrier): a prevented one's dialog answered "Stay".
+      // The tab closed with its `beforeunload` run (agent-web.mjs's Chrome carrier): a prevented one's dialog answered
+      // "Stay".
       if (req.op === 'tap' && req.close !== undefined) {
         if (Object.keys(req).some(k => !['op', 'close'].includes(k)) || req.close !== true) return { malformed: true, error: 'tap close takes no other input fields' };
         const asked = new Promise(ok => page.once('dialog', ok)), gone = new Promise(ok => page.once('close', () => ok(null)));

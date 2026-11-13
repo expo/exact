@@ -207,7 +207,6 @@ fn the_term_parses_writes_back_and_crosses_the_wire() {
     }
     let mut env = Env::new(1.0, 2.0, 3.0, 4.0);
     let at = |text: &str, env: &Env| Dimension::parse_calc(text).unwrap().at_basis(env, 0.0);
-    assert_eq!(at("var(--exact-safe-area-inset-left)", &env), 4.0);
     env.local = Some([10.0, 20.0, 30.0, 40.0]);
     assert_eq!(at("var(--exact-safe-area-inset-left)", &env), 40.0);
     assert_eq!(
@@ -271,7 +270,7 @@ fn overrides_resolve_their_dependencies_and_reject_cycles() {
         (bottom, &to_left[..]),
     ];
     k.apply(0, 3, &[style(5, &cycle)]).unwrap();
-    let root = Edge::ALL.map(|e| k.env().local_inset(e));
+    let root = Edge::ALL.map(|e| k.env().root_inset(e));
     let got = k.local_insets(5).unwrap();
     assert_eq!(got[0], root[0], "top and left read each other: unset");
     assert_eq!(got[3], root[3]);
@@ -338,17 +337,167 @@ fn an_authored_inset_is_what_its_subtree_reads() {
     k.apply(0, 5, &[style(3, &[(bottom, plus)])]).unwrap();
     assert_eq!(k.local_insets(3).unwrap()[2], 35.0, "the node's own top");
     k.apply(0, 6, &[style(5, &[(bottom, plus)])]).unwrap();
-    let root = k.env().local_inset(Edge::Top);
+    let root = k.env().root_inset(Edge::Top);
     assert_eq!(k.local_insets(5).unwrap()[2], root + 5.0, "the parent's");
     // One that reads itself is a cycle: unset, so inherited
     let cycle = "calc(var(--exact-safe-area-inset-top) + 1px)";
     k.apply(0, 7, &[style(5, &[(top, cycle)])]).unwrap();
-    assert_eq!(
-        k.local_insets(5).unwrap()[0],
-        k.env().local_inset(Edge::Top)
-    );
+    assert_eq!(k.local_insets(5).unwrap()[0], k.env().root_inset(Edge::Top));
     // A percentage is no length a custom property of `<length>` takes
     let mut props = StyleProps::default();
     let pct = StyleValue::Text("10%".into());
     assert!(props.set_dynamic(top, &pct).is_err());
+}
+
+/// The document's environment has no local insets: a reader that resolves
+/// a box's length against it, not the box's own (`NodeArena::env_of`),
+/// stops a test instead of reading the session root's under a route's bar.
+#[test]
+#[should_panic(expected = "resolved against the document's environment")]
+fn a_local_inset_read_against_the_documents_environment_stops() {
+    let k = page();
+    let length = Dimension::parse_calc("var(--exact-safe-area-inset-top)").unwrap();
+    let _ = length.at_basis(k.arena.env(), 0.0);
+}
+
+/// The per-node resolver, for a box whose lengths read none, is the
+/// document's, and for one that reads one carries its insets.
+#[test]
+fn the_node_resolver_carries_a_boxs_insets_only_where_it_reads_them() {
+    let mut k = page();
+    k.set_local_insets(2, Some([106.0, 0.0, 0.0, 0.0])).unwrap();
+    let slot = |k: &Kernel, id| k.arena.slot_of(id).unwrap();
+    let route = k.arena.env_of(slot(&k, 2)).local;
+    assert!(route.is_none(), "the route reads none");
+    let reader = k.arena.env_of(slot(&k, 3)).local;
+    assert_eq!(reader, Some([106.0, 0.0, 0.0, 0.0]));
+    assert_eq!(
+        k.env_of(2).local,
+        Some([106.0, 0.0, 0.0, 0.0]),
+        "a host's always does"
+    );
+}
+
+/// A route (2) under the root (1) whose local top inset is 106 and left 20,
+/// holding what `ops` makes (`ids`), laid out.
+fn in_route(k: &mut Kernel, ids: impl IntoIterator<Item = ViewId>, ops: Vec<Op>) {
+    let mut all = create(1..=2);
+    all.extend(create(ids));
+    all.push(style(1, &[(StyleId::Height, "844")]));
+    all.push(children(1, &[2]));
+    all.extend(ops);
+    all.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &all).unwrap();
+    k.set_local_insets(2, Some([106.0, 0.0, 0.0, 20.0]))
+        .unwrap();
+    layout(k);
+}
+
+fn prop(id: ViewId, prop: crate::PropId, value: &str) -> Op {
+    Op::SetProp {
+        id,
+        prop,
+        value: crate::PropValue::Str(value.into()),
+    }
+}
+
+/// [`style`], with the rows marked as the author's.
+fn written(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
+    let Op::SetStyle { id, mut patch } = style(id, rows) else {
+        unreachable!()
+    };
+    for (row, _) in rows {
+        patch.written.set(*row);
+    }
+    Op::SetStyle { id, patch }
+}
+
+/// A native button's padding reads its own inset in what it asks the host
+/// to measure and in the face the host draws.
+#[test]
+fn a_buttons_face_reads_its_own_inset() {
+    use std::sync::{Arc, Mutex};
+    struct Host(Arc<Mutex<Vec<crate::Dimension>>>);
+    impl crate::TextMeasurer for Host {
+        fn measure(&mut self, _: &crate::TextMeasureRequest<'_>) -> crate::TextMetrics {
+            crate::TextMetrics::default()
+        }
+        fn button_measure(
+            &mut self,
+            r: &crate::ButtonMeasureRequest,
+        ) -> Option<crate::ButtonMeasure> {
+            (self.0.lock().unwrap()).push(r.style.button.padding_top.clone());
+            Some(crate::ButtonMeasure {
+                width: 100.0,
+                height: 30.0,
+                provisional: false,
+            })
+        }
+    }
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let mut k = Kernel::new(Box::new(Host(asked.clone())));
+    let ops = vec![
+        Op::CreateView {
+            id: 3,
+            node_type: NodeType::Control,
+        },
+        prop(3, crate::PropId::Type, "button"),
+        written(3, &[(TOP, "var(--exact-safe-area-inset-top)")]),
+        children(2, &[3]),
+    ];
+    in_route(&mut k, [], ops);
+    let top = crate::Dimension::Points(106.0);
+    assert!(!asked.lock().unwrap().is_empty(), "the host measured it");
+    assert!(asked.lock().unwrap().iter().all(|d| *d == top));
+    let slot = k.arena.slot_of(3).unwrap();
+    let face = k.arena.button_face_style(slot).unwrap();
+    assert_eq!(face.button.padding_top, top);
+}
+
+/// A grouped list's section margins are the section's lengths, read where
+/// the section is: the list itself reads no inset.
+#[test]
+fn a_sections_margin_reads_its_own_inset() {
+    let mut k = Kernel::with_monospace();
+    let ops = vec![
+        prop(3, crate::PropId::ListStyle, "inset-grouped"),
+        prop(4, crate::PropId::SemanticTag, "section"),
+        written(
+            4,
+            &[(StyleId::MarginTop, "var(--exact-safe-area-inset-top)")],
+        ),
+        children(2, &[3]),
+        children(3, &[4]),
+    ];
+    in_route(&mut k, 3..=4, ops);
+    let list = k.grouped_list(3).unwrap();
+    assert_eq!(list.sections[0].space_above, Some(106.0));
+}
+
+/// A caption spans its table's padding box, whose padding is the table's
+/// length, read where the table is: as a written 20 would place it.
+#[test]
+fn a_caption_takes_its_tables_padding_in_the_tables_environment() {
+    let caption = |padding: &str| {
+        let mut k = Kernel::with_monospace();
+        let ops = vec![
+            prop(3, crate::PropId::SemanticTag, "table"),
+            written(3, &[(StyleId::PaddingLeft, padding)]),
+            prop(4, crate::PropId::SemanticTag, "caption"),
+            written(5, &[(StyleId::Width, "10"), (StyleId::Height, "10")]),
+            prop(6, crate::PropId::SemanticTag, "tr"),
+            prop(7, crate::PropId::SemanticTag, "td"),
+            written(8, &[(StyleId::Width, "60"), (StyleId::Height, "10")]),
+            children(2, &[3]),
+            children(3, &[4, 6]),
+            children(4, &[5]),
+            children(6, &[7]),
+            children(7, &[8]),
+        ];
+        in_route(&mut k, 3..=8, ops);
+        k.node(4).unwrap().frame
+    };
+    let written = caption("20");
+    assert_ne!(caption("0"), written, "the padding places the caption");
+    assert_eq!(caption("var(--exact-safe-area-inset-left)"), written);
 }

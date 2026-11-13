@@ -1,6 +1,7 @@
 # On macOS, a page zoom that leaves the viewport a fraction of a pixel too small shows and hides the page's scrollers until the stack overflows
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Page zoom snaps near-level factors exactly, and deferred geometry corrections stop without nesting or unbounded work.
 **Systems:** host/apple/Sources/ExactKit/Mac/PresenterMac.swift, host/apple/Sources/ExactKit/Mac/ExactViewMac.swift, host/apple/Sources/ExactKit/Mac/ZoomMac.swift
 **Severity:** P1
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

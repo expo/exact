@@ -505,6 +505,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// The covers the kernel was last told (`deliverCovers`), each route's local insets (LLP 1123 D9), and
     /// the clearance its scrollers' insets hold (D3, ClearanceIOS.swift).
     var delivered: [UInt32: HostCover] = [:], localInsets = LocalInsetsReport(), clearance: [ObjectIdentifier: ClearanceInset] = [:]
+    var deliveringCovers = false
     /// Whether this boot's first batch looked for the tablist the boot
     /// covered (`adoptBootCover`); every boot covers its own.
     private(set) var bootCoverSeen = false

@@ -269,7 +269,7 @@ fn insets(
     } else {
         [&s.scroll_padding_top, &s.scroll_padding_bottom]
     };
-    let env = arena.env();
+    let env = &*arena.env_of(scroller);
     let [start, end] = inset.0;
     [(start, padding[0]), (end, padding[1])].map(|(side, padding)| match side {
         Some(offset) => offset.along(0.0, port),

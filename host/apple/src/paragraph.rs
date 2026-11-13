@@ -62,10 +62,10 @@ impl<D: DataSource> Host<D> {
         if node.node_type != NodeType::View || kernel.arena().children(node.key.index).is_empty() {
             return None;
         }
-        let env = kernel.arena().env();
+        let env = kernel.env_of(id);
         let (exact_kernel::Dimension::Points(w), exact_kernel::Dimension::Points(h)) = (
-            node.style.width.resolve(env),
-            node.style.height.resolve(env),
+            node.style.width.resolve(&env),
+            node.style.height.resolve(&env),
         ) else {
             return None;
         };
@@ -278,11 +278,9 @@ impl<D: DataSource> Host<D> {
                 shown.set(Property::Color, self.paint.runs.get(&id).copied());
                 // An image's box is in its paragraph's font, as the kernel measures it.
                 let styled = inline.and(run.parent).and_then(|p| kernel.node(p));
-                let (style, _) = style::style_json_inherited(
-                    styled.as_ref().unwrap_or(&run),
-                    &kernel.env(),
-                    &shown,
-                );
+                let styled = styled.as_ref().unwrap_or(&run);
+                let env = kernel.env_of(styled.id);
+                let (style, _) = style::style_json_inherited(styled, &env, &shown);
                 let handlers: Vec<_> = self
                     .inline_runs
                     .get(&id)

@@ -25,8 +25,10 @@ export function apkChanges(a, apk) {
   return [...depInfoNewer(since, record.library, record.library.replace(/\.so$/, '.d'), record.workspace), ...newerThan(since, record.sources)];
 }
 
-/** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. */
-export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, onProcess }) {
+/** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. `reader`: on Android, the app
+ * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
+ * that opens a drive says it). */
+export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
   const a = resolveApp(app);
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
@@ -34,14 +36,14 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const artifacts = portable ? null : appleArtifacts(a, { destination: device ? 'ios' : 'macos', host: sample });
   const deviceBundle = artifacts?.bundle;
   const bin = windows ? (process.env.EXACT_WINDOWS_BIN ?? resolve(a.dir, 'dist-windows', `${executableName(a)}.exe`))
-    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
+    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a, undefined, reader)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
   // The macOS build by its own record (agent-build.mjs, which an app's exact.mjs runs first to build it, or bakes its plan-only edit).
   const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED }) : null;
   if (macBuild && !macBuild.missing) refuseBackendOrigin(macBuild, a);
   const macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
   if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
-  const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, !!process.env.EXACT_ANDROID_READER) : linux ? linuxRebuild(a) : null;
+  const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
   if (!existsSync(device ? deviceBundle : bin)) throw new Error(rebuild ? `run ${rebuild} first` : `EXACT_MAC_BIN names no file: ${bin}`);
   if (!macBuild) {
     const receipt = portable ? undefined : device ? resolve(deviceBundle, 'receipt.json')

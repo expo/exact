@@ -481,7 +481,7 @@ impl LayoutTree {
                 let grid = anonymous(
                     formed.columns,
                     style.direction,
-                    crate::style::table::spacing(arena.style(table), arena.env()),
+                    crate::style::table::spacing(arena.style(table), &arena.env_of(table)),
                 );
                 let anon = match anon {
                     Some(anon) => {

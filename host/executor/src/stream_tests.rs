@@ -25,6 +25,14 @@ type Feed = Sender<Vec<u8>>;
 struct Fed {
     rx: Receiver<Vec<u8>>,
     signal: AbortSignal,
+    read: Arc<(Mutex<usize>, Condvar)>,
+    ended: Arc<(Mutex<usize>, Condvar)>,
+}
+impl Drop for Fed {
+    fn drop(&mut self) {
+        *self.ended.0.lock().unwrap() += 1;
+        self.ended.1.notify_all();
+    }
 }
 impl BodySource for Fed {
     fn read(&mut self, output: &mut [u8]) -> Result<usize, HostError> {
@@ -33,6 +41,9 @@ impl BodySource for Fed {
             match self.rx.recv_timeout(Duration::from_millis(5)) {
                 Ok(bytes) => {
                     output[..bytes.len()].copy_from_slice(&bytes);
+                    let mut read = self.read.0.lock().unwrap();
+                    *read += bytes.len();
+                    self.read.1.notify_all();
                     return Ok(bytes.len());
                 }
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -48,6 +59,8 @@ impl BodySource for Fed {
 #[derive(Default)]
 struct Script {
     feeds: Mutex<Vec<Option<Feed>>>,
+    ended: Arc<(Mutex<usize>, Condvar)>,
+    read: Arc<(Mutex<usize>, Condvar)>,
     opened: Condvar,
     /// Hold an upload after its start outcome, before registering its feed.
     opening: Mutex<Option<Sender<Sender<()>>>>,
@@ -90,6 +103,8 @@ impl Transport for Scripted {
                     Box::new(Fed {
                         rx,
                         signal: signal.clone(),
+                        read: self.0.read.clone(),
+                        ended: self.0.ended.clone(),
                     }),
                     request.body_limit(),
                     signal.clone(),
@@ -881,134 +896,8 @@ fn forgetting_a_socket_closes_its_connection() {
     }
 }
 
-/// A TypeScript stream's request: a body that is not events is bytes.
-fn bytes_stream(ticket: u64, path: &str, ceiling: u32) -> RequestOut {
-    let mut out = stream(ticket, path, ceiling);
-    out.request.bytes = true;
-    out
-}
-
-/// Waits until the reader has queued `n` undelivered bytes for `ticket`.
-fn queued(core: &Core, ticket: u64, n: usize) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let waiting: usize = {
-            let state = core.shared.state.lock().unwrap();
-            (state.completed.iter().flatten())
-                .filter(|done| done.ticket == ticket && done.message)
-                .map(|done| match &done.outcome {
-                    Outcome::Message(m) => m.binary.as_ref().map_or(0, Vec::len),
-                    _ => 0,
-                })
-                .sum()
-        };
-        if waiting == n {
-            return;
-        }
-        assert!(Instant::now() < deadline, "{waiting} of {n} bytes queued");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-}
-
-fn binary(outcome: &Outcome) -> &[u8] {
-    match outcome {
-        Outcome::Message(m) => m.binary.as_deref().expect("a binary message"),
-        other => panic!("expected a message, got {other:?}"),
-    }
-}
-
-#[test]
-fn a_byte_stream_joins_reads_until_the_runner_takes_them() {
-    let (core, script, woke) = setup();
-    core.run_owned(bytes_stream(1, "/bytes", 4096), None)
-        .unwrap();
-    let tx = feed(&script, 0);
-    for chunk in [&b"\x00\x01"[..], b"\x02", b"\x03\x04\x05"] {
-        tx.send(chunk.to_vec()).unwrap();
-    }
-    queued(&core, 1, 6);
-    let (ticket, first) = next(&core, &woke);
-    assert_eq!(
-        (ticket, binary(&first)),
-        (1, &[0, 1, 2, 3, 4, 5][..]),
-        "three reads, one message, in order"
-    );
-    tx.send(vec![6, 7]).unwrap();
-    assert_eq!(binary(&next(&core, &woke).1), [6, 7]);
-    drop(tx);
-    let (_, end) = next(&core, &woke);
-    assert!(
-        matches!(&end, Outcome::Failed { kind: FailureKind::Network, message } if message == "the byte stream ended"),
-        "{end:?}"
-    );
-    assert!(settled(&core), "the stream's reservation ends with it");
-}
-
-#[test]
-fn a_byte_stream_past_its_bound_delivers_what_waits_then_ends_refused() {
-    let (core, script, woke) = setup();
-    core.run_owned(bytes_stream(1, "/bytes", 8), None).unwrap();
-    let tx = feed(&script, 0);
-    tx.send(vec![1; 5]).unwrap();
-    queued(&core, 1, 5);
-    tx.send(vec![2; 5]).unwrap();
-    // The reader ends the stream once the second read would pass the bound.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !core.shared.state.lock().unwrap().running.is_empty() {
-        assert!(Instant::now() < deadline, "the stream did not end");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert_eq!(
-        binary(&next(&core, &woke).1),
-        [1; 5],
-        "the queued bytes first"
-    );
-    let (_, end) = next(&core, &woke);
-    assert!(
-        matches!(&end, Outcome::Failed { kind: FailureKind::Refused, message } if message == "byte stream receive queue exceeds the response ceiling"),
-        "{end:?}"
-    );
-}
-
-#[test]
-fn a_byte_stream_that_is_not_2xx_and_a_rust_sources_body_are_one_answer() {
-    let (core, _, woke) = setup();
-    core.run_owned(bytes_stream(1, "/plain", 4096), None)
-        .unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 404),
-        "{outcome:?}"
-    );
-    core.run_owned(stream(2, "/other", 4096), None).unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 200 && r.body == b"done"),
-        "{outcome:?}"
-    );
-    assert!(settled(&core));
-}
-
-#[test]
-fn a_byte_stream_with_no_body_is_one_answer_as_on_the_web() {
-    let (core, _, woke) = setup();
-    core.run_owned(bytes_stream(1, "/empty", 4096), None)
-        .unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 204),
-        "{outcome:?}"
-    );
-    let mut head = bytes_stream(2, "/other", 4096);
-    head.request.method = "HEAD".into();
-    core.run_owned(head, None).unwrap();
-    let (_, outcome) = next(&core, &woke);
-    assert!(
-        matches!(&outcome, Outcome::Response(r) if r.status == 200),
-        "{outcome:?}"
-    );
-    assert!(settled(&core));
-}
+#[path = "byte_stream_tests.rs"]
+mod byte_tests;
 
 #[test]
 fn an_upload_tells_its_bytes_sent_then_its_reply_ends_it() {

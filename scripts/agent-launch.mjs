@@ -576,11 +576,10 @@ export function parseFlags(argv) {
     else if (argv[i] === '--open') (flags.open ??= []).push(resolve(value()));
     else if (argv[i] === '--url') flags.url = value();
     else if (argv[i] === '--device') flags.device = true;
-    // Android: the app on the Canvas reader (its APK), not the Linux host headless. Said as the variable
-    // `agent-android.mjs` reads, as `--sim` is said as EXACT_SIM: the driver's own file is at its line cap.
-    else if (argv[i] === '--reader') { flags.reader = true; process.env.EXACT_ANDROID_READER = '1'; }
+    // Android: the app on the Canvas reader (its APK), not the Linux host headless (`open`'s `reader`).
+    else if (argv[i] === '--reader') flags.reader = true;
     // `--headless`: the Linux host under adb shell, which an `exact new` app's `agent android` asks for with it (app-cli.mjs).
-    else if (argv[i] === '--headless') { flags.reader = false; delete process.env.EXACT_ANDROID_READER; }
+    else if (argv[i] === '--headless') flags.reader = false;
     else if (argv[i] === '--seed') flags.seed = Number(value());
     else if (argv[i] === '--locale') flags.locale = value();
     else if (argv[i] === '--format-locale') flags.formatLocale = value();

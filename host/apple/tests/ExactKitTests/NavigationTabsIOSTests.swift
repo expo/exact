@@ -52,11 +52,12 @@ final class NavigationTabsIOSTests: XCTestCase {
     /// default window is iPhone 17's size at the screen's top left, which on
     /// a larger phone (iPhone Air, 18 Pro Max) ends above the indicator, and
     /// UIKit gives it no bottom inset.
-    private func fixture(_ label: String, module: Bool = false, wholeScreen: Bool = false, plan key: String = "EXACT_FIXTURE_PLAN") throws -> ExactSession {
+    private func fixture(_ label: String, module: Bool = false, wholeScreen: Bool = false, plan key: String = "EXACT_FIXTURE_PLAN", prepare: ((ExactSession) -> Void)? = nil) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[key], "build.mjs --test --ios compiles \(key)")))
         let session = ExactApp.shared.makeSession(label: label)
         sessions.append(session)
+        prepare?(session)
         let view = ExactView(session: session)
         let host = UIViewController()
         // In the test host's scene when it has one: UIKit presents a sheet
@@ -305,6 +306,59 @@ final class NavigationTabsIOSTests: XCTestCase {
         // An authored colour on the tablist is the bar's own.
         p.apply(wireBatch([["op": "style", "id": Int(list.id), "style": ["accent_color": [0x38, 0x38, 0xf5, 255], "written": ["accent_color"]]]]))
         XCTAssertEqual(rgb(tabs.tabBar.tintColor), [0x38, 0x38, 0xf5])
+    }
+
+    func testOverflowingAuthoredTabsSettleAtLaunch() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the authored tabs need their window safe area and control dispatch") }
+        var calls = 0, depth = 0, maximumDepth = 0
+        var history: [String] = []
+        var deliver: (([(UInt32, HostCover?)]) -> Void)?
+        let session = try fixture("overflowing-authored-tabs", wholeScreen: true, plan: "EXACT_OVERFLOWING_TABS_PLAN", prepare: { session in
+            deliver = session.presenter.onCovers
+            session.presenter.onCovers = { changes in
+                depth += 1
+                defer { depth -= 1 }
+                maximumDepth = max(maximumDepth, depth)
+                calls += 1
+                history.append(String(describing: changes))
+                if depth < 3 && calls < 24 { deliver?(changes) }
+            }
+        })
+        let p = session.presenter, list = try node(session, "tabs")
+        defer { p.onCovers = deliver }
+        XCTAssertEqual(maximumDepth, 1, history.joined(separator: "\n"))
+        XCTAssertLessThan(calls, 24, history.joined(separator: "\n"))
+        XCTAssertEqual(list.bounds.width, try XCTUnwrap(session.view).bounds.width + 8, accuracy: 0.5,
+                       "authored content-box overflow stays authored")
+        if case .edges(let edges)? = p.navigation.covers[list.id] {
+            XCTAssertLessThanOrEqual(edges.right, try XCTUnwrap(window).safeAreaInsets.right + 0.5, history.joined(separator: "\n"))
+        }
+        let settled = calls
+        for _ in 0..<12 { session.view?.layoutIfNeeded(); p.navigation.reportCovers() }
+        XCTAssertEqual(calls, settled, "unchanged geometry sends no further cover")
+        try tapNode(session, "tab-saved")
+        until("the overflowing tablist still selects Saved") { p.navigation.routerTab == 1 }
+    }
+
+    func testNavigationCoverCorrectionsDoNotNestAndStopAnOscillation() {
+        let p = Presenter()
+        let navigation = p.navigation
+        p.apply(wireBatch([["op": "create", "id": 1, "kind": "view"], ["op": "roots", "ids": [1]]]))
+        var count = 0, depth = 0, maximumDepth = 0
+        p.onCovers = { _ in
+            depth += 1
+            defer { depth -= 1 }
+            maximumDepth = max(maximumDepth, depth)
+            count += 1
+            guard count < 20 else { return }
+            navigation.covers = count % 2 == 0 ? [1: .whole] : [:]
+            p.afterBatch { navigation.deliverCovers() }
+        }
+        defer { p.onCovers = nil }
+        navigation.covers = [1: .whole]
+        navigation.deliverCovers()
+        XCTAssertEqual(maximumDepth, 1)
+        XCTAssertLessThan(count, 20)
     }
 
     func testAppearanceToggleCoversSettleWithoutRepeatedDelivery() throws {
