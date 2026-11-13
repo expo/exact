@@ -16,6 +16,7 @@ import { backdropValue as backdropCss } from './backdrop.js';
 import { onEnd, effect, say, inflight, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
 import { Adopt, adopting } from './mount.js';
 import { input } from './pieces.js';
+import { autofocusProp } from './focus.js';
 const SVG = 'http://www.w3.org/2000/svg';
 /** An element under `p`: its static class, attributes and text. */
 export function h(p, tag, cls, attrs, text, ns) {
@@ -39,6 +40,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (attrs) {
     for (const k in attrs)
       if (NOT_DOM.test(k)) e['$' + k] = attrs[k];
+      else if (k === 'autofocus') autofocusProp(e, attrs[k] !== 'false');
       else {
         e.setAttribute(k, rel(k, attrs[k]));
         if (k === 'data-exact-f' || k.startsWith('data-exact-f-')) bits |= Number(attrs[k]);
@@ -110,6 +112,7 @@ function adopt(p, tag, cls, attrs) {
     for (const k in attrs) {
       const v = rel(k, attrs[k]);
       if (NOT_DOM.test(k)) e['$' + k] = v;
+      else if (k === 'autofocus') autofocusProp(e, v !== 'false');
       else if (e.getAttribute(k) !== v) e.setAttribute(k, v);
     }
     if (tag === 'a') Links?.made(e, attrs, rendered);
@@ -222,15 +225,12 @@ export function P(e, name, f) {
       if (v != null) (Scrolls.get(e) ?? Scrolls.set(e, {}).get(e))[name] = Number(v);
     } else if (BOOL.test(name)) {
       if (name === 'inert') e.authoredInert = v === 'true';
-      e.toggleAttribute(name, v === 'true');
+      if (name === 'autofocus') autofocusProp(e, v === 'true');
+      else e.toggleAttribute(name, v === 'true');
       // HTML focus fixup, now, for a control only (glue.js)
       if (name === 'disabled' && v === 'true' && document.activeElement === e && e.matches(':disabled')) e.blur();
       if (name === 'checked') e.checked = e.$checked = v === 'true';
       if (name === 'muted') e.muted = v === 'true';
-      if (name === 'autofocus') {
-        if (v === 'true') e.removeAttribute('data-autofocus');
-        else e.setAttribute('data-autofocus', 'false');
-      }
     } else if (v == null) {
       if (e.hasAttribute(name) || suppressedInvocation(e, name)) {
         e.removeAttribute(name);

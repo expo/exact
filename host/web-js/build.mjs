@@ -1068,7 +1068,23 @@ async function copyLazyModules(roots) {
 if (existsSync(gpuLib)) {
   await copyLazyModules(['gpu-glue.js']);
 }
-if (pageModules) cpSync(moduleDirectory(appDir, 'web'), resolve(out, 'modules'), { recursive: true });
+if (pageModules) {
+  const modules = resolve(out, 'modules');
+  cpSync(moduleDirectory(appDir, 'web'), modules, { recursive: true });
+  // The artifact may import helpers or load data at stable URLs. Hash the copied tree the page loads.
+  if (devReload) {
+    const files = [];
+    const visit = dir => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = resolve(dir, entry.name);
+        if (entry.isDirectory()) visit(file);
+        else files.push([relative(modules, file).split(sep).join('/'), createHash('sha256').update(readFileSync(file)).digest('hex')]);
+      }
+    };
+    visit(modules);
+    devLogic.push(['native', createHash('sha256').update(JSON.stringify(files.sort(([a], [b]) => a.localeCompare(b)))).digest('hex')]);
+  }
+}
 // Launch modules' web services, which marks.js imports after startup.
 for (const m of launchWeb) cpSync(m.web, resolve(out, 'launch', m.name, 'service.js'));
 copyStaticTreeIfPresent(resolve(appDir, 'assets'), resolve(out, 'assets'));
