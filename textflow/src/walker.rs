@@ -74,14 +74,11 @@ impl WhiteSpace {
             WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::Pre
         )
     }
-    /// A forced break under this mode: all hard breaks when preserving,
-    /// only a line feed under `pre-line`.
+    /// A forced break under this mode: only a line feed, under every mode
+    /// that keeps segment breaks, as Chrome renders it. A carriage return,
+    /// form feed, NEL, U+2028 or U+2029 never forces one.
     pub fn forces_break(self, ch: char) -> bool {
-        match self {
-            WhiteSpace::PreWrap | WhiteSpace::Pre => hard_break(ch),
-            WhiteSpace::PreLine => ch == '\n',
-            WhiteSpace::Normal | WhiteSpace::Nowrap => false,
-        }
+        self.preserves_breaks() && ch == '\n'
     }
     /// `text-wrap-mode: wrap`: soft wrap opportunities may end a line.
     pub fn wraps(self) -> bool {
@@ -202,9 +199,8 @@ impl Prepared {
             content_end: 0,
         };
         let preserve = options.white_space.preserves();
-        // A forced break: every Unicode hard break when preserving, only a line
-        // feed under `pre-line`. Of the rest, only a carriage return or a line
-        // feed collapses; a form feed, NEL, U+2028 or U+2029 is text.
+        // A forced break only at a line feed. Of the rest, only a carriage
+        // return or a line feed collapses; a form feed, NEL, U+2028 or U+2029 is text.
         let forced = |ch| options.white_space.forces_break(ch);
         let whitespace = |ch| collapsible(ch) && !forced(ch);
         let mut start = 0;
@@ -310,10 +306,12 @@ impl Prepared {
     }
 
     /// Source ink range; trailing hanging spaces carry no ink, leading preserved spaces remain.
+    /// A preserved line ends in ink at a form feed, NEL, U+2028 or U+2029: the
+    /// walker measures them as text, so only what it hangs or breaks at is trimmed.
     pub fn paint_range(&self, text: &str, range: Range<usize>) -> Range<usize> {
         let raw = &text[range.clone()];
         if self.options.white_space.preserves() {
-            range.start..range.start + raw.trim_end_matches(|ch| space(ch) || hard_break(ch)).len()
+            range.start..range.start + raw.trim_end_matches(collapsible).len()
         } else {
             let trim = collapsible;
             let leading = raw.len() - raw.trim_start_matches(trim).len();
