@@ -85,10 +85,10 @@ export function createGame(destination, directory = import.meta.dir, options = {
         removed = true;
       }
     } catch {}
-    // The Cargo error names a manifest in the game, which is gone now: the
-    // SDK's own game workspace locks the same engine crates.
+    // The Cargo error names a manifest in the game, which is gone now. exact
+    // setup fetches the game SDK lock a new game resolves from (sdkFetch).
     if (removed && /^game Cargo graph: /.test(error?.message ?? '')) {
-      error.message += `\nexact new removed ${destination}. Fetch the engine's crates with cargo fetch --manifest-path ${JSON.stringify(resolve(directory, 'Cargo.toml'))}, then run exact new again.`;
+      error.message += `\nexact new removed ${destination}. Fetch the game SDK's crates with bun ${JSON.stringify(resolve(directory, '../scripts/exact.mjs'))} setup, then run exact new again.`;
     }
     throw error;
   }
