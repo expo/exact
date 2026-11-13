@@ -156,6 +156,21 @@ impl<D: DataSource> Host<D> {
         self.flights.running.len() != before
     }
 
+    /// A destination that stopped rendering (`display: none`, a hidden route)
+    /// has no live definition, so its flight ends with the reader's.
+    pub(crate) fn retire_unrendered_flights(&mut self, alive: &[u64]) {
+        let engine = &mut self.engine;
+        let row_dirty = &mut self.row_dirty;
+        self.flights.running.retain(|f| {
+            let rendered = alive.contains(&motion_node(f.frame.to));
+            if !rendered {
+                engine.remove(motion_node(f.frame.to) | FLIGHT);
+                row_dirty.node(f.frame.to);
+            }
+            rendered
+        });
+    }
+
     pub(crate) fn flight_frames(&self) -> Vec<FlightFrame> {
         self.flights
             .running

@@ -31,9 +31,10 @@ class SharedElementsTest {
     }
     private fun definition(k: Long, box: RectF, image: Int = 0, fit: Int = 0,
         crop: RectF = box, group: Int = 0, row: Int = 0, layers: IntArray = intArrayOf(),
-        parents: List<Long> = emptyList(), content: IntArray = intArrayOf(), opacity: Float = 1f): IntBuffer {
+        parents: List<Long> = emptyList(), content: IntArray = intArrayOf(), opacity: Float = 1f,
+        scale: Float = 1f, contentBox: RectF = box): IntBuffer {
         val head = key(k) + intArrayOf(k.toInt(), group, row, 0, 0) + rect(box) + f(12f) + image + rect(crop) +
-            intArrayOf(fit, 400, 200) + rect(RectF(0f, 0f, 1f, 1f)) + rect(box) + f(opacity) + layers.size + layers + parents.size + parents.flatMap { key(it).toList() }.toIntArray()
+            intArrayOf(fit, 400, 200) + rect(RectF(0f, 0f, 1f, 1f)) + rect(contentBox) + f(opacity) + f(scale) + layers.size + layers + parents.size + parents.flatMap { key(it).toList() }.toIntArray()
         val paint = if (content.isNotEmpty()) content else intArrayOf(1, f(1f), 0, 0, f(1f), 0, 0, 2, Color.RED) + rect(box) + IntArray(8)
         return IntBuffer.wrap(intArrayOf(50, head.size + paint.size) + head + paint)
     }
@@ -107,6 +108,24 @@ class SharedElementsTest {
         t.define(definition(2, RectF(0f, 0f, 400f, 400f), 8, 2, RectF(0f, 100f, 400f, 300f)))
         t.draw(); assertEquals(8, t.shared.shown(2)!!.image)
         t.shared.releaseImages { freed.add(it) }; assertEquals(listOf(7), freed)
+    }
+
+    @Test fun pendingRasterFitsItsNaturalSizeInDevicePixels() {
+        // A 400 by 200 point photo covers 1200 by 600 device pixels at density 3, and twice that under a 2x layer.
+        for ((fit, crops) in listOf(
+            4 to listOf(RectF(-150f, 150f, 1050f, 750f), RectF(-300f, 300f, 2100f, 1500f)),
+            5 to listOf(RectF(0f, 225f, 900f, 675f), RectF(0f, 450f, 1800f, 1350f)))) {
+            val t = Fixture()
+            t.pictures[7] = Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)
+            t.shared.begin(state(listOf(1)))
+            t.define(definition(1, RectF(30f, 60f, 330f, 360f), 7, 3, scale = 3f)); t.shared.finish()
+            t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 1f))))
+            t.define(definition(2, RectF(0f, 0f, 900f, 900f), fit = fit, scale = 3f, layers = intArrayOf(3))); t.shared.finish()
+            for ((layerScale, crop) in listOf(1f, 2f).zip(crops)) {
+                t.layerScale = layerScale; t.draw()
+                assertRect(crop, t.shared.shown(2)!!.crop)
+            }
+        }
     }
 
     @Test fun nestedSlotsFlyIndependentlyAndReducedMotionRestoresBoth() {

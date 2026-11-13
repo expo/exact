@@ -282,6 +282,8 @@ impl<D: DataSource> Presenter<D> {
                 .flights
                 .recorded
                 .clone_from(&self.brush.shared.recorded);
+            self.host
+                .retire_unrendered_flights(&self.brush.shared.alive);
         }
         for key in self.brush.flow_failures().collect::<Vec<_>>() {
             if let Some(node) = self.host.kernel().node_by_key(key) {

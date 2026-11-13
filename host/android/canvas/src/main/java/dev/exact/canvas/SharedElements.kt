@@ -34,6 +34,8 @@ internal class SharedElements(
         var unit = RectF(0f, 0f, 1f, 1f)
         var radius = 0f
         var opacity = 1f
+        /** Device pixels a point covers where this definition was recorded. */
+        var scale = 1f
         var image = 0
         var fit = 0
         var naturalW = 0f
@@ -112,10 +114,10 @@ internal class SharedElements(
         e.image = b.get(h + 12); e.crop = rect(b, h + 13)
         e.fit = b.get(h + 17); e.naturalW = b.get(h + 18).toFloat(); e.naturalH = b.get(h + 19).toFloat()
         e.unit = rect(b, h + 20); e.contentBox = rect(b, h + 24)
-        e.opacity = f(b, h + 28)
-        val count = b.get(h + 29)
-        e.layers = IntArray(count) { b.get(h + 30 + it) }
-        val parents = h + 30 + count
+        e.opacity = f(b, h + 28); e.scale = f(b, h + 29)
+        val count = b.get(h + 30)
+        e.layers = IntArray(count) { b.get(h + 31 + it) }
+        val parents = h + 31 + count
         e.parents = LongArray(b.get(parents)) { key(b, parents + 1 + it * 2) }
         val body = parents + 1 + 2 * e.parents.size
         val end = at + 2 + b.get(at + 1)
@@ -177,7 +179,9 @@ internal class SharedElements(
         val placed = placed(e)
         if (e.fit == 0 || e.image != 0) return placed
         val content = map(e, e.contentBox)
-        val crop = fitted(from.naturalW, from.naturalH, e.fit, content)
+        // Natural sizes are in points; the content box is in device pixels under its live layers.
+        val scale = e.scale * content.width() / e.contentBox.width().coerceAtLeast(0.001f)
+        val crop = fitted(from.naturalW * scale, from.naturalH * scale, e.fit, content)
         return placed.copy(crop = crop, image = from.image, naturalW = from.naturalW,
             naturalH = from.naturalH, unit = from.unit)
     }

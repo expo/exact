@@ -839,6 +839,7 @@ impl Painter {
                 self.rank_passes += 1;
             }
         }
+        self.drop_unrendered_flights();
         self.backend.shared_frame(&self.shared);
         let mut walk = Walk {
             scene,

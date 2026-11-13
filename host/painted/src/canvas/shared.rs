@@ -132,6 +132,8 @@ impl Recorder {
         header.extend([unit.0, unit.1, unit.2, unit.3].map(f32::to_bits));
         header.extend(content.map(f32::to_bits));
         header.push(e.opacity.to_bits());
+        // Device pixels a point covers here: natural image sizes are in points.
+        header.push(scale.to_bits());
         let layers = self.layers.shared_ancestors();
         header.push(layers.len() as u32);
         header.extend(layers);
@@ -190,7 +192,7 @@ mod tests {
                 SET => {
                     let h = at + 2;
                     out.push(&ops[h..end]);
-                    let parents = h + 30 + ops[h + 29] as usize;
+                    let parents = h + 31 + ops[h + 30] as usize;
                     out.extend(sets(&ops[parents + 1 + ops[parents] as usize * 2..end]));
                 }
                 ROW_BEGIN => out.extend(sets(&ops[at + 6..end - 1])),
@@ -317,6 +319,107 @@ mod tests {
     }
 
     #[test]
+    fn invisible_shared_images_use_the_live_subtree() {
+        for (parent, own, fit) in [
+            ("", "", 3),
+            ("", "visibility=\"hidden\"", 0),
+            ("visibility=\"hidden\"", "", 0),
+            ("visibility=\"hidden\"", "visibility=\"visible\"", 3),
+        ] {
+            let app = format!("component App\n  view\n    column {parent}\n      image \"\" sharedElement=\"photo\" object-fit=\"cover\" width=80 height=60 {own}\n");
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&app),
+                (),
+                (400., 800.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let ops = take();
+            let defs = sets(&ops);
+            assert_eq!(defs.len(), 1);
+            assert_eq!(
+                defs[0][17], fit,
+                "a raster flight draws pixels the page itself skips: {parent} {own}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_destination_that_stops_rendering_retires_its_flight() {
+        for (ancestor, own) in [
+            ("", " display=(hidden ? \"none\" : \"flex\")"),
+            (" display=(hidden ? \"none\" : \"flex\")", ""),
+        ] {
+            let app = format!(
+                r#"component App
+  state open = false
+  state hidden = false
+  action toggle
+    open = not open
+  action hide
+    hidden = not hidden
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      button "Hide" press=hide testId="hide"
+      column{ancestor}
+        if open
+          column sharedElement="card" width=300 height=200{own} -exact-layout-transition="1s linear"
+            button "Inside" press=toggle testId="inside"
+        else
+          view sharedElement="card" width=80 height=60 -exact-layout-transition="1s linear"
+"#
+            );
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&app),
+                (),
+                (400., 700.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let id = |p: &Presenter<()>, name: &str| {
+                let key = p.host().kernel().find_by_test_id(name)[0];
+                p.host().kernel().node_by_key(key).unwrap().id
+            };
+            p.tap(id(&p, "toggle")).unwrap();
+            p.frame();
+            assert_eq!(p.host().flight_frames().len(), 1);
+            take();
+            p.tap(id(&p, "hide")).unwrap();
+            p.frame();
+            let ops = take();
+            assert_eq!(ops[0], STATE);
+            assert_eq!(
+                ops[3..5],
+                [0, 0],
+                "a destination that is not rendered has no flight and no live definition"
+            );
+            assert!(
+                p.host().flight_frames().is_empty(),
+                "the host retires a flight whose destination stopped rendering"
+            );
+            p.tap(id(&p, "hide")).unwrap();
+            p.frame();
+            let child = id(&p, "inside");
+            assert!(!p.host().flying(child));
+            let rect = p.boxes().iter().find(|b| b.id == child).unwrap().rect;
+            assert_eq!(
+                p.hit(rect.0 + 5., rect.1 + 5.),
+                Some(child),
+                "shown again, the destination is interactive at once"
+            );
+        }
+    }
+
+    #[test]
     fn idle_named_rows_are_retained_and_emit_no_repeated_lifecycle() {
         let app = "component App\n  view\n    scroll width=300 height=300\n      column\n        box sharedElement=\"a\" width=100 height=80 background-color=\"red\"\n        box sharedElement=\"b\" width=100 height=80 background-color=\"blue\"\n";
         let (mut p, error) = Presenter::boot_with(
@@ -434,7 +537,7 @@ mod tests {
             let defs = sets(ops);
             assert_eq!(defs.len(), 1, "flight-dependent drawing must be refreshed");
             let def = defs[0];
-            let parents = 30 + def[29] as usize;
+            let parents = 31 + def[30] as usize;
             let mut at = parents + 1 + def[parents] as usize * 2;
             while at < def.len() {
                 if def[at] == RRECT {
@@ -499,7 +602,7 @@ mod tests {
             if ops[at] == SET {
                 let key = |i| u64::from(ops[i]) | u64::from(ops[i + 1]) << 32;
                 let h = at + 2;
-                let parents = h + 30 + ops[h + 29] as usize;
+                let parents = h + 31 + ops[h + 30] as usize;
                 let names = (0..ops[parents] as usize)
                     .map(|i| key(parents + 1 + i * 2))
                     .collect();

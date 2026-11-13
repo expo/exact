@@ -47,6 +47,11 @@ impl Painter {
             let Some(node) = scene.kernel.node(id) else {
                 continue;
             };
+            // A subtree that does not render records no definition, so its
+            // names are not alive: the reader must not keep flying them.
+            if (scene.hidden)(id) || node.style.display == Display::None {
+                continue;
+            }
             if node
                 .props
                 .str(PropId::SharedElement)
@@ -69,6 +74,14 @@ impl Painter {
         }
         let alive: std::collections::HashSet<_> = self.shared.alive.iter().copied().collect();
         self.shared.recorded.retain(|key| alive.contains(key));
+    }
+
+    /// A flight whose destination stopped rendering ends with its definition.
+    pub(super) fn drop_unrendered_flights(&mut self) {
+        let alive = &self.shared.alive;
+        self.shared
+            .frames
+            .retain(|f| alive.contains(&motion_node(f.to)));
     }
 
     pub(super) fn node_at(
@@ -105,7 +118,10 @@ impl Painter {
         } else {
             ts.pre_translate(shown.layout[0], shown.layout[1])
         };
-        let image = (node.node_type == NodeType::Image)
+        // `visibility: hidden` paints no pixels of this node, so a flight must
+        // not draw its raster either; visible descendants stay live content.
+        let painted = paints(walk.scene.kernel, id, walk.reveal);
+        let image = (painted && node.node_type == NodeType::Image)
             .then(|| walk.scene.images.get(&id))
             .flatten()
             .and_then(|image| {
@@ -114,7 +130,8 @@ impl Painter {
             });
         // Symbols, animated pictures and decorated images keep their live drawing.
         // A plain raster can independently interpolate its fitted image rectangle.
-        let plain_image = node.node_type == NodeType::Image
+        let plain_image = painted
+            && node.node_type == NodeType::Image
             && !node
                 .props
                 .str(PropId::ImageSource)
