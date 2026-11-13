@@ -172,6 +172,7 @@ pub(super) fn file_by_file(sources: &Sources, strings: &Option<Arc<Strings>>) ->
         };
         let hidden: Vec<_> = hidden.into_iter().map(|h| (id as u32, h)).collect();
         graph.index.clear();
+        graph.alone = Some(id as u32);
         graph.ids.clear();
         graph.ambiguous.clear();
         graph.hidden = shadows(&file, &hidden);

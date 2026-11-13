@@ -42,6 +42,8 @@ struct Reference {
 }
 type Names = BTreeMap<String, usize>;
 type Owners = BTreeMap<String, Names>;
+/// A shape's body, by its name and the source read alone that declares it.
+type Shapes = BTreeMap<(Option<u32>, String), String>;
 #[derive(Default)]
 struct Graph {
     definitions: Vec<Definition>,
@@ -58,7 +60,10 @@ struct Graph {
     /// mean it, so it gets no edge.
     hidden: Vec<partial::Shadow>,
     /// Each shape a definition's type names, with its body.
-    shapes: BTreeMap<String, String>,
+    shapes: Shapes,
+    /// The one source being read, when each is read on its own: two of them
+    /// may declare different shapes of one name.
+    alone: Option<u32>,
 }
 impl Graph {
     fn define(
@@ -199,7 +204,7 @@ impl Graph {
             count += 1;
         }
         out.push(b']');
-        types::write(&mut out, &self.shapes);
+        types::write(&mut out, sources, &self.shapes);
         close(out, errors)
     }
 }
@@ -296,9 +301,9 @@ pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSy
     let nothing = |errors: Vec<CompileError>| PartialSymbols {
         json: close(
             if name.is_some() {
-                b"{\"definitions\":[],\"references\":[],\"shapes\":{}".to_vec()
+                b"{\"definitions\":[],\"references\":[],\"shapes\":[]".to_vec()
             } else {
-                b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":{}".to_vec()
+                b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":[]".to_vec()
             },
             &errors,
         ),

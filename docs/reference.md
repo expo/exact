@@ -204,7 +204,11 @@ A definition the type checker types carries `type`, its type in TypeScript as
 inject, resource, mutation (`T | null`), local or parameter by its value, a shape
 by its fields, a field by its value, an action or `fn` as a function of its
 parameters. An enum is the union of its strings, `"a" | "b"`. A shape inside a type is written by its name,
-and `shapes` maps each name used so to the shape's fields, `{ id: string }`.
+and `shapes` lists each shape used so, its `name` and its fields as `type`,
+`{ id: string }`. When loading stopped and each file was read on its own, a
+shape also has the `file` it was read in: two files may declare different
+shapes of one name. A bare `action` prop or inject has no `type`: its arity is
+what it is called with.
 A route, component, source, style, task or ID has no `type`. When the type
 check refused, only what is declared keeps one: shapes, fields, and `fn`s and
 their parameters.

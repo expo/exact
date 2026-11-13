@@ -618,7 +618,8 @@ component Row
             Some("(item: Item, note: string) => void"),
         ),
         (ty("parameter", "note", Some("save")), Some("string")),
-        (ty("prop", "pick", None), Some("() => void")),
+        // A bare `action` prop is called with two arguments here: its arity is not declared.
+        (ty("prop", "pick", None), None),
         (local("next", 17), Some("number")),
         (local("i", 13), Some("Item")),
         (local("item", 22), Some("Item")),
@@ -630,17 +631,65 @@ component Row
     ] {
         assert_eq!(got.as_deref(), expected, "{graph}");
     }
-    let shapes = graph["shapes"].as_object().unwrap();
-    assert_eq!(shapes["Item"], item);
-    assert_eq!(shapes["Tag"], "{ name: string }");
+    let shape = |name: &str| {
+        let shapes = graph["shapes"].as_array().unwrap();
+        let found: Vec<_> = shapes.iter().filter(|s| s["name"] == name).collect();
+        assert_eq!(found.len(), 1, "{name}: {graph}");
+        // A program that loaded is one scope: no shape names a file.
+        assert!(found[0].get("file").is_none(), "{graph}");
+        found[0]["type"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(shape("Item"), item);
+    assert_eq!(shape("Tag"), "{ name: string }");
     // The router's shapes, which no file declares, are named by the router state's type.
     assert_eq!(
-        shapes["Router"],
+        shape("Router"),
         "{ tab: string; tabs: Tab[]; next: number }"
     );
-    assert!(["Tab", "Entry", "Params"]
-        .iter()
-        .all(|s| shapes.contains_key(*s)));
+    for name in ["Tab", "Entry", "Params"] {
+        shape(name);
+    }
+}
+
+/// When loading stops, each file is read on its own, and two of them may
+/// declare different shapes of one name: each keeps its own.
+#[test]
+fn files_read_on_their_own_keep_their_own_shapes_of_one_name() {
+    let f = Fixture::new("alone-shapes");
+    let other = f.write(
+        "other.contract",
+        "shape Item\n  title: string\nfn name(value: Item): string = value.title\n",
+    );
+    let app = f.write(
+        "app.contract",
+        r#"use Gone from "./gone.contract"
+use name from "./other.contract"
+shape Item
+  id: number
+fn key(value: Item): number = value.id
+component App
+  view
+    text "x"
+"#,
+    );
+    let partial = contract::symbols_json(&app, None).unwrap_err();
+    let graph: Value = serde_json::from_str(&partial.json).unwrap();
+    let of = |file: &std::path::Path| {
+        let file = file.canonicalize().unwrap();
+        let found: Vec<_> = (graph["shapes"].as_array().unwrap().iter())
+            .filter(|s| {
+                s["name"] == "Item"
+                    && s["file"]
+                        .as_str()
+                        .is_some_and(|at| std::path::Path::new(at).canonicalize().unwrap() == file)
+            })
+            .map(|s| s["type"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(found.len(), 1, "{graph}");
+        found[0].clone()
+    };
+    assert_eq!(of(&app), "{ id: number }");
+    assert_eq!(of(&other), "{ title: string }");
 }
 
 #[test]
