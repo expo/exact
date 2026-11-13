@@ -1,6 +1,6 @@
 import { writePrivacyManifest } from './privacy.mjs';
 // @ref LLP 1126 D2/D8 — one runtime framework, one generated widget bundle.
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, existsSync, writeFileSync, readFileSync, copyFileSync, cpSync, rmSync, renameSync, statSync, lstatSync, utimesSync } from 'node:fs';
 import { createHash, X509Certificate } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -182,16 +182,32 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
   const dylib = resolve(bin, 'libExactCore.dylib');
   const archive = resolve(libDir, `lib${crate.replaceAll('-', '_')}.a`);
   const digest = createHash('sha256').update(readFileSync(archive)).update(linkedPlan?.digest ?? '').update(library?.sha256 ?? '').digest('hex');
+  // SwiftPM compiles the whole scratch again when any argument in its plan changes, link arguments included, and the
+  // archive and plan sat under the app's own directory: every switch between two widget apps recompiled about 32 s
+  // of Swift (expo/exact-build#177). They are linked from fixed paths here instead, copied in when their bytes change.
+  const inputs = resolve(base, 'link-inputs'), stableArchive = resolve(inputs, basename(archive)), stablePlan = linkedPlan && resolve(inputs, 'plan');
+  const placed = resolve(inputs, 'digest');
+  if (!existsSync(placed) || readFileSync(placed, 'utf8') !== digest || !existsSync(stableArchive)) {
+    rmSync(inputs, { recursive: true, force: true });
+    mkdirSync(inputs, { recursive: true });
+    copyFileSync(archive, stableArchive);
+    if (stablePlan) {
+      mkdirSync(stablePlan);
+      for (const file of ['app.plan', 'compat.json', 'app.hbc']) copyFileSync(resolve(linkedPlan.dir, file), resolve(stablePlan, file));
+    }
+    writeFileSync(placed, digest);
+  }
+  coreEnv.EXACT_LIB_DIR = inputs;
   // A package's framework (LLP 1154 D3), which the archive's shim calls, found beside this one in Frameworks.
   const linkLibrary = appleLinkArgs(library, platform !== 'macos', platform === 'macos' ? '@loader_path/../../..' : '@loader_path/..');
   const stamp = resolve(base, 'archive');
   // SwiftPM tracks neither an external archive nor the linked plan. Invalidate only its link;
   // the objects/module stay incremental, including on a kernel-only edit.
   if (!existsSync(stamp) || readFileSync(stamp, 'utf8') !== digest) rmSync(dylib, { force: true });
-  runApple('swift', [...args, ...linkLibrary, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactCore'], options);
+  runApple('swift', [...args, ...linkLibrary, ...linkedPlanArgs(stablePlan), '--product', 'ExactCore'], options);
   // Only the extension links the snapshot target. Keeping it out of the shared
   // runtime keeps SwiftUI and WidgetKit out of an ordinary app launch.
-  runApple('swift', [...args, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactSnapshot'], options);
+  runApple('swift', [...args, ...linkedPlanArgs(stablePlan), '--product', 'ExactSnapshot'], options);
   const changed = !existsSync(stamp) || readFileSync(stamp, 'utf8') !== digest || !existsSync(resolve(framework, 'ExactCore'));
   if (changed) {
     const layout = frameworkLayout(framework, 'ExactCore', platform === 'macos' ? 'MacOSX' : 'iPhoneOS');
