@@ -13,6 +13,8 @@ component TransparentBar
           header testId="header-home" display="flex" align-items="center" padding="8px 16px"
             text "Product" role="heading" aria-level=2
           scroll testId="home-scroll" flex=1 min-height=0 overflow-x="hidden"
-            view testId="hero" height=320 background-color="-exact-fill"
+            view testId="hero" height=320 position="relative" background-color="-exact-fill"
+              text "Hero control" testId="hero-control" position="absolute" top="var(--exact-safe-area-inset-top)"
+              box testId="document-inset" position="absolute" top=0 width=1 height="env(safe-area-inset-top)"
             text "Below the picture" testId="home-top"
             column height=1600 width=300

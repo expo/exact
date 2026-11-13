@@ -467,6 +467,8 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     // connection per render cost RealWorld most of its latency, measured
     // 2026-09-28); one that hit its deadline, with work in flight, is dropped.
     // The origins its declared sources carry too (LLP 1162.001 D3).
+    // HTTP answers belong to the server, across workers and expired renders
+    // (LLP 1153.001 D7); no runner or module state enters that cache.
     let grants =
         exact_runner::grants::with_declared(exact_runner::DataSource::grants(&settling), plan);
     let executor = EXECUTORS

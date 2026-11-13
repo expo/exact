@@ -41,11 +41,23 @@ replay it on a refresh unless upstream carries the same check.
 `text/event-stream` response identifies an event stream without an explicit
 request timeout. Connection and header limits and explicit timeouts still apply.
 Cancellation interrupts blocked reads; ordinary requests keep their limits.
-Classification uses the headers returned to callers, including the last
-`Content-Type` when it is repeated. `transport/rustls_timeout_tests.rs` probes
-both default deadlines and expired deadlines, explicit-timeout policy and
-agent reuse. `transport/stream_tests.rs` exercises later events, explicit
-timeout expiry, cancellation and release against loopback peers.
+The last `Content-Type` controls classification when it is repeated.
+`transport/rustls_timeout_tests.rs` probes both default deadlines and expired
+deadlines, explicit-timeout policy and agent reuse. `transport/stream_tests.rs`
+exercises later events, explicit timeout expiry, cancellation and release
+against loopback peers.
+
+## Repeated portable HTTP response fields
+
+`transport/rustls_http.rs` combines repeated `Cache-Control` and `Vary` fields
+in wire order, preserving every restriction and selector. Other fields keep
+their last value, including `Content-Type` for stream classification,
+`Location` for redirects and `Set-Cookie`. Exact's
+`host/executor/src/stream_tests.rs` checks event delivery before connection close
+(off Apple, where URLSession joins repeated fields).
+`host/executor/src/shared_cache_tests.rs` exercises repeated
+wire fields through the shared cache; `host/render/tests/it/http_cache.rs`
+checks that separate request renders still fetch private responses.
 
 ## Windows WebSocket readiness
 

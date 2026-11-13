@@ -50,7 +50,7 @@ import { grantAdvice } from './grant-advice.mjs';
 import { installIn } from './package-manager.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
-const { applyPattern, createApp, createGame, patternList, wireSnapback } = await import('../game/new.mjs');
+const { applyPattern, createApp, createGame, patternList, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
 const { gameDefaults, sdkFetch } = await import('../game/app/shells.mjs');
 const { HOST_SDKS, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
 const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/build.mjs');
@@ -763,7 +763,10 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
     throw new Error('exact new needs Rust (rustup) to build exact2\'s own tools, the compiler among them; install it, then run exact new again');
   }
   // A game is a path here, as an app is: `game/new.mjs` alone takes a bare name for game/games.
-  console.log(game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms}));
+  const created = game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms});
+  // A game's cache note is what to do next, so it comes after the compiler's line and the table.
+  const note = created.indexOf(`\n${UNCACHED_CRATES}`);
+  console.log(note < 0 ? created : created.slice(0, note));
   prebuildCompiler();
   if (report.some(row => !row.ok)) {
     // Builders read a bare "still needs" list as the reason a later command failed (bench diaries,
@@ -774,6 +777,7 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
       : '\nThe app was created; nothing below blocks it. Each is needed only for what it names (exact setup --check shows the whole table):');
     printReport(report, {onlyMissing: true});
   }
+  if (note >= 0) console.log(created.slice(note));
 }
 
 const USAGE = `exact — run an Exact app from the command line (macOS)

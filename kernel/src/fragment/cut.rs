@@ -505,7 +505,8 @@ pub(crate) fn container(
         &walk,
         Geometry {
             x0,
-            y0: y0 + align,
+            y0,
+            align,
             w,
             h,
             pitch,
@@ -570,6 +571,7 @@ fn align(v: AlignContent, free: f32) -> f32 {
 struct Geometry<'a> {
     x0: f32,
     y0: f32,
+    align: f32,
     w: f32,
     h: f32,
     /// The column height the walk broke at, which an absolutely positioned
@@ -611,7 +613,8 @@ fn publish(
     };
     let flow = &cutter.flow;
     let cols = walk.starts.len();
-    let shift = |k: usize| ((g.left)(k), g.y0 - walk.starts[k].1);
+    let aligned_y = g.y0 + g.align;
+    let shift = |k: usize| ((g.left)(k), aligned_y - walk.starts[k].1);
     let mut right = 0f32;
     let mut bottom = 0f32;
     let mut leftmost = 0f32;
@@ -623,7 +626,7 @@ fn publish(
     for k in 0..cols.max(g.n) {
         let column = Column {
             x: g.x0 + (g.left)(k),
-            y: g.y0,
+            y: aligned_y,
             width: g.w,
             height: g.h,
             holds: k < cols,
@@ -656,7 +659,7 @@ fn publish(
                 let (dx, dy) = shift(k);
                 Fragment {
                     x: g.x0 + (g.left)(k),
-                    y: g.y0,
+                    y: aligned_y,
                     width: g.w,
                     height: g.h,
                     lines: range(0, k),
@@ -733,17 +736,24 @@ fn publish(
         cut.fragments.push((b.slot, frags));
     }
     // D10.4: an absolutely positioned box takes the column holding its own
-    // flow-thread top, past the content's last column too.
+    // flow-thread top, past the content's last column too. Chrome adds the
+    // columns' alignment to that top first, and places the box as far below
+    // its column's top as the sum lies past the column's start, so
+    // `align-content: end` can carry a box several columns on. With
+    // `column-fill: auto` at a definite height, Chrome's columns are the
+    // content box, and the alignment moves the content inside them.
+    let column_top = if g.pitch > g.h { g.y0 } else { aligned_y };
     for a in &flow.absolutes {
         let (dx, dy) = if a.in_flow && cols > 0 {
-            let mut k = walk.starts.partition_point(|(_, s)| *s <= a.top).max(1) - 1;
+            let top = a.top + g.align;
+            let mut k = walk.starts.partition_point(|(_, s)| *s <= top).max(1) - 1;
             let mut s = walk.starts[k].1;
-            if k + 1 == cols && g.pitch > 0.0 && a.top >= s + g.pitch {
-                let more = ((a.top - s) / g.pitch).floor();
+            if k + 1 == cols && g.pitch > 0.0 && top >= s + g.pitch {
+                let more = ((top - s) / g.pitch).floor();
                 k += more as usize;
                 s += more * g.pitch;
             }
-            ((g.left)(k), g.y0 - s)
+            ((g.left)(k), column_top + g.align - s)
         } else {
             (0.0, 0.0)
         };
@@ -753,7 +763,7 @@ fn publish(
         }
         // Its column is part of the overflow too, as in Chrome.
         if a.in_flow && cols > 0 {
-            extend(g.x0 + dx, g.y0, g.w, g.pitch);
+            extend(g.x0 + dx, column_top, g.w, g.pitch);
         }
         cut.placements
             .push((a.slot, Placement { dx, dy, size: None }));

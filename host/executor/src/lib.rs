@@ -206,6 +206,7 @@ struct Shared {
     #[cfg(test)]
     queued_deadlines: Arc<AtomicUsize>,
     abort: AbortController,
+    http_cache: std::sync::OnceLock<SharedHttpCache>,
     /// Where the app's files are, as the host names them; unset on a host or
     /// drive that has none.
     root_paths: std::sync::OnceLock<[std::path::PathBuf; 3]>,
@@ -396,6 +397,7 @@ impl Core {
             #[cfg(test)]
             queued_deadlines: Arc::default(),
             abort: AbortController::new(),
+            http_cache: std::sync::OnceLock::new(),
             root_paths: std::sync::OnceLock::new(),
             roots: std::sync::OnceLock::new(),
             sockets: Mutex::default(),
@@ -1283,11 +1285,30 @@ fn execute(
     if let Some(outcome) = ended() {
         return outcome;
     }
+    let shared_cache = cache_job.0.http_cache.get();
     if let Some(outcome) =
-        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced)
-            .or_else(|| cache::missing(&request, forced))
+        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced).or_else(|| {
+            if shared_cache.is_none() {
+                cache::missing(&request, forced)
+            } else {
+                None
+            }
+        })
     {
         return outcome;
+    }
+    let mode = if forced && request.cache != exact_runner::CacheMode::NoStore {
+        exact_runner::CacheMode::Reload
+    } else {
+        request.cache
+    };
+    if shared_cache.is_some() {
+        if let Err(outcome) = cache::granted(files.grants, &request) {
+            return outcome;
+        }
+        if let Err(error) = reach::admit_cached(&request) {
+            return fetch_failure(error, abort);
+        }
     }
     let mut req = fetch_request(request, forced);
     cache::observe(cache_job.0, &mut req);
@@ -1298,7 +1319,11 @@ fn execute(
     // deadline over 60 s is not cut short by it.
     req.timeout = timeout.map(|ms| std::time::Duration::from_millis(u64::from(ms) + 1_000));
     let retry = cache::retry_request(cache_job.0, cache_job.1, &req);
-    let result = fetch.stream(req, &abort.signal()).and_then(check_headers);
+    let result = match shared_cache {
+        Some(cache) => cache.stream(&fetch, req, mode, &abort.signal()),
+        None => fetch.stream(req, &abort.signal()),
+    }
+    .and_then(check_headers);
     let redirected_conditional = result.as_ref().is_ok_and(|r| {
         cache::retry(
             &mut cache_job.0.state.lock().unwrap(),
@@ -1375,6 +1400,8 @@ mod body_to;
 
 mod admission;
 mod cache;
+mod shared_cache;
+pub use shared_cache::SharedHttpCache;
 pub mod preload;
 pub mod pump;
 mod reads;

@@ -115,7 +115,7 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
         "undeliverable parser step kinds: {}",
         crate::script::undeliverable_kinds()
     );
-    println!("delivered forms: tap press without modifiers; type replacement; clock +N, data, settle, until state (top-level); leading size (no layout); expect (host-only reads omitted)");
+    println!("delivered forms: tap press without modifiers; type replacement; clock +N, data, settle, until state (fields and indices included); leading size (no layout); expect (host-only reads omitted)");
     let mut delivery = crate::receipt::Delivery::default();
     let mut located = Vec::new();
     for (test_file, tests) in authored {
@@ -127,7 +127,6 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
             delivery.until_met += d.until_met;
             if let Some((_, kind, _)) = &d.stopped {
                 delivery.until_not_met += usize::from(kind == "clock until (not met)");
-                delivery.until_field_paths += usize::from(kind == "clock until (field path)");
             }
             delivery.mutation_events += d.mutation_events;
             delivery.mutation_bounds += d.mutation_bounds;
@@ -248,7 +247,7 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
     let mut found = Vec::new();
     let mut candidates = 0;
     for (i, (l, rust)) in located.iter().zip(&observations).enumerate() {
-        if let Err(e) = expectations_on(&l.scripted, rust) {
+        if let Err(e) = expectations_on(&l.scripted, &plan, rust) {
             println!(
                 "NOTE {}: with the oracle's data, {}",
                 l.scripted.case.name,

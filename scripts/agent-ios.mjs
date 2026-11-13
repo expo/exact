@@ -93,7 +93,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   // (`keepInstalledRelease`).
   let kept = null;
   try {
-    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a));
+    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true));
     if (kept.install) install(dev, bundle, a, hostFixture, true);
   } catch (e) {
     await touches?.close();
@@ -112,7 +112,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   };
   const childEnv = { ...process.env };
   for (const [k, v] of Object.entries(env)) childEnv[`SIMCTL_CHILD_${k}`] = v;
-  const crashName = hostFixture ? 'ExactHostIOS' : appleExecutableName(a);
+  const crashName = hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true);
   let closing = false;
   const crashes = crashWatch(crashName, bundle, { bundleId: id, udid: dev.udid }),
     // `logs`, a failed launch: this build's crash here (ReportCrash writes it seconds after the exit: LLP 1156.001 D4)

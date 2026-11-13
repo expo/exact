@@ -8,8 +8,6 @@ publish = false
 [[bin]]
 name = "windows-desk"
 path = "src/main.rs"
-test = false
-bench = false
 
 [dependencies]
 exact-kernel = { path = "../../kernel" }

@@ -237,3 +237,38 @@ fn relative_weight_in_a_pattern_is_computed_once() {
     };
     assert_eq!(text.chunks[0].runs[0].style.font_weight, 700);
 }
+
+/// Text resolves `url()` as a shape does: a server that names one colour
+/// paints it, a missing one paints its fallback (or nothing), and a
+/// gradient is attached.
+#[test]
+fn a_text_paint_server_resolves_as_a_shapes_does() {
+    let runs = runs(
+        r##"<defs>
+            <linearGradient id="one"><stop stop-color="#00f"/></linearGradient>
+            <linearGradient id="g" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#f00"/><stop offset="1" stop-color="#00f"/>
+            </linearGradient>
+        </defs>
+        <text fill="url(#missing) #f00">A</text>
+        <text fill="url(#one)">B</text>
+        <text fill="url(#g)">C</text>
+        <text fill="url(#missing)">D</text>"##,
+    );
+    let color = |i: usize| runs[i].fill.as_ref().map(|f| f.color.resolve(false));
+    assert_eq!(
+        color(0),
+        Some(exact_kernel::Color(0xff0000ff)),
+        "the fallback"
+    );
+    assert_eq!(
+        color(1),
+        Some(exact_kernel::Color(0x0000ffff)),
+        "the one stop"
+    );
+    assert!(
+        runs[2].fill.as_ref().is_some_and(|f| f.server.is_some()),
+        "the gradient"
+    );
+    assert!(runs[3].fill.is_none(), "no server and no fallback");
+}

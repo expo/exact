@@ -179,9 +179,15 @@ replay the landing; a disagreement still fails verification. The `.events` file
 records its `clock until` origin and bound in a comment. The bound has no effect
 in this world. The usual mutation clock runs after a met step.
 
-The observation matcher reads only top-level values. A field or index path such
-as `session.phase` or `rows.0` stops at `clock until (field path)` before landing.
-The receipt counts met waits, not-met stops and field-path stops separately.
+State expectations and waits resolve record fields and zero-based list indices
+through the compiled plan's shapes on either evaluator's observation. Paths such
+as `session.phase` and `rows.0.name` read the same positional values. Present
+options unwrap during traversal and at the resolved leaf. An existing `none`
+can match `none`; a missing root, field or index, or a path through `none` or
+a scalar, has no value and cannot match even `none`. Traversal
+and value scanning are bounded by the runner's value-depth limit. A wait on a
+missing path lands once, then stops as not met. The receipt counts met waits and
+not-met stops separately.
 A leading `size WxH` is consumed as a launch fact with no event: the harness has
 no layout. The test parser refuses a `size` after an input; a `resize` still
 stops the block.

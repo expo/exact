@@ -50,6 +50,7 @@ import { findings as feelFindings, summary as feelSummary } from '../host/apple/
 import { compilerWarnings, information, shippedHost, windowsWindow } from './app-cli.mjs';
 import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
+import { alive, ancestors, commandLine } from './processes.mjs';
 import { backendOriginSelection, privateNetwork, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent, iosTabBar } from './verify-findings.mjs';
@@ -266,12 +267,6 @@ async function started(dir, server, name, forward, give) {
   return { stop, exited: () => child.exitCode, tail };
 }
 
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-// A process's command line: `ps` has no Windows build, where CIM's Win32_Process reports it. Empty when neither answers.
-const commandLine = (pid) => (process.platform === 'win32'
-  ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CommandLine`], { encoding: 'utf8' })
-  : spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })).stdout?.trim() ?? '';
-
 /** The app's server for one `agent` drive (LLP 1116.008 D1): null when the app has none, or the URL it calls already answers
  * (the builder's own, or another drive's: used, said nothing of); else started where app.ts calls it, on a database of the
  * drive's own, `.exact/agent/<storage>/db.sqlite` kept for the `--storage` name so a second drive on it sees the first's data
@@ -364,18 +359,6 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     say(`agent: started ${server.entry} at ${server.url} for this drive (${!db ? 'no database' : storage ? `database ${relative(dir, db)}, kept for --storage ${storage}` : 'an empty database'}); stopped after`);
     return { stop };
   } finally { if (locked) rmSync(starting, { force: true }); }
-}
-
-/** This process's ancestors' pids, nearest first. */
-function ancestors() {
-  const out = [];
-  for (let pid = process.ppid; pid > 1 && out.length < 32;) {
-    out.push(String(pid));
-    const parent = Number(spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).stdout?.trim());
-    if (!Number.isInteger(parent) || parent === pid) break;
-    pid = parent;
-  }
-  return out;
 }
 
 /** `fn` with the app's server running on an empty database, as verify runs it: its exit code, or 1 when the server cannot

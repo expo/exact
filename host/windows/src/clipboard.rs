@@ -109,6 +109,23 @@ pub(crate) fn run_headless<D: exact_runner::DataSource + Default>(
     exact_painted::app::run_headless::<D>(config, started, Some(adapter))
 }
 
+/// Whether the editor's Paste has text to insert: under the agent's memory
+/// board, that board's text, which the paste reads (`Memory`, and
+/// `Clipboard::read_text` while substituting); otherwise `system`, whether
+/// the Windows clipboard has text.
+#[cfg(windows)]
+pub(crate) fn paste_available(system: impl FnOnce() -> bool) -> bool {
+    paste_from(substituting(), system)
+}
+
+#[cfg(any(windows, test))]
+fn paste_from(substituting: bool, system: impl FnOnce() -> bool) -> bool {
+    match substituting {
+        true => PRIVATE.with(|board| board.borrow().text.is_some()),
+        false => system(),
+    }
+}
+
 #[cfg(any(windows, test))]
 fn substituting() -> bool {
     exact_painted::picker::agent()
@@ -139,6 +156,28 @@ impl exact_painted::presenter::clipboard::Clipboard for Memory {
 #[cfg(any(windows, test))]
 impl Drop for Memory {
     fn drop(&mut self) {
+        PRIVATE.with(|board| *board.borrow_mut() = Item::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The edit menu offers Paste from the board Ctrl+V pastes from: the
+    /// memory board under the agent, whatever the Windows clipboard holds.
+    #[test]
+    fn paste_is_offered_from_the_board_the_editor_pastes_from() {
+        PRIVATE.with(|board| *board.borrow_mut() = Item::default());
+        assert!(!paste_from(true, || true), "nothing copied in the app");
+        let copied = Item {
+            text: Some("copied".into()),
+            image: None,
+        };
+        write(copied, true).unwrap();
+        assert!(paste_from(true, || false), "an in-app copy");
+        assert!(paste_from(false, || true));
+        assert!(!paste_from(false, || false));
         PRIVATE.with(|board| *board.borrow_mut() = Item::default());
     }
 }

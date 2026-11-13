@@ -1721,8 +1721,15 @@ or carries a validator (LLP 1162 D4): in memory, 16 MiB per runtime, gone with
 the process. An entry answers only a request equal in method, URL and every
 header; a stale reply is revalidated when it has a validator. `refresh` and a
 declared `refreshes` go to the network and replace the entry, and a successful
-write to a URL drops that URL's entries. A browser uses its own cache; the
-render server keeps none.
+write to a URL drops that URL's entries. A browser uses its own cache.
+
+The render server keeps one cache for all its renders, as an RFC 9111 shared
+cache (LLP 1153.001 D7): a `GET` reply that gives an explicit lifetime
+(`s-maxage`, `max-age` or `Expires`) and says none of `no-store`, `private`,
+`no-cache` or `Vary: *`, up to 256 replies and 64 MiB, 8 MiB each. A request
+with `Authorization` is given or stores only a reply marked `public`,
+`s-maxage` or `must-revalidate`, and a redirected reply is not kept. Within
+`stale-while-revalidate`, a stale reply is given while one refetch replaces it.
 
 A read whose request and reply may both be handled out of order can leave
 the sequence altogether: `fetch(url, { exactIndependentHttp:

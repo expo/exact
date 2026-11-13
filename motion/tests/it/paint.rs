@@ -357,6 +357,29 @@ fn a_modern_colour_moves_in_oklab() {
     assert_eq!(p3_red.to_rgba8()[0], 255, "an 8-bit reader gets the clip");
 }
 
+/// CSS Transitions §3.2: a reversal between a legacy and a modern colour is
+/// shortened as one between two legacy colours is, though the running
+/// transition keeps its ends in OKLab.
+#[test]
+fn a_reversal_between_colour_encodings_is_shortened() {
+    let legacy = Value::rgba8(255, 0, 0, 255);
+    let modern = Value::oklab(0.452, -0.032, -0.312, 1.0);
+    for (start, end) in [(legacy, modern), (modern, legacy)] {
+        let mut e = Engine::new();
+        e.set_transitions(NODE, Transitions::parse("color 1s linear").unwrap())
+            .unwrap();
+        set(&mut e, Property::Color, start);
+        e.frame();
+        set(&mut e, Property::Color, end);
+        e.advance(0.5).unwrap();
+        set(&mut e, Property::Color, start);
+        assert_eq!(e.settle_time(), Some(1.0), "half the duration back");
+        e.advance(0.75).unwrap();
+        set(&mut e, Property::Color, end);
+        assert_eq!(e.settle_time(), Some(1.5), "a reversal of the reversal");
+    }
+}
+
 /// CSS Color 4 §12.1: a keyframe's modern colour keeps its value and moves
 /// in Oklab, as Chrome plays the same rule; a legacy pair stays in sRGB.
 #[test]

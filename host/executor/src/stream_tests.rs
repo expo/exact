@@ -397,6 +397,47 @@ fn three_messages_then_a_close_and_the_worker_stays_free() {
     }
 }
 
+// URLSession, the Apple transport, joins the repeated fields into one list
+// (`text/plain, text/event-stream`), which names no single media type.
+#[cfg(not(target_vendor = "apple"))]
+#[test]
+fn a_repeated_wire_content_type_delivers_events_before_the_connection_closes() {
+    use crate::cache::tests::{Plan, Server};
+    let server = Server::new();
+    let (release, released) = channel();
+    let mut plan = Plan::new(
+        200,
+        &[
+            ("Content-Type", "text/plain"),
+            ("content-type", "text/event-stream"),
+        ],
+        b"data: live\n\n",
+    );
+    plan.declares = Some(1 << 20);
+    plan.after = Some(released);
+    server.plan("/events", plan);
+    let (core, woke) = server.core(false, false);
+    let exact_runner::Answer::Later(request) =
+        exact_runner::Answer::stream(server.request("/events").independent_http(4096))
+    else {
+        unreachable!()
+    };
+    core.run_owned(
+        RequestOut {
+            class: exact_runner::RequestClass::Ordered,
+            ticket: 1,
+            target: "events".into(),
+            request,
+            forced: false,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(data(&next(&core, &woke).1), ("live", 0));
+    core.forget(|_| false);
+    drop(release);
+}
+
 /// Wait until `ticket` has `n` messages waiting for the runner, or ended.
 fn until_waiting(core: &Core, ticket: u64, n: usize) {
     let deadline = Instant::now() + Duration::from_secs(5);

@@ -621,7 +621,7 @@ impl Engine {
                     declaration.timing,
                     crate::transition::TimingFunction::Easing(_)
                 );
-                let mut next = if is_easing && after == running.reversing_adjusted_start {
+                let mut next = if is_easing && after.same(running.reversing_adjusted_start) {
                     // CSS §3.2, the reversing case.
                     let progress = running.easing_progress(now);
                     let factor = (progress * running.reversing_shortening

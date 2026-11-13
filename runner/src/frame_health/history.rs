@@ -18,6 +18,8 @@ pub const WORK_KNOWN: u64 = 16;
 pub const INTERVAL_MAXIMUM: u64 = 32;
 /// A time or identity did not fit its 32-bit field and was clamped.
 pub const CLAMPED: u64 = 64;
+/// Pending frame work finished after its deadline, whether or not a batch was applied.
+pub const WORK_DEADLINE: u64 = 128;
 
 /// One observed apply, with optional owner timing from the same asynchronous tick.
 /// Zero owner/target fields mean unavailable, not zero queue or execution time.
@@ -68,7 +70,7 @@ pub struct HitchWork {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hitch {
-    /// Callback arrival, or apply end for an asynchronous deadline event.
+    /// Callback arrival, apply end, or pending frame work's finish, according to the event's flags.
     pub at_ns: u64,
     /// Evidence bits plus cached host workload/power flags.
     pub flags: u64,
@@ -86,7 +88,7 @@ pub struct Hitch {
     pub requested_period_us: u32,
     /// Observed callback gap, zero without a comparable predecessor.
     pub gap_us: u32,
-    /// Synchronous callback duration; zero for an apply event.
+    /// Synchronous callback duration; zero for apply and pending-work events.
     pub callback_us: u32,
     /// Gap preceding this callback, when observed in the same segment.
     pub before_gap_us: u32,
@@ -100,12 +102,15 @@ pub struct Hitch {
     pub after_callback_us: u32,
     /// Nearby apply timing; temporal proximity does not establish causation.
     pub work: HitchWork,
+    /// Pending frame's start relative to its finish; `ABSENT` for other event kinds.
+    pub frame_start_us: i32,
 }
 
 /// A hitch as observed, before it is stored.
 #[derive(Default)]
 struct Event {
     at_ns: u64,
+    frame_start_ns: u64,
     target_ns: u64,
     period_ns: u64,
     gap_ns: u64,
@@ -258,7 +263,7 @@ impl History {
         };
         let duration = finished - arrival;
         for slot in &mut self.pending {
-            // Skip an apply this callback ran: the callback began before the apply finished, so it does not follow it
+            // A callback cannot follow an apply or frame-work finish that happened after it began
             let Some(index) = slot.take_if(|index| self.entries[*index].at_ns <= arrival) else {
                 continue;
             };
@@ -286,6 +291,7 @@ impl History {
             };
             self.push(Event {
                 at_ns: arrival,
+                frame_start_ns: 0,
                 target_ns: target,
                 period_ns: period,
                 gap_ns: gap,
@@ -341,6 +347,20 @@ impl History {
         }
     }
 
+    pub(super) fn worked(&mut self, start: u64, deadline: u64, finished: u64) {
+        // Work submitted before this capture segment cannot supply its evidence
+        if self.status.active == 0 || start < self.status.changed_ns {
+            return;
+        }
+        self.push(Event {
+            at_ns: finished,
+            frame_start_ns: start,
+            target_ns: deadline,
+            flags: WORK_DEADLINE,
+            ..Event::default()
+        });
+    }
+
     fn push(&mut self, event: Event) {
         self.status.total = self.status.total.saturating_add(1);
         let at = event.at_ns;
@@ -373,6 +393,7 @@ impl History {
                 landed_us: p.offset(work.landed_ns, at),
                 operations: p.narrow(work.operations),
             },
+            frame_start_us: p.offset(event.frame_start_ns, at),
         };
         if p.clamped {
             event.flags |= CLAMPED;

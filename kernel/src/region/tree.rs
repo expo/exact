@@ -65,6 +65,7 @@ impl Derived {
             };
             tree.set_children(nodes[&s], &children);
         }
+        tree.find_tables(arena, &slots);
         let root = nodes[&root];
         Ok(Self {
             tree,
@@ -154,8 +155,10 @@ impl Derived {
         let mut frames = Vec::with_capacity(self.slots.len());
         let mut offsets = Vec::with_capacity(self.slots.len());
         let mut facts = BoxFacts::default();
-        let mut stack = vec![(root, 0., 0., OWNER, false)];
-        while let Some((s, x, y, parent, hidden)) = stack.pop() {
+        // Each box with the origin it is placed from and its parent's
+        // frame's origin, which differ for a table's parts.
+        let mut stack = vec![(root, (0., 0.), OWNER, false, (0., 0.))];
+        while let Some((s, (x, y), parent, hidden, (px, py))) = stack.pop() {
             let hidden = hidden || arena.style(s).display == crate::Display::None;
             let l = self.tree.layout(self.nodes[&s]);
             let inline = arena.is_inline_run(s);
@@ -206,19 +209,25 @@ impl Derived {
                 });
                 offsets.push(RegionOffset {
                     parent,
-                    x: l.location.x,
-                    y: l.location.y,
+                    x: x - px + l.location.x,
+                    y: y - py + l.location.y,
                     inline,
                 });
                 ordinal
             };
+            let at = (frame.x, frame.y);
+            let origin = if inline {
+                at
+            } else {
+                self.tree.parts_origin(arena, s, self.nodes[&s], (x, y), at)
+            };
             if Some(s) == cut {
                 if let Some(b) = branch {
-                    stack.push((b, frame.x, frame.y, next_parent, hidden))
+                    stack.push((b, origin, next_parent, hidden, at))
                 }
             } else {
                 for &c in arena.children(s).iter().rev() {
-                    stack.push((c, frame.x, frame.y, next_parent, hidden))
+                    stack.push((c, origin, next_parent, hidden, at))
                 }
             }
         }

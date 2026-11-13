@@ -306,6 +306,9 @@ component RoundButton
 // the list's own cell on every host (`-exact-row-look`): its tile's look
 // gives way to the row's, and the selected and chosen tiles' checkmark is the
 // cell's checkmark accessory, as a hand-built UIKit list marks its choice.
+// A Windows contrast theme maps the label and every system hue to one
+// colour, so there a told tile is the theme's highlight pair, as `Badge`'s
+// role tints are; its mark still says which.
 // Call: AnswerTile(label="Paris", status="idle", press=pick("Paris"), testId="answer-paris")
 component AnswerTile
   props
@@ -313,15 +316,18 @@ component AnswerTile
     status: string
     press: action
     testId: string
+  resource preferences = exactViewport() as shape BadgePreferences
+  derive contrast = preferences.prefersContrast == "custom"
+  derive ink = (contrast ? "HighlightText" : "-exact-label")
   view
     if status == "correct" or status == "wrong"
       button appearance="none" press=press disabled=true testId=testId aria-label=`${label}, ${status}`
         -exact-row-look="platform" display="flex" align-items="center" gap=12 padding="14px 16px" border-radius=12
-        border="2px solid transparent" color="-exact-label" color-scheme=(status == "correct" ? "light" : "dark")
-        background-color=(status == "correct" ? "-exact-system-green" : "-exact-system-red")
+        border="2px solid transparent" color=ink color-scheme=(status == "correct" ? "light" : "dark")
+        background-color=(contrast ? "Highlight" : status == "correct" ? "-exact-system-green" : "-exact-system-red")
         text label flex=1 min-width=0 font="-exact-headline" text-align="start" aria-hidden=true
         image (status == "correct" ? "symbol:checkmark" : "symbol:close") width="1.375rem" height="1.375rem"
-          object-fit="contain" flex-shrink=0 aria-hidden=true color="-exact-label"
+          object-fit="contain" flex-shrink=0 aria-hidden=true color=ink
     else
       button appearance="none" press=press disabled=(status == "dimmed" or status == "chosen") testId=testId
         aria-label=(status == "selected" or status == "chosen" ? `${label}, selected` : label)

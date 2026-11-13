@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { posix, resolve, win32 } from 'node:path';
 import { buildPageFiles, writeCrawlerFiles } from './crawl.mjs';
-import { serveBuildTree } from './serve.mjs';
+import { listPublicFiles, serveBuildTree, serveStatic, staticFile } from './serve.mjs';
 import { webCompiler } from '../web-js/module.mjs';
 
 const ORIGIN = 'https://site.invalid';
@@ -62,6 +62,27 @@ test('build pages reject case and Unicode aliases on macOS before writing', () =
   // A control character's escape has two digits, so it is no other byte's escape followed by a letter.
   expect(buildPageFiles('/site/dist', [page('/p/%01a'), page('/p/%1A')], [], posix, 'darwin'))
     .toEqual(['p/%01a/index.html', 'p/%1A/index.html']);
+});
+
+test('a wasm build serves and inventories its generated crawler files', async () => {
+  mkdirSync(resolve(import.meta.dir, '../../target'), { recursive: true });
+  const dir = mkdtempSync(resolve(import.meta.dir, '../../target/crawl-serve-'));
+  const server = createServer((req, res) => serveStatic(dir, req, res));
+  try {
+    writeCrawlerFiles(dir, [page('/')], ORIGIN, []);
+    expect(listPublicFiles(dir)).toEqual(['robots.txt', 'sitemap.xml']);
+    await new Promise(ok => server.listen(0, '127.0.0.1', ok));
+    for (const [name, type] of [['robots.txt', 'text/plain'], ['sitemap.xml', 'application/xml']]) {
+      expect(staticFile(dir, '/' + name)?.route).toBe('/' + name);
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/${name}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain(type);
+      expect(await response.text()).toBe(readFileSync(resolve(dir, name), 'utf8'));
+    }
+  } finally {
+    await new Promise(ok => server.close(ok));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // The sitemap keeps what the render server's keeps (serve.rs `indexed`): a page whose status is 200 or 503 and that

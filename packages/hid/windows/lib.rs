@@ -182,8 +182,8 @@ struct Log {
 
 /// The open collection's handle, shared with its reader thread.
 struct Shared(Handle);
-// SAFETY: a Win32 file handle may be used from any thread; the reader only reads, and the handle is closed after
-// the reader is told to stop and its read cancelled.
+// SAFETY: a Win32 file handle may be used from any thread; the reader only reads, and the handle is closed only
+// once the reader has returned (`release`).
 unsafe impl Send for Shared {}
 unsafe impl Sync for Shared {}
 
@@ -191,6 +191,8 @@ struct Open {
     handle: Arc<Shared>,
     log: Arc<Mutex<Log>>,
     stop: Arc<AtomicBool>,
+    /// None for a collection with no input reports.
+    reader: Option<std::thread::JoinHandle<()>>,
     leases: usize,
 }
 
@@ -233,6 +235,18 @@ fn read_loop(handle: Arc<Shared>, log: Arc<Mutex<Log>>, stop: Arc<AtomicBool>, l
         drop(l);
         notifier.changed("hid.inputReports");
     }
+}
+
+/// Waits for a reader told to stop, calling `cancel` until it has returned. `CancelIoEx` cancels the reads in
+/// progress, so a reader between its `stop` check and its `ReadFile` would block in a read no cancel had reached:
+/// the cancel is made again until the reader is out
+/// (https://learn.microsoft.com/windows/win32/fileio/cancelioex-func). The caller closes the handle after.
+fn stop_reader(reader: std::thread::JoinHandle<()>, cancel: impl Fn()) {
+    while !reader.is_finished() {
+        cancel();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let _ = reader.join();
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -281,10 +295,8 @@ impl Hid {
             let (handle, log, stop) = (Arc::new(Shared(h)), Arc::new(Mutex::new(Log::default())), Arc::new(AtomicBool::new(false)));
             let (hh, l, s, n, len) = (handle.clone(), log.clone(), stop.clone(), self.context.notifier(), device.caps.input as usize);
             let epoch = std::time::Instant::now();
-            if len > 0 {
-                std::thread::spawn(move || read_loop(hh, l, s, len, n, epoch));
-            }
-            self.opens.insert(id.to_owned(), Open { handle, log, stop, leases: 0 });
+            let reader = (len > 0).then(|| std::thread::spawn(move || read_loop(hh, l, s, len, n, epoch)));
+            self.opens.insert(id.to_owned(), Open { handle, log, stop, reader, leases: 0 });
         }
         self.opens.get_mut(id).expect("just opened").leases += 1;
         self.next += 1;
@@ -361,11 +373,15 @@ impl Hid {
             o.leases -= 1;
             if o.leases == 0 {
                 o.stop.store(true, Ordering::Relaxed);
-                // SAFETY: the reader's read is cancelled before the handle closes, once.
-                unsafe {
-                    CancelIoEx(o.handle.0, std::ptr::null_mut());
-                    CloseHandle(o.handle.0);
+                let handle = o.handle.0;
+                if let Some(reader) = o.reader.take() {
+                    // SAFETY: the handle stays open until the reader has returned.
+                    stop_reader(reader, || unsafe {
+                        CancelIoEx(handle, std::ptr::null_mut());
+                    });
                 }
+                // SAFETY: no reader is left to use the handle; closed once.
+                unsafe { CloseHandle(handle) };
                 self.opens.remove(&id);
             }
         }
@@ -424,5 +440,49 @@ impl Package for Hid {
         for h in open {
             self.release(&h);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Condvar;
+
+    /// A reader that enters its read after the first cancel was made, as one between its `stop` check and its
+    /// `ReadFile` does, still ends: the cancel is made again until it has.
+    #[test]
+    fn a_reader_that_reads_after_the_first_cancel_still_ends() {
+        // (in a read, cancelled): a cancel reaches only a read in progress, as `CancelIoEx`'s does.
+        let device = Arc::new((Mutex::new((false, false)), Condvar::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (d, s) = (device.clone(), stop.clone());
+        let (checked, at_check) = std::sync::mpsc::channel::<()>();
+        let (enter, at_read) = std::sync::mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            if s.load(Ordering::Relaxed) {
+                return;
+            }
+            checked.send(()).unwrap();
+            at_read.recv().unwrap();
+            let mut state = d.0.lock().unwrap();
+            state.0 = true;
+            while !state.1 {
+                state = d.1.wait(state).unwrap();
+            }
+            *state = (false, false);
+        });
+        let cancel = || {
+            let mut state = device.0.lock().unwrap();
+            if state.0 {
+                state.1 = true;
+                device.1.notify_all();
+            }
+        };
+        at_check.recv().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        cancel();
+        enter.send(()).unwrap();
+        stop_reader(reader, cancel);
+        assert!(!device.0.lock().unwrap().0, "the reader left its read");
     }
 }

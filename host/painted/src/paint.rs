@@ -241,14 +241,8 @@ impl BoxPaint {
         // The outer shadows, the list's first on top: by the backend's blur
         // where it has one, else as bands.
         for s in self.shadows.iter().rev().filter(|s| !s.inset()) {
-            if let Some((color, sigma, shape)) = s.blurred(&geometry.outer) {
-                if backend.blurred_shadow(&shape, color, sigma, &geometry.outer, ts) {
-                    continue;
-                }
-            }
-            for band in s.fills(&geometry.outer, self.widths) {
-                backend.fill_border(&band, ts);
-            }
+            let bands = || s.fills(&geometry.outer, self.widths);
+            backend.box_shadow(s.blurred(&geometry.outer), &geometry.outer, &bands, ts);
         }
         // @ref LLP 1053.000 D2 — the backdrop filters under the background.
         if !self.backdrop.is_none() {

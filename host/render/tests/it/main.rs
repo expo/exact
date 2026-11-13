@@ -14,6 +14,7 @@ mod boot;
 mod checkpoints;
 mod direct;
 mod each;
+mod http_cache;
 mod longpoll;
 mod overload;
 mod serve;

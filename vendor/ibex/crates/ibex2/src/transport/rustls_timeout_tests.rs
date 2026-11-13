@@ -2,6 +2,17 @@ use super::*;
 use crate::transport::stream_tests::{request_head, server};
 use ureq::unversioned::transport::time::Duration as WireDuration;
 
+#[test]
+fn a_plain_request_through_an_https_proxy_uses_the_tls_agent() {
+    let https_proxy = ureq::Proxy::new("https://proxy.corp:443").unwrap();
+    let http_proxy = ureq::Proxy::new("http://proxy.corp:3128").unwrap();
+    assert!(needs_tls(false, Some(&https_proxy)));
+    assert!(!needs_tls(false, Some(&http_proxy)));
+    assert!(!needs_tls(false, None));
+    assert!(needs_tls(true, None));
+    assert!(needs_tls(true, Some(&http_proxy)));
+}
+
 #[derive(Debug)]
 struct Probe {
     buffers: LazyBuffers,
@@ -92,6 +103,18 @@ fn a_last_plain_content_type_keeps_body_deadlines() {
 #[test]
 fn a_last_event_stream_content_type_removes_body_deadlines() {
     check_response(200, &["text/plain", "text/event-stream"], None, true);
+}
+
+#[test]
+fn repeated_locations_and_cookies_keep_the_last_value() {
+    let (url, peer) = server(move |mut socket| {
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nLocation: /first\r\nLocation: /last\r\nSet-Cookie: session=abc\r\nSet-Cookie: theme=dark\r\n\r\n").unwrap();
+    });
+    let (transport, _) = transport_with_context();
+    let response = transport.send(&Request::get(&url)).unwrap();
+    assert_eq!(response.headers.get("location"), Some("/last"));
+    assert_eq!(response.headers.get("set-cookie"), Some("theme=dark"));
+    peer.join().unwrap();
 }
 
 #[test]

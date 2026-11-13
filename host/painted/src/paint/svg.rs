@@ -276,7 +276,8 @@ impl Painter {
             for (p, r) in &shaped {
                 x += r.dx;
                 y += r.dy;
-                if let Some(fill) = &r.fill {
+                // A gradient on text is owed, not its fallback colour.
+                if let Some(fill) = r.fill.as_ref().filter(|f| f.server.is_none()) {
                     let mut c = rgba(fill.color.resolve(self.dark));
                     c[3] = (c[3] as f32 * fill.opacity).round() as u8;
                     let palette = [crate::text::RunPaint {

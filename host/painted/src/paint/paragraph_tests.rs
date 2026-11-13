@@ -691,6 +691,37 @@ fn hidden_markdown_casts_no_decoration_shadow() {
     }
 }
 
+/// Two struck spans of one Markdown text are two boxes: the later span's
+/// shadow, its strike's included, paints over the earlier span's glyphs
+/// (CSS Text Decoration 3 §4).
+#[test]
+fn a_later_markdown_spans_shadow_paints_over_an_earlier_spans_glyphs() {
+    let draw = |color, shadow| {
+        decoration_frame(&format!(
+            "      text \"~~HH~~ ~~........~~\" markup=\"markdown\" color=\"{color}\" font-size=40 text-shadow=\"{shadow}\"\n"
+        ))
+    };
+    let glyphs = draw("#000000", "none");
+    let shadows = draw("transparent", "-100px 0px 0px #00ff00");
+    let both = draw("#000000", "-100px 0px 0px #00ff00");
+    let mut overlap = 0;
+    for ((glyph, shadow), actual) in glyphs
+        .data()
+        .chunks_exact(4)
+        .zip(shadows.data().chunks_exact(4))
+        .zip(both.data().chunks_exact(4))
+    {
+        if glyph == [0, 0, 0, 255] && shadow == [0, 255, 0, 255] {
+            overlap += 1;
+            assert_eq!(actual, shadow, "the later span's shadow paints last");
+        }
+    }
+    assert!(
+        overlap > 20,
+        "the second span's shadow falls on the first's glyphs"
+    );
+}
+
 #[test]
 fn an_inherited_currentcolor_shadow_uses_the_childs_color() {
     let draw = |shadow| {

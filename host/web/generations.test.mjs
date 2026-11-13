@@ -1,15 +1,17 @@
 // A page is served from the build it booted (generations.mjs; theme2's ruling on the build-swap pair): a page's
 // files all come from one build while another replaces it, old builds are kept while their pages may ask and reaped
 // as the ruling keeps them, and a generation path is checked strictly.
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { takeLock } from './build-lock.mjs';
 import { buildTreeFile, replaceBuild, serveBuildTree } from './serve.mjs';
 import { GENERATION, foreignBeside, generationFile, generationOf, generationPath, leaseGeneration, leasedGenerations, reapGenerations, servedFile } from './generations.mjs';
+import { sitePages } from '../web-js/render.mjs';
 import { BESIDE, STAGE, beside } from './beside.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +29,308 @@ function build(dir, k) {
 const workspace = () => { const root = mkdtempSync(join(tmpdir(), 'exact-generations-')); return { root, dist: join(root, 'dist'), stage: (k) => build(join(root, `stage-${k}`), k) }; };
 const text = (r) => (r.body == null ? null : Buffer.from(r.body).toString());
 const baseOf = (html) => /<base href="([^"]+)">/.exec(html)?.[1];
+
+// `sitePages`'s renderer, made with its generation's reader: a page of the shell and the module, each read as it renders.
+const reading = (made = () => {}) => ({ pageServer: (read) => {
+  made(read);
+  return async () => ({ status: 200, headers: { 'cache-control': 'no-store' }, body: `${read('shell.html')}${read('app.js')}` });
+} });
+const serverBundle = (tree) => { mkdirSync(join(tree, '.gen')); writeFileSync(join(tree, '.gen/server.js'), ''); return tree; };
+/** A swap's second half: the new build in place, the old kept as its generation, the lock released. */
+const finishSwap = (dist, id, next, release) => { renameSync(next, dist); mkdirSync(dist + '.gen', { recursive: true }); renameSync(dist + '.previous', join(dist + '.gen', id)); release(); };
+
+test('rendering waits across a rename gap for the selected generation', async () => {
+  const { root, dist, stage } = workspace();
+  let release = () => {}, wait;
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist), next = serverBundle(stage(2)), pages = sitePages(dist, reading());
+    release = takeLock(dist + '.lock');
+    renameSync(dist, dist + '.previous');
+    // The swap is another process's: it finishes while this one waits.
+    const atomicWait = Atomics.wait;
+    wait = spyOn(Atomics, 'wait').mockImplementation((...args) => { if (existsSync(next)) finishSwap(dist, id, next, release); return atomicWait(...args); });
+    const page = await pages(id, '/', () => undefined);
+    expect(wait).toHaveBeenCalled();
+    expect(page.html).toContain('build 1');
+    expect(page.html).not.toContain('build 2');
+  } finally { wait?.mockRestore(); release(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('rendering retries when retention lands after the missing-tree check and releases the lock', async () => {
+  const { root, dist, stage } = workspace();
+  let release = () => {}, check;
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist), next = serverBundle(stage(2)), retained = join(dist + '.gen', id);
+    const pages = sitePages(dist, reading()), exists = fs.existsSync;
+    release = takeLock(dist + '.lock');
+    renameSync(dist, dist + '.previous');
+    let landed = false;
+    check = spyOn(fs, 'existsSync').mockImplementation(path => {
+      const present = exists(path);
+      if (path === join(retained, '.gen/server.js') && !landed) {
+        expect(present).toBe(false);
+        landed = true;
+        finishSwap(dist, id, next, release);
+      }
+      return present;
+    });
+    const page = await pages(id, '/', () => undefined);
+    expect(landed).toBe(true);
+    expect(page.html).toContain('build 1');
+    expect(page.html).not.toContain('build 2');
+  } finally { check?.mockRestore(); release(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// A swap lands during a read, and crosses the wait's second as it does: the read is made again where the generation
+// went, never answered from the build that replaced it.
+test.each([['construction', 'reads'], ['construction', 'fails'], ['render', 'reads'], ['render', 'fails']])('a %s read a swap interrupts, which then %s, is read again from its generation', async (where, outcome) => {
+  const { root, dist, stage } = workspace();
+  let read, clock;
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist), next = serverBundle(stage(2)), original = fs.readFileSync;
+    let now = Date.now(), armed = where === 'construction', swapped = false;
+    clock = spyOn(Date, 'now').mockImplementation(() => now);
+    read = spyOn(fs, 'readFileSync').mockImplementation((path, ...rest) => {
+      if (armed && !swapped && path === join(dist, 'shell.html')) {
+        swapped = true;
+        replaceBuild(next, dist);
+        now += 1200;
+        if (outcome === 'fails') throw Object.assign(new Error('ENOENT: the build moved during a read'), { code: 'ENOENT' });
+      }
+      return original(path, ...rest);
+    });
+    const pages = sitePages(dist, reading(read => { if (where === 'construction') read('shell.html'); else armed = true; }));
+    const page = await pages(id, '/', () => undefined);
+    expect(swapped).toBe(true);
+    expect(page.html).toContain('build 1');
+    expect(page.html).not.toContain('build 2');
+  } finally { read?.mockRestore(); clock?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a read that fails between the renames of a byte-identical rebuild is read again', async () => {
+  const { root, dist, stage } = workspace();
+  let read;
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist), original = fs.readFileSync;
+    let swapped = false;
+    read = spyOn(fs, 'readFileSync').mockImplementation((path, ...rest) => {
+      if (!swapped && path === join(dist, 'app.js')) {
+        // The whole swap, lock released, before the failed read is looked at: the same generation, another tree.
+        swapped = true;
+        const release = takeLock(dist + '.lock');
+        renameSync(dist, dist + '.previous');
+        renameSync(serverBundle(build(join(root, 'again'), 1)), dist);
+        rmSync(dist + '.previous', { recursive: true });
+        release();
+        throw Object.assign(new Error('ENOENT: the read fell between the renames'), { code: 'ENOENT' });
+      }
+      return original(path, ...rest);
+    });
+    const page = await sitePages(dist, reading())(id, '/', () => undefined);
+    expect([swapped, generationOf(dist)]).toEqual([true, id]);
+    expect(page.html).toContain('build 1');
+  } finally { read?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a file the generation does not have, or a bundle that fails, fails the render at once', async () => {
+  const { root, dist, stage } = workspace();
+  let wait;
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist);
+    wait = spyOn(Atomics, 'wait');
+    const missing = sitePages(dist, { pageServer: (read) => async () => ({ status: 200, headers: {}, body: read('missing.js') }) });
+    await expect(missing(id, '/', () => undefined)).rejects.toThrow('ENOENT');
+    const broken = sitePages(dist, { pageServer: () => { throw new Error('invalid bundle'); } });
+    await expect(broken(id, '/', () => undefined)).rejects.toThrow('invalid bundle');
+    expect(wait).not.toHaveBeenCalled();
+  } finally { wait?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a selected build without a server bundle gets its shell while cleanup holds the lock', async () => {
+  const { root, dist, stage } = workspace();
+  let release = () => {}, wait;
+  try {
+    replaceBuild(stage(1), dist);
+    release = takeLock(dist + '.lock');
+    wait = spyOn(Atomics, 'wait');
+    expect(await sitePages(dist)(generationOf(dist), '/', () => undefined)).toBe(null);
+    expect(wait).not.toHaveBeenCalled();
+  } finally { wait?.mockRestore(); release(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an unfinished generation swap returns a bounded retry response instead of the shell', async () => {
+  const { root, dist, stage } = workspace();
+  let release = () => {}, clock;
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist), pages = sitePages(dist, reading());
+    release = takeLock(dist + '.lock');
+    renameSync(dist, dist + '.previous');
+    // The second passes at the first look: no wait on the wall clock.
+    const now = Date.now();
+    clock = spyOn(Date, 'now').mockReturnValueOnce(now).mockReturnValue(now + 1200);
+    expect(await pages(id, '/', () => undefined)).toMatchObject({ status: 503, retryAfter: '1', cacheControl: 'no-store' });
+  } finally { clock?.mockRestore(); release(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a generation no longer kept, with no swap under way, gets its shell', async () => {
+  const { root, dist, stage } = workspace();
+  try {
+    replaceBuild(serverBundle(stage(1)), dist);
+    const id = generationOf(dist);
+    replaceBuild(serverBundle(stage(2)), dist);
+    rmSync(join(dist + '.gen', id), { recursive: true });
+    expect(await sitePages(dist, reading())(id, '/', () => undefined)).toBe(null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a lease released while a replacement checks what is beside the build does not stop it', () => {
+  const { root, dist, stage } = workspace();
+  let list;
+  try {
+    replaceBuild(stage(1), dist);
+    const release = leaseGeneration(dist, generationOf(dist)), names = fs.readdirSync;
+    list = spyOn(fs, 'readdirSync').mockImplementation((dir, ...rest) => {
+      const found = names(dir, ...rest);
+      if (String(dir).startsWith(dist + '.leases/')) release();
+      return found;
+    });
+    replaceBuild(stage(2), dist);
+    expect(readFileSync(join(dist, 'app.js'), 'utf8')).toBe('build 2');
+    // A foreign entry that stays is still refused.
+    list.mockRestore();
+    mkdirSync(join(dist + '.leases', 'photos'), { recursive: true });
+    expect(() => replaceBuild(stage(3), dist)).toThrow('is there and is not');
+  } finally { list?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(['previous', 'gen'])('a foreign .%s created after the output check survives replacement', (sibling) => {
+  const { root, dist, stage } = workspace();
+  try {
+    replaceBuild(stage(1), dist);
+    expect(foreignBeside(dist)).toBe(null);
+    const next = stage(2), foreign = sibling === 'previous' ? dist + '.previous' : join(dist + '.gen', 'photos');
+    mkdirSync(foreign, { recursive: true });
+    writeFileSync(join(foreign, 'keep.txt'), 'mine');
+    expect(() => replaceBuild(next, dist)).toThrow('is there and is not');
+    expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine');
+    expect(readFileSync(join(dist, 'app.js'), 'utf8')).toBe('build 1');
+    expect(existsSync(next)).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(['previous', 'gen'])('a foreign .%s created after the first build lands survives cleanup', (sibling) => {
+  const { root, dist, stage } = workspace();
+  let swap;
+  try {
+    const next = stage(1), foreign = sibling === 'previous' ? dist + '.previous' : join(dist + '.gen', 'photos');
+    const rename = fs.renameSync;
+    let landed = false;
+    swap = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      rename(from, to);
+      if (from === next && to === dist) {
+        landed = true;
+        mkdirSync(foreign, { recursive: true });
+        writeFileSync(join(foreign, 'keep.txt'), 'mine');
+      }
+    });
+    expect(() => replaceBuild(next, dist)).toThrow('is there and is not');
+    expect(landed).toBe(true);
+    expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine');
+    expect(readFileSync(join(dist, 'app.js'), 'utf8')).toBe('build 1');
+    expect(existsSync(next)).toBe(false);
+  } finally { swap?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each([['photos', false], ['f'.repeat(32), false], ['photos', true]])('reaping preserves foreign %s, created during reaping: %s', (name, during) => {
+  const { root, dist, stage } = workspace();
+  try {
+    replaceBuild(stage(1), dist);
+    replaceBuild(stage(2), dist);
+    expect(foreignBeside(dist)).toBe(null);
+    const foreign = join(dist + '.gen', name);
+    const makeForeign = () => { mkdirSync(foreign); writeFileSync(join(foreign, 'keep.txt'), 'mine'); };
+    const before = readdirSync(dist + '.gen').concat(name).sort();
+    if (!during) makeForeign();
+    const keep = { get newest() { if (during) makeForeign(); return 0; }, ageMs: 0, bytes: 0 };
+    expect(() => reapGenerations(dist, keep)).toThrow('is there and is not');
+    expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine');
+    expect(readdirSync(dist + '.gen').sort()).toEqual(before);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(['age', 'bytes'])('reaping records completed deletions when foreign entries interrupt the %s pass', async (pass) => {
+  const { root, dist, stage } = workspace();
+  try {
+    replaceBuild(stage(1), dist);
+    const first = generationOf(dist);
+    replaceBuild(stage(2), dist);
+    const second = generationOf(dist);
+    replaceBuild(stage(3), dist);
+    for (const [i, id] of [first, second].entries()) {
+      const time = new Date(1000 + i);
+      utimesSync(join(dist + '.gen', id), time, time);
+    }
+    const foreign = join(dist + '.gen', 'photos');
+    let decisions = 0;
+    const interrupt = () => {
+      if (++decisions !== 2) return;
+      mkdirSync(foreign); writeFileSync(join(foreign, 'keep.txt'), 'mine');
+    };
+    const keep = {
+      get newest() { if (pass === 'age') interrupt(); return pass === 'age' ? 0 : 2; },
+      ageMs: 0,
+      get bytes() { if (pass === 'bytes') interrupt(); return 0; },
+    };
+    expect(() => reapGenerations(dist, keep)).toThrow('is there and is not');
+    const removed = pass === 'age' ? second : first, retained = pass === 'age' ? first : second;
+    expect(existsSync(join(dist + '.gen', removed))).toBe(false);
+    expect((await servedFile(dist, `/.exact/gen/${removed}/app.js`)).status).toBe(410);
+    expect(text(await servedFile(dist, `/.exact/gen/${retained}/app.js`))).toBe(`build ${retained === first ? 1 : 2}`);
+    expect(readFileSync(join(foreign, 'keep.txt'), 'utf8')).toBe('mine');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each([[false, false], [false, true], [true, false], [true, true]])('render --serve shares file resolution, with server bundle %s and receipt %s', async (bundle, receipt) => {
+  const { root, dist } = workspace();
+  let child;
+  try {
+    build(dist, 1);
+    if (!receipt) rmSync(join(dist, '.exact-build.json'));
+    mkdirSync(join(dist, 'about')); writeFileSync(join(dist, 'about/index.html'), '<base href="/"><p>About</p>');
+    writeFileSync(join(dist, 'routes.json'), JSON.stringify({ routes: [{ pattern: '/about', render: 'build' }, { pattern: '/client', render: 'client' }] }));
+    if (bundle) serverBundle(dist);
+    const probe = createServer();
+    await new Promise(ok => probe.listen(0, '127.0.0.1', ok));
+    const port = probe.address().port;
+    await new Promise(ok => probe.close(ok));
+    child = Bun.spawn([process.execPath, join(import.meta.dir, '../web-js/render.mjs'), dist, '--serve', '--port', String(port)], { stdout: 'pipe', stderr: 'pipe' });
+    const errors = new Response(child.stderr).text();
+    const reader = child.stdout.getReader();
+    const ready = (async () => {
+      let output = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error('render server exited: ' + await errors);
+        output += new TextDecoder().decode(value);
+        if (output.includes('serving')) return 'http://127.0.0.1:' + port + '/';
+      }
+    })();
+    const url = await ready;
+    for (const [path, status, body] of [['about/', 200, '<p>About</p>'], ['client', 200, 'build 1'], ['.gen/server.js', 404, '']]) {
+      const r = await fetch(new URL(path, url), { headers: { accept: 'text/html' } });
+      expect([path, r.status, (await r.text()).includes(body)]).toEqual([path, status, true]);
+    }
+  } finally {
+    if (child) { child.kill(); await child.exited; }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('a page booted on one build gets that build\'s files after another lands; the path by name mixes them (the negative control)', async () => {
   const { root, dist, stage } = workspace();

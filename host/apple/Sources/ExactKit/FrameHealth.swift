@@ -254,6 +254,7 @@ final class FrameHealth {
     @discardableResult
     private func finish(_ index: Int) -> Bool {
         guard let work = pending[index], work.returned, work.waiting == 0 else { return false }
+        expireCapture(at: work.finished)
         exact_frame_health_worked(handle, Self.nanoseconds(work.start), Self.nanoseconds(work.deadline), Self.nanoseconds(work.finished))
         chart?.work(start: work.start, deadline: work.deadline, finished: work.finished)
         pending[index] = nil

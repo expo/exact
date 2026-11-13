@@ -6,7 +6,7 @@
 // Usage: bun host/web/serve.mjs [<dir> | --origin <dir>] [--port <n>] [--loopback|--lan]
 import { createServer } from 'node:http';
 import { createServer as createSocketServer } from 'node:net';
-import { brotliCompressSync, constants as zlib, gzipSync } from 'node:zlib';
+import { brotliCompressSync, constants as zlib, createBrotliCompress, createGzip, gzipSync } from 'node:zlib';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -25,13 +25,14 @@ import { slashRelative, within } from '../../scripts/paths.mjs';
 
 import { INSTALL_FILES, INSTALL_PUBLIC, INSTALL_ROOT, installRoute, installNetworkPage } from '../../scripts/install-page.mjs';
 import { COMPRESSIBLE, acceptedEncodings, bodyDigest, compressionCache, matchesETag } from './compression.mjs';
-import { generationOf, generationPath, keepGeneration, reapGenerations, servedFile, withGenerationBase } from './generations.mjs';
+import { foreignBeside, generationPath, keepGeneration, reapGenerations, servedFile } from './generations.mjs';
 
 const PUBLIC_FILES = new Set([
   ...INSTALL_PUBLIC,
   ...Object.keys(webHostFiles()).map(name => '/' + name),
   '/app.js', '/app.hbc', '/app.module.json', '/app.plan', '/app.wasm', '/assets.json', '/exact.json',
   '/gpu.js', '/gpu_bg.wasm', '/markup-editor.wasm', '/textflow.wasm', '/index.html', '/manifest.json',
+  '/robots.txt', '/sitemap.xml',
   // The one dot path a static origin serves: the deep-link association
   // file the web build writes (LLP 1030 D1), read by Apple's CDN over HTTPS.
   '/.well-known/apple-app-site-association',
@@ -757,8 +758,18 @@ export function replaceBuild(stage, dist) {
     // Before `.previous` goes: it may be the only tree left by a swap that
     // was killed between its renames.
     if (!realDirectory(stage)) throw new Error(`${stage}: no build to put in place`);
+    const foreign = foreignBeside(dist);
+    if (foreign) throw new Error(foreign);
     // No dist (that swap's state): the stage in place first, then `.previous` gone.
-    if (!existsSync(dist)) { renameSync(stage, dist); keepGeneration(`${dist}.previous`, dist); reapGenerations(dist); return; }
+    if (!existsSync(dist)) {
+      renameSync(stage, dist);
+      // This swap did not move `.previous`; another process may have created it during the rename.
+      const foreign = foreignBeside(dist);
+      if (foreign) throw new Error(foreign);
+      keepGeneration(`${dist}.previous`, dist);
+      reapGenerations(dist);
+      return;
+    }
     rmSync(`${dist}.previous`, { recursive: true, force: true });
     // One step where the system has one: dist is the new tree from one
     // instant to the next, never absent, and the old tree is left at the
@@ -937,7 +948,9 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
   if (r.status === 410) { res.writeHead(410, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`build generation ${r.id} is no longer kept here: load the page again\n`); return; }
   if (pages && [200, 404].includes(r.status) && r.route === '/shell.html' && ['request', 'cached'].includes(r.render) && ['GET', 'HEAD'].includes(req.method)) {
     let page = null;
-    try { page = await pages(r.id, (r.location ?? target.pathname) + target.search, (name) => req.headers[name]); } catch (error) {
+    // A HEAD has no body to send the head of before the render.
+    const header = (name) => (name === 'sec-fetch-dest' && req.method === 'HEAD' ? undefined : req.headers[name]);
+    try { page = await pages(r.id, (r.location ?? target.pathname) + target.search, header); } catch (error) {
       console.error(`render ${target.pathname}: ${error.message}`);
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('This page could not be rendered.\n'); return;
     }
@@ -947,8 +960,18 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
       // page and is a tenth of its size, which the reader's first paint waits on (LLP 1048.007 D6).
       const accepted = compression ? acceptedEncodings(req.headers['accept-encoding']) : new Set();
       const encoding = ['br', 'gzip'].find(name => accepted.has(name));
-      const body = encoding === 'br' ? brotliCompressSync(page.html, { params: { [zlib.BROTLI_PARAM_QUALITY]: 5 } }) : encoding ? gzipSync(page.html) : page.html;
       const vary = [compression && 'Accept-Encoding', negotiated && 'Accept', ...(page.vary ?? '').split(', ').filter(v => v && v !== 'Accept-Encoding' && v !== 'Accept')].filter(Boolean).join(', ');
+      if (page.stream) {
+        // A navigation's head, sent before the render settles (LLP 1048.005), each part flushed through the encoder.
+        res.writeHead(page.status, { ...headers, ...(vary ? { vary } : {}), ...(encoding ? { 'content-encoding': encoding } : {}) });
+        const z = encoding === 'br' ? createBrotliCompress({ params: { [zlib.BROTLI_PARAM_QUALITY]: 5 } }) : encoding ? createGzip() : null;
+        z?.pipe(res);
+        // Read to its end even when the reader has gone: the render disposes its realm when it finishes.
+        for await (const part of page.stream) if (!res.destroyed) await new Promise(ok => (z ? (z.write(part), z.flush(ok)) : res.write(part, ok)));
+        if (z) z.end(); else res.end();
+        return;
+      }
+      const body = encoding === 'br' ? brotliCompressSync(page.html, { params: { [zlib.BROTLI_PARAM_QUALITY]: 5 } }) : encoding ? gzipSync(page.html) : page.html;
       sendStaticBody(req, res, body, { ...headers, ...(vary ? { vary } : {}), ...(encoding ? { 'content-encoding': encoding } : {}) }, page.status);
       return;
     }
@@ -977,47 +1000,6 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     res.writeHead(304, validators); res.end(); return;
   }
   sendStaticBody(req, res, encoding ? compression.get(digest, encoding) : body, headers);
-}
-
-/** `serve`'s `pages` for the JS-target build at `dist`: `(id, location, header)`, the page for `location` rendered by
- * render.mjs's `pageServer` from build generation `id` (`servedFile`'s), wherever that build is (`dist`, or `<dist>.gen`
- * once another replaced it), and bound to it as a document `servedFile` sends is: its base that generation's, and
- * rendered again from where the build was kept when another replaced it during the render. Whole, not streamed, so
- * its head is sent only when all of it is known to be that build's. Null for a build with no server bundle (`--render
- * none`), whose `render=request` and `cached` routes are then served their shell. */
-function sitePages(dist, { pageServer, deferredAnswers, deferredPath }) {
-  const servers = new Map(); // `${id} ${tree}` -> its page server, a `cached` route's pages kept in it
-  const serverOf = (id, tree) => {
-    const key = `${id} ${tree}`;
-    if (!servers.has(key)) {
-      if (servers.size >= 8) servers.delete(servers.keys().next().value);
-      servers.set(key, existsSync(resolve(tree, '.gen/server.js')) ? pageServer(tree) : null);
-    }
-    return servers.get(key);
-  };
-  const pages = async (id, location, header) => {
-    // The page whole (no `sec-fetch-dest`) and uncompressed (no `accept-encoding`), as every file here is sent; laid
-    // out for the viewport the request tells (render.mjs `viewportOf`, LLP 1048.006).
-    const asked = (name) => (name === 'cache-control' || name === 'user-agent' || name.startsWith('sec-ch-') || name === 'viewport-width' ? header(name) : undefined);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const current = !id || generationOf(dist) === id, tree = current ? dist : resolve(`${dist}.gen`, id);
-      const render = existsSync(tree) && serverOf(id, tree);
-      if (!render) return null;
-      const { status, headers, body } = await render(location, asked);
-      if (current && id && generationOf(dist) !== id) continue;
-      const html = Buffer.from(body).toString('utf8');
-      return { status, cacheControl: headers['cache-control'], vary: headers.vary, acceptCH: headers['accept-ch'], retryAfter: headers['retry-after'], html: id ? withGenerationBase(html, id) : html };
-    }
-    return null;
-  };
-  // `/.exact/checkpoint/<hash>.json`: the answers a waiting page named (render.mjs `deferAnswers`), else null.
-  pages.answers = (path) => {
-    const hash = deferredPath(path);
-    if (!hash) return null;
-    const body = deferredAnswers(hash);
-    return body === undefined ? { status: 404, body: "These answers are no longer kept; the page builds itself afresh.\n" } : { status: 200, body };
-  };
-  return pages;
 }
 
 const assetTrees = (rust) => ['assets', 'deck', 'shaders', 'plans', 'activities', ...(rust ? ['rust'] : [])];
@@ -1234,8 +1216,10 @@ export async function serveStatic(dist, req, res, listener, compression = null) 
   sendStaticBody(req, res, encoding ? compression.get(digest, encoding) : body, headers);
 }
 
-async function main() {
-  const argv = guardFlags('serve', process.argv.slice(2));
+/** `serve` with `args`, as its command line takes them; `js` and `sitePages` from a caller that knows them
+ * (`render.mjs --serve`, whose module is still being evaluated and so cannot be imported here). */
+export async function serve(args = process.argv.slice(2), { js = null, sitePages = null } = {}) {
+  const argv = guardFlags('serve', [...args]);
   const value = (flag) => {
     const at = argv.indexOf(flag);
     if (at < 0) return null;
@@ -1250,7 +1234,7 @@ async function main() {
   if (settled) return settled;
   // A JS-target build (LLP 1071) is served as its tree. A published root is its pointer's release, whose page is the
   // JS target's or the wasm's.
-  const js = jsTargetBuild(dist);
+  js ??= jsTargetBuild(dist);
   if (!js && !await readStaticFileAsync(dist, origin && existsSync(resolve(dist, webRootPath)) ? '/index.html' : '/app.wasm')) {
     // A build that is there but unreadable says why: the reader is a Cargo-built
     // helper, and "build first" misled when cargo was not on PATH (LLP 1054 O5).
@@ -1271,7 +1255,7 @@ async function main() {
   const host = loopback ? '127.0.0.1' : '0.0.0.0';
   const compression = compressionCache();
   const warming = warmCompression(dist, compression, js);
-  const pages = js ? sitePages(dist, await import('../web-js/render.mjs')) : null;
+  const pages = js ? (sitePages ?? (await import('../web-js/render.mjs')).sitePages)(dist) : null;
   const rebuild = rebuildOnChange(dist);
   const server = createServer(async (req, res) => {
     if (rebuild && (asksPage(req, webRequestURL(req.url)?.pathname) || (prefersMarkdown(req.headers.accept) && appDocumentPath(webRequestURL(req.url)?.pathname ?? '')))) {
@@ -1423,7 +1407,7 @@ export async function saveTrace(req, res, { app, dist, root }) {
   } catch (error) { reply(400, { error: error.message }); }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await serve();
 
 /** A dev loop its launcher started stops when that process is gone, however it ended: `EXACT_LAUNCHER_PID` names
  * it (an app's `exact.mjs`, or the JS loop for the resident producers it starts). A SIGKILL forwards no signal, and

@@ -623,6 +623,9 @@ impl Resolver<'_, '_> {
                         Some("B") => 2,
                         _ => 3,
                     };
+                    // One scale for both axes, the box's width in bounding-box
+                    // units, as Chrome has it (Blink's `FEDisplacementMap`
+                    // applies only `ApplyHorizontalScale`).
                     Op::Displacement(
                         number(prop(PropId::FeScale), 0.0) * kx,
                         ch(PropId::XChannelSelector),

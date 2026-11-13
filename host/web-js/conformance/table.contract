@@ -11,7 +11,13 @@
 // `tbody` of their own) with a `rowspan=0` reaching the end of them; the
 // first `thead` above and the first `tfoot` below the other row groups
 // wherever each is written; a table that is a block holding an anonymous
-// table; a table's height as its least, short and tall; a row and a row
+// table; flex and grid tables with separate row-group items, updated spacing
+// and new groups and rows, including flex and grid row groups;
+// a direction-only change on an anonymous table;
+// an empty block table gaining and losing rows; a flex row's cell, an item
+// with its UA padding; a block table's row group that turns from a block
+// into a flex of rows;
+// a table's height as its least, short and tall; a row and a row
 // group moved relatively; a right-to-left table padded on one side, with a
 // caption; a caption's percentage margin; a cell's minimum over its width;
 // cells from a `for`; a table stretched in a flex
@@ -108,6 +114,94 @@ component Tables
                 box width=20 height=12
               td testId="b22"
                 box width=20 height=12
+      view testId="items-flow"
+        table testId="items" display=(wide ? "flex" : "grid") border-spacing=(wide ? 10 : 2)
+          thead testId="items-head"
+            tr
+              td testId="items-h1"
+                box width=20 height=10
+              td testId="items-h2"
+                box width=20 height=10
+          tbody testId="items-body"
+            tr
+              td testId="items-b1"
+                box width=20 height=10
+              td testId="items-b2"
+                box width=20 height=10
+      view testId="insert-flex-flow"
+        table testId="insert-flex" display="flex"
+          if wide
+            thead testId="insert-flex-head"
+              tr
+                td testId="insert-flex-h1"
+                  box width=20 height=10
+                td testId="insert-flex-h2"
+                  box width=20 height=10
+            tr testId="insert-flex-row"
+              td testId="insert-flex-r1"
+                box width=20 height=10
+              td testId="insert-flex-r2"
+                box width=20 height=10
+      view testId="insert-grid-flow"
+        table testId="insert-grid" display="grid"
+          if wide
+            thead testId="insert-grid-head"
+              tr
+                td testId="insert-grid-h1"
+                  box width=20 height=10
+                td testId="insert-grid-h2"
+                  box width=20 height=10
+            tr testId="insert-grid-row"
+              td testId="insert-grid-r1"
+                box width=20 height=10
+              td testId="insert-grid-r2"
+                box width=20 height=10
+      view testId="direction-flow"
+        table testId="direction-block" display="block" direction=(wide ? "rtl" : "ltr")
+          tbody
+            tr
+              td testId="direction-first"
+                box width=20 height=10
+              td testId="direction-second"
+                box width=30 height=10
+      view testId="caption-spacing-flow"
+        table testId="caption-spacing" display="block" border-spacing=(wide ? 10 : 2)
+          caption testId="spacing-caption" margin-bottom="10%"
+            box width=10 height=10
+          tr
+            td testId="spacing-caption-cell"
+              box width=60 height=10
+      view testId="nested-items-flow"
+        table testId="nested-items" display="flex" border-spacing=(wide ? 10 : 2)
+          tbody testId="nested-group" display=(wide ? "grid" : "flex")
+            tr testId="nested-row1"
+              td testId="nested-cell1"
+                box width=20 height=10
+            tr testId="nested-row2"
+              td testId="nested-cell2"
+                box width=30 height=10
+      view testId="empty-flow"
+        table testId="empty-block" display="block"
+          if wide
+            tbody
+              tr
+                td testId="empty-cell"
+                  box width=20 height=10
+        box testId="after-empty" width=20 height=10
+      view testId="item-cell-flow"
+        table testId="item-cell-table" display="flex"
+          tr display=(wide ? "grid" : "flex")
+            td testId="item-cell"
+              box width=20 height=10
+      view testId="block-group-flow"
+        table testId="block-group-table" display="block"
+          tbody testId="block-group" display=(wide ? "flex" : "block")
+            tr
+              td testId="block-group-cell1"
+                box width=20 height=10
+            tr
+              td testId="block-group-cell2"
+                box width=30 height=10
       view testId="short-flow"
         table testId="short" height=10
           tr
@@ -139,8 +233,8 @@ component Tables
             td testId="rtl-cell"
               box width=60 height=10
       view testId="percent-flow"
-        table testId="percent"
-          caption testId="percent-caption" margin-left="10%"
+        table testId="percent" padding-left=(wide ? 20 : 0) padding-right=(wide ? 20 : 0)
+          caption testId="percent-caption" margin-left="10%" margin-bottom="10%"
             box width=10 height=10
           tr
             td testId="floor" width=20 min-width=80

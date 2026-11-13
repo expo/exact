@@ -98,6 +98,7 @@ typedef struct ExactFrameHealthHitch {
     int32_t after_at_us;
     uint32_t after_gap_us, after_callback_us;
     ExactFrameHealthHitchWork work;
+    int32_t frame_start_us;
 } ExactFrameHealthHitch;
 typedef struct ExactFrameHealthHistoryStatus {
     uint64_t capture, active, segments, started_ns, changed_ns, callbacks;

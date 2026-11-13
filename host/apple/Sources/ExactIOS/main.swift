@@ -129,7 +129,7 @@ nonisolated(unsafe) var planRefusal: String?
 func agentReady() {
     guard agentMode, !readySent, session.booted || session.bootError != nil else { return }
     readySent = true
-    Agent.startSocket(ready: ["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? NSNull(), "pid": Int(getpid())], sessions: [("main", session)])
+    Agent.startSocket(ready: ["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? session.nativeArtifactFailure ?? NSNull(), "pid": Int(getpid())], sessions: [("main", session)])
 }
 
 /// The one screen: the view fills the controller's view; the plan boots at
