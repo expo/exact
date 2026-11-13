@@ -136,6 +136,7 @@ routes nav
   referenceDeveloperRuntimeFontFamiliesAndAriaDisabled "/reference/developer/runtime-font-families-and-aria-disabled" render=build activate=idle
   referenceDeveloperServeRealworld "/reference/developer/serve-realworld" render=build activate=idle
   referenceDeveloperInspectAndFormatContract "/reference/developer/inspect-and-format-contract" render=build activate=idle
+  referenceDeveloperContractEvaluationLimits "/reference/developer/contract-evaluation-limits" render=build activate=idle
   referenceDeveloperRunATerminalApp "/reference/developer/run-a-terminal-app" render=build activate=idle
   referenceDeveloperRunAnAppFromATerminalOnMacos "/reference/developer/run-an-app-from-a-terminal-on-macos" render=build activate=idle
   referenceDeveloperApplePrivacyManifests "/reference/developer/apple-privacy-manifests" render=build activate=idle
