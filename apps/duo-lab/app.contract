@@ -8,8 +8,9 @@ use ArrangementView, ArrangementSettings from "./arrangement-view.contract"
 // Fold reads the three fields `exactViewport` gained and lays two panes on the segments with `env(viewport-segment-*)`,
 // the fold band empty between them. Images is a virtualized list of a few
 // hundred image rows over four bundled PNGs (the raster budget's stress).
-// Reflow is one long Markdown document and a dense feed (the text caches'
-// stress from 951 to 466 points and back). Combinations pushes a route with
+// Reflow is a long Markdown document, one text per block
+// (docs/recipes/long-text.md), and a dense feed (the text caches' stress from
+// 951 to 466 points and back). Combinations pushes a route with
 // an absolutely positioned sheet holding a textarea, so keyboard + sheet +
 // pushed screen + fold is one sequence of taps. Keyboard adds physical-device
 // checks with an app-local geometry recorder and a native share sheet.
@@ -47,8 +48,11 @@ shape ImageRow
   id: number
   asset: string
   caption: string
+shape Block
+  id: number
+  text: string
 shape Document
-  body: string
+  blocks: Block[]
 shape FeedRow
   id: number
   who: string
@@ -330,7 +334,11 @@ component DuoLab
                     text "Reflow" role="heading" aria-level=1 testId="reflow-title"
                   scroll id="reflow-scroll" flex=1 min-height=0 width="100%" box-sizing="border-box" testId="reflow-scroll"
                     column class=ReadingBody gap=16
-                      text doc.body markup="markdown" testId="document" width="100%" font-size=17 line-height="26px"
+                      // The gap is the blank line one Markdown text would leave between
+                      // these blocks: one line of its 26px line height.
+                      column testId="document" width="100%" gap=26
+                        for block in doc.blocks key=block.id
+                          text block.text markup="markdown" width="100%" font-size=17 line-height="26px"
                       text "Feed" font-size=22 font-weight=700 testId="feed-title"
                       for post in feed key=post.id
                         row gap=10 class=Card testId=`feed-${post.id}`

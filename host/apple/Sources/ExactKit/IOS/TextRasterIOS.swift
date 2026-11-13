@@ -270,17 +270,7 @@ final class TextRasterizer {
             if take(pending), node.textRasterReady { return true }
         }
         guard firstPixels || hasRoom else { return false }
-        let measured = engine.measuredBreaks(key.spec, width: key.box.width)
-        let paragraph = measured == nil ? node.paragraphLayout() : nil
-        guard let geometry = measured ?? paragraph.map(LineGeometry.init) else { return true }
-        let source = paragraph?.shape?.attributed ?? engine.attributed(key.spec)
-        let job = TextRasterJob(source: source.copy() as! NSAttributedString, ranges: geometry.ranges, baselines: geometry.baselines,
-            flush: key.spec.align == 1 ? 0.5 : key.spec.align == 2 ? 1 : 0, whiteSpace: key.spec.whiteSpace, justifies: key.spec.align == 3, insets: paragraph?.insets ?? LineInsets(key.spec, source: source),
-            box: key.box, size: key.size, scale: key.scale, clip: key.clip, room: key.room,
-            ellipsis: key.spec.ellipsis, crop: true, clamped: geometry.clamped, shadow: key.spec.hdrShadow.map(TextRunShadow.init),
-            antialiased: key.spec.antialiased,
-            measuredGlyphs: engine.measuredGlyphs(key.spec, width: key.box.width),
-            measuredColor: TextEngine.color(key.spec.color).cgColor)
+        guard let job = job(node, key: key, engine: engine) else { return true }
         // A job for the paragraph's previous text or box paints nothing now.
         if let pending { _ = pending.abandon() }
         node.textRasterKey = key; node.textRasterReady = false; node.textRasterFailed = false
@@ -312,6 +302,47 @@ final class TextRasterizer {
         }
         return true
     }
+    /// The job that paints `key`'s pixels of `node`'s paragraph. For a band,
+    /// it lays out only the band's lines: laying out all of a long paragraph's
+    /// lines would make each band cost as much as the whole paragraph.
+    func job(_ node: NodeView, key: TextRasterKey, engine: TextEngine) -> TextRasterJob? {
+        let measured = engine.measuredBreaks(key.spec, width: key.box.width)
+        let paragraph = measured == nil ? node.paragraphLayout() : nil
+        guard let geometry = measured ?? paragraph.map(LineGeometry.init) else { return nil }
+        let source = paragraph?.shape?.attributed ?? engine.attributed(key.spec)
+        let glyphs = engine.measuredGlyphs(key.spec, width: key.box.width)
+        // The measured glyphs' fast path pairs each of its lines with a baseline, so it takes them all
+        let lines = glyphs == nil ? Self.lines(geometry, in: key) : (geometry.ranges, geometry.baselines)
+        return TextRasterJob(source: source.copy() as! NSAttributedString, ranges: lines.0, baselines: lines.1,
+            flush: key.spec.align == 1 ? 0.5 : key.spec.align == 2 ? 1 : 0, whiteSpace: key.spec.whiteSpace, justifies: key.spec.align == 3, insets: paragraph?.insets ?? LineInsets(key.spec, source: source),
+            box: key.box, size: key.size, scale: key.scale, clip: key.clip, room: key.room,
+            ellipsis: key.spec.ellipsis, crop: true, clamped: geometry.clamped, shadow: key.spec.hdrShadow.map(TextRunShadow.init),
+            antialiased: key.spec.antialiased,
+            measuredGlyphs: glyphs,
+            measuredColor: TextEngine.color(key.spec.color).cgColor)
+    }
+
+    /// A band's lines: those whose baselines lie within reach of its rows.
+    /// The reach adds the ink a job keeps past its box (`maxInkOverflow`), the
+    /// largest step between baselines (a line with an inline image), four
+    /// times the largest font size (a glyph whose ink reaches past its line)
+    /// and, when the text has a shadow, the shadow's reach.
+    static func lines(_ geometry: LineGeometry, in key: TextRasterKey) -> ([CFRange], [CGFloat]) {
+        let baselines = geometry.baselines
+        guard let clip = key.clip, geometry.clamped == nil, baselines.count == geometry.ranges.count, baselines.count > 1 else {
+            return (geometry.ranges, baselines)
+        }
+        var gap: CGFloat = 0
+        for i in 1..<baselines.count { gap = max(gap, baselines[i] - baselines[i - 1]) }
+        let size = key.spec.runs.map(\.size).max() ?? 0
+        let shadowed = key.spec.shadow != nil || key.spec.hdrShadow != nil || key.spec.runs.contains { $0.shadow != nil }
+        let reach = TextRasterJob.maxInkOverflow + gap + 4 * size + (shadowed ? TextRasterJob.maxShadowReach : 0)
+        let low = clip.minY - reach, high = clip.maxY + reach
+        guard let first = baselines.firstIndex(where: { $0 >= low }) else { return ([], []) }
+        let end = baselines[first...].firstIndex(where: { $0 > high }) ?? baselines.count
+        return (Array(geometry.ranges[first..<end]), Array(baselines[first..<end]))
+    }
+
     private struct UrgentPaint {
         let node: NodeView
         let key: TextRasterKey

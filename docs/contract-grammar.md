@@ -1545,7 +1545,10 @@ wrapping follow the reader's platform and viewport at runtime. Preparing readers
 makes no network requests.
 
 - `text note.body markup="markdown"` is the reader: headings, lists, quotes,
-  code and links painted as one node, on every host.
+  code and links painted as one node, on every host. Its dialect (LLP 1045 D2)
+  has no setext headings, indented code, reference links or HTML, and a list
+  item holds one paragraph and its nested lists: an indented code block is
+  drawn as a paragraph, and an item's second paragraph at the left margin.
 - `textarea id="editor" value=draft input=edit markup="markdown"` is the editor:
   on the web, Markdown shown as it reads, with the syntax hidden away from the
   caret; on macOS and iOS, the platform's text view with the syntax dimmed and

@@ -230,6 +230,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Lists and scrolling
 
+- **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
+  order.** A whole document in one `text` (an article, a long Markdown note) is
+  one string to Core Text, and Core Text does not shape a string longer than a
+  length it does not document: Arabic is unjoined and runs left to right, and
+  Latin text is not kerned, so a line can break at another word. The length was
+  10,240 UTF-16 units on iOS 27.1 and macOS 27.2, and can change in any release.
+  Give each paragraph or block its own `text`, and never split inside a
+  paragraph ([long text](recipes/long-text.md)). (Duo Lab, 2026-11-12.)
+  **Candidate diagnostic:** `check` could name a text whose string is that long.
+
 - **A frame's cell count is not its stretched layout width.** Giving the
   harness's animation rows a width of `animCols` cells changed fullscreen layout in
   a window narrower than the animation's minimum 20 cells. `width="100%"`
