@@ -50,13 +50,14 @@ displayed source before teardown, and re-reads the destination each frame. Nativ
 row placement, scrolling and lowered ancestor transforms contribute to the boxes.
 The destination is revealed with nearest scrolling; flight content takes no hits
 and is hidden from accessibility. Remove animations shows the destination at once.
-A destination that stops rendering (`display: none`, a hidden route) ends its flight.
+A destination that stops rendering (`display: none`, a hidden route) ends its flight;
+a route's hiding is read at every paint, since a crossing's end changes it with no commit.
 
 Plain raster images interpolate their full fitted image rectangles in points,
 applying each decoded image's crop afterward. A pending destination keeps the
 source raster, fitted at the destination's density. Symbols, animated images,
-`visibility: hidden` images, and images with tint, border, background or shadow
-use the live-subtree scale path instead. The largest corner radius is
+`visibility: hidden` images, and images with tint, filter, mask, clip path, border,
+background or shadow use the live-subtree scale path instead. The largest corner radius is
 used while flying. Reversal preserves position, not velocity.
 
 This supports in-page transitions. Separate native dialog panes, presentation

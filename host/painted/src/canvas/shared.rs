@@ -419,6 +419,135 @@ mod tests {
         }
     }
 
+    struct Pixels;
+    impl crate::presenter::top::SurfacePainter for Pixels {
+        fn record(
+            &mut self,
+            size: (f32, f32),
+            scale: f32,
+            paint: &mut dyn FnMut(&mut dyn crate::paint::Backend),
+        ) -> Vec<u32> {
+            let mut raster = crate::raster::Raster::transparent();
+            raster.begin(size.0, size.1, scale);
+            paint(&mut raster);
+            let pixels = raster.finish().unwrap();
+            vec![pixels.width(), pixels.height()]
+        }
+    }
+
+    /// A route's hiding changes with no commit: when a push's crossing ends,
+    /// and while a Back preview shows the route beneath.
+    #[test]
+    fn a_route_hidden_between_commits_ends_flights_and_keeps_names_alive() {
+        let app = r##"routes nav
+  home "/"
+    detail "/detail"
+component App
+  state open = false
+  state count = 0
+  action toggle
+    open = not open
+  action bump
+    count = count + 1
+  action show(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" viewport-fit="cover" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0 background-color="#ffffff"
+            button "Toggle" press=toggle testId="toggle" height=40
+            button "Detail" press=show("/detail") testId="open-detail" height=40
+            if open
+              box sharedElement="card" width=300 height=200 background-color="red" -exact-layout-transition="2s linear" testId="card"
+            else
+              box sharedElement="card" width=80 height=60 background-color="red" -exact-layout-transition="2s linear"
+        if e.name == "detail"
+          column navigationKey=`${e.id}` position="absolute" inset=0 background-color="#ffffff"
+            button "Bump" press=bump testId="bump" height=40
+            text `${count}`
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (412., 916.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.serve_windows(Box::new(Pixels));
+        assert_eq!(p.serve_bars(Box::new(Pixels)), None);
+        let window = crate::presenter::Window {
+            size: (412., 916.),
+            bars: [52., 0., 24., 0.],
+            ..Default::default()
+        };
+        assert_eq!(p.set_window(window), None);
+        // The last lifecycle the reader was sent: its flights and its names.
+        let mut state = (0, Vec::new());
+        let mut paint = |p: &mut Presenter<()>, ms: f64| {
+            let now = p.host().now() + ms;
+            p.tick(now);
+            p.frame();
+            let ops = take();
+            if ops[0] == STATE {
+                let names = 5 + ops[3] as usize * 6;
+                state = (
+                    ops[3],
+                    ops[names..names + ops[names - 1] as usize * 2]
+                        .chunks_exact(2)
+                        .map(|k| u64::from(k[0]) | u64::from(k[1]) << 32)
+                        .collect(),
+                );
+            }
+            (state.clone(), ops)
+        };
+        let tap = |p: &mut Presenter<()>, name: &str| {
+            let key = p.host().kernel().find_by_test_id(name)[0];
+            let id = p.host().kernel().node_by_key(key).unwrap().id;
+            p.tap(id).unwrap();
+            p.run_commands(|| ());
+        };
+        paint(&mut p, 0.);
+        tap(&mut p, "toggle");
+        let card = motion_node(p.host().kernel().find_by_test_id("card")[0]);
+        assert_eq!(paint(&mut p, 0.).0, (1, vec![card]));
+        tap(&mut p, "open-detail");
+        let ((flights, _), _) = paint(&mut p, 0.);
+        assert!(p.stage_moving());
+        assert_eq!(flights, 1, "the route still shows while it crosses out");
+        paint(&mut p, 500.);
+        let (lifecycle, _) = paint(&mut p, 16.);
+        assert!(!p.stage_moving());
+        assert_eq!(
+            lifecycle,
+            (0, vec![card]),
+            "the covered route's flight ends though no commit hid it; its name stays alive"
+        );
+        assert!(p.host().flight_frames().is_empty());
+        // A commit while the route is covered must not retire its names: a
+        // Back preview draws the route again with no commit of its own.
+        tap(&mut p, "bump");
+        paint(&mut p, 0.);
+        let now = p.host().now();
+        assert!(p.back_progress(0, 0., 0, now));
+        assert!(p.back_progress(1, 0.5, 0, now + 50.));
+        let ((_, alive), ops) = paint(&mut p, 50.);
+        let drawn: Vec<_> = sets(&ops)
+            .iter()
+            .map(|def| u64::from(def[0]) | u64::from(def[1]) << 32)
+            .collect();
+        assert_eq!(drawn, [card], "the preview records the route beneath");
+        assert!(
+            alive.contains(&card),
+            "the reader discards a definition whose name it was told is gone"
+        );
+    }
+
     #[test]
     fn idle_named_rows_are_retained_and_emit_no_repeated_lifecycle() {
         let app = "component App\n  view\n    scroll width=300 height=300\n      column\n        box sharedElement=\"a\" width=100 height=80 background-color=\"red\"\n        box sharedElement=\"b\" width=100 height=80 background-color=\"blue\"\n";
@@ -653,6 +782,10 @@ mod tests {
         let mut before = Vec::new();
         definitions(&first, &mut before);
         assert_eq!(before.len(), 2);
+        assert!(
+            sets(&first).iter().all(|def| def[29] == 2f32.to_bits()),
+            "a definition says how many device pixels a point covers"
+        );
         assert_ne!(
             before[0].1, 0,
             "shared subtree is recorded inside a scroll row"

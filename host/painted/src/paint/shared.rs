@@ -9,6 +9,8 @@ pub struct SharedState {
     pub(crate) reduced: bool,
     pub(crate) alive: Vec<u64>,
     pub(crate) recorded: std::collections::HashSet<u64>,
+    /// Destinations this paint found not rendering; the host retires them.
+    pub(crate) unrendered: Vec<exact_kernel::NodeKey>,
     epoch: Option<u64>,
 }
 
@@ -47,9 +49,10 @@ impl Painter {
             let Some(node) = scene.kernel.node(id) else {
                 continue;
             };
-            // A subtree that does not render records no definition, so its
-            // names are not alive: the reader must not keep flying them.
-            if (scene.hidden)(id) || node.style.display == Display::None {
+            // A subtree that is not displayed records no definition, so its
+            // names are not alive. A route's hiding is not asked here: it
+            // changes between commits, and this order is kept for an epoch.
+            if node.style.display == Display::None {
                 continue;
             }
             if node
@@ -76,12 +79,26 @@ impl Painter {
         self.shared.recorded.retain(|key| alive.contains(key));
     }
 
-    /// A flight whose destination stopped rendering ends with its definition.
-    pub(super) fn drop_unrendered_flights(&mut self) {
-        let alive = &self.shared.alive;
-        self.shared
-            .frames
-            .retain(|f| alive.contains(&motion_node(f.to)));
+    /// A flight whose destination stopped rendering ends: the reader would
+    /// draw its kept definition over a page that no longer shows it. A hidden
+    /// route is asked at every paint, as a crossing's end and a Back preview
+    /// change it with no commit.
+    pub(super) fn drop_unrendered_flights(&mut self, scene: &Scene<'_>) {
+        let SharedState {
+            frames,
+            alive,
+            unrendered,
+            ..
+        } = &mut self.shared;
+        unrendered.clear();
+        frames.retain(|f| {
+            let rendered = alive.contains(&motion_node(f.to))
+                && (scene.kernel.node_by_key(f.to)).is_some_and(|n| !(scene.hidden)(n.id));
+            if !rendered {
+                unrendered.push(f.to);
+            }
+            rendered
+        });
     }
 
     pub(super) fn node_at(

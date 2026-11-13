@@ -156,13 +156,13 @@ impl<D: DataSource> Host<D> {
         self.flights.running.len() != before
     }
 
-    /// A destination that stopped rendering (`display: none`, a hidden route)
-    /// has no live definition, so its flight ends with the reader's.
-    pub(crate) fn retire_unrendered_flights(&mut self, alive: &[u64]) {
+    /// A destination the last paint found not rendering (`display: none`, a
+    /// hidden route) flies no longer, so its flight ends with the reader's.
+    pub(crate) fn retire_unrendered_flights(&mut self, unrendered: &[NodeKey]) {
         let engine = &mut self.engine;
         let row_dirty = &mut self.row_dirty;
         self.flights.running.retain(|f| {
-            let rendered = alive.contains(&motion_node(f.frame.to));
+            let rendered = !unrendered.contains(&f.frame.to);
             if !rendered {
                 engine.remove(motion_node(f.frame.to) | FLIGHT);
                 row_dirty.node(f.frame.to);

@@ -110,6 +110,23 @@ class SharedElementsTest {
         t.shared.releaseImages { freed.add(it) }; assertEquals(listOf(7), freed)
     }
 
+    @Test fun aDestinationThatLeavesTheLifecycleStopsFlying() {
+        val t = Fixture()
+        val box = RectF(0f, 0f, 100f, 100f)
+        t.shared.begin(state(listOf(1))); t.define(definition(1, box)); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f))))
+        t.define(definition(2, box)); t.shared.finish()
+        assertTrue(t.shared.isFlying(2))
+        // A hidden route keeps the name alive with no flight; `display: none` removes the name too.
+        for (alive in listOf(listOf(2L), emptyList())) {
+            t.shared.begin(state(alive)); t.shared.finish()
+            assertFalse(t.shared.isFlying(2)); assertEquals(1f, t.shared.node(2).alpha, 0f)
+            val pixels = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+            t.shared.draw(Canvas(pixels))
+            assertEquals(Color.TRANSPARENT, pixels.getPixel(50, 50))
+        }
+    }
+
     @Test fun pendingRasterFitsItsNaturalSizeInDevicePixels() {
         // A 400 by 200 point photo covers 1200 by 600 device pixels at density 3, and twice that under a 2x layer.
         for ((fit, crops) in listOf(
