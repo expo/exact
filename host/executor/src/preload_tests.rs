@@ -93,91 +93,101 @@ fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
 #[test]
 fn a_tool_read_queued_before_its_preload_starts_is_sent_after_the_send() {
     for asynchronous in [false, true] {
-        let server = Server::new();
-        let sender = Server::new();
-        let grants = format!(
-            "net.fetch http://{}\nnet.fetch http://{}",
-            server.address, sender.address
-        );
-        let (set, _clock) = fresh_clock(&server, Vec::new());
-        let control = set.control();
-        let (core, woke) = server.core_grants(asynchronous, true, &grants);
-        adopt(&core, set);
-        let release = held_plan(&sender, "/send", b"send");
-        let mut send = job(1, sender.request("/send"));
-        send.class = RequestClass::Ordered;
-        send.request.method = "POST".into();
-        core.run(send, None).unwrap();
-        sender.seen(1);
-        let mut tool = job(2, server.request("/foreground"));
-        tool.request.reach = exact_runner::local_network::Reach {
-            origin: exact_runner::CallOrigin::Tool,
-            substitute: Some(exact_runner::local_network::State::Unknown),
-        };
-        core.run(tool, None).unwrap();
-        {
-            let state = core.shared.state.lock().unwrap();
-            assert!(state.cache.as_ref().unwrap().preloads.is_empty());
-            assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+        for named in [false, true] {
+            let server = Server::new();
+            let sender = Server::new();
+            let grants = format!(
+                "net.fetch http://{}\nnet.fetch http://{}",
+                server.address, sender.address
+            );
+            let (set, _clock) = fresh_clock(&server, Vec::new());
+            let control = set.control();
+            let (core, woke) = server.core_grants(asynchronous, true, &grants);
+            adopt(&core, set);
+            let release = held_plan(&sender, "/send", b"send");
+            let mut send = job(1, sender.request("/send"));
+            send.class = RequestClass::Ordered;
+            send.request.method = "POST".into();
+            core.run(send, None).unwrap();
+            sender.seen(1);
+            let mut tool = job(2, server.request("/foreground"));
+            if named {
+                tool.request = tool.request.preload("foreground").unwrap();
+            }
+            tool.request.reach = exact_runner::local_network::Reach {
+                origin: exact_runner::CallOrigin::Tool,
+                substitute: Some(exact_runner::local_network::State::Unknown),
+            };
+            core.run(tool, None).unwrap();
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert!(state.cache.as_ref().unwrap().preloads.is_empty());
+                assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+            }
+            server.plan("/foreground", Plan::new(200, &[], b"preload"));
+            control.extend(
+                vec![definition(&server, "/foreground")],
+                &grants,
+                Arc::new(|_, _| {}),
+            );
+            ready(&core, 1);
+            assert_eq!(server.count(), 1);
+            server.plan("/foreground", Plan::new(200, &[], b"sent"));
+            release.send(()).unwrap();
+            assert_eq!(collect(&core, &woke).0, 1);
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, 2);
+            assert!(!timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
+            assert_eq!(server.count(), 2);
+            let (reply, cached) = read(&core, &woke, &server, 3, "/foreground");
+            assert!(cached);
+            assert_eq!(reply.body, b"preload");
+            assert_eq!(server.count(), 2);
         }
-        server.plan("/foreground", Plan::new(200, &[], b"preload"));
-        control.extend(
-            vec![definition(&server, "/foreground")],
-            &grants,
-            Arc::new(|_, _| {}),
-        );
-        ready(&core, 1);
-        assert_eq!(server.count(), 1);
-        server.plan("/foreground", Plan::new(200, &[], b"sent"));
-        release.send(()).unwrap();
-        assert_eq!(collect(&core, &woke).0, 1);
-        let (ticket, outcome, timing) = collect(&core, &woke);
-        assert_eq!(ticket, 2);
-        assert!(!timing.cached);
-        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
-        assert_eq!(server.count(), 2);
-        let (reply, cached) = read(&core, &woke, &server, 3, "/foreground");
-        assert!(cached);
-        assert_eq!(reply.body, b"preload");
-        assert_eq!(server.count(), 2);
     }
 }
 
 #[test]
 fn tool_reads_bypass_complete_and_inflight_preloads_without_waiting() {
     for asynchronous in [false, true] {
-        for pending in [false, true] {
-            let server = Server::new();
-            let release = held_plan(&server, "/held", b"preload");
-            let (set, _clock) = fresh_clock(&server, vec![definition(&server, "/held")]);
-            server.seen(1);
-            let (core, woke) = server.core(asynchronous, true);
-            adopt(&core, set);
-            if !pending {
-                release.send(()).unwrap();
-                ready(&core, 1);
-            }
-            server.plan("/held", Plan::new(200, &[], b"sent"));
-            let mut tool = job(1, server.request("/held"));
-            tool.request.reach.origin = exact_runner::CallOrigin::Tool;
-            let (reply, cached) = ask(&core, &woke, tool);
-            assert!(!cached);
-            assert_eq!(reply.body, b"sent");
-            assert_eq!(server.count(), 2);
-            core.run(job(2, server.request("/held")), None).unwrap();
-            if pending {
-                {
-                    let state = core.shared.state.lock().unwrap();
-                    assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
-                    assert!(state.running.is_empty());
+        for named in [false, true] {
+            for pending in [false, true] {
+                let server = Server::new();
+                let release = held_plan(&server, "/held", b"preload");
+                let (set, _clock) = fresh_clock(&server, vec![definition(&server, "/held")]);
+                server.seen(1);
+                let (core, woke) = server.core(asynchronous, true);
+                adopt(&core, set);
+                if !pending {
+                    release.send(()).unwrap();
+                    ready(&core, 1);
                 }
-                release.send(()).unwrap();
+                server.plan("/held", Plan::new(200, &[], b"sent"));
+                let mut tool = job(1, server.request("/held"));
+                if named {
+                    tool.request = tool.request.preload("held").unwrap();
+                }
+                tool.request.reach.origin = exact_runner::CallOrigin::Tool;
+                let (reply, cached) = ask(&core, &woke, tool);
+                assert!(!cached);
+                assert_eq!(reply.body, b"sent");
+                assert_eq!(server.count(), 2);
+                core.run(job(2, server.request("/held")), None).unwrap();
+                if pending {
+                    {
+                        let state = core.shared.state.lock().unwrap();
+                        assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+                        assert!(state.running.is_empty());
+                    }
+                    release.send(()).unwrap();
+                }
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"preload"));
+                assert_eq!(server.count(), 2);
             }
-            let (ticket, outcome, timing) = collect(&core, &woke);
-            assert_eq!(ticket, 2);
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"preload"));
-            assert_eq!(server.count(), 2);
         }
     }
 }
@@ -791,58 +801,63 @@ fn a_waiting_preload_read_keeps_room_for_its_reply_or_its_network_fallback() {
 #[test]
 fn a_redirected_reply_checks_every_hops_scope_before_boot_and_queued_adoption() {
     for asynchronous in [false, true] {
-        for pending in [false, true] {
-            let first = Server::new();
-            let middle = Server::new();
-            let grants = format!(
-                "net.fetch http://{}\nnet.fetch http://{}",
-                first.address, middle.address
-            );
-            let target = middle.request("/middle").url;
-            for _ in 0..2 {
-                first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
-            }
-            let target = first.request("/final").url;
-            middle.plan("/middle", Plan::new(302, &[("Location", &target)], b""));
-            let release = held_plan(&first, "/final", b"visited middle");
-            let set = Preloads::start(
-                vec![definition(&first, "/start")],
-                &grants,
-                ibex2::host::Host::new,
-            );
-            first.seen(2);
-            let mut scoped = first.request("/start");
-            scoped.grants = Some(format!("net.fetch http://{}", first.address));
-            let restricted = job(1, scoped);
-            if !pending {
-                release.send(()).unwrap();
-                complete_set(&set);
-                assert!(set.control().settle(&restricted).is_none());
-            }
-            let (core, woke) = first.core_grants(asynchronous, true, &grants);
-            adopt(&core, set);
-            if !pending {
-                assert!(core.settle_preload(&restricted).is_none());
-            }
-            core.run(restricted, None).unwrap();
-            if pending {
-                release.send(()).unwrap();
-            }
-            let (_, outcome, timing) = collect(&core, &woke);
-            assert!(!timing.cached);
-            assert!(matches!(
-                outcome,
-                Outcome::Failed {
-                    kind: FailureKind::Refused,
-                    ..
+        for named in [false, true] {
+            for pending in [false, true] {
+                let first = Server::new();
+                let middle = Server::new();
+                let grants = format!(
+                    "net.fetch http://{}\nnet.fetch http://{}",
+                    first.address, middle.address
+                );
+                let target = middle.request("/middle").url;
+                for _ in 0..2 {
+                    first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
                 }
-            ));
-            assert_eq!(first.count(), 3);
-            assert_eq!(middle.count(), 1);
-            let (reply, cached) = read(&core, &woke, &first, 2, "/start");
-            assert!(cached);
-            assert_eq!(reply.body, b"visited middle");
-            assert_eq!(first.count(), 3);
+                let target = first.request("/final").url;
+                middle.plan("/middle", Plan::new(302, &[("Location", &target)], b""));
+                let release = held_plan(&first, "/final", b"visited middle");
+                let set = Preloads::start(
+                    vec![definition(&first, "/start")],
+                    &grants,
+                    ibex2::host::Host::new,
+                );
+                first.seen(2);
+                let mut scoped = first.request("/start");
+                scoped.grants = Some(format!("net.fetch http://{}", first.address));
+                if named {
+                    scoped = scoped.header("X-Trace", "new").preload("start").unwrap();
+                }
+                let restricted = job(1, scoped);
+                if !pending {
+                    release.send(()).unwrap();
+                    complete_set(&set);
+                    assert!(set.control().settle(&restricted).is_none());
+                }
+                let (core, woke) = first.core_grants(asynchronous, true, &grants);
+                adopt(&core, set);
+                if !pending {
+                    assert!(core.settle_preload(&restricted).is_none());
+                }
+                core.run(restricted, None).unwrap();
+                if pending {
+                    release.send(()).unwrap();
+                }
+                let (_, outcome, timing) = collect(&core, &woke);
+                assert!(!timing.cached);
+                assert!(matches!(
+                    outcome,
+                    Outcome::Failed {
+                        kind: FailureKind::Refused,
+                        ..
+                    }
+                ));
+                assert_eq!(first.count(), 3);
+                assert_eq!(middle.count(), 1);
+                let (reply, cached) = read(&core, &woke, &first, 2, "/start");
+                assert!(cached);
+                assert_eq!(reply.body, b"visited middle");
+                assert_eq!(first.count(), 3);
+            }
         }
     }
 }
@@ -1254,4 +1269,143 @@ fn equal_preloads_keep_every_secrets_invalidation_after_their_holds_expire() {
             assert!(!read(&core, &woke, &server, 2, "/equal").1);
         }
     }
+}
+
+#[test]
+fn an_unnamed_read_ends_its_definition_wait_when_rust_launch_begins() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (set, clock) = fresh_clock(&server, Vec::new());
+        let control = set.control();
+        control.definitions_pending(true);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/definitions", Plan::new(200, &[], b"sent"));
+        core.run(job(1, server.request("/definitions")), None)
+            .unwrap();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert!(waiting(&state, &state.jobs[0][0]));
+        }
+        *clock.lock().unwrap() += Duration::from_millis(500);
+        control.launch_pending(Some(Duration::from_secs(5)));
+        let (ticket, outcome, timing) = collect(&core, &woke);
+        assert_eq!(ticket, 1);
+        assert!(!timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
+        assert_eq!(server.count(), 1);
+    }
+}
+
+#[test]
+fn preloads_are_speculative_on_every_hop_and_a_context_fetch_is_not() {
+    struct Recording(Sender<(String, bool)>);
+    impl ibex2::stdlib::fetch::Transport for Recording {
+        fn open(
+            &self,
+            request: &ibex2::stdlib::fetch::Request,
+            signal: &ibex2::stdlib::abort::AbortSignal,
+        ) -> Result<ibex2::stdlib::fetch::StreamingResponse, HostError> {
+            self.0
+                .send((request.url.clone(), request.speculative))
+                .unwrap();
+            let mut headers = ibex2::stdlib::fetch::Headers::new();
+            let status = if request.url.ends_with("/first") {
+                headers.set_response("Location", "/second");
+                302
+            } else {
+                200
+            };
+            Ok(ibex2::stdlib::fetch::Response {
+                status,
+                status_text: String::new(),
+                headers,
+                body: b"content".to_vec(),
+                url: request.url.clone(),
+                redirected: false,
+            }
+            .into_stream(request.body_limit(), signal.clone()))
+        }
+    }
+    let (send, seen) = channel();
+    let host = move || ibex2::host::Host::with_transport(Box::new(Recording(send.clone())));
+    let grants = "net.fetch https://a.example";
+    let request = Request::get("https://a.example/first");
+    let set = Preloads::start(Vec::new(), grants, host.clone());
+    let control = set.control();
+    let (send, handed) = channel();
+    let thread = std::thread::spawn(move || {
+        control.handed();
+        send.send(()).unwrap();
+    });
+    handed.recv_timeout(HANG).unwrap();
+    thread.join().unwrap();
+    assert_eq!(set.control().thread_count(), 0);
+    set.control().extend(
+        vec![Definition {
+            name: "rust-feed".into(),
+            request: request.clone(),
+            deadline_ms: None,
+            secrets: Vec::new(),
+        }],
+        grants,
+        Arc::new(|_, _| {}),
+    );
+    set.control().wait_ready(1);
+    assert_eq!(
+        launch_fetch(request, grants, host(), &AbortController::new().signal())
+            .unwrap()
+            .body,
+        b"content"
+    );
+    for speculative in [true, false] {
+        for path in ["first", "second"] {
+            assert_eq!(
+                seen.recv_timeout(HANG).unwrap(),
+                (format!("https://a.example/{path}"), speculative)
+            );
+        }
+    }
+    assert!(seen.try_recv().is_err());
+}
+
+#[path = "preload_named_tests.rs"]
+mod named;
+
+#[test]
+fn launch_fetches_and_preloads_keep_the_sources_scope_at_redirects() {
+    let first = Server::new();
+    let outside = Server::new();
+    let target = outside.request("/private").url;
+    let grants = format!(
+        "net.fetch http://{}\nnet.fetch http://{}",
+        first.address, outside.address
+    );
+    let mut request = first.request("/start");
+    request.grants = Some(format!("net.fetch http://{}", first.address));
+    for _ in 0..2 {
+        first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
+    }
+    let set = Preloads::start(
+        vec![Definition {
+            request: request.clone(),
+            ..definition(&first, "/start")
+        }],
+        &grants,
+        ibex2::host::Host::new,
+    );
+    complete_set(&set);
+    assert!(set
+        .take_journal()
+        .iter()
+        .any(|fact| fact.outcome == Event::RefusedGrant));
+    assert!(launch_fetch(
+        request.clone(),
+        &grants,
+        ibex2::host::Host::new(),
+        &AbortController::new().signal()
+    )
+    .is_err());
+    assert_eq!(first.count(), 2);
+    assert_eq!(outside.count(), 0);
 }

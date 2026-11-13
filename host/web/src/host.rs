@@ -15,8 +15,8 @@ use exact_kernel::{CommitReceipt, Kernel, NodeKey, NodeType, PropId, ViewId};
 use exact_motion::{EngineError, HoldEnd, HoldStart, Property, Value as MotionValue};
 use exact_plan::{EventKind, Plan};
 use exact_runner::{
-    Carried, DataSource, Dispatch, Event, FailureKind, Outcome, RequestOut, Response, Runner,
-    RunnerError, SurfaceOutcome, Timed, Work,
+    Carried, DataSource, Event, FailureKind, Outcome, RequestOut, Response, Runner, RunnerError,
+    SurfaceOutcome, Timed,
 };
 use mode::mirror::Mirror;
 
@@ -950,64 +950,6 @@ impl<D: DataSource> Host<D> {
         // What the commit kept or forgot (LLP 1018 D1), for the page to persist.
         for w in self.runner.take_store_writes() {
             batch.store(&w);
-        }
-    }
-
-    fn emit_request(
-        &mut self,
-        r: RequestOut,
-        batch: &mut Batch,
-        immediate: &mut Vec<(u64, Outcome)>,
-    ) {
-        if let Some(message) = crate::batch::request_refusal(&r.request) {
-            batch.refuse(r.ticket, message);
-            return;
-        }
-        if r.request.is_auth() {
-            return self.emit_auth(r, batch);
-        }
-        let Some(token) = r.request.continuation else {
-            batch.request(&r);
-            return;
-        };
-        let dispatch = self.runner.dispatch_work(token);
-        self.emit_dispatch(r, dispatch, batch, immediate);
-    }
-
-    fn emit_dispatch(
-        &mut self,
-        mut r: RequestOut,
-        dispatch: Dispatch,
-        batch: &mut Batch,
-        immediate: &mut Vec<(u64, Outcome)>,
-    ) {
-        match dispatch {
-            Dispatch::Host(registry) => {
-                r.request.continuation = Some(registry);
-                batch.request(&r);
-            }
-            Dispatch::Run(Work::Now(work)) => immediate.push((r.ticket, work())),
-            // A re-ask settles at once, as the no-op it replaces did.
-            Dispatch::Again => immediate.push((r.ticket, Dispatch::again_outcome())),
-            Dispatch::Run(Work::Later(_)) => immediate.push((
-                r.ticket,
-                Outcome::Failed {
-                    kind: FailureKind::Unsupported,
-                    message: "an owner thread is unavailable on this host".into(),
-                },
-            )),
-            Dispatch::Held => {
-                if let Some(token) = r.request.continuation {
-                    self.parked.insert(token, r);
-                }
-            }
-            Dispatch::Missing => immediate.push((
-                r.ticket,
-                Outcome::Failed {
-                    kind: FailureKind::Unsupported,
-                    message: "missing or consumed browser continuation".into(),
-                },
-            )),
         }
     }
 

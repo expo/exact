@@ -488,9 +488,15 @@ fn code_block(
             i += 1;
             break;
         }
-        // The fence's own indentation is the block's left edge, not content.
-        let cut = line.len() - line.trim_start().len();
-        text.push_str(&line[cut.min(indent)..]);
+        // The fence's own indentation is the block's left edge, not content:
+        // up to its width of spaces and tabs. Other leading whitespace (an
+        // em space, a no-break space) is code.
+        let cut = line
+            .bytes()
+            .take(indent)
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        text.push_str(&line[cut..]);
         text.push('\n');
         i += 1;
     }

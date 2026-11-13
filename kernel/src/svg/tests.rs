@@ -427,6 +427,17 @@ fn a_boxs_css_filter_is_the_functions_chain_over_a_box_of_no_size() {
     let current = FilterList::parse("drop-shadow(0 2px 4px)").unwrap();
     let text = crate::style::ColorValue::parse_light_dark("light-dark(#ff0000, #0000ff)").unwrap();
     assert_eq!(shade(&current, text, true), [0.0, 0.0, 1.0, 1.0]);
+    // Each function spreads the previous one's result (Filter Effects 1 §5).
+    for (css, region) in [
+        (
+            "drop-shadow(10px 0 0) drop-shadow(10px 0 0)",
+            (0.0, 0.0, 20.0, 0.0),
+        ),
+        ("drop-shadow(10px 0 0) blur(2px)", (-6.0, -6.0, 22.0, 12.0)),
+    ] {
+        let f = crate::svg::scene::box_filter(&FilterList::parse(css).unwrap(), black, false);
+        assert_eq!(f.unwrap().region, region, "{css}");
+    }
     assert!(
         crate::svg::scene::box_filter(&FilterList::parse("url(#f)").unwrap(), black, false)
             .is_none()

@@ -1,6 +1,7 @@
 //! Bounded native I/O (LLP 1016 / 1041 / 1162). Reads and parallel sends
 //! overlap on six shared HTTP workers while retaining ordered delivery.
 //! Independent HTTP shares them; its held sockets cannot occupy the ordered worker.
+pub(crate) use exact_executor::preload::{launch_fetch, valid_request};
 pub use exact_executor::preload::{
     Control as PreloadControl, Definition as Preload, Event as PreloadEvent, Fact as PreloadFact,
     Observation as PreloadObservation, Observer as PreloadObserver, Preloads,

@@ -388,6 +388,9 @@ fn run_raw<D: DataSource>(host: &mut Host<D>, signals: &Signals) -> std::io::Res
                 if poll(&mut input, Some(&zero)).is_ok_and(|ready| ready == 0) {
                     host.idle_timer(now());
                 }
+                // Before sleeping: a timer, an announcement or idle work may
+                // have asked for a URL, and no input may come to follow it.
+                open_outbound(host);
                 // Sleep until input, a wake, the next timer, a held ESC's time, or
                 // a size check.
                 let wait = host
@@ -476,9 +479,10 @@ fn run_raw<D: DataSource>(host: &mut Host<D>, signals: &Signals) -> std::io::Res
                         Input::Paste(text) => host.paste(&text),
                     }
                 }
-                open_outbound(host);
             }
         })();
+        // What the turn that quit or suspended asked to open.
+        open_outbound(host);
         let suspend = SIGNAL
             .compare_exchange(libc::SIGTSTP, 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok();

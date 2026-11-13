@@ -382,6 +382,17 @@ pub fn color_targets(
         .collect()
 }
 
+/// The geometry rows a shape of `node_type` draws from, which animate while
+/// they are lengths in user units (LLP 1055.000 D15).
+fn svg_geometry(node_type: NodeType) -> &'static [Property] {
+    match node_type {
+        NodeType::SvgCircle => &[Property::R, Property::Cx, Property::Cy],
+        NodeType::SvgEllipse => &[Property::Cx, Property::Cy, Property::Rx, Property::Ry],
+        NodeType::SvgRect => &[Property::X, Property::Y, Property::Rx, Property::Ry],
+        _ => &[],
+    }
+}
+
 impl Kernel {
     /// An SVG shape's two animatable geometry rows (LLP 1055 D6): its
     /// computed `stroke-dashoffset` (inherited, as SVG says), and a circle's
@@ -915,7 +926,16 @@ impl Kernel {
                 sync.paths.push((id, path));
             }
             if node.node_type.is_svg_shape() {
-                for (property, value) in self.svg_targets(*key) {
+                let targets = self.svg_targets(*key);
+                // A geometry row that is not a length now (a percentage)
+                // has no target: what the engine moved it toward goes, and
+                // the row paints as authored.
+                for &property in svg_geometry(node.node_type) {
+                    if !targets.iter().any(|(p, _)| *p == property) {
+                        sync.retired.push((id, property));
+                    }
+                }
+                for (property, value) in targets {
                     sync.changes.push(Change {
                         node: id,
                         property,

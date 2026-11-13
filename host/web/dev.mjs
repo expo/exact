@@ -13,6 +13,7 @@ import { filesystem } from '../../scripts/filesystem.mjs';
 import { allowHostArgs, developmentGate, installBrowserOrigins, LOCAL_IOS_INSTALL_ENDPOINT } from '../../scripts/install-page.mjs';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, unwatchFile, watch, watchFile, writeSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { slashRelative, within } from '../../scripts/paths.mjs';
 import { rustPackage, rustOutput, rustInputs, rustCards } from '../../scripts/rust.mjs';
 import { gpuModules, shaderWatchRoots, rustPolicy, rebuildPolicy } from '../../scripts/app.mjs';
 import { HOST_DEV, webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
@@ -174,7 +175,7 @@ function gameRuntimeInputs(inputs) {
   for (const profile of [resolve(app.target,'web'), resolve(app.target,'wasm32-unknown-unknown/web')]) {
     const units = [{directory:resolve(profile,'deps'),output:null,name:''}];
     for (const entry of subdirectories(resolve(profile,'build'))) {
-      const name = entry.slice(entry.lastIndexOf('/')+1), nested = subdirectories(entry).filter(d => /^[a-f0-9]+$/.test(d.slice(d.lastIndexOf('/')+1)));
+      const name = basename(entry), nested = subdirectories(entry).filter(d => /^[a-f0-9]+$/.test(basename(d)));
       if (nested.length) for (const unit of nested) units.push({directory:resolve(unit,'out'),output:resolve(unit,'run/stdout'),name});
       else units.push({directory:entry,output:resolve(entry,'output'),name:name.replace(/-[a-f0-9]+$/,'')});
     }
@@ -185,7 +186,7 @@ function gameRuntimeInputs(inputs) {
         for (const line of readFileSync(output,'utf8').split('\n')) {
           const changed=/^cargo::?rerun-if-changed=(.+)$/.exec(line); if (!changed) continue;
           const watched=resolve(pkg.manifest_path,'..',changed[1]);
-          for (const path of inputs) if (path===watched || path.startsWith(watched+'/')) included.add(path);
+          for (const path of inputs) if (within(watched, path)) included.add(path);
         }
       }
       for (const file of readdirSync(directory)) {
@@ -201,7 +202,7 @@ function gameRuntimeInputs(inputs) {
   if ([...sources].some(path=>inputs.has(path) && !found.has(path))) return inputs;
   const owners = metadata.packages.map(p=>({id:p.id,dir:resolve(p.manifest_path,'..')})).sort((a,b)=>b.dir.length-a.dir.length);
   return new Set([...inputs].filter(path=>{
-    const owner = owners.find(p=>path===p.dir || path.startsWith(p.dir+'/'));
+    const owner = owners.find(p=>within(p.dir, path));
     return !owner || runtime.has(owner.id) || included.has(path);
   }));
 }
@@ -210,7 +211,7 @@ const gpuOnly = files => !tuning?.paths.size && !producersOnly && files.length >
   && files.every(path => path.endsWith('.rs') && gpuInputs.has(path) && !appInputs.has(path));
 const budget = /\|\s*Dev restart[^|]*\|\s*([^|\n]+)/.exec(readFileSync(resolve(root, 'rules/RULES.md'), 'utf8'))?.[1].trim() ?? '?';
 const assetTrees = [...[['assets', 'assets'], ['deck', 'deck']].map(([from, to]) => [resolve(app.dir, from), to]), ...shaderWatchRoots(app).map(root => [root, 'shaders'])];
-const skipped = /(^|\/)(target|dist(?:\.previous)?|\.build|node_modules)(\/|$)/;
+const skipped = /(^|[\\/])(target|dist(?:\.previous)?|\.build|node_modules)([\\/]|$)/;
 const shaderDigests = new Map();
 const toolingEnv = { ...buildEnv, CARGO_TARGET_DIR: app.target };
 const reflectBin = resolve(app.target, 'debug/exact-gpu-reflect');
@@ -812,11 +813,11 @@ async function startModuleCompiler() {
   const contractInput = path => contractSources.has(path) || [...contractSources].some(s => s.startsWith(path + '/') || s.startsWith(path + '\\'));
   const dotInput = name => /^\.exact(?:[\\/]backend-origin)?$|^\.env(?:\.local)?$/.test(name); // the backend selection, and the settings' files (LLP 1153 D4)
   const watches = [watchModuleSources(app.dir, name => name === 'app.contract.d.ts' || (skipped.test(name) && !contractInput(resolve(app.dir, name)))
-    || (/(^|\/)\./.test(name) && !contractInput(resolve(app.dir, name)) && !dotInput(name))
-    || (assetTrees.some(([tree]) => resolve(app.dir,name) === tree || resolve(app.dir,name).startsWith(tree+'/')) && !contractInput(resolve(app.dir, name))), moduleChanged)];
+    || (/(^|[\\/])\./.test(name) && !contractInput(resolve(app.dir, name)) && !dotInput(name))
+    || (assetTrees.some(([tree]) => within(tree, resolve(app.dir,name))) && !contractInput(resolve(app.dir, name))), moduleChanged)];
   // Directories the manifest mounts beside app.ts (typescript.sources) are sources too.
   for (const path of Object.values(app.manifest.typescript?.sources ?? {})) {
-    watches.push(watchModuleSources(realpathSync(resolve(app.dir, path)), name => skipped.test(name) || /(^|\/)\./.test(name), moduleChanged));
+    watches.push(watchModuleSources(realpathSync(resolve(app.dir, path)), name => skipped.test(name) || /(^|[\\/])\./.test(name), moduleChanged));
   }
   // And the Contract packages it uses, wherever installed (a package's own
   // dot directories are its sources too; only its node_modules is not).
@@ -963,9 +964,9 @@ function startRustCompiler() {
 }
 // App-relative names the Rust source watcher leaves to other producers (a
 // design edit is the TypeScript producer's, as a batch or a generation).
-const rustWatchIgnores = name => skipped.test(name) || /(^|\/)\./.test(name)
+const rustWatchIgnores = name => skipped.test(name) || /(^|[\\/])\./.test(name)
   || /\.(ts|json|tamber)$/.test(name) || gpuOnly([resolve(app.dir, name)])
-  || assetTrees.some(([tree]) => resolve(app.dir,name).startsWith(tree+'/'));
+  || assetTrees.some(([tree]) => resolve(app.dir,name) !== tree && within(tree, resolve(app.dir,name)));
 const killCompiler = () => {
   const gpuChild = gpuBuildChild; gpuBuildChild = null;
   if (gpuChild) { try { process.kill(-gpuChild.pid, 'SIGKILL'); } catch {} }
@@ -1006,7 +1007,7 @@ try {
   watchStaticTrees(app.dir, assetTrees, (change) => {
     if (tuning && change.name === 'assets/exact-tables.json') return;
     if (change.targetRoot === 'shaders') change = {...change,tree:true,relative:'',name:'shaders'};
-    if (skipped.test(change.relative) || /(^|\/)\./.test(change.relative)) return;
+    if (skipped.test(change.relative) || /(^|[\\/])\./.test(change.relative)) return;
     if (change.tree) {
       for (const name of assetChanges.keys()) if (name === change.targetRoot || name.startsWith(`${change.targetRoot}/`)) assetChanges.delete(name);
       assetChanges.set(change.targetRoot, change);
@@ -1158,7 +1159,7 @@ function watchCompilerInputs() {
   // node_modules included (LLP 1091 D10).
   const contract=contractGraph(); for (const path of contract.sources) readinessContracts.add(path);
   const outside=p=>skipped.test(p)&&!contract.files.has(p);
-  const files=new Set([...builtReceipts.flatMap(r=>r.binary.inputs.map(f=>f.path)),...rustInputFiles,...gpuInputs,...appInputs,...failedInputs,...contract.files].filter(p=>!outside(p)&&!p.includes('/.cargo/')));
+  const files=new Set([...builtReceipts.flatMap(r=>r.binary.inputs.map(f=>f.path)),...rustInputFiles,...gpuInputs,...appInputs,...failedInputs,...contract.files].filter(p=>!outside(p)&&!/[\\/]\.cargo[\\/]/.test(p)));
   for(const receipt of builtReceipts)for(const missing of receipt.binary.missing)files.add(missing);
   files.add(resolve(app.dir,'app.json'));
   compilerInputFiles = files;
@@ -1169,11 +1170,11 @@ function watchCompilerInputs() {
   const targets=new Set([...files,...directories]);
   for(const [path,handle] of watched)if(!targets.has(path)){handle.close();watched.delete(path);}
   for(const target of targets) {
-    if(outside(target)||target.includes('/.cargo/')||watched.has(target))continue;
+    if(outside(target)||/[\\/]\.cargo[\\/]/.test(target)||watched.has(target))continue;
     const file=files.has(target),dir=file?resolve(target,'..'):target;
     const changedPath=name=>{
-      if(file)name=target.slice(target.lastIndexOf('/')+1);
-      if(!name||skipped.test(name)||/(^|\/)\./.test(name)||name.endsWith('dev.js')||assetTrees.some(([tree])=>resolve(dir,name)===tree||resolve(dir,name).startsWith(tree+'/'))||resolve(dir,name)===source)return;
+      if(file)name=basename(target);
+      if(!name||skipped.test(name)||/(^|[\\/])\./.test(name)||name.endsWith('dev.js')||assetTrees.some(([tree])=>within(tree, resolve(dir,name)))||resolve(dir,name)===source)return;
       // Parent-directory notifications include unrelated documents and output.
       // Only receipt inputs, declared trees/missing paths, and Swift's implicit
       // source discovery can invalidate the host. Rust additions are reached
@@ -1184,16 +1185,16 @@ function watchCompilerInputs() {
       // The resident Contract compiler already watches generated game arguments.
       // Rebuilding the host afterward would discard the carried world.
       if (app.manifest.game && path === resolve(app.dir, '.shells/surfaces.json')) return;
-      if (!compilerInputFiles.has(path) && !compilerInputTrees.some(tree=>path===tree||path.startsWith(tree+'/'))
-        && !compilerMissingInputs.some(missing=>path===missing||missing.startsWith(path+'/'))
+      if (!compilerInputFiles.has(path) && !compilerInputTrees.some(tree=>within(tree, path))
+        && !compilerMissingInputs.some(missing=>within(path, missing))
         && !(name.endsWith('.swift') && swiftSourceDirectories.has(dir))) return;
       // The TypeScript producer takes the app's sources and its design (a
       // value-only design edit is a batch, never a host rebuild).
-      if (typescript && resolve(dir, name).startsWith(app.dir + '/') && /\.(ts|contract|tamber)$/.test(name)) return;
+      if (typescript && within(app.dir, resolve(dir, name)) && /\.(ts|contract|tamber)$/.test(name)) return;
       if (portableRust && rustInputFiles.has(path)) {
         // A Contract source the Rust source watcher sees has already started
         // its build (that watcher tracks .contract names, never .rs).
-        if (rustSourceWatch && path.endsWith('.contract') && path.startsWith(app.dir + '/') && !rustWatchIgnores(path.slice(app.dir.length + 1))) return;
+        if (rustSourceWatch && path.endsWith('.contract') && within(app.dir, path) && !rustWatchIgnores(slashRelative(app.dir, path))) return;
         rustSaved=Date.now();rustDirty=true;if(rebuildOn.rust==='save'){clearTimeout(timer);timer=setTimeout(produceRust,200);}return;
       }
       changed.add(resolve(dir,name));console.log(`edit ${resolve(dir,name)} → build pending; classification follows its receipt`);

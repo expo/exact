@@ -1,6 +1,7 @@
 // Build exact-web-js before running these tests (docs/testing.md).
 // Live token edits must update both direct rows and aliases without reloading.
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -21,7 +22,7 @@ test('a live edit of a base name the app sets moves its row and its alias on the
   const app = mkdtempSync(resolve(target, 'base-live-app-'));
   const dir = mkdtempSync(resolve(target, 'base-live-out-'));
   const sheet = readFileSync(resolve(root, 'host/web/index.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
-  const bin = resolve(target, 'debug/exact-web-js');
+  const bin = resolve(target, `debug/exact-web-js${EXE}`);
   let server, browser;
   try {
     writeFileSync(resolve(app, 'app.contract'), VIEW);
@@ -80,7 +81,7 @@ test('an alias switched between base names goes live; the first base name moves 
   const target = resolve(root, 'target');
   const app = mkdtempSync(resolve(target, 'base-switch-app-'));
   const dir = mkdtempSync(resolve(target, 'base-switch-out-'));
-  const bin = resolve(target, 'debug/exact-web-js');
+  const bin = resolve(target, `debug/exact-web-js${EXE}`);
   const alias = base => `tamber t\n\ntheme\n  card.pad: length = ${base}\n`;
   let server, browser;
   try {
@@ -150,7 +151,7 @@ test('a bound grid track naming a base name or an alias keeps its length', async
   const root = resolve(import.meta.dir, '../..');
   const target = resolve(root, 'target');
   const app = mkdtempSync(resolve(target, 'base-grid-app-'));
-  const bin = resolve(target, 'debug/exact-web-js');
+  const bin = resolve(target, `debug/exact-web-js${EXE}`);
   let server, browser;
   const dirs = [];
   try {

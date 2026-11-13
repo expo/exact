@@ -120,7 +120,13 @@ pub fn write_line(dir: &Path, name: &str, value: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     let path = dir.join("keys");
-    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    // Only a missing file is empty: rewriting one that cannot be read would
+    // discard the lines it holds.
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
     let mut lines: Vec<String> = Vec::new();
     let mut placed = false;
     for line in old.lines() {
@@ -205,6 +211,41 @@ mod tests {
         assert_eq!(
             parse(&text).get("OPENROUTER_API_KEY").map(String::as_str),
             Some("test-value-one")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_left_as_it_was() {
+        let dir = std::env::temp_dir().join(format!(
+            "exact-harness-keys-unreadable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keys");
+
+        let invalid = b"# caf\xe9\nANTHROPIC_API_KEY=old\n".to_vec();
+        std::fs::write(&path, &invalid).unwrap();
+        assert!(write_line(&dir, "OPENAI_API_KEY", "new").is_err());
+        assert!(write_line(&dir, "ANTHROPIC_API_KEY", "").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), invalid);
+
+        std::fs::write(&path, "ANTHROPIC_API_KEY=old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+        let err = write_line(&dir, "OPENAI_API_KEY", "new");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(err.unwrap_err().starts_with("cannot read"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "ANTHROPIC_API_KEY=old\n"
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        write_line(&dir, "OPENAI_API_KEY", "new").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "OPENAI_API_KEY=new\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

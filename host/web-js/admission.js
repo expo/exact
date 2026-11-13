@@ -103,7 +103,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   if (unreached) throw new FetchError('Refused', `NotAllowedError: ${unreached}`);
   redirect = redirectFor(origin, redirect);
   try {
-    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal']);
+    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'exactPreload', 'exactPrefetch', 'redirect', 'signal']);
     // A forced ask reloads unless the request stores nothing; Fetch allows only-if-cached same-origin (LLP 1162 D4).
     const cache = init.cache ?? input?.cache, sent = forced && cache !== 'no-store' ? 'reload' : cache;
     const mode = init.mode ?? (sent === 'only-if-cached' && 'same-origin');

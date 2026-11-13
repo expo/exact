@@ -753,11 +753,8 @@ impl WorkerBudget {
     }
 }
 
-/// Wake the workers when one of them has something to do: a queued job (it
-/// may now fit its bytes) or work to destroy. With neither, nothing a worker
-/// waits for has changed, and none is woken: `forget` runs after every commit
-/// and woke all seven for nothing (1-2 ms/s each through a list's fling).
-/// Retirement wakes them itself.
+/// Forgetting runs after every commit; an idle core needs no worker wake
+/// unless queued jobs or disposal can make progress.
 fn rouse(shared: &Shared, state: &State) {
     if !state.discard.is_empty() || state.jobs.iter().any(|lane| !lane.is_empty()) {
         #[cfg(test)]
@@ -994,6 +991,7 @@ fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str>
         request.grants.as_ref().map_or(0, String::capacity),
         request.body_from.as_ref().map_or(0, String::capacity),
         request.body_to.as_ref().map_or(0, String::capacity),
+        request.preload.as_ref().map_or(0, |name| name.len()),
         request.storage.as_ref().map_or(0, Vec::capacity),
         request
             .headers
@@ -1092,9 +1090,8 @@ fn worker(
                     break next;
                 }
                 let delay = state.cache.as_ref().and_then(|cache| {
-                    cache
-                        .preload_definitions_due
-                        .map(|due| due.saturating_duration_since((cache.clock)()))
+                    let now = (cache.clock)();
+                    preload::pending_due(cache).map(|due| due.saturating_duration_since(now))
                 });
                 state = match delay {
                     Some(delay) => shared.ready.wait_timeout(state, delay).unwrap().0,

@@ -3,6 +3,7 @@
 // on the dev server); a request that is no navigation (an asset's fetch)
 // still finds nothing, and a file that exists is still that file.
 import {afterAll, afterEach, beforeAll, describe, test, expect, spyOn, mock} from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import {mkdirSync, mkdtempSync, rmSync, readFileSync, renameSync, writeFileSync, symlinkSync} from 'node:fs';
 import {createServer} from 'node:net';
 import {createServer as httpServer} from 'node:http';
@@ -105,7 +106,7 @@ component App
 function plan(dist, pattern) {
   const source = resolve(dist, 'routes.contract');
   writeFileSync(source, sourceFor(pattern));
-  const built = spawnSync(resolve(process.env.CARGO_TARGET_DIR ?? 'target', 'debug/contract'),
+  const built = spawnSync(resolve(process.env.CARGO_TARGET_DIR ?? 'target', `debug/contract${EXE}`),
     ['build', source, '-o', resolve(dist, 'app.plan')], {encoding: 'utf8'});
   if (built.error || built.status !== 0) throw new Error(`build the contract binary first: ${built.error ?? built.stderr}`);
   writeFileSync(resolve(dist, 'routes.json'), JSON.stringify({routes: planRouteTable(readFileSync(resolve(dist, 'app.plan')))}));

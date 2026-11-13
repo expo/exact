@@ -144,9 +144,11 @@ impl Chain {
 }
 
 /// One CSS filter function (Filter Effects 1 §12) appended to `chain`, its
-/// `SourceGraphic` the chain so far, growing the region from `visual` (the
-/// box it filters, with any stroke) by what it spreads. Colours resolve
-/// under the `dark` appearance; `text_color` already has.
+/// `SourceGraphic` the chain so far, growing the region by what it spreads.
+/// What it spreads is the chain's output so far, or `visual` (the box it
+/// filters, with any stroke) when it is first: each function consumes the
+/// previous one's result (§5), so a second shadow shadows the first.
+/// Colours resolve under the `dark` appearance; `text_color` already has.
 fn function(
     chain: &mut Chain,
     f: &FilterFn,
@@ -156,7 +158,7 @@ fn function(
 ) {
     let src = chain.source();
     let grow = |chain: &mut Chain, by: Rect| {
-        if let Some(v) = visual {
+        if let Some(v) = chain.region.or(visual) {
             let r = (v.0 + by.0, v.1 + by.1, v.2 + by.2, v.3 + by.3);
             chain.region = Some(chain.region.map_or(r, |c| union(c, r)));
         }

@@ -279,6 +279,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
     fn app_id(&self) -> &str {
         self.source.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.source.launch()
+    }
     fn preloads(&self) -> &[exact_runner::request::Preload] {
         self.source.preloads()
     }

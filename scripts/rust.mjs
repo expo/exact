@@ -8,10 +8,11 @@ import { createInterface } from 'node:readline';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, relative, resolve } from 'node:path';
+import nodePath, { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HOST_DEV, cargoReproducibilityFlags, developmentBuildEnv, readBuilds, resolveApp, rustPolicy } from './app.mjs';
+import { HOST_DEV, cargoReproducibilityFlags, developmentBuildEnv, readBuilds, resolveApp, rustPolicy, rustRemapFlags } from './app.mjs';
 import { channelOrigin } from './origin.mjs';
+import { within } from './paths.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -30,6 +31,15 @@ function run(app, command, args, env) {
 export function rustPackage(app) { return app.manifest.rust?.module?.package ?? null; }
 export function rustOutput(app) { return resolve(app.target, 'rust-dev', hash(app.dir).slice(0, 24)); }
 
+/** The publisher's local copy of a blob a receipt names: a record under
+ * `.exact/streams/<stream>/releases/` has its blobs in `.exact/blobs/`. null for a
+ * record kept anywhere else. `path` is the platform's path module, a parameter so
+ * Windows paths can be tested on any host. */
+export function localBlob(recordPath, sha256, path = nodePath) {
+  const releases = path.dirname(recordPath);
+  return path.basename(releases) === 'releases' ? path.resolve(releases, '../../../blobs', sha256) : null;
+}
+
 /** Fetch only signed-record companion names from the publisher's blob store.
  * Cargo independently verifies the record signature and exact asset roster. */
 export function prepareRustBundle(app, platform, target, env) {
@@ -47,10 +57,8 @@ export function prepareRustBundle(app, platform, target, env) {
   for(const card of cards) {
     if(!/^[0-9a-f]{64}$/.test(card.sha256)||!Number.isSafeInteger(card.bytes)||card.bytes<0||card.bytes>32*1024*1024||card.url!==`./${card.sha256}`)throw new Error('invalid Rust companion blob card');
     let bytes;
-    if(dirname(recordPath).endsWith('/releases')) {
-      const blob=resolve(dirname(recordPath),'../../../blobs',card.sha256);
-      if(existsSync(blob))bytes=readFileSync(blob);
-    }
+    const blob=localBlob(recordPath,card.sha256);
+    if(blob&&existsSync(blob))bytes=readFileSync(blob);
     if(!bytes) {
       const origin=channelOrigin(app.manifest,head.stream.channel) ?? app.origin;
       if(!origin)throw new Error('Rust companion blobs unavailable locally; provide EXACT_RUST_BUNDLE or configure the signed origin');
@@ -228,8 +236,8 @@ function matchesCfg(selector, facts) {
 function compile(app, targets, env, profile) {
   const packageName = rustPackage(app);
   // A module's bytes must not depend on where it was built: a cold deploy's
-  // cache is a new directory each time. Code generated under OUT_DIR records
-  // its path, and a Mach-O library names itself by its output path.
+  // cache is a new directory each time. Path dependencies and code generated
+  // under OUT_DIR record their paths; a Mach-O library names its output path.
   const modules = resolve(app.target,'rust-modules');
   const moduleEnv = {...env,CARGO_TARGET_DIR:modules};
   delete moduleEnv.RUSTFLAGS; delete moduleEnv.CARGO_ENCODED_RUSTFLAGS;
@@ -241,7 +249,7 @@ function compile(app, targets, env, profile) {
   }
   const messages = targets.flatMap(target => {
     const {flags, configuration} = moduleFlags(app, target, env);
-    const targetEnv = {...moduleEnv, CARGO_ENCODED_RUSTFLAGS:[...flags, `--remap-path-prefix=${modules}=/rust-modules`,
+    const targetEnv = {...moduleEnv, CARGO_ENCODED_RUSTFLAGS:[...flags, ...rustRemapFlags(app, null, env), `--remap-path-prefix=${modules}=/rust-modules`,
       ...(target.includes('apple') ? ['-Clink-arg=-Wl,-install_name,@rpath/app.module.dylib'] : []),
     ].join('\x1f')};
     return run(app, 'cargo', ['build', ...cargoReproducibilityFlags(app), ...configuration, '--lib', '-p', packageName,
@@ -391,7 +399,7 @@ export async function buildRust(app, { compat, env = developmentBuildEnv(), nati
   const { files: inputs, directories } = rustClosure(app, env), observed = new Map(), before = rustInputDigest(inputs, observed);
   // Contract sources outside every Cargo package feed the bake, never Cargo: a
   // Contract-only edit reuses the modules compiled from the same Rust inputs.
-  const compiledFrom = inputs.filter(path => !path.endsWith('.contract') || directories.some(dir => path.startsWith(dir + '/')));
+  const compiledFrom = inputs.filter(path => !path.endsWith('.contract') || directories.some(dir => within(dir, path)));
   const key = JSON.stringify([profile, nativeTarget, env.EXACT_UPDATE_TRUST ?? null, env.EXACT_RUST_SIGN_IDENTITY ?? null,
     hash(JSON.stringify(compiledFrom.map(path => [path, observed.get(path)])))]);
   const reused = compiledModules.get(app.dir);

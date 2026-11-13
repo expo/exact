@@ -115,6 +115,16 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
         },
         redirect: Redirect::parse(j.get("redirect").and_then(Json::as_str))?,
         cache: CacheMode::parse(j.get("cache").and_then(Json::as_str))?,
+        preload: match j.get("preload") {
+            None | Some(Json::Null) => None,
+            Some(Json::String(name)) => Some(name.as_str().into()),
+            Some(_) => return Err("exactPreload must match ^[a-z][a-z0-9-]*$".into()),
+        },
+        prefetch: match j.get("prefetch") {
+            None | Some(Json::Null) => false,
+            Some(Json::Bool(value)) => *value,
+            Some(_) => return Err("exactPrefetch is true or false".into()),
+        },
         held: j.get("held").and_then(Json::as_bool).unwrap_or(false),
         reach: Default::default(),
         // `exactListen`'s options (LLP 1133.005 D1); the defaults where unsaid.
@@ -142,6 +152,9 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
         fetch: None,
     };
     request.check_protocols()?;
+    if let Some(why) = request.prefetch_refusal().or(request.preload_refusal()) {
+        return Err(why.into());
+    }
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.
     match (request.long_poll_refusal().or(request.ceiling_refusal()))
         .or(request.upload_progress_refusal())
@@ -288,4 +301,40 @@ pub(crate) fn canvas_image(
     let (w, h) =
         exact_runner::exact_canvas::images_in(&env.images).size(env.canvas, v["src"].as_str()?)?;
     Some(format!("[{w},{h}]"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preload_and_prefetch_types_are_checked_at_the_wire() {
+        let base = json!({"method": "GET", "url": "https://example.test"});
+        let request = request_from_json(&base.to_string(), None).unwrap();
+        for (key, why) in [
+            ("preload", "exactPreload must match ^[a-z][a-z0-9-]*$"),
+            ("prefetch", "exactPrefetch is true or false"),
+        ] {
+            for value in [json!(7), json!([]), json!({}), json!(true), json!("true")] {
+                if (key == "prefetch" && value.is_boolean())
+                    || (key == "preload" && value.is_string())
+                {
+                    continue;
+                }
+                let mut wire = base.clone();
+                wire[key] = value;
+                assert_eq!(request_from_json(&wire.to_string(), None).unwrap_err(), why);
+            }
+            let mut wire = base.clone();
+            wire[key] = Json::Null;
+            assert_eq!(request_from_json(&wire.to_string(), None).unwrap(), request);
+        }
+        let mut wire = base;
+        wire["prefetch"] = json!(false);
+        wire["preload"] = json!("feed-2");
+        assert_eq!(
+            request_from_json(&wire.to_string(), None).unwrap(),
+            request.preload("feed-2").unwrap()
+        );
+    }
 }

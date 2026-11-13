@@ -657,6 +657,55 @@ fn moving_or_destroying_many_children_is_linear_in_them() {
     }
 }
 
+/// Destroying a subtree once grouped its departing selector names by
+/// inserting each into a sorted vector, which moved the vector's tail for
+/// every name that arrived before the last: N²/2 moves when the names
+/// descend (40,000 children: 682 ms, release). Destroying one parent of
+/// 40,000 children takes about as long in either order.
+#[test]
+fn destroying_a_subtree_takes_as_long_whatever_its_selector_names_order() {
+    let n = 40_000u32;
+    let destroy = |descending: bool| {
+        let kids: Vec<u32> = (10..10 + n).collect();
+        let mut ops = create([1], NodeType::View);
+        ops.extend(create(kids.iter().copied(), NodeType::View));
+        for (i, &id) in kids.iter().enumerate() {
+            let rank = if descending { n as usize - i } else { i };
+            let name = format!("row-{rank:08}");
+            // Every hundredth child shares one test id; every tenth also
+            // carries an `id`.
+            if i % 100 == 0 {
+                ops.push(prop(id, PropId::TestId, "shared"));
+            } else {
+                ops.push(prop(id, PropId::TestId, &name));
+            }
+            if i % 10 == 0 {
+                ops.push(prop(id, PropId::Id, &name));
+            }
+        }
+        ops.extend([children(1, &kids), Op::AttachRoot { id: 1 }]);
+        let mut k = kernel(&ops);
+        assert_eq!(k.find_by_test_id("shared").len(), n as usize / 100);
+        let start = std::time::Instant::now();
+        let receipt = k.apply(0, 2, &[Op::DestroyView { id: 1 }]).unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(receipt.destroyed.len(), n as usize + 1);
+        assert_eq!(k.live_count(), 0);
+        assert!(k.find_by_test_id("shared").is_empty());
+        for rank in [1, 5, n as usize - 10, n as usize - 1] {
+            let name = format!("row-{rank:08}");
+            assert!(k.find_by_test_id(&name).is_empty(), "{name}");
+            assert!(k.find_by_id(&name).is_empty(), "{name}");
+        }
+        elapsed
+    };
+    let (up, down) = (destroy(false), destroy(true));
+    assert!(
+        down < up * 2 + std::time::Duration::from_millis(100),
+        "descending names took {down:?}, ascending {up:?}"
+    );
+}
+
 /// The batched detach against what one op at a time built: destroys
 /// that later ops read, a parent destroyed after its children, a slot
 /// reused within the batch, moves from several parents, inline runs.

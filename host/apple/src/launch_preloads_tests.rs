@@ -21,6 +21,10 @@ struct Server {
 }
 impl Server {
     fn new(replies: usize) -> Self {
+        Self::responding(vec![b"HTTP/1.1 503 Unavailable\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncontent".to_vec(); replies])
+    }
+    fn responding(responses: Vec<Vec<u8>>) -> Self {
+        let replies = responses.len();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (send, requests) = channel();
@@ -31,13 +35,13 @@ impl Server {
         let stopping = stop.clone();
         let thread = std::thread::spawn(move || {
             let mut clients = Vec::new();
-            let mut held = held.into_iter();
+            let mut held = held.into_iter().zip(responses);
             for socket in listener.incoming() {
                 let mut socket = socket.unwrap();
                 if stopping.load(Ordering::Acquire) {
                     break;
                 }
-                let held = held.next().expect("unexpected duplicate request");
+                let (held, response) = held.next().expect("unexpected duplicate request");
                 let send = send.clone();
                 let seen = seen.clone();
                 clients.push(std::thread::spawn(move || {
@@ -45,13 +49,15 @@ impl Server {
                     let mut head = Vec::new();
                     while !head.ends_with(b"\r\n\r\n") {
                         let mut byte = [0];
-                        if socket.read(&mut byte).unwrap_or(0) == 0 { return; }
+                        if socket.read(&mut byte).unwrap_or(0) == 0 {
+                            return;
+                        }
                         head.push(byte[0]);
                     }
                     seen.fetch_add(1, Ordering::AcqRel);
                     send.send(String::from_utf8(head).unwrap()).unwrap();
                     let _ = held.recv_timeout(HANG);
-                    let _ = socket.write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncontent");
+                    let _ = socket.write_all(&response);
                 }));
             }
             for client in clients {
@@ -160,6 +166,16 @@ impl DataSource for Source {
                 "{url}/first"
             ))));
         }
+        if source == "named" {
+            return Ok(Answer::Later(
+                self.definitions[0]
+                    .fill(|_| None)
+                    .unwrap()
+                    .header("X-Trace", "new")
+                    .preload("feed")
+                    .unwrap(),
+            ));
+        }
         Ok(Answer::Later(
             self.definitions[usize::from(source == "after")]
                 .fill(|_| Some("present-secret".into()))
@@ -217,6 +233,17 @@ fn fixture() -> LaunchPreloads {
     crate::store::PLATFORM
         .with(|p| *p.borrow_mut() = Some(Arc::new(ibex2::secrets::MemoryStore::new())));
     let launch = LaunchPreloads::default();
+    *launch.0.reader.lock().unwrap() = Some(Arc::new(|grants, _, definitions| {
+        let bindings = memory_endow(grants, "", false).bindings.unwrap();
+        crate::store::read_launch_secrets(&bindings, grants, definitions)
+    }));
+    let bindings = memory_endow("secret.keep session", "", false)
+        .bindings
+        .unwrap();
+    *launch.0.backend.lock().unwrap() = Some(Arc::new(crate::store::launch_backend_in(
+        bindings.secrets,
+        None,
+    )));
     LOCAL.with(|l| *l.borrow_mut() = Some(launch.clone()));
     launch
 }
@@ -226,6 +253,27 @@ fn factory(source: &Source) -> impl FnOnce() -> Source + Send + 'static {
 }
 fn ready(launch: &LaunchPreloads) {
     launch.0.set.get().unwrap().control.wait_ready(1);
+}
+fn memory_endow(grants: &str, _: &str, _: bool) -> crate::store::Endowed {
+    let grants = format!(
+        "{}\nstorage.kv {}\nstorage.kv exact.state",
+        exact_runner::io_grants(grants),
+        crate::store::KEPT
+    );
+    let bindings = ibex2::host::Host::new()
+        .with_secret_store(Box::new(ibex2::secrets::MemoryStore::new()))
+        .with_kv_store(Box::new(ibex2::kv::MemoryStore::new()))
+        .endow(ibex2::grant::GrantSet::parse(&grants).unwrap());
+    let secrets = crate::store::Platform::of(&bindings)
+        .with_namespace(exact_data::secrets::Namespace::memory());
+    crate::store::Endowed {
+        bindings: Some(bindings),
+        snapshot: Vec::new(),
+        unread_kept: Vec::new(),
+        secrets: Some(Box::new(secrets)),
+        unbound: None,
+        presence: None,
+    }
 }
 struct Driven {
     bridge: Bridge<Source>,
@@ -246,6 +294,7 @@ fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Dri
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
             preloads: local,
+            endow: memory_endow,
             start: start_io,
             ..IoLinks::LINKED
         }),
@@ -273,7 +322,7 @@ fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Dri
         );
         bridge.commit_plan()
     } else {
-        bridge.boot(plan, source, hooks, 100., 100.)
+        bridge.boot_selected(plan.to_vec().leak(), || source.clone(), hooks, 100., 100.)
     };
     let batch = String::from_utf8(bridge.output_bytes(len as usize).to_vec()).unwrap();
     assert!(!batch.contains("\"error\":\""), "{batch}");
@@ -416,6 +465,7 @@ fn discarding_a_prepared_batch_does_not_mark_an_unrelated_reply_as_preload_conte
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
             preloads: local,
+            endow: memory_endow,
             start: start_io,
             ..IoLinks::LINKED
         }),
@@ -874,6 +924,24 @@ fn definitions_wait_ends_at_one_second_while_the_secret_read_is_held() {
     }
 }
 
+fn widget_plan() -> Vec<u8> {
+    let widget = contract::Widget {
+        requires_secrets: false,
+        kind: "feed-widget".into(),
+        title: None,
+        description: None,
+        families: vec!["systemSmall".into()],
+        watch_families: vec![],
+        component: "Card".into(),
+        props: "Props".into(),
+        refresh: "timeline".into(),
+        preview: serde_json::json!({"title":"preview"}),
+        configuration: None,
+    };
+    let snapshot = contract::snapshot::compile("shape Props\n  title: string\ncomponent App\n  view\n    text \"app\"\ncomponent Card\n  props\n    title: string\n  view\n    text title\n", &widget).unwrap();
+    snapshot.encode()
+}
+
 #[test]
 fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
     for asynchronous in [false, true] {
@@ -886,24 +954,11 @@ fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
         server.release(0);
         ready(&launch);
         server.release(1);
-        let widget = contract::Widget {
-            requires_secrets: false,
-            kind: "feed-widget".into(),
-            title: None,
-            description: None,
-            families: vec!["systemSmall".into()],
-            watch_families: vec![],
-            component: "Card".into(),
-            props: "Props".into(),
-            refresh: "timeline".into(),
-            preview: serde_json::json!({"title":"preview"}),
-            configuration: None,
-        };
-        let snapshot = contract::snapshot::compile("shape Props\n  title: string\ncomponent App\n  view\n    text \"app\"\ncomponent Card\n  props\n    title: string\n  view\n    text title\n", &widget).unwrap();
-        let bytes = snapshot.encode();
+        let bytes = widget_plan();
         let mut entry = Bridge::with_links(Links {
             io: Some(IoLinks {
                 preloads: local,
+                endow: memory_endow,
                 start: start_io,
                 ..IoLinks::LINKED
             }),
@@ -930,5 +985,231 @@ fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
         assert!(batch.contains("\"text\":\"content\""), "{batch}");
         assert!(launch.0.set.get().unwrap().owner.lock().unwrap().is_none());
         assert_eq!(server.count.load(Ordering::Acquire), 2);
+    }
+}
+
+#[path = "launch_rust_tests.rs"]
+mod rust_launch;
+
+#[test]
+fn a_plan_only_selection_disables_named_taking_before_the_first_batch_and_dispatch() {
+    static SELECTED: crate::delivery::Hooks = crate::delivery::Hooks {
+        selected_plan: || Some(("plan-only".into(), named_plan())),
+        selected_module: || Ok(None),
+        candidate_delivery: |_, _| None,
+        boot_started: || {},
+        entry_refused: |_, why| panic!("{why}"),
+        status_into: |_| {},
+        take_note: || None,
+        last_line: || None,
+    };
+    fn named_plan() -> Vec<u8> {
+        contract::compile("shape Reply\n  value: string\ncomponent App\n  resource feed = named() as shape Reply\n  view\n    text feed.value\n").unwrap().encode()
+    }
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for selected in [false, true] {
+            let server = Server::new(if selected { 2 } else { 1 });
+            let source = server.source(PreloadWhen::Start, false);
+            let launch = fixture();
+            launch.begin(false, factory(&source));
+            server.request();
+            server.release(0);
+            ready(&launch);
+            let mut bridge = Bridge::with_links(Links {
+                io: Some(IoLinks {
+                    preloads: local,
+                    endow: memory_endow,
+                    start: start_io,
+                    ..IoLinks::LINKED
+                }),
+                ..Links::ALL
+            });
+            if selected {
+                bridge.set_delivery(Some(&SELECTED));
+            }
+            let len = bridge.boot_selected(
+                named_plan().leak(),
+                || source.clone(),
+                Hooks::none(),
+                100.,
+                100.,
+            );
+            let batch = String::from_utf8_lossy(bridge.output_bytes(len as usize));
+            assert_eq!(batch.contains("\"text\":\"content\""), !selected, "{batch}");
+            if selected {
+                assert!(server.request().contains("x-trace: new"));
+                server.release(1);
+            }
+            assert_eq!(
+                server.count.load(Ordering::Acquire),
+                if selected { 2 } else { 1 }
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads() {
+    #[derive(Clone)]
+    struct Named {
+        base: Source,
+        body: &'static [u8],
+    }
+    impl DataSource for Named {
+        fn grants(&self) -> &str {
+            self.base.grants()
+        }
+        fn preloads(&self) -> &[Baked] {
+            self.base.preloads()
+        }
+        fn replacement(&self, _: &[u8], _: &str, _: Vec<u8>) -> Result<Self, DataError> {
+            Ok(self.clone())
+        }
+        fn query(&mut self, name: &str, args: &[Value]) -> Result<Value, DataError> {
+            self.base.query(name, args)
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let mut request = self.base.definitions[0].fill(|_| None).unwrap();
+            request.body = self.body.to_vec();
+            Ok(Answer::Later(request.preload("feed").unwrap()))
+        }
+        fn parse(
+            &mut self,
+            store: &mut Store,
+            name: &str,
+            args: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            self.base.parse(store, name, args, outcome)
+        }
+    }
+    let plan = plan();
+    let empty = contract::compile("component App\n  view\n    text \"empty\"\n")
+        .unwrap()
+        .encode();
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for carried in [false, true] {
+            for equal in [false, true] {
+                for path in [
+                    "baked",
+                    "plan",
+                    "plan-delivery",
+                    "carried",
+                    "module",
+                    "module-delivery",
+                    "boot-plan",
+                    "direct",
+                ] {
+                    let takes = path == "baked" || equal;
+                    let server = Server::new(if takes { 1 } else { 2 });
+                    let mut base = server.source(PreloadWhen::Start, false);
+                    let mut definition = base.definitions[0];
+                    definition.method = "POST";
+                    definition.body = Some(&[PreloadPart::Literal("A")]);
+                    base.definitions = Box::leak(vec![definition].into_boxed_slice());
+                    let source = Named {
+                        base,
+                        body: if equal { b"A" } else { b"B" },
+                    };
+                    let launch = fixture();
+                    let mut bridge = Bridge::with_links(Links {
+                        io: Some(IoLinks {
+                            preloads: local,
+                            endow: memory_endow,
+                            start: start_io,
+                            ..IoLinks::LINKED
+                        }),
+                        ..Links::ALL
+                    });
+                    if carried {
+                        bridge.boot_selected(
+                            empty.clone().leak(),
+                            || source.clone(),
+                            Hooks::none(),
+                            100.,
+                            100.,
+                        );
+                        bridge.data_ready();
+                    }
+                    let initial = source.clone();
+                    launch.begin(false, move || initial);
+                    assert!(server.request().starts_with("POST "));
+                    server.release(0);
+                    ready(&launch);
+                    bridge.input_write(&plan);
+                    let length = match path {
+                        "baked" => bridge.boot_selected(
+                            plan.clone().leak(),
+                            || source.clone(),
+                            Hooks::none(),
+                            100.,
+                            100.,
+                        ),
+                        "direct" => bridge.boot(&plan, source, Hooks::none(), 100., 100.),
+                        "plan" => {
+                            bridge.prepare_plan(plan.len(), source, Hooks::none(), 100., 100.)
+                        }
+                        "plan-delivery" => bridge.prepare_plan_with_delivery(
+                            plan.len(),
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                            Some(Default::default()),
+                        ),
+                        "carried" => bridge.prepare_plan_carried(
+                            plan.len(),
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                            None,
+                            None,
+                            None,
+                        ),
+                        "module" => bridge.prepare_module(
+                            [plan.len(), 0, 0],
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                        ),
+                        "module-delivery" => bridge.prepare_module_with_delivery(
+                            [plan.len(), 0, 0],
+                            source,
+                            Hooks::none(),
+                            100.,
+                            100.,
+                            Some(Default::default()),
+                            false,
+                        ),
+                        "boot-plan" => {
+                            bridge.boot_plan(plan.len(), source, Hooks::none(), 100., 100.)
+                        }
+                        _ => unreachable!(),
+                    };
+                    let batch = String::from_utf8_lossy(bridge.output_bytes(length as usize));
+                    assert!(!batch.contains("\"error\":\""), "{path}: {batch}");
+                    assert_eq!(
+                        batch.contains("\"text\":\"content\""),
+                        takes,
+                        "{path}, carried={carried}, equal={equal}: {batch}"
+                    );
+                    if !matches!(path, "baked" | "direct" | "boot-plan") {
+                        bridge.commit_plan();
+                    }
+                    if !takes {
+                        assert!(server.request().starts_with("POST "));
+                        server.release(1);
+                    }
+                    assert_eq!(
+                        server.count.load(Ordering::Acquire),
+                        if takes { 1 } else { 2 }
+                    );
+                }
+            }
+        }
     }
 }

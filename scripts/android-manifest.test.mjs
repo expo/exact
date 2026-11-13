@@ -243,3 +243,26 @@ test('the Android package reader preserves Maven declarations and names their so
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('Android auth filters schemes but retains complete callback endpoints', async () => {
+  const { withAuthCallbacks } = await import('./android-manifest.mjs');
+  const xml = withAuthCallbacks('', ['app.test:/oauth', 'app.test:/other', 'second.test://host/cb',
+    'https://app.test/.exact/auth/callback', 'http://127.0.0.1/cb']);
+  assert.equal((xml.match(/<intent-filter>/g) ?? []).length, 2);
+  assert.match(xml, /android:scheme="app.test"/);
+  assert.match(xml, /android:scheme="second.test"/);
+  const endpoints = xml.match(/dev.exact.auth.callbacks" android:value="([^"]+)"/);
+  assert.deepEqual(JSON.parse(endpoints?.[1].replaceAll('&quot;', '"')), ['app.test:/oauth', 'app.test:/other', 'second.test://host/cb']);
+  assert.match(xml, /android.intent.category.BROWSABLE/);
+  assert.match(xml, /android:launchMode="singleTask"/);
+  assert.match(xml, /android.support.customtabs.action.CustomTabsService/);
+  assert.doesNotMatch(xml, /autoVerify|android:path|android:host|127.0.0.1/);
+  assert.equal(withAuthCallbacks('unchanged', ['https://app.test/cb']), 'unchanged');
+  const { androidShareActivity } = await import('./share-target.mjs');
+  const { withMetaData } = await import('./android-manifest.mjs');
+  const shared = withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } }));
+  const withShare = withAuthCallbacks(shared, ['app.test:/cb']);
+  assert.match(withShare, /dev.exact.auth.callbacks/);
+  assert.match(withShare, /android.intent.action.SEND/);
+  assert.equal((withShare.match(/<activity /g) ?? []).length, 1);
+});

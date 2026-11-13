@@ -28,7 +28,7 @@ import { pluginOnLoopback } from '../../scripts/tamber-remote.mjs';
 import { openRemoteCanvas } from '../../scripts/tamber-canvas.mjs';
 import { mapCard, pullMap } from '../../scripts/tamber-inspect.mjs';
 import { serveCommands, serveReport, streamFrame } from '../../scripts/tamber-builds.mjs';
-import { fresh, freshCompiler, webCompiler } from './module.mjs';
+import { EXE, depInfoOf, fresh, freshCompiler, webCompiler } from './module.mjs';
 import { hostModuleSources } from './glue.mjs';
 import { INSPECT_EVENTS } from './inspect-dev.js';
 import { galleryLoop } from './dev-gallery.mjs';
@@ -190,16 +190,18 @@ const mtimeMs = (path) => { try { return statSync(path).mtimeMs; } catch { retur
 function copyCompiler(path, copy, built) {
   const temp = `${copy}.${process.pid}.tmp`, tempDep = `${temp}.d`;
   try {
-    const dep = mtimeMs(`${path}.d`);
+    const dep = mtimeMs(depInfoOf(path));
     if (mtimeMs(path) !== built || dep === null) throw new Error('built again');
     copyFileSync(path, temp);
     utimesSync(temp, new Date(built), new Date(built));
-    copyFileSync(`${path}.d`, tempDep);
-    if (mtimeMs(path) !== built || mtimeMs(`${path}.d`) !== dep || !readFileSync(tempDep, 'utf8').endsWith('\n')) throw new Error('built again');
-    renameSync(tempDep, `${copy}.d`);
+    copyFileSync(depInfoOf(path), tempDep);
+    if (mtimeMs(path) !== built || mtimeMs(depInfoOf(path)) !== dep || !readFileSync(tempDep, 'utf8').endsWith('\n')) throw new Error('built again');
+    renameSync(tempDep, depInfoOf(copy));
     renameSync(temp, copy);
   } catch { rmSync(temp, { force: true }); rmSync(tempDep, { force: true }); }
 }
+/** Where `app`'s builds take the loop's compiler copy (`copyCompiler`). */
+const compilerCopy = (app) => resolve(app.target, `web-js-dev-compiler-${app.name.replace(/[^\w.-]/g, '_')}${EXE}`);
 
 /** Build `app` on the JS target and serve it with reload, until the process ends. */
 export async function devJs({ app, dist, port, host, origins, gate, lan, allowHosts = [], remoteAsked = { remote: null, tunnel: null, plugin: false, hosts: [] }, residentPort = 0, pairTtlMs }) {
@@ -208,7 +210,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // a value-only edit's and a scrub's. Optimised (host-dev), built as the
   // loop starts and again after any edit that is not a design's, so it is
   // the compiler the builds use; until it is, the debug compiler answers.
-  const tool = { path: resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), 'host-dev/exact-web-js'), ready: false, built: null, child: null, reading: null, cleaner: null };
+  const tool = { path: resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), `host-dev/exact-web-js${EXE}`), ready: false, built: null, child: null, reading: null, cleaner: null };
   const patcher = { child: null, built: null, asks: new Map(), n: 0 };
   const toolExits = new Set(), inspections = new Set();
   const stopGroup = child => {
@@ -402,13 +404,13 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // edit the loop does not watch, under contract/ or kernel/, rebuilds it).
   const toolFresh = () => {
     if (!tool.ready) return false;
-    if (fresh(tool.path, `${tool.path}.d`)) return true;
+    if (fresh(tool.path, depInfoOf(tool.path))) return true;
     buildTool();
     return false;
   };
   // The same, starting nothing: for what a request below write scope reaches
   // (`propose`'s class, stage 10 A1), which may not start a build.
-  const toolReady = () => tool.ready && fresh(tool.path, `${tool.path}.d`);
+  const toolReady = () => tool.ready && fresh(tool.path, depInfoOf(tool.path));
   buildTool();
   // The page's inspect table (LLP 1122 T2b, inspect.rs), made for dist's
   // plan when the page first asks (seconds for a large app, so no build
@@ -502,8 +504,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // The variant gallery (dev-gallery.mjs), started by its first page: told of each publication after it is out.
   const gallery = galleryLoop({ app, root, appDist: dist, channel: () => tamber?.channel, design: () => design?.digest ?? null, idleMs: Number(process.env.EXACT_DEV_GALLERY_IDLE_MS) || undefined,
     // (The reader's binary while it is fresh, asked without building it or the reader again; else no table yet.)
-    tableTool: () => (tool.ready && tool.path && fresh(tool.path, `${tool.path}.d`) ? { cmd: tool.path, pre: [] } : null),
-    compiler: () => { const copy = resolve(app.target, `web-js-dev-compiler-${app.name.replace(/[^\w.-]/g, '_')}`); return freshCompiler(copy) ? copy : null; },
+    tableTool: () => (tool.ready && tool.path && fresh(tool.path, depInfoOf(tool.path)) ? { cmd: tool.path, pre: [] } : null),
+    compiler: () => { const copy = compilerCopy(app); return freshCompiler(copy) ? copy : null; },
     client: (n) => client(n, null, { base: '/__dev/gallery', stream: '/__dev/gallery/stream', page: 'gallery' }) });
   const rebuild = async () => {
     // A burst a build already took (its timer still armed) is no edit.
@@ -589,7 +591,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // kept while it is fresh, so a build while the reader builds again (as
     // it does below, after every edit) takes it as well.
     // The app's own (apps in the tree share a target/).
-    const copy = resolve(app.target, `web-js-dev-compiler-${app.name.replace(/[^\w.-]/g, '_')}`);
+    const copy = compilerCopy(app);
     // Only the binary this loop's own build left (another loop on this
     // target/ may have linked one since, not yet dated to its start).
     if (tool.ready && tool.built !== null && freshCompiler(tool.path)) copyCompiler(tool.path, copy, tool.built);

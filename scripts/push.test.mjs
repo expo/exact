@@ -1,4 +1,5 @@
 import { validateChannel, channelOrigin, sha256, blobPath } from './origin.mjs';
+import { EXE } from './paths.mjs';
 import {expect, mock, test} from 'bun:test';
 import * as fs from 'node:fs';
 import {tmpdir, homedir} from 'node:os';
@@ -166,7 +167,7 @@ test('push refuses a SQLite module whose transaction options are data to a cohor
   const ROOT=fileURLToPath(new URL('..',import.meta.url));
   // The bake the lane built (docs/testing.md: a test runs a built binary, it
   // builds none), in Cargo's target directory, the lane's own if it set one.
-  const bake=resolve(ROOT,process.env.CARGO_TARGET_DIR||'target','debug/exact-js-bake');
+  const bake=resolve(ROOT,process.env.CARGO_TARGET_DIR||'target',`debug/exact-js-bake${EXE}`);
   if(!fs.existsSync(bake))throw new Error('build the bake first: cargo build -p exact-js-bake');
   const grants='sqlite.open app:/data/a.db';
   const {root,calls,pusher}=harness(classifyArtifacts,undefined,{bake,cohortRuntime:9,grants});

@@ -1074,6 +1074,19 @@
     copyBytes: copyBytes,
     fileRefusal: fileRefusal,
     cacheMode: cacheMode,
+    prefetch: function (init, read) {
+      var value = init ? init.exactPrefetch : undefined;
+      if (value !== undefined && value !== true && value !== false)
+        throw new TypeError("exactPrefetch is true or false");
+      if (value && !read) throw new TypeError("exactPrefetch requires a plain HTTP read");
+      return value;
+    },
+    preload: function (init) {
+      var name = init ? init.exactPreload : undefined;
+      if (name !== undefined && (typeof name !== "string" || !/^[a-z][a-z0-9-]*$/.test(name)))
+        throw new TypeError("exactPreload must match ^[a-z][a-z0-9-]*$");
+      return name;
+    },
     FetchError: FetchError,
     toBase64: toBase64,
     utf8Length: utf8Length,

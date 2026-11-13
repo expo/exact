@@ -351,7 +351,7 @@ export async function setup({check = false, platform = null, device = false} = {
     const result = spawnSync(cmd, args, {cwd: ROOT, encoding: 'utf8'});
     return result.status === 0 ? result.stdout.trim() : '';
   };
-  if (!check && !output('rustup', ['--version'])) throw new Error('install rustup from https://rustup.rs, then rerun exact setup');
+  if (!check && !output('rustup', ['--version'])) throw new Error('rustup is not on PATH, so setup installed nothing: install it from https://rustup.rs, then rerun exact setup');
   if (!check) {
     run('rustup', ['toolchain', 'install', pin.channel, '--profile', pin.profile,
       ...pin.components.flatMap(c => ['--component', c]), ...pin.targets.flatMap(t => ['--target', t])]);

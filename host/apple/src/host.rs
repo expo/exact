@@ -178,6 +178,7 @@ pub(crate) struct Mirror {
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
     pub(crate) preloads: Option<crate::launch_preloads::LaunchPreloads>,
+    pub(crate) launch_store: Option<std::sync::Arc<crate::launch_preloads::StoreWatch>>,
     boot_requests: Vec<RequestOut>,
     preload_content: Vec<String>,
     preload_accepted: bool,
@@ -539,6 +540,7 @@ impl<D: DataSource> Host<D> {
             .transpose()?
             .unwrap_or_default();
         let mut host = Host {
+            launch_store: None,
             preloads,
             boot_requests,
             preload_content,
@@ -812,6 +814,9 @@ impl<D: DataSource> Host<D> {
 
     /// Take the source's announced topics, waking the host (LLP 1016.002).
     pub fn listen(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        if let Some(store) = &self.launch_store {
+            store.listen(wake.clone());
+        }
         self.preload_wake.set(wake.clone());
         self.runner.listen(wake);
     }

@@ -55,7 +55,7 @@ test.skipIf(process.platform !== 'darwin')('an install replaces its own, and a f
   const { built, target, shim } = paths();
   place(app, built, target, shim);
   expect(marker(target)).toBe('new');
-  expect(readFileSync(shim, 'utf8')).toContain(`exec /usr/bin/open -a ${JSON.stringify(target)}`);
+  expect(readFileSync(shim, 'utf8')).toContain(`exec /usr/bin/open -a '${target}'`);
   expect(lstatSync(shim).mode & 0o777).toBe(0o755);
   writeFileSync(resolve(built, 'Contents/marker'), 'newer');
   place(app, built, target, shim);

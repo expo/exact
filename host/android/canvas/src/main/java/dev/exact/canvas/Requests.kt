@@ -91,6 +91,12 @@ internal class Requests(private val activity: ExactActivity) {
             try {
                 when (kind) {
                     OPEN -> open(string(words, body).first)
+                    AUTH -> {
+                        val (url, next) = string(words, body)
+                        val (callback, after) = string(words, next)
+                        Auth.open(activity, id, url, callback, string(words, after).first)
+                    }
+                    AUTH_END -> Auth.end(words[body])
                     HAPTIC -> haptic(words[body])
                     COPY -> copy(string(words, body).first)
                     SHARE -> share(id, words, body)
@@ -266,11 +272,25 @@ internal class Requests(private val activity: ExactActivity) {
         }
     }
 
-    private companion object {
-        const val TAG = "exact"
+    companion object {
+        /** No activity can launch a browser, but process-owned waits still receive their cleanup. */
+        fun detached(words: IntArray) {
+            var i = 0
+            while (i + 3 <= words.size) {
+                val kind = words[i]; val id = words[i + 1]; val body = i + 3
+                i = body + words[i + 2]
+                if (i > words.size) return
+                when (kind) {
+                    AUTH -> Exact.answer(id, "cancelled")
+                    AUTH_END -> Auth.end(words[body])
+                }
+            }
+        }
+
+        private const val TAG = "exact"
         /** A URL's user name and password (to the authority's last `@`), which logcat is not given. */
-        val USERINFO = Regex("^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#\\\\]*@")
-        const val ID = "id"
+        private val USERINFO = Regex("^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#\\\\]*@")
+        private const val ID = "id"
         /** The kinds (`presenter::Request`). */
         const val OPEN = 1
         const val HAPTIC = 2
@@ -288,7 +308,9 @@ internal class Requests(private val activity: ExactActivity) {
         const val PAD_INPUT = 14
         const val SURFACE_HAPTIC = 15
         const val SOUND = 16
+        const val AUTH = 17
+        const val AUTH_END = 18
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
-        const val DISMISSED_MS = 500L
+        private const val DISMISSED_MS = 500L
     }
 }

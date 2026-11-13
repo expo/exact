@@ -32,6 +32,11 @@ pub enum Request {
     /// Leave the app for this absolute `http`, `https`, `mailto` or `tel`
     /// URL: the browser, the mail app, the dialer.
     Open(String),
+    /// Open an authorization URL with its callback endpoint and state. The reader acknowledges
+    /// its wait, then answers on failure or cancellation.
+    Auth(String, String, String),
+    /// Forget the reader's auth wait, by its request id. The browser owns its tab.
+    AuthEnd(u32),
     /// Play this haptic.
     Haptic(Haptic),
     /// Put this text on the clipboard.
@@ -133,6 +138,8 @@ impl Request {
             Request::PadInput(_) => 14,
             Request::SurfaceHaptic(..) => 15,
             Request::Sound(_) => 16,
+            Request::Auth(..) => 17,
+            Request::AuthEnd(_) => 18,
         }
     }
 }
@@ -198,6 +205,10 @@ impl Haptic {
 enum Waiting {
     /// The share sheet: its outcome is a journal line (LLP 1069.003 D2).
     Share,
+    Auth {
+        ticket: u64,
+        opened: bool,
+    },
     /// A date or time control's picker: its answer is the control's value.
     Pick(ViewId),
     /// A package's picture (`pictures.rs`): answered with its pixels, by
@@ -276,6 +287,12 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
         | Request::Module(text)
         | Request::Presence(text)
         | Request::Sound(text) => string(out, text),
+        Request::Auth(url, callback, state) => {
+            string(out, url);
+            string(out, callback);
+            string(out, state);
+        }
+        Request::AuthEnd(id) => out.push(*id as i32),
         Request::Haptic(haptic) => out.push(*haptic as i32),
         Request::Share(share) => {
             // Which of the three the app gave (bit 0 the title, 1 the text,
@@ -477,6 +494,7 @@ impl<D: DataSource> Presenter<D> {
         let id = self.requests.last;
         if *LOG {
             match &request {
+                Request::Auth(..) => eprintln!("exact: request {id}: Auth"),
                 // Its picture is words by the hundred: what it is, not that.
                 Request::Surface(s) => eprintln!(
                     "exact: request {id}: Surface {} {:?} {:?}, {} words",
@@ -501,6 +519,72 @@ impl<D: DataSource> Presenter<D> {
         id
     }
 
+    pub(super) fn open_auth(&mut self, ticket: u64, session: exact_runner::auth::Session) {
+        if session.ephemeral {
+            exact_runner::auth::settle(
+                self.host.runner_mut(),
+                ticket,
+                501,
+                "ephemeral auth sessions are not supported by this Android build",
+            );
+            return;
+        }
+        let id = self.request(Request::Auth(session.url, session.callback, session.state));
+        self.requests.waiting.insert(
+            id,
+            Waiting::Auth {
+                ticket,
+                opened: false,
+            },
+        );
+    }
+
+    fn end_auth(&mut self) {
+        exact_runner::auth::forgotten(self.host.runner_mut());
+        let pending: Vec<(u32, u64)> = self
+            .requests
+            .waiting
+            .iter()
+            .filter_map(|(id, waiting)| {
+                if let Waiting::Auth { ticket, .. } = waiting {
+                    Some((*id, *ticket))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let ended: Vec<u32> = pending
+            .into_iter()
+            .filter_map(|(id, ticket)| {
+                (!self.host.runner().holds(ticket)
+                    || self.host.runner_mut().auth_mut().live(ticket).is_none())
+                .then_some(id)
+            })
+            .collect();
+        for id in ended {
+            self.end_auth_wait(id);
+        }
+    }
+
+    fn end_auth_wait(&mut self, id: u32) {
+        self.requests.waiting.remove(&id);
+        self.requests.queued.retain(|(queued, _)| *queued != id);
+        self.queue(Request::AuthEnd(id));
+    }
+
+    /// Runner tickets restart on reload; reader ids belong to the presenter.
+    pub(super) fn auth_replaced(&mut self) {
+        let ids: Vec<u32> = self
+            .requests
+            .waiting
+            .iter()
+            .filter_map(|(id, waiting)| matches!(waiting, Waiting::Auth { .. }).then_some(*id))
+            .collect();
+        for id in ids {
+            self.end_auth_wait(id);
+        }
+    }
+
     /// What the shell is told of the app's state, when it is not what it
     /// was last told: whether Back has somewhere to go (read again only
     /// after a commit, since it walks the tree) and whether a text field
@@ -511,6 +595,7 @@ impl<D: DataSource> Presenter<D> {
         if !self.requests.shell {
             return;
         }
+        self.end_auth();
         // The top layer first: a surface that closes here changes Back.
         self.tell_surface();
         for (surface, json) in self.surfaces.haptics.take_queued() {
@@ -702,6 +787,12 @@ impl<D: DataSource> Presenter<D> {
             });
             return true;
         }
+        if answer == Some("opened") {
+            if let Some(Waiting::Auth { opened, .. }) = self.requests.waiting.get_mut(&id) {
+                *opened = true;
+                return true;
+            }
+        }
         let Some(waiting) = self.requests.waiting.remove(&id) else {
             return false;
         };
@@ -728,27 +819,45 @@ impl<D: DataSource> Presenter<D> {
                 None => self.host.log(format!("picker: dismissed for {node}")),
             },
             Waiting::Picture(ticket) => self.picture_cancelled(ticket, answer),
+            Waiting::Auth { ticket, .. } => {
+                let (status, message) = match answer {
+                    Some("unavailable") => (501, "no system browser on this host"),
+                    Some("failed") => (502, "the browser could not open"),
+                    _ => (499, "cancelled"),
+                };
+                if self.host.runner().holds(ticket) {
+                    exact_runner::auth::complete(
+                        self.host.runner_mut(),
+                        ticket,
+                        Err((status, message)),
+                    );
+                }
+            }
         }
         true
     }
 
     /// The shell was made again (`reader_replaced`): it is told the app's
     /// state anew, and what the last one was asked and never answered is
-    /// cancelled, since nothing will answer it. A picker is the exception:
-    /// it is the activity's, which answers it as it closes, whether the
-    /// person chose or the activity went (`Requests.destroy`), and a reader
-    /// made again over the same activity leaves it up.
+    /// cancelled, since nothing will answer it. Auth waits acknowledged by the
+    /// reader belong to the process and survive reader recreation. A picker
+    /// belongs to the activity, which answers it as it closes (`Requests.destroy`);
+    /// a reader made again over the same activity leaves it up.
     pub(super) fn requests_reset(&mut self) {
         (self.requests.back, self.requests.back_epoch) = (None, None);
         self.requests.keyboard = None;
         (self.requests.wakelock, self.requests.wakelock_epoch) = (None, None);
         self.requests.pad_input = None;
         let waiting: Vec<u32> = (self.requests.waiting.iter())
-            .filter(|(_, w)| !matches!(w, Waiting::Pick(_)))
+            .filter(|(_, w)| !matches!(w, Waiting::Pick(_) | Waiting::Auth { opened: true, .. }))
             .map(|(id, _)| *id)
             .collect();
         for id in waiting {
+            let auth = matches!(self.requests.waiting.get(&id), Some(Waiting::Auth { .. }));
             self.answer_request(id, None);
+            if auth {
+                self.end_auth_wait(id);
+            }
         }
     }
 

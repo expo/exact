@@ -397,3 +397,66 @@ fn flex_region_live_certificate_loss_preserves_publication_until_explicit_clear(
     k.set_content_region(None).unwrap();
     k.compute_layout(1, Offer::definite(400., 300.)).unwrap();
 }
+
+/// CSS Flexbox §5.4.1, CSS Grid §8.1: a region lays a flex or grid
+/// container's items out in `order`-modified document order, as ordinary
+/// layout does, and a block's in document order; an `order` changed after
+/// publication too.
+#[test]
+fn a_region_lays_items_out_in_css_order() {
+    use exact_kernel::region::RegionProfile;
+    let order = |id: ViewId, order: i32| {
+        let mut s = StyleProps::default();
+        s.mask = mask(&[StyleId::Order]);
+        s.order = order;
+        flex_style(id, s)
+    };
+    for profile in [RegionProfile::PinnedOffers, RegionProfile::SplitFacts] {
+        for display in [Display::Flex, Display::Grid, Display::Block] {
+            let mut k = fixture();
+            let mut content = StyleProps::default();
+            content.mask = mask(&[StyleId::Display]);
+            content.display = display;
+            let mut item = StyleProps::default();
+            item.mask = mask(&[StyleId::Width, StyleId::Height]);
+            item.width = Dimension::Points(20.);
+            item.height = Dimension::Points(20.);
+            let mut ops = vec![flex_style(3, content)];
+            for id in [7, 8] {
+                ops.push(Op::CreateView {
+                    id,
+                    node_type: NodeType::View,
+                });
+                ops.push(flex_style(id, item.clone()));
+            }
+            ops.push(Op::SetChildren {
+                id: 3,
+                children: vec![7, 8],
+            });
+            ops.push(order(7, 1));
+            k.apply(0, 0, &ops).unwrap();
+            k.set_content_region_profile(Some(binding(&k)), profile)
+                .unwrap();
+            for orders in [[1, 0], [-1, 0], [2, 2]] {
+                k.apply(0, 0, &[order(7, orders[0]), order(8, orders[1])])
+                    .unwrap();
+                assert!(ready(&mut k, 400., 1).current);
+                let mut oracle = k.rehydrate(Box::new(MonospaceMeasurer::default()));
+                oracle
+                    .compute_layout(1, Offer::definite(400., 300.))
+                    .unwrap();
+                for id in [7, 8] {
+                    assert!(
+                        k.node(id)
+                            .unwrap()
+                            .frame
+                            .bits_eq(oracle.node(id).unwrap().frame),
+                        "{profile:?} {display:?} {orders:?}: {id} at {:?}, not {:?}",
+                        k.node(id).unwrap().frame,
+                        oracle.node(id).unwrap().frame
+                    );
+                }
+            }
+        }
+    }
+}

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { bakedRustSource, buildModule, moduleGrants, webCompiler, fresh, freshCompiler } from './module.mjs';
+import { bakedRustSource, buildModule, buildScriptDir, crateDir, depInfoOf, moduleGrants, webCompiler, fresh, freshCompiler } from './module.mjs';
 import { spawnOwned } from '../../scripts/test-children.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
@@ -331,15 +331,15 @@ test.each([
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 1024, bytes = [];
   const u32 = n => bytes.push(n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255);
   const string = s => { const b = new TextEncoder().encode(s); u32(b.length); bytes.push(...b); };
-  u32(8); bytes.push(0); string('test.grants'); string(grants);
+  u32(9); bytes.push(0); string('test.grants'); string(grants);
   new Uint8Array(memory.buffer, out, bytes.length).set(bytes);
   const output = mock(() => out);
-  let abi = 8;
+  let abi = 9;
   const instantiate = spyOn(WebAssembly, 'instantiate').mockResolvedValue({ instance: { exports: {
     memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
     exact_logic_call(_session, pointer, length) {
       const request = new DataView(memory.buffer, pointer, length);
-      return length === 5 && request.getUint32(0, true) === 8 && request.getUint8(4) === 0 ? 0 : 1;
+      return length === 5 && request.getUint32(0, true) === 9 && request.getUint8(4) === 0 ? 0 : 1;
     },
     exact_logic_output: output, exact_logic_output_len: () => bytes.length,
   } } });
@@ -347,8 +347,8 @@ test.each([
     const actual = await moduleGrants(path);
     expect(output).toHaveBeenCalledTimes(1);
     expect(actual).toBe(grants);
-    abi = 7;
-    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 7 is not 8');
+    abi = 8;
+    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 8 is not 9');
   } finally {
     instantiate.mockRestore();
     rmSync(dir, { recursive: true, force: true });
@@ -1431,6 +1431,26 @@ test('compiler reuse is invalidated by dependency manifests and the workspace lo
     if (fast === undefined) delete process.env.EXACT_WEB_COMPILER; else process.env.EXACT_WEB_COMPILER = fast;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a Windows compiler is found by its .exe beside the dep-info Cargo names without it', () => {
+  expect(depInfoOf('C:\\t\\debug\\exact-web-js.exe')).toBe('C:\\t\\debug\\exact-web-js.d');
+  expect(depInfoOf('/t/debug/exact-web-js')).toBe('/t/debug/exact-web-js.d');
+  expect(crateDir('C:\\w\\contract\\src\\lib.rs')).toBe('C:\\w\\contract');
+  expect(crateDir('/w/contract/src/lib.rs')).toBe('/w/contract');
+  expect(crateDir('C:\\w\\Cargo.lock')).toBe(null);
+  expect(buildScriptDir('C:\\t\\debug\\build\\kernel-0a1b\\out\\tables.rs')).toBe('C:\\t\\debug\\build\\kernel-0a1b');
+  expect(buildScriptDir('/t/debug/build/kernel-0a1b/out/tables.rs')).toBe('/t/debug/build/kernel-0a1b');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-compiler-exe-'));
+  try {
+    const product = resolve(dir, 'compiler.exe'), source = resolve(dir, 'dep/src/lib.rs');
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, ''); writeFileSync(resolve(dir, 'dep/Cargo.toml'), '[package]\nname="fixture"\n');
+    writeFileSync(product, 'compiler fixture'); writeFileSync(resolve(dir, 'compiler.d'), `${product}: ${source}\n`);
+    const built = Date.now() / 1000 + 10;
+    utimesSync(product, built, built);
+    expect(freshCompiler(product)).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('web builds expose their version inputs in the view and delivery state', async () => {

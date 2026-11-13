@@ -12,6 +12,18 @@ use exact_kernel::{CommitReceipt, StyleId, ViewId};
 use exact_motion::{Presentation, Property, Value};
 use exact_runner::DataSource;
 
+/// The SVG geometry rows, in `Presented::svg`'s order.
+const SVG: [Property; 8] = [
+    Property::R,
+    Property::StrokeDashoffset,
+    Property::Cx,
+    Property::Cy,
+    Property::X,
+    Property::Y,
+    Property::Rx,
+    Property::Ry,
+];
+
 impl<D: DataSource> Host<D> {
     /// A path's `d` while a transition moves it (LLP 1055.000 D15); `None`
     /// paints the attribute.
@@ -37,6 +49,25 @@ impl<D: DataSource> Host<D> {
             self.keys.keys().copied(),
             &mut self.engine,
         );
+    }
+
+    /// Forget the presented SVG geometry a commit retired (a row now a
+    /// percentage): the shape paints its row again.
+    pub(super) fn retire_svg_geometry(&mut self, retired: &[(u64, Property)]) {
+        for &(node, property) in retired {
+            let Some(i) = SVG.iter().position(|p| *p == property) else {
+                continue;
+            };
+            let key = node_key(node);
+            let Some(view) = self.keys.get(&key).copied() else {
+                continue;
+            };
+            if let Some(entry) = self.presented.get_mut(&view) {
+                if entry.svg[i].take().is_some() {
+                    self.row_dirty.node(key);
+                }
+            }
+        }
     }
 
     fn retire_paint(&mut self, retired: Vec<(u64, Property)>) {

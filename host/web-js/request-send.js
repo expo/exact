@@ -15,6 +15,7 @@ export function sendRequest(t, land, out, data, inflight, say) {
       if (more) { const ms = o.streamed ?? [o]; t.messages += o.messages ?? ms.length; t.coalesced += ms.reduce((n, m) => n + (m.coalesced ?? 0), 0); o.more = true; } else { Open.delete(t); longPollEnded(t); }
       say(`${more ? "message" : "reply"} ${t.id}; wall ${t.elapsed} ms`); land(o);
     };
+    if (t.req?.prefetch && !t.r) return done({ failed: 2, message: 'exactPrefetch requires a plain HTTP read' });
     const failed = e => done({ failed: 1, message: String(e?.message ?? e) });
     // An answer that keeps coming (LLP 1016.000): a Rust source's streamed request, or a TypeScript source's `exactStream`
     // (ts-data.js). In flight until its first message (D5), then open until its end or until its ticket is let go (`Open`).

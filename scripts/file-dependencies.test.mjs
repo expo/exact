@@ -1,11 +1,12 @@
 // A `file:` package's sources reach the next build without a `bun install` by hand (#115), in both of Bun's layouts.
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileDependencies, installDifference, installedFileDependencies } from './file-dependencies.mjs';
+import { withInstallLock } from './filesystem.mjs';
 
 /** An app at `<dir>/app` with `@x/p` from `file:<spec>` (relative to the app), installed by the pinned Bun. */
 function installed(spec) {
@@ -111,6 +112,30 @@ test('a declared directory that is gone refuses the build, though its last insta
     assert.throws(() => installedFileDependencies(app, run), /@x\/p is file:\.\/packages\/p in .*package\.json, and .*packages\/p is not a directory, so the build would read the copy .* restore the directory/);
     assert.equal(run.calls.length, 0);
     assert.equal(readFileSync(resolve(copy, 'apple/P.swift'), 'utf8'), 'let a = 1\n', 'nothing was removed');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
+test('an install lock is waited for while its holder lives, however long it holds it, and is free once the holder is killed', async () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-install-lock-')));
+  const lock = resolve(dir, 'install.lock'), done = resolve(dir, 'done');
+  const holder = (ms) => {
+    const code = `const { withInstallLock } = await import(${JSON.stringify(resolve(import.meta.dir, 'filesystem.mjs'))});
+      withInstallLock(${JSON.stringify(lock)}, () => { console.log('held'); Bun.sleepSync(${ms}); require('node:fs').writeFileSync(${JSON.stringify(done)}, ''); });`;
+    const child = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'inherit'] });
+    return new Promise((held) => child.stdout.once('data', () => held(child)));
+  };
+  try {
+    await holder(1500);
+    // Older than any install: an age is no reason to take a live holder's lock.
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(lock, old, old);
+    withInstallLock(lock, () => assert.ok(existsSync(done), 'the holder finished before this ran'));
+    rmSync(done);
+    const killed = await holder(60_000);
+    killed.kill('SIGKILL');
+    const started = Date.now();
+    withInstallLock(lock, () => assert.ok(!existsSync(done)));
+    assert.ok(Date.now() - started < 10_000);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);
 

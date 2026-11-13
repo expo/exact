@@ -44,10 +44,22 @@ pub fn over_limit(limit: usize) -> HostError {
 /// Stored folded so lookup and duplicate detection are exact, and so two
 /// platforms cannot disagree about whether `Content-Type` and `content-type`
 /// are the same header.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Headers {
     entries: Vec<(String, String)>,
+    /// `entries`' indexes in name order, made when an indexed read first
+    /// asks and dropped when a header is added or deleted (a changed value
+    /// keeps its place), so iterating an unchanged list sorts it once.
+    order: std::sync::OnceLock<Box<[usize]>>,
 }
+
+impl PartialEq for Headers {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl Eq for Headers {}
 
 /// Headers a caller may not set, because the transport owns them.
 ///
@@ -139,8 +151,13 @@ impl Headers {
         let value = normalize_value(value).to_string();
         match self.entries.iter_mut().find(|(k, _)| *k == folded) {
             Some(entry) => entry.1 = value,
-            None => self.entries.push((folded, value)),
+            None => self.add(folded, value),
         }
+    }
+
+    fn add(&mut self, folded: String, value: String) {
+        self.entries.push((folded, value));
+        self.order.take();
     }
 
     /// Append, combining with any existing value as `a, b` per the spec.
@@ -152,7 +169,7 @@ impl Headers {
                 entry.1.push_str(", ");
                 entry.1.push_str(&value);
             }
-            None => self.entries.push((folded, value)),
+            None => self.add(folded, value),
         }
     }
 
@@ -175,6 +192,7 @@ impl Headers {
                 .filter(|(name, _)| !FORBIDDEN_REQUEST_HEADERS.contains(&name.as_str()))
                 .cloned()
                 .collect(),
+            order: Default::default(),
         }
     }
 
@@ -185,6 +203,19 @@ impl Headers {
         let mut sorted = self.entries.clone();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         sorted
+    }
+
+    /// The entry at `index` of [`Headers::sorted_entries`], without copying
+    /// or sorting the list again while it is unchanged.
+    pub fn sorted_entry(&self, index: usize) -> Option<(&str, &str)> {
+        let order = self.order.get_or_init(|| {
+            let mut order: Box<[usize]> = (0..self.entries.len()).collect();
+            // Names are unique, so an unstable sort orders them as a stable one.
+            order.sort_unstable_by(|&a, &b| self.entries[a].0.cmp(&self.entries[b].0));
+            order
+        });
+        let (name, value) = &self.entries[*order.get(index)?];
+        Some((name, value))
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
@@ -201,7 +232,11 @@ impl Headers {
 
     pub fn delete(&mut self, name: &str) {
         let folded = Self::fold(name);
+        let before = self.entries.len();
         self.entries.retain(|(k, _)| *k != folded);
+        if self.entries.len() != before {
+            self.order.take();
+        }
     }
 
     pub fn entries(&self) -> &[(String, String)] {
@@ -906,6 +941,38 @@ mod tests {
             .map(|(name, _)| name)
             .collect();
         assert_eq!(names, vec!["alpha", "mike", "zebra"]);
+    }
+
+    #[test]
+    fn an_indexed_read_follows_every_change_to_the_list() {
+        let mut headers = Headers::new();
+        let agree = |headers: &Headers| {
+            let indexed: Vec<_> = (0..=headers.len())
+                .map(|i| {
+                    headers
+                        .sorted_entry(i)
+                        .map(|(n, v)| (n.to_owned(), v.to_owned()))
+                })
+                .collect();
+            let mut sorted: Vec<_> = headers.sorted_entries().into_iter().map(Some).collect();
+            sorted.push(None);
+            assert_eq!(indexed, sorted);
+        };
+        agree(&headers);
+        headers.set("zebra", "1");
+        headers.set("alpha", "2");
+        agree(&headers);
+        headers.append("Mike", "3");
+        agree(&headers);
+        headers.append("ALPHA", "4");
+        headers.set("zebra", "5");
+        agree(&headers);
+        headers.delete("alpha");
+        agree(&headers);
+        headers.delete("absent");
+        headers.set("beta", "6");
+        agree(&headers);
+        assert_eq!(headers.sorted_entry(0), Some(("beta", "6")));
     }
 
     #[test]

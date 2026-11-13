@@ -11,7 +11,7 @@ import { resolve, toNamespacedPath } from 'node:path';
 import { applyPattern, createApp } from '../game/new.mjs';
 import { findings } from '../host/apple/feel/analyze.mjs';
 import { chromium } from './agent-launch.mjs';
-import { ago, appServer, buildWarnings, draftFields, fixedType, groups, judgeRelaunch, judgeReload, movedClock, persistedStates, pinnedLaunch, recordedServerAddress, refusalsOf, relaunchFacts, relaunchStore, reloadLine, reloadNote, report, reusable, savedChanges, screenTexts, serverUrl, shotName, storedTexts, warningsOfBuild } from './verify.mjs';
+import { ago, appServer, buildProgress, buildWarnings, draftFields, fixedType, groups, judgeRelaunch, judgeReload, movedClock, persistedStates, pinnedLaunch, recordedServerAddress, refusalsOf, relaunchFacts, relaunchStore, reloadLine, reloadNote, report, reusable, savedChanges, screenTexts, serverUrl, shotName, storedTexts, warningsOfBuild } from './verify.mjs';
 import { semanticsSummary } from './verify-semantics.mjs';
 
 const SIZES = [[390, 844], [1280, 900]];
@@ -1474,3 +1474,8 @@ test('every drive after the build, and the run recorded, select the app the call
     for (const [, name, at, gpu] of lines) assert.deepEqual([name, at, gpu], ['original', realpathSync(dir), 'original-gpu']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
+
+test('verify shows a drive build as it starts and as it runs, not its other lines', () => {
+  const lines = ['building for ios: app.contract changed', 'waiting for the build in another drive', '  still building (60 s): Compiling exact-kernel', 'kept the plan', 'warning: x'];
+  assert.deepEqual(lines.filter(buildProgress), lines.slice(0, 3));
+});

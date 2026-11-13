@@ -862,10 +862,16 @@ impl<D: DataSource> Runner<D> {
                     && !p.refused
                     && p.refusal.is_none()
                     && p.args != args
-                    // Who asked it is stamped as it goes out (LLP 1133.036
-                    // D6), so it is no part of the same request.
-                    && (p.keepable.as_ref())
-                        .is_some_and(|k| *request == Request { reach: request.reach, ..k.clone() })
+                    // Prefetch is a plain fetch (LLP 1162.000 D5); who asked
+                    // is stamped as it goes out (LLP 1133.036 D6).
+                    && p.keepable.as_ref().is_some_and(|k| {
+                        *request
+                            == Request {
+                                reach: request.reach,
+                                prefetch: request.prefetch,
+                                ..k.clone()
+                            }
+                    })
             }) {
                 p.args = args;
                 // (new arguments: a new streak after a turn over its budget)

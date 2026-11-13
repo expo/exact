@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cargoEnvironment, developmentBuildEnv } from './app.mjs';
+import { bakeTarget, cargoEnvironment, developmentBuildEnv } from './app.mjs';
 import { webOnly } from './app-cli.mjs';
 import { appleCargo } from './cargo-check.mjs';
 import { cargoInputPaths, packageDirectories, watchedDigest } from './cargo-dep-info.mjs';
@@ -40,8 +40,7 @@ export const appleBakeToolArgs = (host, cargoArgs = ['--profile', 'host-dev']) =
  * build script runs again when a variable it reads differs (cc's `CXXFLAGS`, the deployment targets). The
  * executable. */
 export function appleBakeTool(env, cargoArgs) {
-  const host = /^host: (\S+)$/m.exec(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout ?? '')?.[1];
-  if (!host) throw new Error('rustc did not report its host target');
+  const host = bakeTarget('macos');
   const args = [...appleBakeToolArgs(host, cargoArgs), '-q', '--message-format=json-render-diagnostics'];
   const built = spawnSync(...appleCargo('cargo', args, { cwd: ROOT, env: { ...cargoEnvironment(env), CARGO_TARGET_DIR: TOOL_TARGET }, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   if (built.status !== 0) throw new Error(`the bake tool did not build (cargo ${args.join(' ')})`);

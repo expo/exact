@@ -806,7 +806,8 @@ test('setup selects supported pinned Binaryen archives on Windows and Unix', () 
 test('SDK CLI entrypoint executes', () => {
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'exact.mjs'),'--help'],{encoding:'utf8'});
   expect(result.status).toBe(0);
-  expect(result.stdout).toContain('exact setup [--check]');
+  // The verb and its first flag, not the whole usage line, which grows with its options.
+  expect(result.stdout).toMatch(/^\s*exact setup \[--check\b/m);
 });
 
 test('caps command reports the checkout budgets', () => {

@@ -406,7 +406,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             _ if is_placeholder => "void 0".into(),
             _ => pages::zero(plan, r.ty),
         };
-        // A host fact is the page's; a store reader's value a placeholder (LLP 1027 D4).
+        // Host facts and store readers are asked at launch (LLP 1027 D4).
         let fact = HOST_FACTS.contains(&plan.str(r.source));
         let initial = plan.bytes(r.initial);
         let initial = if initial.is_empty() || fact {
@@ -425,6 +425,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         } else {
             em.uses.rt("res")
         };
+        let res = each::constructor(r, res);
         // An `else` row's compiled answer is the bake's for every launch,
         // never asked again (each was a worker turn; the runner's
         // `is_placeholder_row`, review B4): it is settled, not a bake.
@@ -790,6 +791,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (!commands.is_empty(), commands_import.as_str()),
             (paint, "import{paintUse as $paint}from\"./paint.js\";"),
             (em.list, "import{vl as $vl}from\"./list.js\";"),
+            (each::readers(plan), "import{reader as $reader}from\"./store-reader.js\";"),
             (em.follow, "import\"./follow.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),

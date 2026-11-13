@@ -43,6 +43,7 @@
 - **The workers' retirement leaves a retired completion's accounting standing** (2026-11-12, read, not run). `complete` in `host/executor/src/lib.rs` returns at `state.retired` before it releases the run's bytes and counts, so they stay in the shared state for as long as a waker or a clone holds it. The asynchronous machine now applies physical ends after retirement (`async_retire.rs`).
 - **`exactBodyTo` is refused on Apple's own asynchronous lane** (2026-11-12). The machine's portable lanes write a reply to a file (LLP 1162 D8 item 5); `DarwinLane`'s callbacks run on URLSession's delegate queue, which must not block on a disk, so it refuses by name. It needs a download task or writes handed to another thread before the machine can be measured on a device.
 - **A resource that wakes is asked as a refresh** (2026-11-12, read, not run). A `when` that opens again asks its resource forced (`runner/src/runner/settlement.rs`, "Waking asks again, forced"; `r.asleep` in `host/web-js/rt.js`), and a forced ask bypasses the executor's cache (LLP 1162 D4): the HTTP cache natively, `cache: "reload"` on the web. LLP 1161.002 D3 asks only that no request is kept across idleness. Decide whether a wake is a refresh; a launch's own ask no longer is (LLP 1162.000 D1).
+- **A read asked before a refresh can put its older reply back in the cache** (2026-11-13, read, not run). The HTTP cache stores a reply when its exchange completes (`host/executor/src/cache.rs`, `store_response`). A read asked first and still in flight when an equal refresh is asked and completes stores its reply over the refresh's, and the next equal read is answered with it while it is fresh. LLP 1162 D4 has a forced ask replace the entry. A count kept for each key, raised when a replacing request is asked and compared at the store, would refuse the older exchange's reply.
 - **An upload test's fixture lacks `socketProtocols`** (2026-11-12, main 6674ae8c). `bun test host/web-js/upload.test.mjs` fails "an untraced async tool handler keeps its origin for fetches and nested module calls" with `SyntaxError: export 'socketProtocols' not found in './grant-admission.js'`: the fixture's copy of the runtime predates the WebSocket subprotocols change. Find what the fixture copies and give it the current file.
 - **Shelf's test file fails three tests on macOS on main** (2026-11-12).
 - **`exact-data` tests share machine state across checkouts** (2026-11-12). Its lock and kept-document tests fail when two checkouts on one machine run them at once.
@@ -1345,12 +1346,6 @@ sits on that list carries the trade it would take.
   view without the `UITabBarController`'s bar, or the bar's visibility following the route stack,
   which still has the photo on top until UIKit finishes.
   2026-10-22 (lane q1022/c2): the retained tabbed fullscreen-zoom fixture enters a real interactive dismissal (vertical 250-pt drag) and its capture shows the presented card covering the bar's place, the bar visible after completion; this does not separate a missing bar from ordinary occlusion.
-- **The web JS target's build-time answer at a store holding secrets** (LLP 1027 D4,
-  approved 2026-10-10): the Rust runner shows a store reader's declared `else` placeholder
-  instead of the bake's empty-store answer when the store holds a granted secret and the
-  source is not ready; `rt.js` still shows the build-time answer until its Rust module
-  loads. It learns a store reader only from an answer (`ans.store`), so it needs the
-  plan's reader marker emitted first.
 - **The sky's capture on the phone** landed at the display's rate 2026-08-30 (LLP 1008
   §9): a shadow layer tree rendered by `CARenderer`, a nested canvas's readback cached,
   the texture handed to the module as it is (`gpu_texture_metal`, `gpu_sync`) — 119 fps
@@ -1569,14 +1564,6 @@ and the Linux headless CPU renderer without claiming display frame timing.
   copied into the run after the build, would let an unchanged deploy reuse them. The
   `exact-filesystem` helper also rebuilds inside each deploy's capture, where its tool
   target sits.
-- Default deploys republish the web root (2026-09-24, deploy lane): two cold deploys
-  of unchanged Caltrain left every native stream `current` but changed the
-  `.exact/install/` pages, which carry their build time, and `app.wasm` and
-  `gpu_bg.wasm`, which recorded the run's target path until 113abeaa remapped it.
-  Browsers fetch the new root; native clients are unaffected. The Rust module build
-  remaps only its target directory: an app outside this repo with a module (none
-  yet) would also need the capture root its exact2 path dependencies arrive under
-  remapped, as `wasmRemapFlags` does for web builds.
 - **Other `fs.watch` consumers under Bun** (2026-09-23): on this Mac, Bun 1.4.2's `fs.watch` (file and recursive directory) delivered no event in 45 s while `watchFile` polling fired in 2 ms (oven-sh/bun#43870); a Contract save reached the update-lab page 10–40 s late or never. `watchModuleSources` in `host/web/dev.mjs` now polls at 100 ms as well. Still fs.watch-only: `rustOutputWatch` (the `current` pointer; the baker's reply covers the common case), the compiler-input directory watch at `dev.mjs` line ~863 (files there already poll), and `watchStaticTrees` in `serve.mjs` (asset, deck, and shader edits). Same fix or a shared poller.
 
 - LLP 1024 §9 guardrails (Charlie, 2026-09-27): enforce the prop update size budget (a named refusal status) and flag per-frame prop churn in the journal. Neither is enforced yet.
@@ -1585,7 +1572,6 @@ and the Linux headless CPU renderer without claiming display frame timing.
 - **Playwright WebKit cannot launch on the Linux builder** (2026-10-02, cross-browser conformance): its complete missing-library set is `libevent-2.1.so.7`, `libopus.so.0`, `libwebpmux.so.3`, `libgtk-4.so.1`, `libgraphene-1.0.so.0`, `libgstallocators-1.0.so.0`, `libgstapp-1.0.so.0`, `libgstpbutils-1.0.so.0`, `libgstaudio-1.0.so.0`, `libgsttag-1.0.so.0`, `libgstvideo-1.0.so.0`, `libgstgl-1.0.so.0`, `libgstcodecparsers-1.0.so.0`, `libgstfft-1.0.so.0`, `libflite.so.1`, `libflite_usenglish.so.1`, `libflite_cmu_grapheme_lang.so.1`, `libflite_cmu_grapheme_lex.so.1`, `libflite_cmu_indic_lang.so.1`, `libflite_cmu_indic_lex.so.1`, `libflite_cmulex.so.1`, `libflite_cmu_time_awb.so.1`, `libflite_cmu_us_awb.so.1`, `libflite_cmu_us_kal16.so.1`, `libflite_cmu_us_kal.so.1`, `libflite_cmu_us_rms.so.1`, `libflite_cmu_us_slt.so.1`, `libavif.so.16`, `libharfbuzz-icu.so.0`, `libwayland-server.so.0`, `libmanette-0.2.so.0`, `libenchant-2.so.2`, `libhyphen.so.0`, `libsecret-1.so.0`, `libGLESv2.so.2`, and `libx264.so`. Install those host packages before enabling this engine on this builder; the Mac async lane is unaffected.
 
 - **The two kanban conversions are not in their apps yet** (2026-10-04, LLP 1094 stage 3): converted copies and patches are the lane's (`kanban-1094.patch`, `kanban2-1094.patch`); kanban's also adds the module imports LLP 1091 asks for.
-- **LLP 1097's parity fixture** (2026-10-04, impl/1097, §5). `host/web-js/conformance/storage-background` (a TypeScript source driven on the wasm target, the JS target and Linux, comparing journals and `state.background`) was not built: no TypeScript app with storage grants has a Linux host for `conform.mjs --linux`, and a fixture app with web and Linux crates would be new apparatus. The same steps were driven by hand on drums (JS target, wasm target, macOS): `state.background` and the journal's storage lines matched, the messages differing by host as the codes allow. Linux runs the module's background rounds in `host/painted/src/agent/tests.rs` over a scripted source.
 
 - **A substituted pick on the WebKit carrier fails to store the file** (2026-11-12, Fieldnotes' import, `agent web --browser webkit`): `type @<ticket> <file>` fails with `filesystem: Error preparing Blob/File data to be stored in object store`, where Chrome and Firefox hand the action the `Picked` record. WebKit refuses a `Blob` in IndexedDB in an ephemeral session, which a Playwright context is and a Safari private window is too; the web host's picked-file store (`host/web/storage-fs.js`) could keep the bytes as an `ArrayBuffer` instead.
 
@@ -1646,9 +1632,9 @@ and the Linux headless CPU renderer without claiming display frame timing.
 
 
 - **Apple frame-health qualification (LLP 1079.000, 2026-10-28).** An iPhone 15 Pro on iOS 27.0.1 is connected; the minimal development app is installed and launched, with its running process verified. The minimal frame-health fixture and signed development/core/off builds are prepared locally. Use the phone when available and identify an above-120 Hz display. Run the independent presentation and observer off/on experiments, hidden/stationary/dragging overlay pairs, and energy/thermal checks. Callback/apply proxies and the debug scroll probe currently provide no presentation or battery certification. The card's own work in the app's frames has an opt-in benchmark (`FrameHealthCardCostIOSTests`, `EXACT_FRAME_HEALTH_BENCHMARK=1`) measured only on the simulator; run it and the overlay pairs on a phone over a full-window GPU canvas, a 60 Hz iPhone included, where the card's own work was 13 to 17 ms an update before it drew in bands and tiles (expo/exact#296).
+- **The iOS frame-health card's header rests under the status bar** (2026-11-13, found driving the minimized card; a decision). A new full card rests 8 points from the window's top edge, past the safe area (LLP 1079.000 §7.2, #303), so on an iPhone simulator its Close, Pause, Details and Share sit under the status bar and take no taps until the card is dragged down. The minimized card already rests below the status bar. Decide whether the full card rests below it too.
 
 - **macOS live trackpad replay (LLP 1079.000, 2026-10-28).** Add a reliable completion acknowledgement for synthetic phased wheels before admitting them under platform timing. Immediate layout reads exposed zero or partial motion; posting the later phases first did not resolve it. The carrier currently refuses with `platform-trackpad-replay-unqualified`; ordinary wheels and frozen-clock functional replay remain available.
-- **A minimized frame-health card (LLP 1079.000 §7.2).** The card is opaque and takes the touches within its bounds, so on a phone it covers over a third of the app. A minimized form, resting in its corner as the card does, would leave the app usable while it watches.
 - **Late work that lands unchanged leaves no hitch (LLP 1079.000 §1).** A frame whose owner batch changes nothing is never applied, so when it finishes late it counts as a late frame but the detail ring records no apply-deadline event. Record the late frame's start, deadline and landing as an event of its own.
 
 - **NucBox: qualify an AMD overlay diagnostic if the paint crash recurs**
@@ -1771,3 +1757,5 @@ and the Linux headless CPU renderer without claiming display frame timing.
 - Game audio: after a large upward pitch change on a one-shot, the web output can be stopped about 168.5 ms of source before its end (1→16, 10.53 ms of playback), and a downward change leaves silence until the simulation ends the voice.
 
 - Changing an in-flight upload's finite `with` context makes a worker source's reply miss its original argument key (`data/src/placed.rs`, `parse_with`); the main-thread source takes the new context.
+
+- The web JS auth hold outlives a superseded mutation when its replacement does not call `openAuthSession` (`host/web-js/auth.js`). Replacing a sign-in mutation with a synchronous cancellation leaves its auth ticket in `state.pending`; a late callback can resume the old source and write its session. A browser regression test reproduced both effects. The supersession cleanup runs only when another auth session opens. Match the runner's let-go behavior.

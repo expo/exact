@@ -129,13 +129,12 @@ impl Visit for Tree {
         Ok(Json::Array(out))
     }
     fn object(self, members: &mut Members<'_, '_>) -> Result<Json, Error> {
-        let mut out = Object::new();
+        let mut out = Vec::new();
         while let Some(key) = members.key()? {
             let key = key.to_owned();
-            let value = members.value(Tree)?;
-            out.insert(key, value);
+            out.push((key, members.value(Tree)?));
         }
-        Ok(Json::Object(out))
+        Ok(Json::Object(Object::of(out)))
     }
 }
 

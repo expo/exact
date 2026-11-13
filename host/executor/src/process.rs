@@ -772,12 +772,15 @@ fn person_required(api: &str, origin: CallOrigin) -> Outcome {
     )
 }
 
-/// One answer, as JSON.
+/// One answer, as JSON. Its capacity is its length: the retention check
+/// counts capacity, which the writer's growth can leave near twice it.
 fn reply(body: Json) -> Outcome {
+    let mut body = body.to_string().into_bytes();
+    body.shrink_to_fit();
     Outcome::Response(Response {
         status: 200,
         headers: Vec::new(),
-        body: body.to_string().into_bytes(),
+        body,
     })
 }
 

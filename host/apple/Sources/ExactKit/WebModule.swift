@@ -559,16 +559,29 @@ final class WebViews {
         data.withUnsafeBytes { module.endSession($0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count)) }
     }
 
-    fileprivate func receivedEvent(id: UInt32, kind: UInt32, data: Data) {
+    /// `deliver` on a later main-queue turn, if frame `id` is still `entry`'s
+    /// node in the session generation that raised the event. A reload's
+    /// runner numbers its nodes from 1 again, so an old frame's queued event
+    /// would otherwise run the handler of whatever node has its id now.
+    private func later(_ entry: WebEntry, id: UInt32, _ deliver: @escaping (ExactSession) -> Void) {
+        guard let session else { return }
+        let issued = GenerationStamp(session)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.entries[id] === entry, let session = issued.session else { return }
+            deliver(session)
+        }
+    }
+
+    func receivedEvent(id: UInt32, kind: UInt32, data: Data) {
         // A failed file says nothing more, but the view the arm shows in its place is still shown (kind 7).
         guard let entry = entries[id], !entry.fileFailed || kind == 7, let owner = entry.owner else { return }
         switch kind {
         case 0:
-            if owner.handlers.contains("load") { DispatchQueue.main.async { [weak owner] in owner?.presenter?.load(id) } }
+            if owner.handlers.contains("load") { later(entry, id: id) { [weak owner] _ in owner?.presenter?.load(id) } }
         case 1:
             if owner.handlers.contains("message") {
                 let text = String(decoding: data, as: UTF8.self)
-                DispatchQueue.main.async { [weak owner] in owner?.presenter?.message(id, text) }
+                later(entry, id: id) { [weak owner] _ in owner?.presenter?.message(id, text) }
             }
         case 2: entry.loading = false
         case 3: entry.loading = true
@@ -577,11 +590,10 @@ final class WebViews {
             guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let name = value["event"] as? String, let record = value["record"] as? [String: Any] else { return }
             entry.navigation = record
-            guard owner.handlers.contains(name), let session,
+            guard owner.handlers.contains(name),
                   let json = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys) else { return }
             let text = String(decoding: json, as: UTF8.self)
-            DispatchQueue.main.async { [weak session] in
-                guard let session else { return }
+            later(entry, id: id) { session in
                 session.apply(session.runtime.frameNavigation(id, event: name, record: text, now: session.now()))
             }
         case 5:
@@ -591,11 +603,10 @@ final class WebViews {
             if name == "download", let path = record["path"] as? String, path.hasPrefix("app:/tmp/downloads/"), record["state"] as? String == "completed" {
                 reserved.remove(String(path.dropFirst("app:/tmp/downloads/".count)))
             }
-            guard owner.handlers.contains(name), let session,
+            guard owner.handlers.contains(name),
                   let json = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys) else { return }
             let text = String(decoding: json, as: UTF8.self)
-            DispatchQueue.main.async { [weak session] in
-                guard let session else { return }
+            later(entry, id: id) { session in
                 session.apply(session.runtime.frameNavigation(id, event: name, record: text, now: session.now()))
             }
         case 6:

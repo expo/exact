@@ -40,9 +40,10 @@ impl Run {
         }
     }
 
-    /// The same style, other text.
-    pub fn same_style(&self, other: &Run) -> bool {
-        self.fg == other.fg
+    /// Whether `other` can join this run: the same style and the same link.
+    pub fn joins(&self, other: &Run) -> bool {
+        self.href == other.href
+            && self.fg == other.fg
             && self.bg == other.bg
             && self.bold == other.bold
             && self.italic == other.italic
@@ -60,13 +61,13 @@ impl Line {
         }
     }
 
-    /// Append a run, merging it into the last when the styles match.
+    /// Append a run, merging it into the last when it [joins](Run::joins) it.
     pub fn push(&mut self, run: Run) {
         if run.text.is_empty() {
             return;
         }
         if let Some(last) = self.runs.last_mut() {
-            if last.same_style(&run) {
+            if last.joins(&run) {
                 last.text.push_str(&run.text);
                 return;
             }

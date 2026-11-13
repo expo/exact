@@ -20,3 +20,9 @@ sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"
 ureq = { version = "=3.4.0", default-features = false, features = ["rustls"] }
+
+# Its own workspace takes none of the root's profiles: optimize dependencies as
+# the root's dev profile does, or `--check` hashes each bundle with an
+# unoptimized sha2, about nine seconds a target.
+[profile.dev.package."*"]
+opt-level = 3

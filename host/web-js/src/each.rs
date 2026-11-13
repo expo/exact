@@ -39,6 +39,25 @@ pub(super) fn resource(
     )))
 }
 
+/// The function that builds row `r`, given `res`: a store reader goes
+/// through store-reader.js's `reader`, told whether it declares an `else`
+/// (LLP 1027 D4).
+pub(super) fn constructor(r: &exact_plan::ResourcesRow, res: String) -> String {
+    if !r.reader {
+        return res;
+    }
+    let declared = r.placeholder.is_some() || r.placeholder_value.len > 0;
+    format!("$reader({res},{})", u8::from(declared))
+}
+
+/// Whether the plan builds a store reader (`constructor`): only then does
+/// its page import store-reader.js.
+pub(super) fn readers(plan: &Plan) -> bool {
+    plan.resources
+        .iter()
+        .any(|r| r.reader && plan.resource_each(r).is_none())
+}
+
 /// A resource's arguments as `res()` takes them: a function, with its `with`
 /// context count and its `when` (LLP 1161.002) when it has them.
 pub(super) fn arguments(

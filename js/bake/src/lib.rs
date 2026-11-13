@@ -181,6 +181,23 @@ fn with_module_identity(compat: &str, meta: &serde_json::Value) -> Result<String
     ))
 }
 
+/// `logic.rs`'s entry over `embedded_data()`. A linked bake names an unnamed
+/// source by the identity the link carries, as `module.rs` reads `APP`, so
+/// the archive compiles the same for apps that differ only in identity.
+fn embedded_entry(mode: &str, inputs: &serde_json::Value, linked: bool) -> Result<String, String> {
+    if linked {
+        contract::rust_entry_naming(
+            "ExactEmbeddedData",
+            "embedded_data()",
+            mode,
+            inputs,
+            Some(linked::LINKED_APP),
+        )
+    } else {
+        contract::rust_entry("ExactEmbeddedData", "embedded_data()", mode, inputs)
+    }
+}
+
 /// `module.rs`'s first constants: the app, its grants and, but in a linked
 /// bake, the module's hash (`REVISION`, which the web's entry passes on); on
 /// a native platform the bytecode, embedded, or in a linked bake the
@@ -392,8 +409,7 @@ fn build_sources(
         } else {
             mode
         };
-        let mut entry =
-            contract::rust_entry("ExactEmbeddedData", "embedded_data()", mode, &compat.inputs)?;
+        let mut entry = embedded_entry(mode, &compat.inputs, outside && platform != "web")?;
         // The web entry links what the plan uses (LLP 1047 D3).
         if platform == "web" {
             let plan = exact_plan::Plan::decode(&baked.plan).map_err(|e| format!("{e:?}"))?;

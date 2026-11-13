@@ -224,9 +224,23 @@
         );
       var poll = longPollOf(init, stream, method, url);
       if (typeof poll === "string") return optionRefused(new TypeError(poll));
-      var cache;
+      var cache, preload, prefetch;
       try {
         cache = binary.cacheMode(init);
+        preload = binary.preload(init);
+        prefetch = binary.prefetch(
+          init,
+          !call.mutation &&
+            !call.tool &&
+            !stream &&
+            !listen &&
+            !own &&
+            !child &&
+            bodyFrom === undefined &&
+            bodyTo === undefined &&
+            ceiling === undefined &&
+            /^https?:/i.test(url)
+        );
       } catch (e) {
         return optionRefused(e);
       }
@@ -291,6 +305,8 @@
         body_to: bodyTo,
         redirect: redirect,
         cache: cache,
+        preload: preload,
+        prefetch: prefetch,
         held: held ? true : undefined,
         listen: listen,
       });

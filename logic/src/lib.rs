@@ -67,6 +67,7 @@ pub struct Swappable<D> {
     app_id: String,
     grants: String,
     preloads: Vec<exact_runner::request::Preload>,
+    launch: Option<exact_runner::request::Launch>,
     mode: &'static str,
     loader: Option<Loader>,
     preloader: Option<Preloader>,
@@ -91,6 +92,7 @@ impl<D: DataSource> Swappable<D> {
             app_id: embedded.app_id().into(),
             grants: embedded.grants().into(),
             preloads: embedded.preloads().to_vec(),
+            launch: embedded.launch(),
             canvas_surfaces: embedded.canvas_surfaces(),
             embedded: Some(embedded),
             mode,
@@ -327,6 +329,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
     }
     fn app_id(&self) -> &str {
         &self.app_id
+    }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.launch.clone()
     }
     fn preloads(&self) -> &[exact_runner::request::Preload] {
         &self.preloads
@@ -629,6 +634,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 app_id: self.app_id.clone(),
                 grants: self.grants.clone(),
                 preloads: self.preloads.clone(),
+                launch: self.launch.clone(),
                 mode: self.mode,
                 loader: self.loader,
                 preloader: self.preloader,

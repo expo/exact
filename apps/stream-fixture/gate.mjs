@@ -14,12 +14,14 @@
 // ruled (§16 question 8): three streams for the whole run with no overflow
 // and no frame dropped by the path; receipt to decode p95 under 8 ms and
 // p99 under 16 ms; busy under 25% of one core; frame time unchanged within
-// the noise of the run with no stream. It writes `target/stream-fixture/
-// gate-<host>.json` and prints a table.
+// the noise of the run with no stream; and none of these without every
+// run's declared streams live, received, decoded and sent (judge.mjs). It
+// writes `target/stream-fixture/gate-<host>.json` and prints a table.
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
+import { judge, unestablished } from './judge.mjs';
 
 const args = process.argv.slice(2);
 const host = args[0];
@@ -108,15 +110,16 @@ try {
     const sent = await (await fetch(`${SERVER}/stats`)).json();
     const state = await s.state();
     const failed = ['a', 'b', 'c'].map((k) => state.resources?.[k]?.failed).filter(Boolean);
+    const live = ['a', 'b', 'c'].filter((k) => state.resources?.[k]?.live === true);
     const streams = timing.streams.filter((x) => x.messages > 0);
     const decodes = streams.reduce((n, x) => n + x.decodes, 0), framesSent = sent.reduce((n, c) => n + c.frames, 0);
     const worst = (k, p) => Math.max(0, ...streams.map((x) => x[k][p]));
-    results.push({ ...run, seconds: timing.seconds, frame, cores, failed, framesSent, decodes,
+    results.push({ ...run, seconds: timing.seconds, frame, cores, failed, live, connections: sent.map((c) => c.frames), framesSent, decodes,
       dropped: Math.max(0, framesSent - decodes - 2 * run.streams), refused: streams.reduce((n, x) => n + (x.refused ?? 0), 0),
       busy: +streams.reduce((n, x) => n + x.busy, 0).toFixed(4), toDecode: { p95: worst('toDecode', 'p95'), p99: worst('toDecode', 'p99'), max: worst('toDecode', 'max') },
       toCommit: { p95: worst('toCommit', 'p95'), p99: worst('toCommit', 'p99') }, perStream: streams });
-    const r = results.at(-1);
-    console.log(`${host} · ${run.name}: ${r.framesSent} sent, ${r.decodes} decoded, ${r.dropped} dropped, ${r.refused} refused${failed.length ? `, failed: ${failed.join('; ')}` : ''} · receipt→decode p95 ${r.toDecode.p95} p99 ${r.toDecode.p99} max ${r.toDecode.max} ms · busy ${(r.busy * 100).toFixed(2)}%${cores != null ? ` · process ${(cores * 100).toFixed(1)}% of a core` : ''} · frames p50 ${frame.p50} p95 ${frame.p95} p99 ${frame.p99} ms; of ${frame.presented} presented ${frame.missed} vsyncs missed, ${frame.late} late${frame.overruns != null ? ` (${frame.overruns} overruns)` : ''}`);
+    const r = results.at(-1), missing = !baseline && run.streams ? unestablished(r) : null;
+    console.log(`${host} · ${run.name}: ${r.framesSent} sent, ${r.decodes} decoded, ${r.dropped} dropped, ${r.refused} refused${failed.length ? `, failed: ${failed.join('; ')}` : ''}${missing ? ` · UNESTABLISHED: ${missing}` : ''} · receipt→decode p95 ${r.toDecode.p95} p99 ${r.toDecode.p99} max ${r.toDecode.max} ms · busy ${(r.busy * 100).toFixed(2)}%${cores != null ? ` · process ${(cores * 100).toFixed(1)}% of a core` : ''} · frames p50 ${frame.p50} p95 ${frame.p95} p99 ${frame.p99} ms; of ${frame.presented} presented ${frame.missed} vsyncs missed, ${frame.late} late${frame.overruns != null ? ` (${frame.overruns} overruns)` : ''}`);
   }
   await press(s, 'stop');
 } finally {
@@ -130,19 +133,7 @@ if (baseline) {
   console.log(out);
   process.exit(0);
 }
-const base = results[0].frame, three = results.filter((r) => r.streams === 3);
-if (three.length !== 2) throw new Error(`gate: ${three.length} three-stream runs, not 2`);
-const pass = {
-  noOverflowOrDrop: three.every((r) => !r.failed.length && !r.refused && !r.dropped),
-  decodeP95: three.every((r) => r.toDecode.p95 < 8),
-  decodeP99: three.every((r) => r.toDecode.p99 < 16),
-  busy: three.every((r) => r.busy < 0.25),
-  // Within the noise: the p95 frame interval moves by under a millisecond, and
-  // missed vsyncs by under 1% of the frames presented.
-  // A run that presented nothing (the app left the foreground, and the
-  // macOS sampler with it) measured no frame time, and fails.
-  frames: base.presented > 0 && three.every((r) => r.frame.presented > 0 && r.frame.p95 - base.p95 < 1 && (r.frame.missed / r.frame.presented) - (base.missed / base.presented) < 0.01),
-};
+const pass = judge(results);
 writeFileSync(out, JSON.stringify({ host, seconds, pass, results }, null, 2));
 console.log(`${host}: ${Object.entries(pass).map(([k, v]) => `${k} ${v ? 'pass' : 'FAIL'}`).join(' · ')}\n${out}`);
 process.exit(Object.values(pass).every(Boolean) ? 0 : 1);

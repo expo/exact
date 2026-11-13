@@ -32,8 +32,9 @@ const ABI_HEADER: &str = include_str!(concat!(
 pub const GPU_MODULE_ABI: u32 = 1;
 /// The separately linked Rust data-source wire ABI, as the seam declares it:
 /// admitted secret names before the store snapshot (LLP 1048.000 D9), two-way
-/// sockets (LLP 1016.003), cache-mode tag 12 (LLP 1162 D4), and stream
-/// protocol names (LLP 1016.000).
+/// sockets (LLP 1016.003), cache-mode tag 12 (LLP 1162 D4), stream
+/// protocol names (LLP 1016.000), preload-name tag 13 (LLP 1162.000 D1) and
+/// prefetch tag 14 (D5).
 pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
@@ -75,7 +76,9 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// module whose grants admit `sqlite.open` needs 10 ([`typescript_runtime_of`]).
 /// 11: Fetch's `cache` (LLP 1162 D4), which an older prelude ignores.
 /// 12: `exactProtocols`, which an older prelude would ignore (LLP 1016.000).
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 12;
+/// 13: `exactPreload` and `exactPrefetch`, which an older prelude ignores
+/// (LLP 1162.000 D1, D5).
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 13;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -86,7 +89,9 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 12;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 25] = [
+const RUNTIME_OPTIONS: [(u32, &str); 27] = [
+    (13, "exactPrefetch"),
+    (13, "exactPreload"),
     (12, "exactProtocols"),
     (11, "cache"),
     (9, "exactIdleTimeout"),

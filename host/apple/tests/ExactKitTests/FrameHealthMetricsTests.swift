@@ -1252,6 +1252,33 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertTrue(risen > 0 && card.contains(CGPoint(x: now.maxX, y: now.maxY - risen)), "\(risen)")
     }
 
+    #if os(iOS)
+    func testMinimizeKeepsWithinARounderBottomCorner() throws {
+        // Beside a compact card's pacing, Minimize sits in the bottom-right corner: in a 54-point corner it moves in
+        // as Share does from a rounder top-right one, and the pacing it sits beside gives way
+        let width = FrameHealthCardFace.width, height = FrameHealthCardFace.compactHeight
+        let corners: (CGFloat, CGFloat, CGFloat, CGFloat) = (12, 12, 54, 12)
+        let plain = FrameHealthCardFace.Layout(width: width, compact: true, minimizable: true)
+        let rounded = FrameHealthCardFace.Layout(width: width, compact: true, minimizable: true, corners: corners)
+        XCTAssertEqual(rounded.minimize.maxX, plain.minimize.maxX - 0.2915 * 42, accuracy: 0.01)
+        XCTAssertEqual(rounded.minimize.maxY, plain.minimize.maxY)
+        XCTAssertLessThanOrEqual(rounded.pacingArea.maxX + 8, rounded.minimize.minX)
+        XCTAssertEqual(FrameHealthCardFace.Layout(width: width, minimizable: true, corners: corners).minimize.maxX,
+            FrameHealthCardFace.Layout(width: width, minimizable: true).minimize.maxX, "in the toolbar's row it stays")
+        // Pressed, it inks nothing outside the card's edge
+        var state = FrameHealthCardFace.State()
+        state.pressed = .minimize
+        let edge = FrameHealthCardDrawing.continuous(CGRect(x: 1, y: 1, width: width - 2, height: height - 2),
+            radii: [corners.0, corners.1, corners.2, corners.3].map { $0 - 1 })
+        var p = Self.palette
+        p.iconPressed = CGColor(gray: 0, alpha: 1)
+        let ink = try Self.ink(outside: edge, size: CGSize(width: width, height: height)) {
+            FrameHealthCardFace.minimize($0, rounded, state: state, palette: p)
+        }
+        XCTAssertEqual(ink, 0)
+    }
+    #endif
+
     /// The pixels `draw` inks on a white card `size` points large, drawn at twice its scale, whose middles lie outside
     /// `outline`
     private static func ink(outside outline: CGPath, size: CGSize, _ draw: (CGContext) -> Void) throws -> Int {

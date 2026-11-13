@@ -662,6 +662,26 @@ fn a_linked_module_leaves_its_bytecode_to_the_link() {
     );
 }
 
+/// A linked bake's entry names an unnamed source by the id the link carries,
+/// never by a literal, so two apps that differ only in identity compile the
+/// same entry; an embedded bake names it by the manifest's id.
+#[test]
+fn a_linked_entry_names_its_source_from_the_link() {
+    let inputs = |app: &str| serde_json::json!({"app": app, "linked": []});
+    for mode in ["off", "native", "tiered", "wasm"] {
+        let a = super::embedded_entry(mode, &inputs("com.example.a"), true).unwrap();
+        let b = super::embedded_entry(mode, &inputs("com.example.b"), true).unwrap();
+        assert_eq!(a, b);
+        assert!(!a.contains("com.example.a"), "{a}");
+        assert!(
+            a.contains(".named(::exact_apple::baked::identity().app)"),
+            "{a}"
+        );
+        let embedded = super::embedded_entry(mode, &inputs("com.example.a"), false).unwrap();
+        assert!(embedded.contains(".named(\"com.example.a\")"), "{embedded}");
+    }
+}
+
 /// LLP 1154 D3: the one direct dependency whose `exact.json`, at its root,
 /// declares `native` fills the slot, whatever its `exports` "." names (here
 /// its TypeScript driver). On a native platform `module.rs` joins its shim

@@ -86,8 +86,10 @@ enum AppFiles {
 
 final class Picker: NSObject {
     unowned let session: ExactSession
-    /// Inputs whose picker is showing: a second `showPicker` does nothing.
-    private var open: Set<UInt32> = []
+    /// Inputs whose picker is showing, with the session generation that
+    /// showed it: a second `showPicker` does nothing, and a replacement
+    /// generation's input with the same id opens its own.
+    private var open: [UInt32: Int] = [:]
     /// Chosen documents under `startAccessingSecurityScopedResource`, until
     /// the session ends (LLP 1069.010 D1).
     var scoped: [URL] = []
@@ -106,7 +108,8 @@ final class Picker: NSObject {
     #endif
     init(session: ExactSession) { self.session = session }
 
-    struct Request { let view: UInt32; let id: String; let accept: [String]; let multiple: Bool }
+    /// A picker shown for input `view`, in the session generation `issued`.
+    struct Request { let view: UInt32; let id: String; let accept: [String]; let multiple: Bool; let issued: GenerationStamp }
 
     private func object(_ s: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] ?? [:]
@@ -124,13 +127,28 @@ final class Picker: NSObject {
             if let e = r["error"] as? String { fputs("exact: \(e)\n", stderr) }
             return
         }
+        if let request = request(id) { present(request) }
+    }
+
+    /// The request to show input `id`'s picker, now marked open; nil when it
+    /// is no file input or its picker shows already.
+    func request(_ id: String) -> Request? {
         let r = object(session.agent("{\"op\":\"picker\",\"id\":\(quoted(id))}"))
         guard let view = (r["view"] as? NSNumber)?.uint32Value else {
-            session.log("picker: refused: no file input with id \"\(id)\""); return
+            session.log("picker: refused: no file input with id \"\(id)\""); return nil
         }
-        guard !open.contains(view) else { session.log("picker: \"\(id)\" is already open"); return }
-        open.insert(view)
-        present(Request(view: view, id: id, accept: r["accept"] as? [String] ?? [], multiple: r["multiple"] as? Bool ?? false))
+        guard open[view] != session.generation else { session.log("picker: \"\(id)\" is already open"); return nil }
+        open[view] = session.generation
+        return Request(view: view, id: id, accept: r["accept"] as? [String] ?? [], multiple: r["multiple"] as? Bool ?? false,
+                       issued: GenerationStamp(session))
+    }
+
+    /// The platform's answer to `r`: the files chosen, or none when cancelled.
+    /// A reload or plan replacement since it showed numbers nodes afresh, so
+    /// `r.view` may now be another input: the answer is dropped.
+    func finish(_ r: Request, files: [(url: URL, name: String)]) {
+        guard r.issued.session != nil else { return }
+        if files.isEmpty { cancel(r.view) } else { deliver(r.view, accept: r.accept, files: files) }
     }
 
     /// The agent's answer, after the library consumed the hold (D9): `reply`
@@ -147,13 +165,13 @@ final class Picker: NSObject {
     }
 
     func cancel(_ view: UInt32) {
-        open.remove(view)
+        open[view] = nil
         session.apply(session.runtime.pickerCancel(view, now: session.now()))
     }
 
     /// Copy each file in, converting per D6, describe it (D3), fire `change`.
     func deliver(_ view: UInt32, accept: [String], files: [(url: URL, name: String)]) {
-        open.remove(view)
+        open[view] = nil
         var lines: [String] = []
         for f in files {
             let ext = (f.name as NSString).pathExtension.lowercased()
@@ -348,7 +366,7 @@ extension Picker: UIDocumentPickerDelegate {
                 session.log("picker: refused: this build links no photo picker (media_picker); rebuild"); cancel(r.view); return
             }
             link.present(over: controller, accept: r.accept, multiple: r.multiple) { [weak self] files in
-                if files.isEmpty { self?.cancel(r.view) } else { self?.deliver(r.view, accept: r.accept, files: files) }
+                self?.finish(r, files: files)
                 for f in files { try? FileManager.default.removeItem(at: f.url) }
             }
         } else {
@@ -363,13 +381,13 @@ extension Picker: UIDocumentPickerDelegate {
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         if exportFinished(controller, urls: urls) || documentFinished(controller, urls: urls) { return }
         guard let r = requests.removeValue(forKey: ObjectIdentifier(controller)) else { return }
-        deliver(r.view, accept: r.accept, files: urls.map { ($0, $0.lastPathComponent) })
+        finish(r, files: urls.map { ($0, $0.lastPathComponent) })
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         if exportFinished(controller, urls: nil) || documentFinished(controller, urls: nil) { return }
         guard let r = requests.removeValue(forKey: ObjectIdentifier(controller)) else { return }
-        cancel(r.view)
+        finish(r, files: [])
     }
 }
 #else
@@ -387,9 +405,9 @@ extension Picker {
         let panel = Picker.panel(for: r)
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self, weak panel] response in
             guard let self else { return }
-            guard response == .OK, let urls = panel?.urls, !urls.isEmpty else { self.cancel(r.view); return }
+            let urls = response == .OK ? panel?.urls ?? [] : []
             let scoped = urls.map { $0.startAccessingSecurityScopedResource() }
-            self.deliver(r.view, accept: r.accept, files: urls.map { ($0, $0.lastPathComponent) })
+            self.finish(r, files: urls.map { ($0, $0.lastPathComponent) })
             for (url, started) in zip(urls, scoped) where started { url.stopAccessingSecurityScopedResource() }
         }
         if let window = session.presenter.root.window { panel.beginSheetModal(for: window, completionHandler: finish) }

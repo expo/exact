@@ -6,11 +6,12 @@
 // eleven components the parser returned, and a setter asks Rust for the URL
 // as it is after the assignment, so the setters' semantics are the spec's.
 //
-// A URLSearchParams holds its serialized query string and nothing else. Every
-// method is one crossing that reads or rewrites that string in Rust, so the
-// list semantics — order, duplicates, form-urlencoded escaping — have one
-// implementation, and `url.searchParams` is a live view because it reads and
-// writes `url.search` directly rather than keeping a copy.
+// A URLSearchParams holds its serialized query string. Every method is one
+// crossing that reads or rewrites that string in Rust, so the list semantics
+// — order, duplicates, form-urlencoded escaping — have one implementation,
+// and `url.searchParams` is a live view because it reads and writes
+// `url.search` directly rather than keeping a copy. Iteration alone keeps the
+// pairs Rust parsed, until the query changes.
 (function (global) {
   "use strict";
 
@@ -155,7 +156,20 @@
       urls.set(p.url, setField(state(p.url)[0], "search", next).split("\n"));
     } else {
       p.query = next;
+      p.parsed = null;
     }
+  }
+
+  // The pairs of the query as it is now, parsed once per change. A view's
+  // URL replaces its components array on every change, however it was made;
+  // a list of its own drops its pairs when it writes.
+  function list(p) {
+    var from = p.url ? state(p.url) : p;
+    if (p.parsed !== from) {
+      p.pairs = JSON.parse(sp.entries(query(p)));
+      p.parsed = from;
+    }
+    return p.pairs;
   }
 
   function own(instance) {
@@ -168,7 +182,7 @@
     if (!(this instanceof URLSearchParams)) {
       throw new TypeError("URLSearchParams must be constructed with new");
     }
-    var p = { url: null, query: "" };
+    var p = { url: null, query: "", pairs: null, parsed: null };
     params.set(this, p);
     brand(this, "URLSearchParams");
     if (init === undefined || init === null) return;
@@ -243,38 +257,54 @@
   Object.defineProperty(proto, "size", {
     configurable: true,
     get: function () {
-      return JSON.parse(sp.entries(query(own(this)))).length;
+      return list(own(this)).length;
     },
   });
 
-  // Iteration hands out a snapshot of the pairs: one crossing, then the
-  // engine's own array iterator.
-  function pairs(instance) {
-    return JSON.parse(sp.entries(query(own(instance))));
+  // Iteration is live, as WebIDL's pair iterators are: each step reads the
+  // pair at its index in the list as the list is then
+  // (https://webidl.spec.whatwg.org/#es-iterator-prototype-object).
+  var IteratorPrototype = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]())
+  );
+  var iterators = new WeakMap(); // iterator -> { p, index, kind }
+  var IteratorProto = Object.create(IteratorPrototype);
+  IteratorProto.next = function () {
+    var it = iterators.get(this);
+    if (!it) throw new TypeError("not a URLSearchParams iterator");
+    var pairs = list(it.p);
+    if (it.index >= pairs.length) return { done: true, value: undefined };
+    var pair = pairs[it.index++];
+    return {
+      done: false,
+      value: it.kind === 0 ? [pair[0], pair[1]] : it.kind === 1 ? pair[0] : pair[1],
+    };
+  };
+  Object.defineProperty(IteratorProto, Symbol.toStringTag, {
+    value: "URLSearchParams Iterator",
+    configurable: true,
+  });
+  function iterator(instance, kind) {
+    var it = Object.create(IteratorProto);
+    iterators.set(it, { p: own(instance), index: 0, kind: kind });
+    return brand(it, "URLSearchParamsIterator");
   }
   proto.entries = function () {
-    return brand(pairs(this)[Symbol.iterator](), "URLSearchParamsIterator");
+    return iterator(this, 0);
   };
   proto.keys = function () {
-    return brand(pairs(this)
-      .map(function (pair) {
-        return pair[0];
-      })
-      [Symbol.iterator](), "URLSearchParamsIterator");
+    return iterator(this, 1);
   };
   proto.values = function () {
-    return brand(pairs(this)
-      .map(function (pair) {
-        return pair[1];
-      })
-      [Symbol.iterator](), "URLSearchParamsIterator");
+    return iterator(this, 2);
   };
   proto[Symbol.iterator] = proto.entries;
   proto.forEach = function (callback, thisArg) {
     if (typeof callback !== "function") throw new TypeError("forEach requires a function");
-    var list = pairs(this);
-    for (var i = 0; i < list.length; i++) {
-      callback.call(thisArg, list[i][1], list[i][0], this);
+    var p = own(this);
+    for (var i = 0; i < list(p).length; i++) {
+      var pair = list(p)[i];
+      callback.call(thisArg, pair[1], pair[0], this);
     }
   };
   Object.defineProperty(proto, Symbol.toStringTag, { value: "URLSearchParams", configurable: true });

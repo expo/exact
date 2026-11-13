@@ -12,6 +12,7 @@ const MAX_PRELOADS: usize = 8;
 const MAX_BODY_BYTES: usize = 64 << 10;
 
 /// A plain HTTP request prepared by the host, with its present secrets filled in.
+#[derive(Clone)]
 pub struct Definition {
     /// Stable app-defined name used in the journal.
     pub name: String,
@@ -28,12 +29,31 @@ pub struct Definition {
 pub enum Event {
     /// Handed to the repository fetch client.
     Sent,
+    /// The crate finished its process-start function.
+    LaunchRan {
+        /// Time spent in the entry point, in milliseconds.
+        elapsed_ms: u64,
+        /// Number of requests handed over, before validation.
+        requests: usize,
+    },
+    /// The crate panicked; no payload is retained.
+    LaunchPanicked {
+        /// Time until the panic was caught, in milliseconds.
+        elapsed_ms: u64,
+    },
+    /// The crate exceeded its own launch window.
+    LaunchDeadline {
+        /// Time until the deadline was observed, in milliseconds.
+        elapsed_ms: u64,
+    },
     /// The device could not supply a named secret.
     MissingSecret,
     /// A filled header is not a Fetch field value.
     InvalidHeader,
     /// The filled URL does not parse.
     InvalidUrl,
+    /// The function handed over a request whose name fails the grammar.
+    InvalidName,
     /// The first hop or a redirect exceeded the grants.
     RefusedGrant,
     /// The definition was not a bounded plain HTTP request.
@@ -200,13 +220,14 @@ impl Drop for ThreadGuard {
 
 enum Destination {
     Staging(Box<cache::Cache>),
-    Adopted(Weak<Shared>),
+    Adopted(Weak<Shared>, Option<Weak<asynch::timer::Timer>>),
     Closed,
 }
 enum Message {
     Reply(usize, Result<Collected, HostError>, Instant),
     Hop(Box<dyn FnOnce() + Send>),
     Start(std::ops::Range<usize>, String),
+    Barrier(mpsc::Sender<()>),
     Tick,
     Stop,
 }
@@ -297,6 +318,20 @@ impl Preloads {
     }
 }
 impl Control {
+    /// Selected updates may use only full equality (LLP 1162.000 D1, D2).
+    pub fn select_update(&self) {
+        update(&self.destination, |cache| cache.preload_names = false);
+    }
+    /// Wait only on the launch thread until earlier definitions have reached the client.
+    pub fn handed(&self) {
+        if self.startup.lock().unwrap().is_some() {
+            return;
+        }
+        let (send, receive) = mpsc::channel();
+        if self.send.send(Message::Barrier(send)).is_ok() {
+            let _ = receive.recv();
+        }
+    }
     fn start_worker(&self) {
         let Some(Startup { receive, host }) = self.startup.lock().unwrap().take() else {
             return;
@@ -319,18 +354,40 @@ impl Control {
     /// (LLP 1162.000 D4).
     pub fn definitions_pending(&self, pending: bool) {
         update(&self.destination, |cache| {
-            cache.preload_starting = pending;
             cache.preload_definitions_due = pending.then(|| (cache.clock)() + DEFINITIONS_WAIT);
         });
+        let _ = self.send.send(Message::Tick);
+    }
+    /// Hold reads naming unknown preloads while the Rust launch function runs,
+    /// bounded by its remaining window (LLP 1162.000 D2).
+    pub fn launch_pending(&self, deadline: Option<Duration>) {
+        let delay = update(&self.destination, |cache| {
+            cache.preload_definitions_due = None;
+            cache.preload_launch_due = deadline.map(|wait| (cache.clock)() + wait);
+            cache
+                .preload_launch_due
+                .map(|due| due.saturating_duration_since((cache.clock)()))
+        });
+        if let Some(Some(delay)) = delay {
+            if let Destination::Adopted(_, Some(timer)) = &*self.destination.state.lock().unwrap() {
+                if let Some(timer) = timer.upgrade() {
+                    arm_expiry(&self.destination, &timer, delay);
+                }
+            }
+        }
         let _ = self.send.send(Message::Tick);
     }
     /// A test's clock in place of the monotonic one.
     pub fn test_clock(&self, clock: Arc<dyn Fn() -> Instant + Send + Sync>) {
         update(&self.destination, |cache| cache.clock = clock);
     }
-    /// Expire what is due now, as the launch thread's tick does: a test's.
-    pub fn test_tick(&self) {
-        update(&self.destination, expire);
+    /// Expire what is due now and report whether definitions are still pending: a test's.
+    pub fn test_tick(&self) -> bool {
+        update(&self.destination, |cache| {
+            expire(cache);
+            pending_due(cache).is_some()
+        })
+        .unwrap_or(false)
     }
     /// The launch threads alive: a test's.
     pub fn thread_count(&self) -> usize {
@@ -346,7 +403,7 @@ impl Control {
             .wait_timeout_while(
                 state,
                 Duration::from_secs(10),
-                |s| matches!(s, Destination::Staging(cache) if cache.preload_starting),
+                |s| matches!(s, Destination::Staging(cache) if cache.preload_definitions_due.is_some() || cache.preload_launch_due.is_some()),
             )
             .unwrap();
         drop(state);
@@ -363,6 +420,14 @@ impl Control {
         assert!(!timeout.timed_out(), "launch replies did not finish");
     }
 
+    /// Mark a name whose definition is known, including a refused or foreground request.
+    pub fn defined(&self, name: &str) {
+        update(&self.destination, |cache| {
+            if !cache.preloads.iter().any(|p| p.name == name) {
+                cache.preload_defined.insert(name.into());
+            }
+        });
+    }
     /// Add launch definitions on their launch thread, including after adoption.
     pub fn extend(&self, definitions: Vec<Definition>, grants: &str, observer: Observer) {
         if let Destination::Staging(cache) = &mut *self.destination.state.lock().unwrap() {
@@ -371,6 +436,7 @@ impl Control {
         let range = update(&self.destination, |cache| {
             let first = cache.preloads.len();
             for definition in definitions.into_iter().take(MAX_PRELOADS - first) {
+                cache.preload_defined.remove(&definition.name);
                 let now = (cache.clock)();
                 cache
                     .preloads
@@ -386,7 +452,8 @@ impl Control {
                 .is_err()
             {
                 update(&self.destination, |cache| {
-                    cache.preload_starting = false;
+                    cache.preload_definitions_due = None;
+                    cache.preload_launch_due = None;
                     cancel_all(cache);
                 });
             }
@@ -395,6 +462,18 @@ impl Control {
     /// Cancel uses of a changed secret before returning.
     pub fn drop_secret(&self, name: &str) {
         update(&self.destination, |cache| drop_secret(cache, name));
+        let _ = self.send.send(Message::Tick);
+    }
+    /// Cancel the launch function's accepted requests if it panics (LLP 1162.000 D2).
+    pub fn cancel_names(&self, names: &[String]) {
+        update(&self.destination, |cache| {
+            for i in 0..cache.preloads.len() {
+                if names.contains(&cache.preloads[i].name) {
+                    drop_held(cache, i, Event::Cancelled);
+                    cache::drop_preload_copy(cache, i);
+                }
+            }
+        });
         let _ = self.send.send(Message::Tick);
     }
     /// Drain facts before or after adoption.
@@ -431,7 +510,7 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             location.changed.notify_all();
             Some(result)
         }
-        Destination::Adopted(shared) => {
+        Destination::Adopted(shared, _) => {
             let shared = shared.upgrade()?;
             drop(destination);
             let mut state = shared.state.lock().unwrap();
@@ -446,6 +525,18 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
         }
         Destination::Closed => None,
     }
+}
+
+fn arm_expiry(location: &Arc<Location>, timer: &asynch::timer::Timer, delay: Duration) {
+    let destination = Arc::downgrade(location);
+    timer.arm_callback(
+        delay,
+        Box::new(move || {
+            if let Some(destination) = destination.upgrade() {
+                update(&destination, expire);
+            }
+        }),
+    );
 }
 
 impl Core {
@@ -464,19 +555,18 @@ impl Core {
             return Err(set);
         };
         cache.grants = self.grants.clone();
-        if let (Some(machine), Some(due)) = (&self.machine, cache.preload_definitions_due) {
-            let destination = Arc::downgrade(&set.destination);
-            machine.timer.arm_callback(
+        if let (Some(machine), Some(due)) = (&self.machine, pending_due(&cache)) {
+            arm_expiry(
+                &set.destination,
+                &machine.timer,
                 due.saturating_duration_since((cache.clock)()),
-                Box::new(move || {
-                    if let Some(destination) = destination.upgrade() {
-                        update(&destination, expire);
-                    }
-                }),
             );
         }
         state.cache = Some(*cache);
-        *destination = Destination::Adopted(Arc::downgrade(&self.shared));
+        *destination = Destination::Adopted(
+            Arc::downgrade(&self.shared),
+            self.machine.as_ref().map(|m| Arc::downgrade(&m.timer)),
+        );
         drop(destination);
         *owned = Some(set);
         Ok(())
@@ -554,6 +644,7 @@ fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) ->
     class == RequestClass::Read
         && request.reach.origin == exact_runner::CallOrigin::App
         && request.is_plain_http()
+        && request.preload_refusal().is_none()
         && !forced
         && !work
         && !matches!(
@@ -562,6 +653,20 @@ fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) ->
         )
 }
 fn find(cache: &cache::Cache, request: &Request) -> Option<usize> {
+    if cache.preload_names {
+        if let Some(name) = &request.preload {
+            let url = cache::identity(&request.url);
+            let now = (cache.clock)();
+            if let Some(i) = cache.preloads.iter().position(|p| {
+                p.name == name.as_ref()
+                    && p.key.method == request.method
+                    && p.key.url == url
+                    && live_at(p, now)
+            }) {
+                return Some(i);
+            }
+        }
+    }
     matching(cache, request, true)
 }
 // A preload's HTTP-cache copy cannot erase D1's body comparison.
@@ -579,12 +684,15 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
             && p.request
                 .as_ref()
                 .is_some_and(|r| (r.body == request.body) == equal_body)
-            && match &p.reply {
-                ReplyState::Pending { due, .. } => now < *due,
-                ReplyState::Ready(r) => now.saturating_duration_since(r.completed) < HOLD,
-                ReplyState::Gone => false,
-            }
+            && live_at(p, now)
     })
+}
+fn live_at(held: &Held, now: Instant) -> bool {
+    match &held.reply {
+        ReplyState::Pending { due, .. } => now < *due,
+        ReplyState::Ready(r) => now.saturating_duration_since(r.completed) < HOLD,
+        ReplyState::Gone => false,
+    }
 }
 fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
     match &cache.preloads[i].reply {
@@ -596,10 +704,25 @@ fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
         ReplyState::Gone => false,
     }
 }
+pub(super) fn pending_due(cache: &cache::Cache) -> Option<Instant> {
+    cache
+        .preload_definitions_due
+        .into_iter()
+        .chain(cache.preload_launch_due.filter(|_| cache.preload_names))
+        .filter(|due| (cache.clock)() < *due)
+        .min()
+}
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
         && state.cache.as_ref().is_some_and(|c| {
-            c.preload_starting
+            let now = (c.clock)();
+            c.preload_definitions_due.is_some_and(|due| now < due)
+                || (c.preload_names
+                    && c.preload_launch_due.is_some_and(|due| now < due)
+                    && job.request.preload.as_ref().is_some_and(|name| {
+                        !c.preloads.iter().any(|p| p.name == name.as_ref())
+                            && !c.preload_defined.contains(name.as_ref())
+                    }))
                 || find(c, &job.request).is_some_and(|i| can_take(c, &job.request, i))
         })
 }
@@ -627,7 +750,7 @@ pub(super) fn effect_count(state: &State) -> usize {
     if state
         .cache
         .as_ref()
-        .is_none_or(|c| !c.preload_starting && c.preloads.is_empty())
+        .is_none_or(|c| pending_due(c).is_none() && c.preloads.is_empty())
     {
         return effects;
     }
@@ -767,8 +890,10 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
 pub(super) fn expire(cache: &mut cache::Cache) {
     let now = (cache.clock)();
     if cache.preload_definitions_due.is_some_and(|due| now >= due) {
-        cache.preload_starting = false;
         cache.preload_definitions_due = None;
+    }
+    if cache.preload_launch_due.is_some_and(|due| now >= due) {
+        cache.preload_launch_due = None;
     }
     for i in 0..cache.preloads.len() {
         match &cache.preloads[i].reply {
@@ -812,13 +937,19 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
     }
     let key = Equal::of(&r.request);
     for i in 0..cache.preloads.len() {
-        if cache.preloads[i].key == key
-            && cache.preloads[i]
+        let held = &cache.preloads[i];
+        let named = cache.preload_names
+            && r.request.preload.as_deref() == Some(held.name.as_str())
+            && held.key.method == key.method
+            && held.key.url == key.url;
+        let equal = held.key == key
+            && held
                 .request
                 .as_ref()
-                .is_some_and(|request| request.body == r.request.body)
-        {
+                .is_some_and(|request| request.body == r.request.body);
+        if named || equal {
             drop_held(cache, i, Event::DroppedByRefresh);
+            cache::drop_preload_copy(cache, i);
         }
     }
 }
@@ -923,6 +1054,7 @@ fn finish(
         + request.url.capacity()
         + request.body.capacity()
         + request.grants.as_ref().map_or(0, String::capacity)
+        + request.preload.as_ref().map_or(0, |name| name.len())
         + request.protocols.capacity() * std::mem::size_of::<String>()
         + request
             .protocols
@@ -988,6 +1120,7 @@ fn run(
                     ReplyState::Ready(r) => Some(r.completed + HOLD),
                     ReplyState::Gone => None,
                 })
+                .chain(pending_due(cache))
                 .min()
                 .map(|at| at.saturating_duration_since(now))
         });
@@ -1008,10 +1141,101 @@ fn run(
                 update(destination, |c| finish(c, i, result, at));
             }
             Ok(Message::Hop(start)) => start(),
+            Ok(Message::Barrier(ready)) => {
+                let _ = ready.send(());
+            }
             Ok(Message::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Ok(Message::Tick) | Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
+}
+
+/// Runtime checks for requests supplied by Rust, including filled manifest references.
+pub fn valid_request(request: &Request) -> bool {
+    use ibex2::stdlib::fetch::{is_valid_name, is_valid_value, normalize_value, Headers};
+    let Ok(url) = url::Url::parse(&request.url) else {
+        return false;
+    };
+    let userinfo = request.url.split_once(':').is_some_and(|(_, tail)| {
+        tail.trim_start_matches(['/', '\\'])
+            .split(['/', '\\', '?', '#'])
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    });
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || userinfo
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !is_valid_name(&request.method)
+        || !request.is_plain_http()
+        || request.body.len() > MAX_BODY_BYTES
+        || (matches!(request.method.to_ascii_uppercase().as_str(), "GET" | "HEAD")
+            && !request.body.is_empty())
+        || request.preload_refusal().is_some()
+        || request.timeout_refusal().is_some()
+    {
+        return false;
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for (name, value) in &request.headers {
+        if !is_valid_name(name)
+            || !is_valid_value(value)
+            || normalize_value(value) != value
+            || !names.insert(name.to_ascii_lowercase())
+        {
+            return false;
+        }
+        let mut headers = Headers::new();
+        headers.set(name, value);
+        if headers.for_request().entries().is_empty() {
+            return false;
+        }
+    }
+    true
+}
+
+/// A launch-context fetch bypasses the executor's cache in both directions (LLP 1162.000 D2).
+pub fn launch_fetch(
+    request: Request,
+    grants: &str,
+    host: ibex2::host::Host,
+    launch_signal: &ibex2::stdlib::abort::AbortSignal,
+) -> Result<Response, String> {
+    if !valid_request(&request) {
+        return Err("invalid launch fetch".into());
+    }
+    cache::granted(grants, &request).map_err(|_| "launch fetch refused".to_owned())?;
+    let scope = exact_data::storage::scope(grants, request.grants.as_deref())?;
+    let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(scope))
+        .map_err(|_| "invalid launch grants")?;
+    let abort = AbortController::new();
+    let cancel = abort.clone();
+    let _launch = launch_signal.register(move || cancel.abort());
+    let deadline = super::outcome::Deadline::arm(
+        request
+            .timeout_ms
+            .unwrap_or(DEFAULT_DEADLINE.as_millis() as u32),
+        &abort,
+    )?;
+    let fetch = reach::gate_fetch(host.endow(grants).fetch, request.reach);
+    let mut req = fetch_request(request, false);
+    req.max_body = Some(cache::MAX_ENTRY);
+    let result = fetch
+        .stream(req, &abort.signal())
+        .and_then(check_headers)
+        .and_then(|r| r.collect());
+    if deadline.passed() {
+        return Err("launch fetch deadline".into());
+    }
+    result
+        .map(|r| Response {
+            status: r.status,
+            headers: r.headers.entries().to_vec(),
+            body: r.body,
+        })
+        .map_err(|_| "launch fetch failed".into())
 }
 
 fn start_indices(
@@ -1030,7 +1254,7 @@ fn start_indices(
                 return None;
             };
             let request = held.request.as_ref().expect("pending request");
-            if request.body.len() > MAX_BODY_BYTES || !request.is_plain_http() {
+            if !valid_request(request) {
                 drop_held(cache, i, Event::Refused);
                 return None;
             }

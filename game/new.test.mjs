@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { EXE } from '../scripts/paths.mjs';
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -701,7 +702,7 @@ test('an app.json edited after its shells: the compiler says the copy is stale, 
   const root=resolve(import.meta.dir,'..'), built=spawnSync('cargo',['build','-q','-p','contract','--bin','contract'],{cwd:root,encoding:'utf8'});
   assert.equal(built.status,0,built.stderr);
   const parent=realpathSync(mkdtempSync(resolve(tmpdir(),'stale-shells-'))), app=resolve(parent,'my-game');
-  const build=()=>spawnSync(resolve(root,'target/debug/contract'),['build',resolve(app,'app.contract'),'-o',resolve(parent,'app.plan')],{encoding:'utf8'});
+  const build=()=>spawnSync(resolve(root,`target/debug/contract${EXE}`),['build',resolve(app,'app.contract'),'-o',resolve(parent,'app.plan')],{encoding:'utf8'});
   try {
     createGame(app);
     gameShells(app,gameDefaults(app).game,import.meta.dir);
@@ -999,7 +1000,7 @@ test('generated logic targets rebuild from each snapshot sharing a Cargo target'
       const env = {...process.env,CARGO_TARGET_DIR:target,CARGO_BUILD_BUILD_DIR:target};
       const built = spawnSync('cargo',['build','--offline','--bin','probe'],{cwd:resolve(app,'.shells'),env,encoding:'utf8'});
       assert.equal(built.status,0,built.stderr);
-      const result = spawnSync(resolve(target,'debug/probe'),[],{encoding:'utf8'});
+      const result = spawnSync(resolve(target,`debug/probe${EXE}`),[],{encoding:'utf8'});
       assert.equal(result.status,0,result.stderr);
       assert.equal(result.stdout.trim(),String(value),'the product must contain this snapshot source');
     }

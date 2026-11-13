@@ -189,6 +189,25 @@ export function rememberWorkspace(dir, outside, manifests, workspace, check) {
   try { mkdirSync(resolve(dir, '.exact'), { recursive: true }); const at = resolve(dir, `.exact/cargo-check.json.${process.pid}`); writeFileSync(at, JSON.stringify(known)); renameSync(at, resolve(dir, '.exact/cargo-check.json')); } catch { /* asked again next time */ }
 }
 
+/** Claims, for the app in `dir`, the crate names `<name>-*` in a target directory apps share (`CARGO_TARGET_DIR`), and
+ * refuses them while another app's directory holds them. Cargo puts each crate's library and dep-info in the target
+ * under the crate's name alone, and the Apple build claims a crate by its name, so two apps whose crates share names
+ * would each read the other's build as its own changed inputs, and each be refused as busy while the other builds. An
+ * app whose directory is gone has given its names up. */
+export function claimTargetCrates(target, name, dir) {
+  const record = resolve(target, '.exact-crates', name);
+  let holder = null;
+  try { holder = readFileSync(record, 'utf8').trim(); } catch { /* unclaimed */ }
+  if (holder === dir) return;
+  if (holder && existsSync(resolve(holder, 'app.contract'))) {
+    throw new Error(`${target} (CARGO_TARGET_DIR) holds the crates ${name}-* of the app in ${holder}, and the app in ${dir} names its crates the same: each build would overwrite the other's. Give each app its own CARGO_TARGET_DIR, or unset it to build in each app's target/.`);
+  }
+  mkdirSync(dirname(record), { recursive: true });
+  const at = `${record}.${process.pid}`;
+  writeFileSync(at, `${dir}\n`);
+  renameSync(at, record);
+}
+
 /** The generated native workspace of an app that authored none (LLP 1153 D1): under its `.exact/`, which is ignored. */
 export const shellsDir = (dir) => resolve(dir, '.exact/shells');
 const readToml = (path) => { try { return Bun.TOML.parse(readFileSync(path, 'utf8')); } catch { return null; } };

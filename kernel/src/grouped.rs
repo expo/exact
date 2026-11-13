@@ -374,6 +374,31 @@ impl Kernel {
         Some(list)
     }
 
+    /// The control a grouped list's standard row shows as its switch
+    /// (`Accessory::Toggle`), for a host that paints the row: the row and
+    /// its switch are one accessibility element there, as the platform's
+    /// list item with a trailing switch is. `None` for any other node.
+    pub fn grouped_toggle(&self, row: ViewId) -> Option<ViewId> {
+        let node = self.node(row)?;
+        let group = self.node(node.parent?)?;
+        if matches!(
+            group.props.str(PropId::SemanticTag),
+            Some("header" | "footer")
+        ) {
+            return None;
+        }
+        let section = self.node(group.parent?)?;
+        self.node(section.parent?)?.props.str(PropId::ListStyle)?;
+        match self.grouped_row(&node) {
+            GroupedRow {
+                custom: false,
+                accessory: Accessory::Toggle(control),
+                ..
+            } => Some(control),
+            _ => None,
+        }
+    }
+
     fn grouped_row(&self, row: &NodeRef<'_>) -> GroupedRow {
         let mut out = GroupedRow {
             view: row.id,

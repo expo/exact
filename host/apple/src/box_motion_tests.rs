@@ -224,6 +224,37 @@ component A
     assert_eq!(specs(&off, id(&host, "sweep")), Some(Vec::new()), "{off}");
 }
 
+/// A modern colour keyframe moves in Oklab (CSS Color 4 §12.1); a lowered
+/// track interpolates in sRGB, so the engine samples it.
+#[test]
+fn a_modern_colour_keyframe_is_sampled() {
+    let app = r##"keyframes glow
+  from background-color="color(srgb 1 0 0)"
+  to background-color="color(srgb 0 0 1)"
+component A
+  state on = false
+  action go
+    on = not on
+  view
+    column
+      button press=go testId="go"
+        text "Go"
+      box testId="glow" width=64 height=64 animation=(on ? "glow 1s linear infinite" : "none")
+"##;
+    let plan = contract::compile(app).unwrap().encode();
+    let (mut host, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        844.0,
+    )
+    .unwrap();
+    ios(&mut host);
+    let on = host.dispatch_at(id(&host, "go"), Event::Press, 100.0);
+    assert!(on.contains("\"motion\":true"), "{on}");
+}
+
 #[test]
 fn hosts_without_box_lowering_sample_them() {
     let plan = contract::compile(APP).unwrap().encode();

@@ -401,6 +401,12 @@ fn a_quit_ends_every_group() {
     std::process::exit(0);
 }
 
+/// An `execFile` reply's output, which crosses as base64, as text.
+fn text(v: &serde_json::Value) -> String {
+    let bytes = exact_runner::agent::unbase64(v.as_str().unwrap()).unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[test]
 fn exec_file_ends_what_its_child_left_running() {
     let (core, woke, _) = core("process.spawn /bin/sh");
@@ -412,7 +418,7 @@ fn exec_file_ends_what_its_child_left_running() {
         panic!("{out:?}")
     };
     let reply: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
-    let grandchild: i32 = reply["stdout"].as_str().unwrap().trim().parse().unwrap();
+    let grandchild: i32 = text(&reply["stdout"]).trim().parse().unwrap();
     assert!(
         os::start_time(grandchild).is_none(),
         "its group ended before the answer"
@@ -444,12 +450,8 @@ fn exec_file_keeps_its_limits() {
     .unwrap();
     let r = body(&collect(&core, &woke, |o| !o.is_empty())[0]);
     assert_eq!(
-        (
-            r["stdout"].as_str(),
-            r["stderr"].as_str(),
-            r["code"].as_i64()
-        ),
-        (Some("in\n"), Some("err\n"), Some(2))
+        (text(&r["stdout"]), text(&r["stderr"]), r["code"].as_i64()),
+        ("in\n".into(), "err\n".into(), Some(2))
     );
     core.run(
         exec(2, "sleep 5", serde_json::json!({ "timeout": 200 })),
@@ -486,7 +488,7 @@ fn exec_file_keeps_its_limits() {
     .unwrap();
     let r = body(&collect(&core, &woke, |o| !o.is_empty())[0]);
     assert_eq!(r["overflow"].as_str(), Some("stdout"));
-    assert_eq!(r["stdout"].as_str().map(str::len), Some(1000));
+    assert_eq!(text(&r["stdout"]).len(), 1000);
     let seen = std::fs::read_to_string(&mark).unwrap_or_default();
     let _ = std::fs::remove_file(&mark);
     // (The shell's failed `printf` may flush its `x` into the redirect.)

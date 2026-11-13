@@ -71,6 +71,8 @@ open class ExactActivity : Activity() {
         // adopts the one that runs ([Owner.boot], [Native.start]). The environment below is read once, as the library
         // loads and the host boots, and other threads read it from then on, so it is written only the first time.
         val again = Exact.live
+        // A history launch carries no new callback, and a new process has no auth session to resume.
+        if (!again || intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) intent.data?.takeIf { Auth.claims(this, it) }?.let { intent.data = null }
         Exact.live = true
         // An activity this one replaces that is not destroyed yet (it finished; its onDestroy comes late) lets go of
         // the host now, before this one's view takes it.
@@ -108,10 +110,8 @@ open class ExactActivity : Activity() {
         }
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
-        // A launch with a URL (a shortcut, a link) or a share into a process whose host runs goes where it says; an
-        // intent the system starts again ([Shares.arrived]) keeps where the app was. The first launch's is the host's
-        // launch location ([environment]).
-        if (again && arrived) received(intent)
+        // A restored share keeps its route; an auth callback can recreate a destroyed activity with saved state.
+        if (again && (arrived || intent.data?.let { Auth.claims(this, it) } == true)) received(intent)
     }
 
     /** A URL or a share given to the running activity: its location, as a link's (LLP 1133.023 D15 item 3), or the
@@ -123,6 +123,7 @@ open class ExactActivity : Activity() {
     }
 
     private fun received(intent: android.content.Intent) {
+        if (Auth.receive(this, intent)) return
         if (Shares.isShare(intent)) Shares.request(this, intent)?.let { Exact.share(it) }
         else intent.data?.let { Exact.open(it.toString()) }
     }
@@ -539,6 +540,7 @@ open class ExactActivity : Activity() {
         stopped = true
         Exact.owner?.windowFrames?.detach(window)
         requests.foreground(false)
+        if (reads()) Auth.stopped()
         // A replaced activity's stop can come after its successor's start: the page is the successor's to hide.
         if (reads()) Exact.hidden(true)
         if (reads()) pads.background()
@@ -555,6 +557,7 @@ open class ExactActivity : Activity() {
      * reads again what the person may have changed in Settings ([Extensions.resumed]). */
     override fun onResume() {
         super.onResume()
+        Auth.resumed()
         requests.resumed()
         Extensions.resumed()
     }
@@ -603,7 +606,7 @@ open class ExactActivity : Activity() {
         if (Fields.context === this) Fields.context = null
         if (!reads()) return
         Exact.reader = null
-        Exact.owner?.let { it.published = {}; it.asked = {}; it.chrome = {} }
+        Exact.owner?.let { it.published = {}; it.asked = null; it.chrome = {} }
         Exact.answered = {}
         Exact.turned = {}
     }
@@ -618,7 +621,7 @@ open class ExactActivity : Activity() {
         // The launching intent's URL is the launch location (LLP 1133.023 D15 item 3): the activity is exported, so
         // any app may start it with one, which reaches only what the navigation root routes, as a link does.
         if (arrived) {
-            intent.data?.takeUnless { Shares.isShare(intent) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
+            intent.data?.takeUnless { Shares.isShare(intent) || Auth.claims(this, it) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
             // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
             Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
         }

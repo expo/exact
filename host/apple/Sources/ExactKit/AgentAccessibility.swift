@@ -14,8 +14,9 @@ import UIKit
 #endif
 
 /// An accessibility object standing for one Exact view it is not itself:
-/// a swipe cell's authored control, an inline run's element (D5).
-protocol AgentOwned { var agentViewId: UInt32? { get } }
+/// a swipe cell's authored control, an inline run's element, a grouped
+/// list's toggle row (D5).
+package protocol AgentOwned { var agentViewId: UInt32? { get } }
 
 extension Agent {
     /// `{"op":"tree","ax":true}` (D1, D7): validated here, at the wire, and

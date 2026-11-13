@@ -1,9 +1,14 @@
 //! Process-start requests and their boot handoff (LLP 1162.000 D4).
 use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservation, Preloads};
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+#[path = "launch_rust.rs"]
+mod rust;
+#[path = "launch_store.rs"]
+mod store;
+pub(crate) use store::StoreWatch;
 
 const BEGUN: u8 = 1;
 const PREWARM: u8 = 2;
@@ -27,8 +32,14 @@ pub struct LaunchPreloads(Arc<Launch>);
 #[derive(Default)]
 struct Launch {
     phase: AtomicU8,
+    selected_update: AtomicBool,
     set: OnceLock<Set>,
-    invalidated: Mutex<BTreeSet<String>>,
+    invalidated: Mutex<BTreeMap<String, u64>>,
+    rust: OnceLock<Arc<rust::Running>>,
+    hosts: Mutex<Vec<std::sync::Weak<StoreWatch>>>,
+    foreground: Mutex<Vec<rust::Prepared>>,
+    #[cfg(test)]
+    backend: Mutex<Option<Arc<dyn exact_data::secrets::Backend>>>,
     journal: Mutex<Vec<PreloadFact>>,
     marks: Mutex<Marks>,
     #[cfg(test)]
@@ -48,11 +59,10 @@ impl Drop for DefinitionsPending {
 struct Set {
     owner: Mutex<Option<Preloads>>,
     control: PreloadControl,
-    opened: mpsc::Sender<()>,
 }
 #[derive(Default)]
 struct Marks {
-    entries: Vec<(&'static str, LaunchMark)>,
+    entries: Vec<(String, LaunchMark)>,
     tickets: BTreeMap<u64, String>,
 }
 /// Seconds on CACurrentMediaTime's mach_absolute_time clock; zero means unobserved.
@@ -112,10 +122,8 @@ impl LaunchPreloads {
             .phase
             .fetch_or(LAUNCHED | if opened { OPENED } else { 0 }, Ordering::AcqRel);
         self.start(factory);
-        if opened && previous & OPENED == 0 {
-            if let Some(set) = self.0.set.get() {
-                let _ = set.opened.send(());
-            }
+        if opened && previous & OPENED == 0 && self.0.set.get().is_some() {
+            self.start_foreground();
         }
     }
     fn start<D: DataSource>(&self, factory: impl FnOnce() -> D + Send + 'static) {
@@ -125,22 +133,23 @@ impl LaunchPreloads {
         {
             return;
         }
-        let mut new_receiver = None;
+        let mut started = false;
         self.0.set.get_or_init(|| {
             let owner = Preloads::start(Vec::new(), "", ibex2::host::Host::new);
             let control = owner.control();
             control.definitions_pending(true);
-            let (opened, receive) = mpsc::channel();
-            new_receiver = Some(receive);
+            started = true;
             Set {
                 owner: Mutex::new(Some(owner)),
                 control,
-                opened,
             }
         });
-        let Some(receive) = new_receiver else {
+        if !started {
             return;
-        };
+        }
+        if self.0.selected_update.load(Ordering::Acquire) {
+            self.0.set.get().unwrap().control.select_update();
+        }
         let launch = self.clone();
         let spawned = std::thread::Builder::new()
             .name("exact-launch".into())
@@ -149,6 +158,8 @@ impl LaunchPreloads {
                 let data = factory();
                 let definitions: Vec<_> = data.preloads().iter().copied().take(8).collect();
                 let grants = data.grants().to_owned();
+                let entry = data.launch();
+                let app = data.app_id().to_owned();
                 #[cfg(test)]
                 let custom = launch.0.reader.lock().unwrap().clone();
                 #[cfg(test)]
@@ -160,32 +171,23 @@ impl LaunchPreloads {
                 let secrets = crate::store::launch_secrets(&grants, data.app_id(), &definitions);
                 drop(data);
                 let mut marks = launch.0.marks.lock().unwrap();
-                marks
-                    .entries
-                    .extend(definitions.iter().map(|d| (d.name, LaunchMark::default())));
+                marks.entries.extend(
+                    definitions
+                        .iter()
+                        .map(|d| (d.name.into(), LaunchMark::default())),
+                );
                 drop(marks);
+                for definition in &definitions {
+                    launch.0.set.get().unwrap().control.defined(definition.name);
+                }
                 launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Start);
+                launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Foreground);
+                if let Some(entry) = entry {
+                    launch.0.set.get().unwrap().control.handed();
+                    rust::run(&launch, entry, &app, &grants, &definitions);
+                }
+                launch.0.set.get().unwrap().control.launch_pending(None);
                 drop(pending);
-                if !definitions
-                    .iter()
-                    .any(|d| d.when == PreloadWhen::Foreground)
-                {
-                    return;
-                }
-                let opened = launch.0.phase.load(Ordering::Acquire) & OPENED != 0;
-                let weak = Arc::downgrade(&launch.0);
-                drop(launch);
-                if !opened && receive.recv().is_err() {
-                    return;
-                }
-                if let Some(launch) = weak.upgrade().map(LaunchPreloads) {
-                    launch.start_definitions(
-                        &definitions,
-                        &secrets,
-                        &grants,
-                        PreloadWhen::Foreground,
-                    );
-                }
             });
         if spawned.is_err() {
             self.0.set.get().unwrap().control.definitions_pending(false);
@@ -210,7 +212,7 @@ impl LaunchPreloads {
             if definition
                 .secrets
                 .iter()
-                .any(|name| invalidated.contains(*name))
+                .any(|name| invalidated.contains_key(*name))
             {
                 self.record_definition(definition, crate::executor::PreloadEvent::DroppedBySecret);
                 continue;
@@ -232,12 +234,27 @@ impl LaunchPreloads {
                         self.record_definition(definition, outcome);
                         continue;
                     }
-                    ready.push(Preload {
+                    let preload = Preload {
                         name: definition.name.into(),
                         request,
                         deadline_ms: definition.timeout_ms,
                         secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
-                    });
+                    };
+                    if when == PreloadWhen::Foreground
+                        && self.0.phase.load(Ordering::Acquire) & OPENED == 0
+                    {
+                        self.0.foreground.lock().unwrap().push(rust::Prepared {
+                            preload,
+                            grants: grants.into(),
+                            versions: definition
+                                .secrets
+                                .iter()
+                                .map(|s| ((*s).into(), 0))
+                                .collect(),
+                        });
+                    } else {
+                        ready.push(preload);
+                    }
                 }
                 Err(_) => {
                     self.record_definition(definition, crate::executor::PreloadEvent::MissingSecret)
@@ -322,6 +339,12 @@ impl LaunchPreloads {
         pending.retain(|request| runner.holds(request.ticket));
         Ok((pending, fulfilled))
     }
+    pub(crate) fn select_update(&self) {
+        self.0.selected_update.store(true, Ordering::Release);
+        if let Some(set) = self.0.set.get() {
+            set.control.select_update();
+        }
+    }
     pub(crate) fn adopt(&self, executor: &dyn Io) {
         if let Some(set) = self.0.set.get() {
             let owner = set.owner.lock().unwrap().take();
@@ -333,10 +356,75 @@ impl LaunchPreloads {
         }
     }
     pub(crate) fn drop_secret(&self, name: &str) {
-        self.0.invalidated.lock().unwrap().insert(name.into());
+        self.invalidate(name);
+    }
+    fn invalidate(&self, name: &str) -> u64 {
+        let mut versions = self.0.invalidated.lock().unwrap();
+        let version = versions.entry(name.into()).or_default();
+        *version += 1;
         if let Some(set) = self.0.set.get() {
             set.control.drop_secret(name);
         }
+        *version
+    }
+    fn with_secret_version<T>(
+        &self,
+        name: &str,
+        expected: u64,
+        write: impl FnOnce(u64) -> Result<T, String>,
+    ) -> Result<T, String> {
+        // Compare, persist and publish in the app writers' order (LLP 1162.000 D3).
+        let mut versions = self.0.invalidated.lock().unwrap();
+        let version = versions.entry(name.into()).or_default();
+        if *version != expected {
+            return Err("launch secret changed".into());
+        }
+        *version += 1;
+        if let Some(set) = self.0.set.get() {
+            set.control.drop_secret(name);
+        }
+        write(*version)
+    }
+    fn with_secret_write<T>(&self, name: &str, write: impl FnOnce() -> T) -> T {
+        let mut versions = self.0.invalidated.lock().unwrap();
+        *versions.entry(name.into()).or_default() += 1;
+        if let Some(set) = self.0.set.get() {
+            set.control.drop_secret(name);
+        }
+        write()
+    }
+    fn start_foreground(&self) {
+        let versions = self.0.invalidated.lock().unwrap();
+        let mut foreground = self.0.foreground.lock().unwrap();
+        for definition in foreground.drain(..) {
+            if definition
+                .versions
+                .iter()
+                .any(|(name, version)| versions.get(name).copied().unwrap_or(0) != *version)
+            {
+                self.0.journal.lock().unwrap().push(PreloadFact {
+                    name: definition.preload.name.clone(),
+                    origin: rust::origin(&definition.preload.request),
+                    outcome: crate::executor::PreloadEvent::DroppedBySecret,
+                });
+            } else {
+                self.extend_rust(definition.preload, &definition.grants);
+            }
+        }
+    }
+    fn extend_rust(&self, preload: Preload, grants: &str) {
+        let weak = Arc::downgrade(&self.0);
+        let observer = Arc::new(move |name: &str, observation| {
+            if let Some(launch) = weak.upgrade().map(LaunchPreloads) {
+                launch.observe(name, observation);
+            }
+        });
+        self.0
+            .set
+            .get()
+            .unwrap()
+            .control
+            .extend(vec![preload], grants, observer);
     }
     pub(crate) fn journal(&self) -> Vec<PreloadFact> {
         let mut facts = std::mem::take(&mut *self.0.journal.lock().unwrap());
@@ -351,26 +439,26 @@ impl LaunchPreloads {
     pub(crate) fn committed(&self, names: Vec<String>, sequence: u64) {
         let mut marks = self.0.marks.lock().unwrap();
         for (name, mark) in &mut marks.entries {
-            if mark.committed == 0. && names.iter().any(|n| n.as_str() == *name) {
+            if mark.committed == 0. && names.iter().any(|n| n.as_str() == name) {
                 mark.committed = clock();
                 mark.sequence = sequence;
             }
         }
     }
-    /// Baked definition order; no request bytes cross the measurement ABI.
-    pub fn mark(&self, index: usize) -> Option<(&'static str, LaunchMark)> {
-        self.0.marks.lock().unwrap().entries.get(index).copied()
+    /// Definition order; no request bytes cross the measurement ABI.
+    pub fn mark(&self, index: usize) -> Option<(String, LaunchMark)> {
+        self.0.marks.lock().unwrap().entries.get(index).cloned()
     }
-    /// Number of baked definitions whose marks can be read.
+    /// Number of launch definitions whose marks can be read.
     pub fn count(&self) -> usize {
         self.0.marks.lock().unwrap().entries.len()
     }
 }
 
-/// Invalidate even before a boot has adopted the launch work (D3).
-pub(crate) fn drop_secret(name: &str) {
-    if let Some(launch) = current() {
-        launch.drop_secret(name);
+pub(crate) fn with_secret_write<T>(name: &str, write: impl FnOnce() -> T) -> T {
+    match current() {
+        Some(launch) => launch.with_secret_write(name, write),
+        None => write(),
     }
 }
 
@@ -411,7 +499,7 @@ pub fn copy_name(index: usize, out: *mut u8, capacity: usize) -> usize {
         return 0;
     };
     if !out.is_null() {
-        // SAFETY: the ABI caller supplies capacity writable bytes, without aliasing the baked name.
+        // SAFETY: the ABI caller supplies capacity writable bytes, without aliasing the launch name.
         unsafe {
             std::ptr::copy_nonoverlapping(name.as_ptr(), out, capacity.min(name.len()));
         }

@@ -800,6 +800,11 @@ data_source! {
         ""
     }
 
+    /// Optional binary-bound Rust entry point, without activating this source (LLP 1162.000 D2).
+    fn launch(&self) -> Option<crate::request::Launch> {
+        None
+    }
+
     /// Checked process-start definitions, without activating this source (LLP 1162.000 D2).
     fn preloads(&self) -> &[crate::request::Preload] {
         &[]

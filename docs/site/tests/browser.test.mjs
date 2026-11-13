@@ -194,6 +194,23 @@ for (const path of ['/start?from=https%3A%2F%2Fevil.example%2Flogin', '/recipes/
   }));
 }
 
+test('a page whose module fails to download offers to try again, not a 404', () => withPage({}, async page => {
+  await visit(page, '/no-such-page');
+  await page.getByTestId('not-found').waitFor();
+  // Every page preloads every page's module, so the request fails from the start.
+  const chunk = /\/recipeWebsite-[\w-]+\.js$/;
+  await page.route(chunk, route => route.abort('internetdisconnected'));
+  await visit(page, '/start');
+  await page.getByTestId('nav-recipeWebsite').click();
+  await page.getByTestId('load-failed').waitFor();
+  expect(await page.getByTestId('not-found').count()).toBe(0);
+  expect(new URL(page.url()).pathname).toBe('/recipes/website');
+  await page.unroute(chunk);
+  await page.getByTestId('load-retry').click();
+  await page.getByTestId('h-a-deep-link').waitFor();
+  expect(await page.getByTestId('load-failed').count()).toBe(0);
+}));
+
 test('a known moved page keeps its redirect banner', () => withPage({}, async page => {
   await visit(page, '/start-here');
   await page.getByTestId('redirected').waitFor();

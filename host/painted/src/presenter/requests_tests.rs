@@ -2,7 +2,7 @@
 //! queued for the shell, taken once and answered by its id; a host with no
 //! shell keeps what it did.
 use super::*;
-use exact_runner::{DataError, Value};
+use exact_runner::{auth, Answer, DataError, Event, Store, Value};
 
 /// A source that answers nothing, and is granted notifications.
 #[derive(Default)]
@@ -505,4 +505,197 @@ fn a_surfaces_haptics_go_to_a_shell_as_its_id_then_its_json() {
         [r#"{"texture":{"intensity":0.5,"sharpness":0}}"#]
     );
     assert_eq!(strings(&taken[1].2, 1), [r#"{"texture":null}"#]);
+}
+
+struct Signer;
+impl DataSource for Signer {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(name.into()))
+    }
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Later(exact_runner::Request::post_json(
+            "exact-auth:",
+            r#"{"url":"https://as.test/a","callback":"app.test:/cb","state":"s1"}"#,
+        )))
+    }
+    fn grants(&self) -> &str {
+        "auth.session https://as.test\nauth.callback app.test:/cb"
+    }
+}
+
+fn auth_presenter() -> (Presenter<Signer>, Vec<u8>) {
+    let plan = crate::test_plan(
+        r#"component App
+  mutation signed as shape string
+  action go
+    send signed = signIn()
+  view
+    button press=go testId="go"
+      text "Sign in"
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        Signer,
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    p.serve_requests();
+    (p, plan)
+}
+
+fn start_auth(p: &mut Presenter<Signer>) -> (u64, u32) {
+    let runner = p.host.runner_mut();
+    let key = runner.kernel().find_by_test_id("go")[0];
+    let node = runner.kernel().node_by_key(key).unwrap().id;
+    runner.dispatch(node, Event::Press).unwrap();
+    let out = runner.take_requests().pop().unwrap();
+    let auth::Arm::Present(session) = auth::arm(runner, &out, false, auth::Browser::Android, None)
+    else {
+        panic!("a browser session")
+    };
+    p.open_auth(out.ticket, session);
+    (out.ticket, p.requests.last)
+}
+
+#[test]
+fn auth_reload_retires_old_reader_ids_before_reusing_a_runner_ticket() {
+    for taken in [false, true] {
+        let (mut p, plan) = auth_presenter();
+        let (old_ticket, old_id) = start_auth(&mut p);
+        if taken {
+            p.take_requests();
+        }
+        assert!(p.reload(&plan, Signer).unwrap().is_none());
+        let (ticket, id) = start_auth(&mut p);
+        assert_eq!(
+            ticket, old_ticket,
+            "the replacement runner reuses the ticket"
+        );
+        assert_ne!(id, old_id, "reader ids survive reload");
+        assert!(
+            !p.answer_request(old_id, Some("cancelled")),
+            "the old timeout is dropped"
+        );
+        assert!(p.host.runner_mut().auth_mut().live(ticket).is_some());
+        assert!(p.host.runner_mut().take_request_refusal(true).is_none());
+        let requests: Vec<_> = decode(p.take_requests())
+            .into_iter()
+            .filter(|r| matches!(r.0, 17 | 18))
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            (requests[0].0, requests[0].2.clone()),
+            (18, vec![old_id as i32])
+        );
+        assert_eq!((requests[1].0, requests[1].1), (17, id));
+        assert_eq!(
+            strings(&requests[1].2, 0),
+            ["https://as.test/a", "app.test:/cb", "s1"]
+        );
+        assert!(p.answer_request(id, Some("cancelled")));
+        let (_, exact_runner::Outcome::Response(response)) =
+            p.host.runner_mut().take_request_refusal(true).unwrap()
+        else {
+            panic!("a cancellation response")
+        };
+        assert_eq!(response.status, 499);
+    }
+}
+
+#[test]
+fn auth_reader_recreation_keeps_only_acknowledged_waits() {
+    for (taken, opened) in [(false, false), (true, false), (true, true)] {
+        let (mut p, _) = auth_presenter();
+        let (ticket, id) = start_auth(&mut p);
+        if taken {
+            p.take_requests();
+        }
+        if opened {
+            assert!(p.answer_request(id, Some("opened")));
+        }
+        p.reader_replaced(Box::new(crate::raster::Raster::new()));
+        if opened {
+            assert!(p.host.runner_mut().auth_mut().live(ticket).is_some());
+            assert!(p.host.runner_mut().take_request_refusal(true).is_none());
+            assert!(p.answer_request(id, Some("cancelled")));
+        } else {
+            assert!(p.host.runner_mut().auth_mut().live(ticket).is_none());
+            assert!(!p.answer_request(id, Some("opened")));
+            let requests = decode(p.take_requests());
+            assert!(!requests.iter().any(|r| r.0 == 17), "the launch is retired");
+            assert!(requests.iter().any(|r| r.0 == 18 && r.2 == [id as i32]));
+        }
+        let (_, exact_runner::Outcome::Response(response)) =
+            p.host.runner_mut().take_request_refusal(true).unwrap()
+        else {
+            panic!("a cancellation response")
+        };
+        assert_eq!(response.status, 499);
+        start_auth(&mut p);
+    }
+}
+
+#[test]
+fn auth_browser_launch_failure_is_answered_through_the_reader() {
+    for (answer, status) in [("unavailable", 501), ("failed", 502)] {
+        let (mut p, _) = auth_presenter();
+        let (ticket, id) = start_auth(&mut p);
+        p.take_requests();
+        assert!(p.answer_request(id, Some(answer)));
+        let (settled, exact_runner::Outcome::Response(response)) =
+            p.host.runner_mut().take_request_refusal(true).unwrap()
+        else {
+            panic!("a launch failure response")
+        };
+        assert_eq!(settled, ticket);
+        assert_eq!(response.status, status);
+        assert!(!p.answer_request(id, Some(answer)));
+    }
+}
+
+#[test]
+fn auth_ephemeral_refuses_without_queuing_a_browser_launch() {
+    for ephemeral in [true, false] {
+        let (mut p, _) = auth_presenter();
+        let runner = p.host.runner_mut();
+        let key = runner.kernel().find_by_test_id("go")[0];
+        let node = runner.kernel().node_by_key(key).unwrap().id;
+        runner.dispatch(node, Event::Press).unwrap();
+        let mut out = runner.take_requests().pop().unwrap();
+        out.request = exact_data::auth::open_auth_session(
+            "https://as.test/a",
+            "app.test:/cb",
+            "s1",
+            ephemeral,
+        );
+        let auth::Arm::Present(session) =
+            auth::arm(runner, &out, false, auth::Browser::Android, None)
+        else {
+            panic!("a session")
+        };
+        p.open_auth(out.ticket, session);
+        let requests = decode(p.take_requests());
+        if ephemeral {
+            assert!(
+                !requests.iter().any(|r| r.0 == 17),
+                "ephemeral must never launch a shared browser"
+            );
+            assert!(p.requests.waiting.is_empty());
+            let (ticket, exact_runner::Outcome::Response(response)) =
+                p.host.runner_mut().take_request_refusal(true).unwrap()
+            else {
+                panic!("an unavailable response")
+            };
+            assert_eq!((ticket, response.status), (out.ticket, 501));
+            assert!(String::from_utf8_lossy(&response.body).contains("ephemeral"));
+        } else {
+            assert_eq!(requests.iter().filter(|r| r.0 == 17).count(), 1);
+            assert!(p.host.runner_mut().take_request_refusal(true).is_none());
+        }
+    }
 }

@@ -1,5 +1,6 @@
 // Build exact-web-js once before running this test (docs/testing.md).
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -15,7 +16,7 @@ test('compiled SVG geometry bindings render, change, unset and preserve zero', a
   const sheet = readFileSync(resolve(root, 'host/web/index.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
   let server, browser;
   try {
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), [
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), [
       'js', resolve(import.meta.dir, 'conformance/svg-geometry.contract'), '-o', dir,
     ], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
@@ -218,7 +219,7 @@ test('font-relative SVG attributes follow root and inherited fonts', async () =>
   const sheet = readFileSync(resolve(root, 'host/web/index.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
   let server, browser;
   try {
-    const compiled = spawnSync(resolve(root, 'target/debug/exact-web-js'), [
+    const compiled = spawnSync(resolve(root, `target/debug/exact-web-js${EXE}`), [
       'js', resolve(import.meta.dir, 'conformance/svg-rem.contract'), '-o', dir,
     ], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);

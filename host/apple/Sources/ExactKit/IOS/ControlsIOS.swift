@@ -343,7 +343,7 @@ final class ControlHost: NSObject {
             }
             if !(control is NativeButtonIOS) {
                 assign(control, \.isEnabled, !owner.disabled)
-                assign(control, \.accessibilityLabel, owner.authoredLabel)
+                assign(control, \.accessibilityLabel, owner.controlLabel)
                 assign(control, \.accessibilityIdentifier, owner.props["testId"])
             }
             // A native button's box is its frame (below): its natural size is
@@ -457,6 +457,9 @@ final class ControlHost: NSObject {
         guard !changed.contains(owner.id), !touched.contains(owner.id), let control = controls[owner.id],
               control.superview === owner.controlMount,
               !(control is NativeButtonIOS) || faces[owner.id] != nil else { return false }
+        // A grouped toggle row's switch is named by the row's words (`controlLabel`).
+        if let row = owner.groupedToggleRow, ([row] + row.container.subviews.compactMap { $0 as? NodeView })
+            .contains(where: { changed.contains($0.id) || touched.contains($0.id) }) { return false }
         var at = presenter.accessibilityParent(of: owner)
         while let view = at {
             if let node = view as? NodeView, touched.contains(node.id) { return false }
@@ -540,6 +543,34 @@ final class ControlHost: NSObject {
         appliedRange.removeAll()
         picked.removeAll()
         faces.removeAll()
+    }
+}
+
+extension NodeView {
+    /// A control's accessible name: its own; but where a grouped list shows its authored nodes
+    /// (tvOS, and any list UIKit does not draw), the switch or checkbox that ends one of its rows
+    /// is the row's one element, as UIKit's list cell is on iOS (`GroupedCell.toggle`), named by
+    /// the row's label, else its own, else the row's words.
+    var controlLabel: String? {
+        guard let row = groupedToggleRow else { return authoredLabel }
+        let name = row.authoredLabel ?? authoredLabel ?? row.accessibleName
+        return name.isEmpty ? nil : name
+    }
+
+    /// The row of a grouped list (`listStyle`) whose trailing switch or checkbox this is: the
+    /// last child of a row of a section's group, as the kernel reads a toggle row
+    /// (`Kernel::grouped_toggle`).
+    var groupedToggleRow: NodeView? {
+        guard kind == "control", ["switch", "checkbox"].contains(ControlKinds.kind(props)) else { return nil }
+        func parent(_ view: UIView?) -> NodeView? {
+            var at = view?.superview
+            while let v = at { if let node = v as? NodeView { return node }; at = v.superview }
+            return nil
+        }
+        guard let row = parent(self), let group = parent(row), !["header", "footer"].contains(group.props["semanticTag"]),
+              let list = parent(parent(group)), list.kind == "list", list.props["listStyle"] != nil,
+              row.container.subviews.last(where: { $0 is NodeView }) === self else { return nil }
+        return row
     }
 }
 

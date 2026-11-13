@@ -96,7 +96,7 @@ final class Adapter: ExactSessionDelegate {
             case "light": app.appearance = NSAppearance(named: .aqua)
             default: app.appearance = ExactEnv.fixedAppearance
             }
-        case "openURL": open(args.first as? String ?? "", from: session) { session.answerOpenURL(args, opened: $0) }
+        case "openURL": open(args.first as? String ?? "", from: session, answer: session.openURLAnswer(args))
         // `window.close()` (studio diary R17): the window this session
         // shows, without asking its `beforeunload` again.
         case "close": windows.first { $0.session === session }?.close()

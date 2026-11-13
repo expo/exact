@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname, extname } from 'node:path';
+import { within } from '../../scripts/paths.mjs';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
 import { createDocument } from './dom.js';
@@ -468,7 +469,7 @@ if (import.meta.main) {
     Bun.serve({ port, hostname: '127.0.0.1', async fetch(req) {
       const url = new URL(req.url);
       const file = resolve(dist, '.' + decodeURIComponent(url.pathname));
-      if (file.startsWith(dist + '/') && !file.includes('/.gen/') && existsSync(file) && extname(file)) {
+      if (file !== dist && within(dist, file) && !/[\\/]\.gen[\\/]/.test(file) && existsSync(file) && extname(file)) {
         const type = TYPES[extname(file)] ?? 'application/octet-stream';
         // A dist file compressed once, at quality 11.
         if (/\bbr\b/.test(req.headers.get('accept-encoding') ?? '') && /html|javascript|css|json|wasm|svg/.test(type)) {
@@ -483,7 +484,7 @@ if (import.meta.main) {
       if (answers) { const checkpoint = deferredAnswers(answers); return new Response(checkpoint ?? 'These answers are no longer kept; the page builds itself afresh.\n', { status: checkpoint ? 200 : 404, headers: checkpoint ? { 'content-type': 'application/json', 'cache-control': 'private, max-age=3600, immutable' } : { 'content-type': 'text/plain', 'cache-control': 'no-store' } }); }
       const at = matchPattern(routes, canonical(url.pathname)), built = resolve(file, 'index.html');
       const html = { 'content-type': 'text/html', 'cache-control': 'no-cache' };
-      if (at >= 0 && routes[at].render === 'build' && built.startsWith(dist + '/') && existsSync(built)) return new Response(Bun.file(built), { headers: html });
+      if (at >= 0 && routes[at].render === 'build' && within(dist, built) && existsSync(built)) return new Response(Bun.file(built), { headers: html });
       if (at >= 0 && routes[at].render === 'client') return new Response(Bun.file(resolve(dist, 'shell.html')), { headers: html });
       const { status, headers, body } = await page(url.pathname + url.search, name => req.headers.get(name));
       return new Response(body, { status, headers });

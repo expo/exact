@@ -520,6 +520,25 @@ fn fenced_code_keeps_its_text_and_never_parses_it() {
     );
 }
 
+/// A fence's indentation is spaces and tabs, removed from each line up to
+/// its width; leading Unicode spaces are the code's own.
+#[test]
+fn an_indented_fence_keeps_leading_unicode_spaces_as_code() {
+    for (source, code) in [
+        (" ```\n\u{2003}em\n x\n ```\n", "\u{2003}em\nx"),
+        (
+            "  ```\n\u{2003}em\n \u{a0}nbsp\n    four\n  ```\n",
+            "\u{2003}em\n\u{a0}nbsp\n  four",
+        ),
+        ("```\n\u{a0}nbsp\n```\n", "\u{a0}nbsp"),
+    ] {
+        let doc = here(source);
+        assert_eq!(doc.blocks.len(), 1, "{source:?}");
+        assert_eq!(doc.blocks[0].kind, Kind::Code);
+        assert_eq!(doc.blocks[0].text, code, "{source:?}");
+    }
+}
+
 #[test]
 fn lists_carry_their_marker_and_their_depth() {
     let doc = here("- one\n- two\n  - nested\n\n1. first\n2. second\n");

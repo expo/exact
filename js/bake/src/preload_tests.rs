@@ -127,11 +127,26 @@ fn baked_preloads_reach_typescript_rust_and_mixed_accessors_without_an_engine() 
             "{name}: the emitted expression must be the one Cargo compiled"
         );
         let meta = json!({"appId":"test.preload", "grants":javascript.unwrap_or(""), "module":{"sha256":"hash"}});
-        let constants =
-            module_constants(&meta, false, "web", false, None, &compat.inputs["preload"]).unwrap();
-        assert!(constants.contains(&format!(
-            "pub const PRELOAD: &[exact_logic::exact_runner::request::Preload] = {expression};"
-        )));
+        for (platform, linked) in [("web", false), ("ios", true)] {
+            let constants = module_constants(
+                &meta,
+                false,
+                platform,
+                linked,
+                None,
+                &compat.inputs["preload"],
+            )
+            .unwrap();
+            assert!(constants.contains(&format!(
+                "pub const PRELOAD: &[exact_logic::exact_runner::request::Preload] = {expression};"
+            )));
+            if linked {
+                assert!(constants.starts_with(linked::LINKED_IDENTITY));
+                assert!(
+                    constants.find("pub const PRELOAD").unwrap() >= linked::LINKED_IDENTITY.len()
+                );
+            }
+        }
         let entry = contract::rust_entry(
             "ExactEmbeddedData",
             "embedded_data()",

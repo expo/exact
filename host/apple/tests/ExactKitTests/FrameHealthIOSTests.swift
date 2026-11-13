@@ -14,6 +14,273 @@ private final class Ticker: NSObject {
 }
 
 final class FrameHealthIOSTests: XCTestCase {
+    func testTheCardOffersAnAccessibleMinimizeAction() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the frame-health card's minimize control")
+        }
+        let health = FrameHealth(policy: .onDemand)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health, measuresScreen: false)
+        let window = hosted(overlay, in: scene, size: .zero)
+        overlay.frame = window.bounds
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        overlay.layoutIfNeeded()
+        let elements = overlay.card.accessibilityElements?.compactMap { $0 as? UIAccessibilityElement } ?? []
+        let minimize = try XCTUnwrap(elements.first { $0.isAccessibilityElement && $0.accessibilityLabel == "Minimize frame health" })
+        let full = overlay.card.frame
+        let generation = health.snapshot().generation, collector = health.handle
+        XCTAssertTrue(minimize.accessibilityActivate())
+        overlay.layoutIfNeeded()
+        XCTAssertLessThan(overlay.card.frame.width, full.width)
+        XCTAssertLessThan(overlay.card.frame.height, full.height / 4)
+        XCTAssertTrue(overlay.desiredVisible && health.hudVisible && health.hudEffectiveVisible)
+        XCTAssertTrue(health.enabled, "a minimized card keeps on-demand collection active")
+        let start = CACurrentMediaTime()
+        for i in 0...60 {
+            let time = start + Double(i) / 120
+            health.record(arrival: time, target: time + 1 / 120, period: 1 / 120, finished: time + 0.001)
+        }
+        overlay.refresh(now: start + 0.501)
+        XCTAssertEqual(overlay.card.state.rows[0].1, "120", "the minimized status takes new samples")
+        XCTAssertEqual(health.handle, collector)
+        XCTAssertEqual(health.snapshot().generation, generation, "minimizing does not start a new measurement")
+        XCTAssertEqual(health.snapshot().callbacks, 61)
+        XCTAssertGreaterThan(overlay.card.chart.latest, start, "the charts retain frames while minimized")
+        XCTAssertNil(overlay.card.chart.clock, "hidden plots need no redraw timer")
+        let restore = try XCTUnwrap(elements.first { $0.isAccessibilityElement && $0.accessibilityLabel == "Restore frame health" })
+        XCTAssertEqual(elements.filter(\.isAccessibilityElement).count, 1, "only the reduced control is exposed")
+        XCTAssertTrue(restore.accessibilityValue?.contains("120 FPS") == true)
+        XCTAssertTrue(restore.accessibilityActivate())
+        overlay.layoutIfNeeded()
+        XCTAssertEqual(overlay.card.frame, full)
+        XCTAssertEqual(health.snapshot().callbacks, 61)
+        // Details and the user's pause survive a minimize/restore cycle too.
+        overlay.card.activate?(.details)
+        overlay.card.activate?(.status)
+        XCTAssertTrue(minimize.accessibilityActivate())
+        XCTAssertTrue(restore.accessibilityActivate())
+        XCTAssertTrue(overlay.card.state.showsDetails)
+        XCTAssertFalse(overlay.card.detailsScroll.isHidden)
+        XCTAssertEqual(overlay.card.state.status, .paused)
+    }
+
+    func testTheCompactCardFitsAndRestoresAboveTheKeyboardWithoutLosingSamples() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the compact frame-health card above the keyboard")
+        }
+        let health = FrameHealth(policy: .onDemand)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health, measuresScreen: false)
+        let window = hosted(overlay, in: scene, size: CGSize(width: 393, height: 216))
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        overlay.layoutIfNeeded()
+        let card = overlay.card
+        XCTAssertFalse(card.isHidden, "the original 176-point compact face fits")
+        XCTAssertTrue(card.compact)
+        XCTAssertEqual(card.bounds.height, FrameHealthCardFace.compactHeight)
+        XCTAssertTrue(card.bounds.contains(try XCTUnwrap(card.minimizeElement).accessibilityFrameInContainerSpace))
+        XCTAssertFalse(card.layout.pacingArea.intersects(card.layout.minimize))
+        let start = CACurrentMediaTime(), generation = health.snapshot().generation
+        func sample(_ first: Int, through last: Int) {
+            for i in first...last {
+                let time = start + Double(i) / 120
+                health.record(arrival: time, target: time + 1 / 120, period: 1 / 120, finished: time + 0.001)
+            }
+            overlay.refresh(now: start + Double(last) / 120 + 0.001)
+        }
+        sample(0, through: 60)
+        let history = card.chart.latest
+        overlay.frame.size.height = 300
+        NotificationCenter.default.post(name: UIResponder.keyboardWillChangeFrameNotification, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: window.convert(CGRect(x: 0, y: 200, width: 600, height: 300), to: nil)])
+        overlay.layoutIfNeeded()
+        XCTAssertFalse(card.isHidden, "184 points above the keyboard still fit the compact face")
+        XCTAssertTrue(health.enabled && health.hudEffectiveVisible)
+        XCTAssertEqual(card.chart.latest, history, "fitting changes keep the chart's history")
+        sample(61, through: 120)
+        XCTAssertEqual(card.state.rows[0].1, "120")
+        XCTAssertTrue(card.minimizeElement?.accessibilityActivate() == true)
+        XCTAssertTrue(card.minimized)
+        sample(121, through: 180)
+        XCTAssertTrue(card.minimizeElement?.accessibilityActivate() == true)
+        XCTAssertFalse(card.minimized, "the compact card restores above the keyboard")
+        XCTAssertFalse(card.isHidden)
+        XCTAssertTrue(overlay.bounds.insetBy(dx: 8, dy: 8).contains(card.frame))
+        XCTAssertLessThanOrEqual(card.frame.maxY, 192)
+        XCTAssertEqual(card.state.rows[0].1, "120")
+        XCTAssertGreaterThan(card.chart.latest, history)
+        XCTAssertEqual(health.snapshot().callbacks, 181)
+        XCTAssertEqual(health.snapshot().generation, generation)
+    }
+
+    private final class CardTouch: UITouch {
+        var point: CGPoint
+        var time: TimeInterval = 1
+        init(_ point: CGPoint) { self.point = point; super.init() }
+        override var timestamp: TimeInterval { time }
+        override func location(in view: UIView?) -> CGPoint { view.map { $0.convert(point, from: nil) } ?? point }
+    }
+
+    func testTheMinimizedCardTakesOnlyItsBoundsAndDragsWithoutRestoring() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "touches on and beside the minimized frame-health card")
+        }
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health)
+        let window = hosted(overlay, in: scene, size: .zero)
+        overlay.frame = window.bounds
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        overlay.layoutIfNeeded()
+        let card = overlay.card
+        func tap(_ point: CGPoint) {
+            let touch = CardTouch(card.convert(point, to: nil))
+            card.touchesBegan([touch], with: nil)
+            card.touchesEnded([touch], with: nil)
+            overlay.layoutIfNeeded()
+        }
+        let full = card.frame
+        let minimize = card.layout.minimize
+        tap(CGPoint(x: minimize.midX * card.scale, y: minimize.midY * card.scale))
+        XCTAssertTrue(card.minimized, "the visible Minimize control takes a tap")
+        let bar = scene.statusBarManager?.statusBarFrame ?? .zero
+        XCTAssertEqual(card.frame.origin, CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY)),
+            "at the same edge, below the status bar")
+        let free = CGPoint(x: full.midX, y: full.maxY - 60)
+        let button = UIButton(type: .system)
+        button.frame = CGRect(x: free.x - 40, y: free.y - 22, width: 80, height: 44)
+        var pressed = 0
+        button.addAction(UIAction { _ in pressed += 1 }, for: .touchUpInside)
+        let root = try XCTUnwrap(window.rootViewController?.view)
+        root.insertSubview(button, belowSubview: overlay)
+        XCTAssertTrue(window.hitTest(free, with: nil) === button, "the released area routes touches to the app")
+        (window.hitTest(free, with: nil) as? UIControl)?.sendActions(for: .touchUpInside)
+        XCTAssertEqual(pressed, 1)
+        let center = CGPoint(x: card.bounds.midX, y: card.bounds.midY)
+        XCTAssertTrue(window.hitTest(card.convert(center, to: window), with: nil) === card)
+        let touch = CardTouch(card.convert(center, to: nil))
+        card.touchesBegan([touch], with: nil)
+        touch.point = overlay.convert(CGPoint(x: overlay.bounds.maxX - 8 - card.frame.width / 2,
+            y: overlay.bounds.maxY - 8 - card.frame.height / 2), to: nil)
+        touch.time += 1
+        card.touchesMoved([touch], with: nil)
+        touch.time += 0.1
+        card.touchesEnded([touch], with: nil)
+        waitFor("the minimized drag settles") { !overlay.isSettling }
+        overlay.layoutIfNeeded()
+        XCTAssertTrue(card.minimized, "a drag is not a restore tap")
+        XCTAssertEqual(card.frame.maxX, overlay.bounds.maxX - 8, accuracy: 0.5)
+        XCTAssertEqual(card.frame.maxY, overlay.bounds.maxY - 8, accuracy: 0.5)
+        let restore = try XCTUnwrap(card.minimizeElement)
+        XCTAssertTrue(card.bounds.contains(restore.accessibilityFrameInContainerSpace))
+        let move = try XCTUnwrap(restore.accessibilityCustomActions?.first { $0.name == "Move up" })
+        XCTAssertTrue(move.actionHandler?(move) == true)
+        waitFor("the accessibility move settles") { !overlay.isSettling }
+        tap(center)
+        XCTAssertFalse(card.minimized)
+        XCTAssertEqual(card.frame.size, full.size)
+        XCTAssertEqual(card.frame.maxX, overlay.bounds.maxX - 8, accuracy: 0.5)
+        XCTAssertEqual(card.frame.minY, 8, accuracy: 0.5)
+        // A shorter window uses the compact face and still offers a visible minimize control.
+        overlay.frame.size = CGSize(width: full.height + 100, height: 300)
+        overlay.layoutIfNeeded()
+        XCTAssertTrue(card.compact)
+        XCTAssertTrue(card.bounds.contains(try XCTUnwrap(card.minimizeElement).accessibilityFrameInContainerSpace))
+        card.activate?(.minimize)
+        overlay.layoutIfNeeded()
+        XCTAssertTrue(card.minimized)
+        XCTAssertTrue(card.accessibilityMove?(CGVector(dx: 0, dy: 1)) == true)
+        waitFor("the card rests above the keyboard's future position") { !overlay.isSettling }
+        NotificationCenter.default.post(name: UIResponder.keyboardWillChangeFrameNotification, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: window.convert(CGRect(x: 0, y: 200, width: 600, height: 300), to: nil)])
+        overlay.layoutIfNeeded()
+        XCTAssertEqual(card.frame.maxY, 192, accuracy: 0.5)
+        card.activate?(.minimize)
+        XCTAssertFalse(card.minimized, "the compact card restores in 184 points above the keyboard")
+        XCTAssertFalse(card.isHidden)
+        XCTAssertTrue(health.hudEffectiveVisible)
+        card.activate?(.minimize)
+        NotificationCenter.default.post(name: UIResponder.keyboardWillChangeFrameNotification, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: window.convert(CGRect(x: 0, y: 150, width: 600, height: 300), to: nil)])
+        overlay.layoutIfNeeded()
+        card.activate?(.minimize)
+        XCTAssertTrue(card.minimized && !card.isHidden, "less than 176 points keeps the status available")
+        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: card.bounds).image { context in
+            card.drawNow()
+            card.layer.render(in: context.cgContext)
+        })
+        attachment.name = "Frame health — minimized"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        NotificationCenter.default.post(name: UIResponder.keyboardWillChangeFrameNotification, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: window.convert(CGRect(x: 0, y: 1000, width: 600, height: 300), to: nil)])
+        overlay.layoutIfNeeded()
+        card.activate?(.minimize)
+        XCTAssertFalse(card.minimized, "with the keyboard dismissed, the compact card restores")
+    }
+
+    func testTheMinimizedCardKeepsBelowTheStatusBar() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the minimized frame-health card beside the status bar")
+        }
+        let bar = try XCTUnwrap(scene.statusBarManager?.statusBarFrame)
+        guard bar.height > 0 else { throw XCTSkip("this host shows no status bar") }
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health, measuresScreen: false)
+        let window = hosted(overlay, in: scene, size: .zero)
+        overlay.frame = window.bounds
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        overlay.layoutIfNeeded()
+        let card = overlay.card
+        XCTAssertEqual(card.frame.minY, 8, accuracy: 0.5, "the whole card rests past the safe area")
+        // Touches within the status bar's frame reach the system, not the app: all one control, the minimized card
+        // rests below it, and restored, the card returns to its edge
+        card.activate?(.minimize)
+        overlay.layoutIfNeeded()
+        XCTAssertGreaterThanOrEqual(card.frame.minY, overlay.convert(bar, from: nil).maxY)
+        XCTAssertEqual(card.frame.minX, 8, accuracy: 0.5)
+        card.activate?(.minimize)
+        overlay.layoutIfNeeded()
+        XCTAssertEqual(card.frame.minY, 8, accuracy: 0.5)
+    }
+
+    func testTheMinimizedCardKeepsItsCornerThroughRotation() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the minimized frame-health card rotating with its window")
+        }
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health, measuresScreen: false)
+        let window = hosted(overlay, in: scene, size: .zero)
+        overlay.frame = window.bounds
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        overlay.layoutIfNeeded()
+        overlay.card.activate?(.minimize)
+        XCTAssertTrue(overlay.card.accessibilityMove?(CGVector(dx: 1, dy: 1)) == true)
+        waitFor("the card reaches the bottom-right corner") { !overlay.isSettling }
+        let original = overlay.bounds.size
+        // The test host supports portrait only; exercise the bounds change delivered by rotation.
+        for size in [CGSize(width: original.height, height: original.width), original] {
+            overlay.frame.size = size
+            overlay.layoutIfNeeded()
+            XCTAssertTrue(overlay.card.minimized)
+            XCTAssertTrue(overlay.bounds.contains(overlay.card.frame))
+            XCTAssertEqual(overlay.card.frame.maxX, overlay.bounds.maxX - 8, accuracy: 0.5)
+            XCTAssertEqual(overlay.card.frame.maxY, overlay.bounds.maxY - 8, accuracy: 0.5)
+        }
+        overlay.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+        overlay.setNeedsLayout()
+        overlay.layoutIfNeeded()
+        XCTAssertGreaterThan(overlay.card.scale, 1)
+        XCTAssertTrue(overlay.bounds.contains(overlay.card.frame))
+    }
+
     /// A window for an overlay: the card reads only while it can be seen.
     private func hosted(_ overlay: FrameHealthOverlay, in scene: UIWindowScene, size: CGSize) -> UIWindow {
         let window = UIWindow(windowScene: scene)
@@ -115,6 +382,24 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertTrue(cardWindow.hitTest(cardPoint, with: nil)?.isDescendant(of: overlay) == true,
             "the card stays above a sheet the app presents after it")
         XCTAssertTrue(DevMenu.frameHealthOverlay() === overlay, "the menu's row finds the same card")
+        let observer = overlay.screen, frames = overlay.screenFrames
+        overlay.card.activate?(.minimize)
+        overlay.layoutIfNeeded()
+        XCTAssertTrue(overlay.card.minimized)
+        XCTAssertTrue(overlay.screen === observer && overlay.observing, "minimizing keeps the screen observer")
+        XCTAssertEqual(menu.groups[1].first?.checked, true, "a minimized card is still shown")
+        XCTAssertNil(cardWindow.hitTest(cardPoint, with: nil), "the sheet receives the area the card released")
+        let sheetPoint = navigation.view.convert(CGPoint(x: navigation.view.bounds.midX, y: 120), to: window)
+        XCTAssertTrue(window.hitTest(sheetPoint, with: nil)?.isDescendant(of: navigation.view) == true)
+        menu.tableView.reloadData()
+        waitFor("the screen keeps observing the app's sheet") { overlay.screenFrames > frames }
+        let minimized = XCTAttachment(image: screen())
+        minimized.name = "Frame health — minimized above a sheet"
+        minimized.lifetime = .keepAlways
+        add(minimized)
+        XCTAssertTrue(overlay.card.minimizeElement?.accessibilityActivate() == true)
+        overlay.layoutIfNeeded()
+        XCTAssertTrue(cardWindow.hitTest(cardPoint, with: nil)?.isDescendant(of: overlay) == true)
 
         navigation.setOverrideTraitCollection(UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge), forChild: menu)
         navigation.overrideUserInterfaceStyle = .dark
@@ -178,6 +463,18 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertTrue(rows.layer is FrameHealthCardView.Pictured.Picture)
         rows.layer.displayIfNeeded()
         XCTAssertNotNil(rows.layer.contents)
+        // The picture is opaque, so it fills its own ground: the card's, not black
+        let picture = try XCTUnwrap(rows.layer.contents.map { $0 as! CGImage })
+        var corner = [UInt8](repeating: 0, count: 4)
+        let probe = try XCTUnwrap(CGContext(data: &corner, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        probe.draw(picture, in: CGRect(x: -2, y: 2 - CGFloat(picture.height) + 1, width: CGFloat(picture.width), height: CGFloat(picture.height)))
+        var ground = [UInt8](repeating: 0, count: 4)
+        let fill = try XCTUnwrap(CGContext(data: &ground, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        fill.setFillColor(try XCTUnwrap(overlay.card.palette).background)
+        fill.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        XCTAssertEqual(corner, ground, "Details' ground")
         let timing = overlay.card.drawing
         var drawn = 0
         overlay.card.drawing = { drawn += 1; $0() }
@@ -550,7 +847,7 @@ final class FrameHealthIOSTests: XCTestCase {
         let card = overlay.card
         card.drawNow()
         let content = try XCTUnwrap(card.subviews.first)
-        let bands = content.subviews.filter { $0.layer is FrameHealthCardView.Pictured.Picture && !($0 is FrameHealthCardView.DetailsView) }
+        let bands = content.subviews.filter { $0.layer is FrameHealthCardView.Pictured.Picture && $0.frame.width == card.bounds.width }
         XCTAssertEqual(bands.map { $0.frame.minY / card.scale }, [0, 44, 82, 126, 170, 206], "header, context, figures, pacing, toolbar, charts")
         func drawn(_ change: (inout FrameHealthCardPresentation) -> Void) -> [Bool] {
             let before = bands.map { $0.layer.contents as AnyObject? }

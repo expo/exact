@@ -1426,3 +1426,37 @@ test('a backend flag keeps its source through child builds and an environment ov
   env.EXACT_BACKEND_ORIGIN = 'https://other.example';
   expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://other.example', source: 'EXACT_BACKEND_ORIGIN' });
 });
+
+test('an import without an extension reaches its JavaScript file, a directory its index, and both what they import', async () => {
+  const { notBuildInput } = await import('./agent-launch.mjs');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exact-module-graph-')));
+  try {
+    const files = {
+      'app.ts': "import { a } from './helper';\nimport { b } from './helpers';\nimport c from './view';\n", 'helper.js': "export { d } from './deep';\n",
+      'deep.mjs': 'export const d = 1;\n', 'helpers/index.js': "import './more/x';\n", 'helpers/more/x.cjs': '', 'view.jsx': "import './y';\n", 'y.js': '', 'unused.js': '',
+    };
+    for (const [name, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, name)), { recursive: true }); writeFileSync(join(dir, name), text); }
+    const input = notBuildInput(dir);
+    expect(Object.keys(files).filter(name => input(join(dir, name)))).toEqual(['unused.js']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an Apple build is not stale for a Contract file it did not compile, edited while it ran', async () => {
+  const { receiptChanges } = await import('./agent-launch.mjs');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exact-contract-sources-')));
+  try {
+    const files = ['app.contract', 'parts/row.contract', 'draft.contract', 'watch.contract', 'modules/apple/view.contract'];
+    writeFileSync(join(dir, 'app.json'), '{"watch":{"source":"watch.contract"}}');
+    for (const name of files) { mkdirSync(dirname(join(dir, name)), { recursive: true }); writeFileSync(join(dir, name), ''); }
+    const receipt = join(dir, 'receipt.json'), started = new Date(Date.now() - 60_000), edited = new Date(Date.now() - 30_000);
+    const app = { dir, target: join(dir, 'missing-target'), manifest: {}, crate: () => 'fixture-apple' };
+    const changed = (graph) => {
+      writeFileSync(receipt, JSON.stringify({ target: 'aarch64-apple-darwin', started: started.toISOString(), build: { graph } }));
+      for (const name of files) utimesSync(join(dir, name), edited, edited);
+      return receiptChanges(receipt, app).map(path => path.slice(dir.length + 1)).filter(name => name.endsWith('.contract')).sort();
+    };
+    expect(changed({ contractSources: [join(dir, 'app.contract'), join(dir, 'parts/row.contract')] })).toEqual(['app.contract', 'modules/apple/view.contract', 'parts/row.contract', 'watch.contract']);
+    // A receipt that does not list them keeps every one.
+    expect(changed({})).toEqual([...files].sort());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

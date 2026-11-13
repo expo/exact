@@ -12,7 +12,7 @@
 //! never a silent skip and never a panic.
 
 use crate::id::{IdMap, IdSet};
-use crate::sorted::{SortedMap, SortedSet};
+use crate::sorted::SortedSet;
 
 use crate::arena::NodeArena;
 use crate::error::{ApplyError, StyleDomainError};
@@ -1235,15 +1235,16 @@ impl Detach {
             }
         }
         self.seen.clear();
-        let mut leaving: SortedMap<String, IdSet<u32>> = SortedMap::new();
-        for (test_id, slot) in self.selectors.drain(..) {
-            leaving
-                .get_or_insert_with(test_id, IdSet::default)
-                .insert(slot);
+        // Sorted once and taken a name at a time: inserting each name into a
+        // sorted map moves its tail, N²/2 moves when the names descend.
+        self.selectors.sort_unstable();
+        let mut slots = IdSet::default();
+        for run in self.selectors.chunk_by(|a, b| a.0 == b.0) {
+            slots.clear();
+            slots.extend(run.iter().map(|&(_, slot)| slot));
+            selectors.remove_all(&run[0].0, &slots);
         }
-        for (test_id, slots) in leaving {
-            selectors.remove_all(&test_id, &slots);
-        }
+        self.selectors.clear();
         // A later op can only have destroyed an ancestor of an earlier one's
         // root (a destroyed node's descendants go with it), and each subtree
         // lists its root first. Removing the ops' nodes in reverse therefore

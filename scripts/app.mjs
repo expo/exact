@@ -15,8 +15,7 @@ import { nativeResourceMappings, nativeResourceInventory, appleAssetCatalogInven
 // everything else follows from it: the workspace cargo runs in, the target
 // directory the artifacts land in, `app.contract`, `assets/`, `gpu/`. Every
 // script that builds, serves, or drives an app resolves it here, so nothing
-// else knows the difference.
-//   bun host/web/build.mjs weird-castle-web          (EXACT_APP_DIR set)
+// else knows the difference; `EXACT_APP_DIR` selects the app for `bun host/web/build.mjs weird-castle-web`.
 // The app manifest (LLP 1030 D2; 1030.000 D7): `app.json` beside
 // `app.contract` — the W3C Web App Manifest's own keys, which the web host
 // copies out as `manifest.json`, plus `app` (identity: the id every platform
@@ -28,6 +27,7 @@ import { nativeResourceMappings, nativeResourceInventory, appleAssetCatalogInven
 import { spawnSync } from '../host/apple/toolchain.mjs';
 import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
+import { within } from './paths.mjs';
 import { constants, homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BINARYEN, packageGpuWasm, webGpuTools } from '../host/web/stages.mjs';
@@ -42,7 +42,7 @@ import { installedFileDependencies } from './file-dependencies.mjs';
 import { startSweep } from './sweep.mjs';
 import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
   NO_WORKSPACE, androidCargo, appleCargo, authoredWorkspace, cargoDiagnosticsCommand,
-  cargoOnPath, knownWorkspace, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
+  cargoOnPath, claimTargetCrates, knownWorkspace, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath } from './cargo-check.mjs';
 import { ensureShells } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
@@ -245,29 +245,33 @@ export const runnerOwnedSource = name => ['exactDelivery', 'exactViewport', 'exa
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
-/** Source paths inside the wasm (panic locations) name no machine: the
+/** Source paths inside Rust artifacts (panic locations) name no machine: the
  * toolchain's sources as std's own rlibs do (`/rustc/<commit>`), Cargo's
- * home as `cargo`, and the checkout, the app and the target relatively, so
+ * home as `cargo`, and the capture, checkout, app and target relatively, so
  * the bytes that hashes and signatures cover are the same on every machine
- * and in every checkout. Every web-profile wasm build passes the same flags,
- * so they share one set of artifacts. Later prefixes win (rustc's rule). */
+ * and in every checkout. Later prefixes win (rustc's rule). */
 const rustcFacts = new Map();
-export function wasmRemapFlags(app, toolchain = null) {
-  const cwd = app?.workspace ?? ROOT, key = `${cwd}\0${toolchain ?? ''}`;
-  const env = toolchain ? { ...process.env, RUSTUP_TOOLCHAIN: toolchain } : process.env;
-  const rustc = (...args) => spawnSync('rustc', args, { cwd, env, encoding: 'utf8' }).stdout ?? '';
+export function rustRemapFlags(app, toolchain = null, env = process.env) {
+  const cwd = app?.workspace ?? ROOT, key = `${cwd}\0${toolchain ?? env.RUSTUP_TOOLCHAIN ?? ''}`;
+  const rustcEnv = toolchain ? { ...env, RUSTUP_TOOLCHAIN: toolchain } : env;
+  const rustc = (...args) => spawnSync('rustc', args, { cwd, env: rustcEnv, encoding: 'utf8' }).stdout ?? '';
   if (!rustcFacts.has(key)) rustcFacts.set(key, { commit: /^commit-hash: (\S+)$/m.exec(rustc('-vV'))?.[1], sysroot: rustc('--print', 'sysroot').trim() });
   const { commit, sysroot } = rustcFacts.get(key);
-  const pairs = [[resolve(process.env.CARGO_HOME ?? resolve(homedir(), '.cargo')), 'cargo']];
+  const pairs = [[resolve(env.CARGO_HOME ?? resolve(homedir(), '.cargo')), 'cargo']];
   if (sysroot && commit) pairs.push([resolve(sysroot, 'lib/rustlib/src/rust'), `/rustc/${commit}`]);
+  if (env.EXACT_SOURCE_ROOT) pairs.push([resolve(env.EXACT_SOURCE_ROOT), 'source']);
   pairs.push([ROOT, '']);
   if (app && resolve(app.workspace) !== ROOT) pairs.push([resolve(app.workspace), '']);
   if (app) pairs.push([resolve(app.target), 'target']);
+  return pairs.map(([from, to]) => `--remap-path-prefix=${from}=${to}`);
+}
+// Every web-profile wasm build shares these flags and one set of artifacts.
+export function wasmRemapFlags(app, toolchain = null) {
   // Target rustflags replace [build].rustflags: retain the game's determinism promise.
-  const flags = [...pairs.map(([from, to]) => `--remap-path-prefix=${from}=${to}`),
+  const flags = [...rustRemapFlags(app, toolchain),
     ...(app?.manifest?.game ? ['-C', 'llvm-args=-fp-contract=off'] : []),
     ...(toolchain === WEB_TOOLCHAIN ? WEB_RUSTFLAGS : [])];
-  return targetRustflags('wasm32-unknown-unknown', flags, { cwd });
+  return targetRustflags('wasm32-unknown-unknown', flags, { cwd: app?.workspace ?? ROOT });
 }
 
 // A Bun older than package.json's pin is refused before anything builds.
@@ -379,7 +383,7 @@ export function webDist(app) {
 export function webBuildCommand(app, dist, flags = '', otherwise = null) {
   const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
   const own = app.dir ? resolve(app.dir, 'exact.mjs') : null;
-  if (own && app.outside && !process.env.EXACT_WEB_DIST && existsSync(own) && !own.startsWith(`${ROOT}/`))
+  if (own && app.outside && !process.env.EXACT_WEB_DIST && existsSync(own) && !within(ROOT, own))
     return `cd ${quote(app.dir)} && bun exact.mjs web-build${flags}`;
   return otherwise ?? `EXACT_APP_DIR=${quote(app.dir)} EXACT_WEB_DIST=${quote(resolve(dist))} bun host/web/build.mjs ${app.crate('web')}${flags}`;
 }
@@ -477,7 +481,11 @@ export function resolveApp(nameOrCrate) {
   // verb reads `dir` and `target` and runs no Cargo (D2.1).
   let rusted = false;
   const rust = () => {
-    if (!rusted) { rusted = true; if (generated) { ensureShells(dir, manifest, name); checkOutsideLock(workspace); } else checkLock?.(); }
+    if (rusted) return workspace;
+    rusted = true;
+    // A deploy builds its capture of the app where the app builds (scripts/deploy.mjs `materializeSnapshot`).
+    if (process.env.CARGO_TARGET_DIR && own !== ROOT && !process.env.EXACT_DEPLOY_CAPSULE) claimTargetCrates(target, name, dir);
+    if (generated) { ensureShells(dir, manifest, name); checkOutsideLock(workspace); } else checkLock?.();
     return workspace;
   };
   startSweep(target);
@@ -909,9 +917,10 @@ export function bakeTarget(platform) {
   if (platform === 'ios') return 'aarch64-apple-ios';
   // The Linux host is also a supported headless executable on macOS. This
   // is the actual target Cargo will build here, never a guessed architecture.
-  const result = spawnSync('rustc', ['-vV'], { encoding: 'utf8' });
+  // The pinned toolchain's rustc, as the build's: rustup may have no default, and an app's directory names none.
+  const result = spawnSync('rustc', ['-vV'], { cwd: ROOT, env: PINNED_RUST ? { ...process.env, RUSTUP_TOOLCHAIN: PINNED_RUST } : process.env, encoding: 'utf8' });
   const host = /^host: (.+)$/m.exec(result.stdout ?? '')?.[1];
-  if (result.status !== 0 || !host) throw new Error('rustc did not report its host target');
+  if (result.status !== 0 || !host) throw new Error(`rustc did not report its host target: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`);
   return host;
 }
 /** Cargo's metadata for a development bake, asked once for a lock and a set of

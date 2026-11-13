@@ -695,6 +695,7 @@
       storage: 0,
       replied: false,
       mutation: mutation === "mutation",
+      tool: mutation === "tool",
       answer: mutation === "resource",
       set: mutation === "resource",
       sync: false,

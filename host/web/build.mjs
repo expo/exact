@@ -30,6 +30,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
+import { within } from '../../scripts/paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { writeInstallPages } from '../../scripts/install-page.mjs';
@@ -525,9 +526,13 @@ const manifestNotes = [];
 const webManifest = webAppManifest(app.manifest, app.displayName, manifestNotes, app.dir);
 for (const note of manifestNotes) console.log(note);
 writeFileSync(resolve(stage, 'manifest.json'), JSON.stringify(webManifest, null, 2) + '\n');
-const sourceRevision = spawnSync('git', ['rev-parse', '--short=10', 'HEAD'], {cwd:app.dir,encoding:'utf8'});
-const sourceChanges = spawnSync('git', ['status', '--porcelain'], {cwd:app.dir,encoding:'utf8'});
-writeInstallPages(stage, app.manifest, {id:buildReceipt.binary.sha256, source:sourceRevision.status === 0 ? sourceRevision.stdout.trim() : null, dirty:sourceChanges.status === 0 && !!sourceChanges.stdout.trim(), builtAt:new Date().toISOString(), mode:buildEnv.EXACT_UPDATE_TRUST === 'production' ? 'Release build' : 'Development build', reach:bakedReceipt.reach?.rows ?? []});
+const sourceRevision = spawnSync('git', ['rev-parse', '--short=10', 'HEAD'], {cwd:app.dir,encoding:'utf8',timeout:5000,killSignal:'SIGKILL'});
+const sourceChanges = spawnSync('git', ['status', '--porcelain'], {cwd:app.dir,encoding:'utf8',timeout:5000,killSignal:'SIGKILL'});
+writeInstallPages(stage, app.manifest, { id: buildReceipt.binary.sha256,
+  source: sourceRevision.status === 0 ? sourceRevision.stdout.trim() : null,
+  dirty: sourceChanges.status === 0 ? !!sourceChanges.stdout.trim() : null,
+  builtAt: buildEnv.EXACT_UPDATE_TRUST === 'production' ? null : new Date().toISOString(),
+  mode: buildEnv.EXACT_UPDATE_TRUST === 'production' ? 'Release build' : 'Development build', reach: bakedReceipt.reach?.rows ?? [] });
 const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 // The shell's <style> ships without its comments and indentation: they are
 // for readers of host/web/index.html, and every served document's first bytes
@@ -639,7 +644,7 @@ if (buildLocations.length && renderAt) {
     if (doc.error) throw new Error(`${renderBin} ${doc.location}: ${doc.error}`);
     const html = doc.page;
     const file = doc.notfound ? '404.html' : `${decodeURIComponent(doc.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
-    if (!resolve(stage, file).startsWith(stage + '/')) throw new Error(`${renderBin}: location ${doc.location} leaves dist`);
+    if (resolve(stage, file) === stage || !within(stage, resolve(stage, file))) throw new Error(`${renderBin}: location ${doc.location} leaves dist`);
     mkdirSync(resolve(stage, file, '..'), { recursive: true });
     writeFileSync(resolve(stage, file), html);
   }

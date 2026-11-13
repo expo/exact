@@ -1047,6 +1047,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         if cell.row != id { cell.restorePressPresentation() }
         cell.row = id
         cell.target = rows[id]?.target
+        #if os(iOS)
+        cell.toggle = nil // a standard toggle row's `accessories` gives it its switch
+        #endif
         // The row's `-exact-tint-adjustment` is its cell's, as a hand-built app sets the cell's
         cell.tintAdjustmentMode = .init(host.presenter.views[id]?.style["tint_adjustment"])
         guard let row = rows[id] else { return }
@@ -1187,6 +1190,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
                 return s
             }()
             refresh(id, toggle)
+            cell.toggle = toggle
             // A custom-view accessory takes a view with no superview, and a
             // reconfigured cell builds its accessories again.
             toggle.removeFromSuperview()
@@ -1403,7 +1407,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
 
     private func accessibility(_ cell: UICollectionViewCell, _ id: UInt32, _ row: GroupedListModel.Row) {
         let node = host.presenter.views[id]
-        cell.accessibilityLabel = node?.props["accessibilityLabel"]
+        // A toggle row is its switch's element (`GroupedCell.toggle`), named by the switch where the row is not.
+        let control = row.accessory == "toggle" ? row.target.flatMap { host.presenter.views[$0] }?.props["accessibilityLabel"] : nil
+        cell.accessibilityLabel = node?.props["accessibilityLabel"] ?? control
             ?? [row.title, row.secondary].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
         cell.accessibilityTraits.remove([.button, .link, .selected])
         if row.pressable { cell.accessibilityTraits.insert(.button) } // whatever it opens, as UIKit's cell
@@ -1430,8 +1436,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // Reading a list cell's traits searches its subviews: only a cell marked before or now does.
         let unavailable = node?.disabled == true || node?.ariaUnavailable == true
         if let cell = cell as? GroupedCell, !unavailable, !cell.markedNotEnabled { return }
-        if unavailable { cell.accessibilityTraits.insert(.notEnabled) } else { cell.accessibilityTraits.remove(.notEnabled) }
         (cell as? GroupedCell)?.markedNotEnabled = unavailable
+        if unavailable { cell.accessibilityTraits.insert(.notEnabled) } else { cell.accessibilityTraits.remove(.notEnabled) }
     }
 }
 
