@@ -996,7 +996,7 @@ test('web freshness tracks backend selection creation, edits and deletion',async
   const app={dir,manifest:{}},dist=join(dir,'dist'),selection=join(dir,'.exact/backend-origin');
   try {
     mkdirSync(dist);mkdirSync(join(dir,'.exact'));
-    const bake=()=>writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true),inputRoots:[]}));
+    const bake=()=>writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true,[]),inputRoots:[]}));
     bake();expect(webChanges(dist,app).all).toEqual([]);
     writeFileSync(selection,'http://127.0.0.1:4412');expect(webChanges(dist,app).app).toEqual([selection]);
     bake();expect(webChanges(dist,app).all).toEqual([]);
@@ -1008,7 +1008,7 @@ test('web freshness tracks backend selection creation, edits and deletion',async
     rmSync(source);expect(webChanges(dist,app).app).toEqual([source]);
     // A source edited while the build compiled (after it read its inputs, before its marker): a change.
     writeFileSync(source,'export {};\n');
-    const inputsAt=Date.now()-10_000;writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true),inputsAt,inputRoots:[]}));
+    const inputsAt=Date.now()-10_000;writeFileSync(join(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true,[]),inputsAt,inputRoots:[]}));
     writeFileSync(source,'export const edited = 1;\n');utimesSync(source,new Date(inputsAt+5_000),new Date(inputsAt+5_000));
     expect(webChanges(dist,app).app).toEqual([source]);
   } finally {rmSync(dir,{recursive:true,force:true});}
@@ -1178,7 +1178,7 @@ test('a setting is a web build input by value and source, and serve finds one ch
   const {changedSettings}=await import('../js/bake/src/__exact_env.mjs');
   const dir=mkdtempSync(resolve(tmpdir(),'exact-settings-')), dist=resolve(dir,'dist'), name='EXACT_TEST_SETTING', key=`import.meta.env.${name}`;
   const app={dir,manifest:{env:[name]}};
-  const bake=env=>writeFileSync(resolve(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true),inputRoots:[],env}));
+  const bake=env=>writeFileSync(resolve(dist,'.exact-build.json'),JSON.stringify({target:'js',inputs:webInputDigests(app,true,[]),inputRoots:[],env}));
   try {
     mkdirSync(dist);
     writeFileSync(resolve(dir,'.env'),`${name}=http://a.example\n`);
