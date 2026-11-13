@@ -300,16 +300,21 @@ final class NativeButtonFidelityMacTests: XCTestCase {
         let cache = ButtonMeasureCache(), aqua = NSAppearance(named: .aqua)!
         cache.configure(aqua, scale: 1)
         let plain = try data()
-        XCTAssertEqual(cache.answer(face: plain, widthKind: 0, width: 100).provisional, 1)
-        XCTAssertEqual(cache.answer(face: plain, widthKind: 0, width: 100).provisional, 0)
-        XCTAssertEqual(cache.misses, 1)
-        for variant in [try data(title: "Other"), try data(["title": ["font_weight": 600]]), try data(style: "gray"), try data(["button": ["control_size": "large"]])] {
-            XCTAssertEqual(cache.answer(face: variant, widthKind: 0, width: 100).provisional, 1)
+        // A miss is measured before it is answered: exact, never provisional, so the kernel keeps it.
+        func ask(_ face: Data, _ kind: UInt8 = 0, _ width: Float = 100, measures: Bool, _ label: String) {
+            let misses = cache.misses
+            XCTAssertEqual(cache.answer(face: face, widthKind: kind, width: width).provisional, 0, label)
+            XCTAssertEqual(cache.misses, misses + (measures ? 1 : 0), label)
         }
-        for (kind, width) in [(UInt8(0), Float(300)), (1, 0), (2, 0)] { XCTAssertEqual(cache.answer(face: plain, widthKind: kind, width: width).provisional, 1) }
+        ask(plain, measures: true, "first")
+        ask(plain, measures: false, "again")
+        for variant in [try data(title: "Other"), try data(["title": ["font_weight": 600]]), try data(style: "gray"), try data(["button": ["control_size": "large"]])] {
+            ask(variant, measures: true, "variant")
+        }
+        for (kind, width) in [(UInt8(0), Float(300)), (1, 0), (2, 0)] { ask(plain, kind, width, measures: true, "offer \(kind) \(width)") }
         for (appearance, scale) in [(NSAppearance(named: .darkAqua)!, CGFloat(1)), (aqua, CGFloat(2))] {
-            XCTAssertTrue(cache.configure(appearance, scale: scale)); XCTAssertEqual(cache.answer(face: plain, widthKind: 0, width: 100).provisional, 1)
-            XCTAssertEqual(cache.answer(face: plain, widthKind: 0, width: 100).provisional, 0)
+            XCTAssertTrue(cache.configure(appearance, scale: scale))
+            ask(plain, measures: true, "new traits"); ask(plain, measures: false, "new traits, again")
         }
     }
     /// Titles and widths a session has stopped asking for are released; a
