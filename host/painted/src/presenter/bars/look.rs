@@ -319,6 +319,7 @@ impl Layout {
                     *rect,
                     *color,
                     exact_kernel::SymbolSet::Material,
+                    400,
                 ),
             }
         }

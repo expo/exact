@@ -16,7 +16,7 @@
 
 use exact_runner::DataSource;
 use std::cell::Cell;
-use std::ffi::{c_char, c_int, c_void, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -57,7 +57,11 @@ extern "C" {
 
 /// One line to logcat under `exact`.
 pub fn log(text: &str) {
-    let tag = c"exact";
+    log_as(c"exact", text);
+}
+
+/// One line to logcat under `tag`, at the info priority.
+pub fn log_as(tag: &CStr, text: &str) {
     if let Ok(text) = CString::new(text.replace('\0', " ")) {
         // SAFETY: both strings are NUL-terminated and live across the call.
         unsafe { __android_log_write(4, tag.as_ptr(), text.as_ptr()) };

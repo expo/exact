@@ -1296,7 +1296,7 @@ fn reorder_anchor_keeps_signed_offsets_and_clamps_when_no_other_row_is_visible()
     ] {
         let mut i = index(&[20.; 30]);
         let a = i
-            .capture_anchor_excluding(offset, port, false, Some("k10"))
+            .capture_anchor_excluding(offset, port, false, &["k10"])
             .unwrap();
         let mut order = keys(30);
         let source = order.remove(10);
@@ -1306,7 +1306,7 @@ fn reorder_anchor_keeps_signed_offsets_and_clamps_when_no_other_row_is_visible()
     }
     let mut i = index(&[20.; 30]);
     let a = i
-        .capture_anchor_excluding(200., 100., false, Some("k10"))
+        .capture_anchor_excluding(200., 100., false, &["k10"])
         .unwrap();
     i.replace_keys(vec![
         "k11".into(),
@@ -1321,7 +1321,7 @@ fn reorder_anchor_keeps_signed_offsets_and_clamps_when_no_other_row_is_visible()
     assert!(!i.kept_row(&a, 100.));
     let mut i = index(&[20., 20., 0., 20., 20., 20.]);
     let a = i
-        .capture_anchor_excluding(20., 40., false, Some("k1"))
+        .capture_anchor_excluding(20., 40., false, &["k1"])
         .unwrap();
     i.replace_keys(vec![
         "k0".into(),
@@ -1339,7 +1339,7 @@ fn reorder_anchor_keeps_signed_offsets_and_clamps_when_no_other_row_is_visible()
 fn drop_anchor_requires_a_move_among_surviving_keys() {
     let mut i = index(&[20.; 30]);
     let a = i
-        .capture_anchor_excluding(200., 100., false, Some("k10"))
+        .capture_anchor_excluding(200., 100., false, &["k10"])
         .unwrap();
     let mut order = keys(30);
     order.insert(10, "new".into());

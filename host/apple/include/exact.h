@@ -202,6 +202,9 @@ typedef struct ExactTextRun {
     uint8_t inline_box;
     uint8_t box_align;
     float box_width, box_height, box_shift;
+    /* Its inline boxes' padding, border and margin before its first glyph and after
+     * its last, in points, start and end by the paragraph's direction. */
+    float inline_start, inline_end;
 } ExactTextRun;
 
 /* Evidence of the host's local-network fact from @exact/local-network

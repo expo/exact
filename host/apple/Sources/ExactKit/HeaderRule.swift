@@ -56,7 +56,8 @@ struct HeaderRule {
         // A disabled button, native or bare: a dimmed bar item, pressed or not, never the title's tap.
         let button = node.kind == "button" || (node.kind == "control" && node.props["type"] == "button")
         if button && node.props["accessibilityRole"] == "button" && node.disabled { facts |= 4096 }
-        if node.presenter?.invocation(of: node)?.opensPopover == true { facts |= 16 }
+        // A button that opens what it names, a popover or a modal dialog (`fact::OPENS`).
+        if node.presenter?.invocation(of: node)?.opens == true { facts |= 16 }
         if back != nil, node.props["id"] == back { facts |= 32 }
         if node.props["semanticTag"] == "header" { facts |= 64 }
         // A plain box, which shows nothing of its own (`fact::BOX`).

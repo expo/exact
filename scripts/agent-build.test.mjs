@@ -17,13 +17,15 @@ import { bakeOutput, hermesBundle, hermesTarget, linuxBinary, resolveApp, window
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
 import { writePackagedReceipt } from '../host/windows/build.mjs';
 
-test('Mac drives use the assembled app bundle even without catalogs or widgets', () => {
+test('Mac drives use the assembled app bundle even without catalogs or widgets, and the sample host its own', () => {
   const { dir } = scratchApp('ats-drive');
   try {
     const app = resolveApp(dir);
     const paths = appleArtifacts(app);
     assert.equal(appleRunBinary(app), resolve(paths.bundle, 'Contents/MacOS', paths.executable));
-    assert.equal(appleRunBinary(app, true), appleArtifacts(app, { host: true }).binary);
+    const host = appleArtifacts(app, { host: true });
+    assert.equal(appleRunBinary(app, true), resolve(host.bundle, 'Contents/MacOS', 'ExactHostMac'));
+    assert.match(host.bundle, / Host\.app$/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

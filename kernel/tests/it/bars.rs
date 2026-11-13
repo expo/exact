@@ -383,6 +383,7 @@ fn a_pressable_around_the_heading_is_the_title_and_a_tablist_its_segments() {
 }
 
 const MORE: &[(PropId, &str)] = &[(PropId::Id, "more"), (PropId::Popover, "auto")];
+const CLEAR: &[(PropId, &str)] = &[(PropId::Id, "clear"), (PropId::SemanticTag, "dialog")];
 const STATUS: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "status")];
 
 /// A readout (`role="status"`, LLP 1075.003 §9.15) is an item on its side of
@@ -452,9 +453,11 @@ fn a_readout_is_an_item_that_is_no_button() {
 type Props = &'static [(PropId, &'static str)];
 
 /// Whether a header button with no `press` is an item is whether what it
-/// invokes, as HTML resolves it (`exact_kernel::Invocation`), opens a popover.
+/// invokes, as HTML resolves it (`exact_kernel::Invocation`), opens what it
+/// names: a popover, or a dialog shown modally (#387: an alert's button that
+/// says `commandfor` alone was left out of the iOS bar).
 #[test]
-fn a_header_button_is_a_menu_item_when_its_invocation_opens_a_popover() {
+fn a_header_button_is_an_item_when_its_invocation_opens_what_it_names() {
     let cases: &[(Props, bool, &str)] = &[
         (
             &[
@@ -487,6 +490,27 @@ fn a_header_button_is_a_menu_item_when_its_invocation_opens_a_popover() {
             false,
             "a commandfor governs its popovertarget",
         ),
+        (
+            &[
+                (PropId::Commandfor, "clear"),
+                (PropId::Command, "show-modal"),
+            ],
+            true,
+            "a command that shows a dialog modally",
+        ),
+        (
+            &[(PropId::Commandfor, "clear"), (PropId::Command, "close")],
+            false,
+            "a command that only closes the dialog",
+        ),
+        (
+            &[
+                (PropId::Commandfor, "more"),
+                (PropId::Command, "show-modal"),
+            ],
+            false,
+            "show-modal on a popover that is no dialog",
+        ),
     ];
     for (props, menu, why) in cases {
         let kernel = kernel(view(
@@ -499,6 +523,7 @@ fn a_header_button_is_a_menu_item_when_its_invocation_opens_a_popover() {
                     vec![text(12, H1), button(50, props)],
                 ),
                 Node(60, NodeType::View, MORE, vec![]),
+                Node(61, NodeType::View, CLEAR, vec![]),
             ],
         ));
         let items = kernel

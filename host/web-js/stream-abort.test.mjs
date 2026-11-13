@@ -340,12 +340,12 @@ test('a JS upload with effective only-if-cached fails before sending; a forced u
     const { streamed } = await import(at(fixture, 'http-body.js'));
     for (const forced of [false, true]) {
       const controller = new AbortController(); controller.forced = forced;
-      const req = { method: 'POST', url: 'https://example.test/upload', headers: [], stream: true, upload: true, cache: 'only-if-cached', forced };
+      const req = { method: 'POST', url: 'https://example.test/upload', headers: [], stream: true, upload: true, cache: 'only-if-cached', forced, origin: 'app' };
       const messages = [], outcome = await streamed(req, set, m => messages.push(m), controller);
       expect(outcome.kind).toBe(forced ? 0 : 1);
       expect(messages.some(m => m.event === 'exact:sending')).toBe(forced);
       const events = [];
-      const ended = await open({ input: req.url, init: { method: 'POST', body: 'bytes', cache: req.cache, exactUploadProgress: true, exactStream: e => (events.push(e), e.type) } }, v => v, set, () => {}, controller);
+      const ended = await open({ input: req.url, init: { method: 'POST', body: 'bytes', cache: req.cache, exactUploadProgress: true, exactStream: e => (events.push(e), e.type) }, origin: 'app' }, v => v, set, () => {}, controller);
       expect(events.at(-1).type).toBe(forced ? 'load' : 'error');
       expect(ended.v).toBe(forced ? 'load' : 'error');
     }

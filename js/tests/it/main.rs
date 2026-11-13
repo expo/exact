@@ -41,6 +41,7 @@ mod shim;
 mod snapshot;
 mod socket;
 mod storage;
+mod storage_documents;
 mod superseded;
 mod timers;
 mod turn_budget;

@@ -202,6 +202,10 @@ pub(super) struct HardLine {
     inset: (f32, f32),
     /// The first visual line's indent as Parley applies it.
     indent: f32,
+    /// The room before a run's first cluster and before an image's box,
+    /// which its glyphs or its box are drawn past (`run_edges`).
+    leads: Vec<(usize, f32)>,
+    box_leads: Vec<(u32, f32)>,
 }
 
 /// A hard line's layout and the width, balanced width and alignment it was
@@ -298,6 +302,60 @@ fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes)> {
     out
 }
 
+/// A hard line's inline-box room (`Run::edges`): advance after the cluster
+/// holding a run's last character (its end), and before the cluster
+/// holding its first (its start), kept with that cluster where a line
+/// breaks, as Chrome keeps a `<span>`'s padding with its text; and for an
+/// image, its start before its box, by run.
+#[derive(Default)]
+struct Edges {
+    after: Vec<(usize, f32)>,
+    leads: Vec<(usize, f32)>,
+    box_leads: Vec<(u32, f32)>,
+}
+
+fn run_edges(spec: &Spec, pieces: &[(usize, String, Pieces, Boxes)]) -> Vec<Edges> {
+    let mut out: Vec<Edges> = (0..pieces.len()).map(|_| Edges::default()).collect();
+    if spec.runs.iter().all(|r| r.edges.is_empty()) {
+        return out;
+    }
+    // Each run's first and last place: its hard line and its byte range there.
+    let mut first: Vec<Option<(usize, usize)>> = vec![None; spec.runs.len()];
+    let mut last: Vec<Option<(usize, usize)>> = vec![None; spec.runs.len()];
+    for (h, (_, _, runs, _)) in pieces.iter().enumerate() {
+        for (range, index) in runs {
+            first[*index].get_or_insert((h, range.start));
+            last[*index] = Some((h, range.end));
+        }
+    }
+    for (index, run) in spec.runs.iter().enumerate() {
+        if run.inline.is_some() {
+            if run.edges.start != 0.0 {
+                if let Some(h) = pieces.iter().position(|p| p.3.iter().any(|b| b.1 == index)) {
+                    out[h].box_leads.push((index as u32, run.edges.start));
+                }
+            }
+            continue;
+        }
+        if run.edges.end != 0.0 {
+            if let Some((h, end)) = last[index] {
+                if let Some((at, _)) = pieces[h].1[..end].char_indices().last() {
+                    out[h].after.push((at, run.edges.end));
+                }
+            }
+        }
+        if run.edges.start != 0.0 {
+            if let Some((h, start)) = first[index] {
+                out[h].leads.push((start, run.edges.start));
+            }
+        }
+    }
+    for edges in &mut out {
+        edges.leads.sort_by_key(|l| l.0);
+    }
+    out
+}
+
 impl ShapedSource {
     pub(super) fn flow_box<'a>(
         &self,
@@ -351,6 +409,7 @@ impl ShapedSource {
         };
         let mut text_bytes = 0;
         let pieces = hard_lines(&spec);
+        let mut edges = run_edges(&spec, &pieces);
         let mut lines = Vec::with_capacity(pieces.len());
         for (h, (start, text, runs, boxes)) in pieces.into_iter().enumerate() {
             #[cfg(test)]
@@ -375,13 +434,23 @@ impl ShapedSource {
                     &families[*index],
                 );
             }
+            // An inline box's room separates the characters either side of
+            // it: no ligature or kerning joins them across it, as in Chrome.
+            for (range, index) in &runs {
+                if !spec.runs[*index].edges.is_empty() {
+                    builder.push_shaping_break(range.start);
+                    builder.push_shaping_break(range.end);
+                }
+            }
             for &(index, run) in &boxes {
                 let b = spec.runs[run].inline.expect("a box's run");
                 builder.push_inline_box(parley::InlineBox {
                     id: run as u64,
                     kind: parley::InlineBoxKind::InFlow,
                     index,
-                    width: b.width.max(0.0),
+                    // The room its boxes take beside it: its width reaches
+                    // past the image, which is drawn past the start's.
+                    width: b.width.max(0.0) + spec.runs[run].edges.start + spec.runs[run].edges.end,
                     height: b.height.max(0.0),
                 });
             }
@@ -396,6 +465,17 @@ impl ShapedSource {
             });
             builder.set_line_break_override(Some(CHROME));
             let mut layout = builder.build(&text);
+            let Edges {
+                after,
+                leads,
+                box_leads,
+            } = std::mem::take(&mut edges[h]);
+            for &(index, amount) in &after {
+                layout.add_advance_after(index, amount);
+            }
+            for &(index, amount) in &leads {
+                layout.add_lead(index, amount);
+            }
             let inset = line_inset(&spec, &runs, &mut layout);
             // CSS `text-indent`: the paragraph's first line only.
             let indent = if h == 0 { spec.text_indent } else { 0.0 } + inset.0 - inset.1;
@@ -419,6 +499,8 @@ impl ShapedSource {
                 }),
                 inset,
                 indent,
+                leads,
+                box_leads,
             });
         }
         catalog.release_scratch(text_bytes);
@@ -562,7 +644,13 @@ impl ShapedSource {
             let styles = layout.styles();
             for (i, line) in layout.lines().enumerate() {
                 let start = out.glyphs.len() as u32;
-                let content = lines::extract(&line, styles, shift, &mut out);
+                let content = lines::extract(
+                    &line,
+                    styles,
+                    shift,
+                    (&hard.leads, &hard.box_leads),
+                    &mut out,
+                );
                 let m = line.metrics();
                 // A collapsible space that ends a line hangs; a preserved
                 // one counts where the hard line ends (`pre`, `pre-wrap`).
@@ -689,7 +777,7 @@ impl ShapedSource {
         let mut ink = Lines::default();
         let mut advance = 0.0;
         if let Some(l) = symbol.lines().next() {
-            advance = lines::extract(&l, symbol.styles(), 0.0, &mut ink);
+            advance = lines::extract(&l, symbol.styles(), 0.0, (&[], &[]), &mut ink);
         }
         // Visual clusters, kept from the line's start edge.
         let extent = |g: &LayoutGlyph| (g.x, g.x + g.w);

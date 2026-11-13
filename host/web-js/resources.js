@@ -37,6 +37,7 @@ import {
   Refused,
   Restoring,
   Sched,
+  Origin,
 } from './rt.js';
 import { checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
@@ -268,7 +269,8 @@ export function res(
         (p, o) => {
           if (t.call?.seen?.read || p.store) r.store = t.read = true;
           if (p.req) {
-            const req = { ...p.req, forced: t.forced };
+            // A request its reply asks for is the same answer's, asked by the same origin.
+            const req = { ...p.req, forced: t.forced, origin: t.req?.origin };
             if (o.more) {
               const n = {
                 id: ++Ticket,
@@ -424,7 +426,8 @@ export function res(
             owner: r,
             args: a,
             forced: refresh,
-            req: ans.req && { ...ans.req, forced: refresh },
+            // The origin of the commit that asked it (LLP 1133.036 D6), which the host sends it as.
+            req: ans.req && { ...ans.req, forced: refresh, origin: Origin.now() },
             promise: ans.promise,
             call: ans.call,
             stream: ans.stream,
@@ -642,13 +645,14 @@ export function mut(name, slot, refreshes, type, mode) {
       () => (m.parallel ? m.tickets.includes(t) : m.ticket === t),
       (p, o) => {
         if (p.req) {
+          const req = { ...p.req, origin: t.req?.origin };
           if (o.more) {
-            const n = { id: ++Ticket, source: t.source, args: t.args, req: p.req, write: t.write, send: t.send };
+            const n = { id: ++Ticket, source: t.source, args: t.args, req, write: t.write, send: t.send };
             if (m.parallel) m.tickets = [...m.tickets.filter(x => x !== t), n];
             else m.ticket = n;
             send(n, land(n));
           } else {
-            t.req = p.req;
+            t.req = req;
             send(t, land(t));
           }
           return;
@@ -758,7 +762,7 @@ export function mut(name, slot, refreshes, type, mode) {
           owner: m,
           source,
           args,
-          req: a.req,
+          req: a.req && { ...a.req, origin: Origin.now() },
           promise: a.promise,
           call: a.call,
           stream: a.stream,

@@ -30,9 +30,12 @@ const VENDORS = { '045e': 'xbox', '054c': 'playstation', '057e': 'nintendo' };
 export function family(id) {
   const vendor = /Vendor:\s*([0-9a-f]{4})/i.exec(id)?.[1] ?? /^([0-9a-f]{4})-[0-9a-f]{4}-/i.exec(id)?.[1];
   if (vendor && VENDORS[vendor.toLowerCase()]) return VENDORS[vendor.toLowerCase()];
-  if (/dualsense|dualshock|playstation|wireless controller/i.test(id)) return 'playstation';
+  if (/dualsense|dualshock|playstation/i.test(id)) return 'playstation';
   if (/xbox|xinput/i.test(id)) return 'xbox';
   if (/nintendo|pro controller|joy-con/i.test(id)) return 'nintendo';
+  // Sony's pads call themselves "Wireless Controller", which other names contain ("Xbox Wireless Controller"), so it
+  // is checked after every family's own name.
+  if (/wireless controller/i.test(id)) return 'playstation';
   return 'generic';
 }
 

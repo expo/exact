@@ -20,6 +20,7 @@ android {
             "../../../packages/media-capture/android", "../../../packages/media-capture/test",
             "../../../packages/local-auth/android", "../../../packages/local-auth/test",
             "../../../packages/passkeys/android", "../../../packages/passkeys/test",
+            "../../../packages/recording/android", "../../../packages/recording/test",
         ))
     }
 }

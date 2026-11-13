@@ -549,7 +549,10 @@ extension Agent {
             guard let point = tapPoint(req, node: node, drawn: drawn) else {
                 return ["error": "tap #\(req["id"] ?? node.id): no visible text fragment; scroll it into view first"]
             }
-            if !presenter.reach(of: node).contains(point) {
+            // To a hundredth of a point, as replies give it: under the agent's `size` the scaled viewport's
+            // conversion leaves a box on its edge a hair outside it (#390). A root tab UIKit's tab bar stands
+            // for has no box of its own: its item's press is `activateChrome`'s.
+            if !presenter.reach(of: node).insetBy(dx: -0.01, dy: -0.01).contains(point), !presenter.navigation.tabBarStands(for: node) {
                 return ["error": "tap #\(node.id): its middle is outside the viewport; scroll it into view first"]
             }
         }

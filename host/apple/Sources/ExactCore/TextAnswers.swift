@@ -46,6 +46,11 @@ package enum TextAnswerKey {
         out.append(3); put(width.bitPattern, &out); put(height.bitPattern, &out)
         put(Int32(truncatingIfNeeded: align), &out); put(shift.bitPattern, &out)
     }
+    /// A run's inline edges where it has any, as a spec's run and a request's both carry them.
+    private static func edges(_ start: Double, _ end: Double, _ out: inout [UInt8]) {
+        guard start != 0 || end != 0 else { return }
+        out.append(4); put(start.bitPattern, &out); put(end.bitPattern, &out)
+    }
     private static func finish(_ out: [UInt8]) -> Int {
         var h = Hasher()
         out.withUnsafeBytes { h.combine(bytes: $0) }
@@ -68,6 +73,7 @@ package enum TextAnswerKey {
             // expanded Markdown spec has one, never a request's plain runs.
             if r.indent != 0 || r.hang { out.append(r.hang ? 2 : 1); put(single(r.indent).bitPattern, &out) }
             if let b = r.box { box(single(b.width), single(b.height), b.align, single(b.shift), &out) }
+            edges(single(r.inlineStart), single(r.inlineEnd), &out)
         }
         out.append(spec.strut == nil ? 0 : 1)
         if let s = spec.strut {
@@ -102,6 +108,7 @@ package enum TextAnswerKey {
             out.append(contentsOf: UnsafeBufferPointer(start: r.text, count: r.len))
             run(r)
             if r.inline_box != 0 { box(Double(r.box_width), Double(r.box_height), Int(r.box_align), Double(r.box_shift), &out) }
+            edges(Double(r.inline_start), Double(r.inline_end), &out)
         }
         out.append(1)
         run(request.strut)

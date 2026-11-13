@@ -13,6 +13,9 @@
     "snapback4": "0.4.33",
     "typescript": "7.0.2"
   },
+  "overrides": {
+    "undici": "8.12.2"
+  },
   "bin": {
     "exact": "scripts/exact.mjs"
   },

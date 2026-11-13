@@ -150,6 +150,13 @@ export function macSigning(app, compat, { current, widgets = null, release = fal
   if (widgets) return { provisioning, widgets: { ...widgets, profiles: pair }, sha1: current };
   return { provisioning, widgets, sha1: identityFor(provisioning.profile, current, { distribution }) };
 }
+/** The Mac sample host's bundle identifier and name (LLP 1031 D10), signed under `profile` or none: under one, the
+ * app's id, the App ID the profile grants its entitlements to (Apple ties them to it), so its sessions keep what the
+ * app's do; with none, iOS's sample host's own second identity, `<id>.host`. */
+export function macHostIdentity(app, profile) {
+  return { id: profile ? app.id : `${app.id}.host`, name: 'Host (not Exact)' };
+}
+
 /** The RP IDs a Mac needs an associated domain for: every `auth.passkey` line but `localhost`, which only the web admits. */
 export function passkeyLines(ceiling = '') {
   return String(ceiling).split('\n').map((line) => line.trim().split(/\s+/))

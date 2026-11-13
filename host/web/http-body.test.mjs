@@ -326,7 +326,7 @@ test('the JS target opens a socket under net.websocket, never net.fetch', async 
   const text = (r) => new TextDecoder().decode(r.body);
   try {
     const sent = [];
-    const end = await streamed({ method: 'GET', url: `${peer.url}/three`, headers: [], maxResponseBytes: 64 }, normalized(`net.websocket ${peer.url}`), ({ received, ...m }) => { sent.push(m); if (m.data === 'a' || m.data === 'd') peer.next('/three'); }, new AbortController());
+    const end = await streamed({ method: 'GET', url: `${peer.url}/three`, headers: [], maxResponseBytes: 64, origin: 'app' }, normalized(`net.websocket ${peer.url}`), ({ received, ...m }) => { sent.push(m); if (m.data === 'a' || m.data === 'd') peer.next('/three'); }, new AbortController());
     assert.deepEqual(sent[0], { event: '', id: '', data: 'a', coalesced: 0, protocol: '' });
     assert.deepEqual([end.kind, text(end)], [1, 'the socket closed (1000)']);
     const refused = await streamed({ url: `${peer.url}/three`, maxResponseBytes: 64 }, normalized(`net.fetch ${peer.url.replace('ws:', 'http:')}`), () => {}, new AbortController());
@@ -345,7 +345,7 @@ test('a source-scoped POST can return through an app-granted middle origin', asy
   try {
     for (const run of [
       () => request({ method: 'POST', url: `${origin.url}start`, headers: [], body: btoa('payload'), scope }, { grantSet: app, controllers: new Set(), moduleLoader: null }),
-      () => js({ method: 'POST', url: `${origin.url}start`, headers: [], raw: 'payload', scope }),
+      () => js({ method: 'POST', url: `${origin.url}start`, headers: [], raw: 'payload', scope, origin: 'app' }),
     ]) {
       const result = await run();
       expect([result.failed ?? result.kind ?? 0, new TextDecoder().decode(result.body)]).toEqual([0, 'accepted']);

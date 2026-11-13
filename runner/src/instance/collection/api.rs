@@ -3,6 +3,13 @@
 use exact_kernel::ViewId;
 use exact_plan::bytes::{Reader, Writer};
 
+/// Candidates from one accepted geometry report. The second edge may run only
+/// after a pure no-op first action. State changes defer it until settlement.
+pub(crate) struct CollectionEdges {
+    pub first: exact_plan::EventKind,
+    pub end_after_noop: bool,
+}
+
 /// A mounted wrapper's measured border-box size on the list's main axis,
 /// using its published epoch.
 #[derive(Debug, Clone, Copy, PartialEq)]

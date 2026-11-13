@@ -133,6 +133,7 @@ fn measure_request_and_fragment_paint_have_identical_metrics() {
     let runs = [exact_kernel::TextRun {
         text: "Measure what we paint. ".into(),
         style,
+        edges: Default::default(),
         inline: None,
     }];
     let exclusions = circle(120.);

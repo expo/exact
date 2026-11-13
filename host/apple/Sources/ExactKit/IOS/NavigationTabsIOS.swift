@@ -67,6 +67,11 @@ extension NavigationHost {
     /// Whether Exact's tab bar shows: not under the agent's own chrome,
     /// which sees the authored tablist (LLP 1021 D4's one presentation).
     var tabBarShows: Bool { tabController != nil && tabOwner === tabController && !ExactEnv.authoredChrome && !tablistAppearanceNone }
+    /// Whether UIKit's tab bar stands for `node`: a root tab, or what it holds, while the bar shows.
+    func tabBarStands(for node: NodeView) -> Bool {
+        guard tabBarShows, let tabs = container.flatMap({ NavigationTabs.of($0, presenter) }) else { return false }
+        return tabs.tabs.contains { node === $0 || node.isDescendant(of: $0) }
+    }
 
     /// What a tab other than the selected one holds: its stack up to its
     /// first presentation. A sheet is presented only over the selected tab;

@@ -33,7 +33,7 @@
 // second executable path for the same binary, and macOS gives it the bundle
 // identity of whatever the *symlink* is beside — which is not the app.
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statfsSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statfsSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 if (import.meta.main && process.argv[2] === 'status' && !process.argv.includes('--help')) {
@@ -68,15 +68,12 @@ const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', i
 const { generate: gameVocabulary } = await import('../game/vocab.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const APPLICATIONS = resolve(homedir(), 'Applications');
 /** The app's assembled bundle in this repo — `host/apple/build.mjs --bundle`'s one stable output. */
 export const bundleOf = (app) => appleArtifacts(app).bundle;
 /** The executable inside a bundle: what a terminal launches to keep stdio. */
 export const executableIn = (bundle, app) => resolve(bundle, 'Contents/MacOS', appleExecutableName(app));
-/** The name this app answers to on the command line (`app.command`, else its directory's name). */
-export const commandOf = (app) => app.manifest.app?.command ?? app.name;
-/** Where `install` puts the app. */
-export const installedAt = (app) => resolve(APPLICATIONS, `${appleExecutableName(app)}.app`);
+const { install, uninstall } = await import('./exact-install.mjs');
+export const { binDirectory, commandOf, installedAt } = await import('./exact-install.mjs');
 
 /** The targets this host cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
  * TypeScript, a Hermes bundle, and only for its destination: on a Mac with Xcode; on Linux with the cross SDK (an ARM simulator). */
@@ -150,16 +147,6 @@ export function androidHermes(env = process.env, execute = spawnSync, local = he
   const pinned = checkHermesBundles(env, execute, process.platform, process.arch, ['aarch64-linux-android']);
   return { ok: pinned.ok, have: pinned.ok ? 'verified by hermes-lean-sys' : 'not installed or invalid', fix: pinned.fix };
 }
-/** Where a shim goes: `EXACT_BIN_DIR`, else the first of these already on PATH, else `~/.local/bin` (made, and named in the advice). */
-export function binDirectory() {
-  if (process.env.EXACT_BIN_DIR) return resolve(process.env.EXACT_BIN_DIR);
-  const path = (process.env.PATH ?? '').split(':').map((p) => p && resolve(p));
-  const candidates = [resolve(homedir(), '.local/bin'), '/usr/local/bin', resolve(homedir(), 'bin')];
-  return candidates.find((dir) => path.includes(dir) && writable(dir)) ?? candidates[0];
-}
-
-const writable = (dir) => { try { accessSync(dir, constants.W_OK); return true; } catch { return false; } };
-const onPath = (dir) => (process.env.PATH ?? '').split(':').some((p) => p && resolve(p) === dir);
 /** Cheap assertion on the executable's baked identity, shared with the driver. */
 function refuseForeignBundle(app, bundle) {
   assertAppleIdentity(app, executableIn(bundle, app));
@@ -212,41 +199,6 @@ async function run(app, files) {
   });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
   child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 0));
-}
-/** `exact install` — the app where the OS looks for apps, and its name where a shell looks for names. */
-function install(app) {
-  const bundle = build(app);
-  const target = installedAt(app);
-  mkdirSync(APPLICATIONS, { recursive: true });
-  // A copy, not a symlink: Launch Services registers what it finds at the
-  // path, and a symlinked bundle registers the repo's copy — which moves,
-  // and which a `cargo clean` deletes underneath the Dock.
-  rmSync(target, { recursive: true, force: true });
-  const copy = spawnSync('/bin/cp', ['-R', bundle, target], { stdio: 'inherit' });
-  if (copy.status !== 0) process.exit(copy.status ?? 1);
-  // Register it now rather than whenever the OS next rescans, so `open -a`
-  // and Open With work in the same second this returns.
-  spawnSync('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister', ['-f', target], { stdio: 'ignore' });
-
-  const command = commandOf(app);
-  const dir = binDirectory();
-  mkdirSync(dir, { recursive: true });
-  const shim = resolve(dir, command);
-  // `open` and not the executable: it hands the files to a copy that is
-  // already running instead of starting a second one, and it returns to the
-  // shell instead of holding it. `--args` after the files keeps a leading
-  // `-` in a filename from being read as one of open's own switches.
-  writeFileSync(shim, `#!/bin/sh
-# ${app.displayName} — written by \`exact install ${app.name}\`. Delete it or
-# run \`exact uninstall ${app.name}\` to take it away.
-exec /usr/bin/open -a ${JSON.stringify(target)} ${'"$@"'}
-`);
-  chmodSync(shim, 0o755);
-
-  console.log(`${app.displayName}: ${target}`);
-  console.log(`${command}: ${shim}`);
-  if (!onPath(dir)) console.log(`\n  ${dir} is not on your PATH. Add it:\n    echo 'export PATH="${dir}:$PATH"' >> ~/.zshrc && exec zsh`);
-  else console.log(`\n  ${command} <file> opens it — in the copy already running, if there is one.`);
 }
 /** A tool this verb depends on, run to completion. A failure here is the
  *  end of the verb: half a signed bundle is worse than none. */
@@ -359,15 +311,6 @@ function release(app) {
   console.log(`  ${dmg}`);
   console.log(`  ${zip}`);
   if (assess.status !== 0) throw new Error('the artifacts were built but Gatekeeper refuses them; do not send these');
-}
-/** `exact uninstall` — both halves, and nothing else. */
-function uninstall(app) {
-  const target = installedAt(app), shim = resolve(binDirectory(), commandOf(app));
-  for (const path of [target, shim]) {
-    if (!existsSync(path)) { console.log(`not installed: ${path}`); continue; }
-    rmSync(path, { recursive: true, force: true });
-    console.log(`removed ${path}`);
-  }
 }
 /** `exact list` — every app in this repo, its command, and whether it is installed. */
 function list() {
@@ -1478,7 +1421,7 @@ async function main(argv) {
   if (verb === 'run') return run(app, rest);
   // `--release` on `install` is the same path, since that is what it is for.
   if (verb === 'release' || (verb === 'install' && rest.includes('--release'))) return release(app);
-  if (verb === 'install') return install(app);
+  if (verb === 'install') return install(app, build(app));
   return uninstall(app);
 }
 

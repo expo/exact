@@ -54,7 +54,8 @@ impl std::fmt::Display for BakeError {
 impl std::error::Error for BakeError {}
 
 /// An app's Cargo build-script entrypoint. Write the paired artifacts and
-/// actual target/grants receipt to OUT_DIR; source files stay untouched.
+/// actual target/grants receipt to OUT_DIR. A mixed bake also writes its
+/// generated declarations beside app.ts, before checking it.
 /// This development slice requires an updater-free composition (store L=0).
 ///
 /// With `EXACT_BAKED` naming a directory `exact-js-bake --cargo` filled (an
@@ -111,7 +112,8 @@ pub fn build_mixed(app: &Path, platform: &str, rust: &dyn DataSource) -> Result<
 /// bake's TypeScript module is composed with the app's Rust source by
 /// `compose`, so a resource only Rust owns bakes its first-frame value
 /// through Rust, with no TypeScript placeholder. `rust_sources` names what
-/// Rust owns, for the receipt the development producer seeds from.
+/// Rust owns, for the TypeScript provider types and the receipt the
+/// development producer seeds from.
 pub fn build_mixed_with(
     app: &Path,
     platform: &str,
@@ -287,6 +289,7 @@ fn build_sources(
         ("app.plan", &baked.plan[..]),
         ("app.js", &baked.script[..]),
         ("app.hbc", &baked.bytecode[..]),
+        (DECLARATIONS, baked.declarations.as_bytes()),
         ("app.module.json", baked.receipt.as_bytes()),
     ] {
         replace_changed(&out.join(name), bytes)?;
@@ -1117,16 +1120,22 @@ fn bake_in(
     let exported = contract::design_exports(&app.join("app.contract"));
     let entries = contract::snapshot::entries(&app)?;
     let source_plan = contract::snapshot::source_plan(&entries, &plan)?;
-    let declarations = contract::typescript_exporting(&source_plan, exported.as_deref())?;
+    let rust_sources = composer
+        .as_ref()
+        .map(|c| c.rust_sources.as_slice())
+        .or_else(|| seed.map(|s| s.rust_sources.as_slice()))
+        .unwrap_or_default();
+    let declarations =
+        contract::typescript_exporting(&source_plan, exported.as_deref(), rust_sources)?;
     write_changed(&stage.join("__exact_canvas.js"), RECORDER.as_bytes())?;
     write_changed(
         &stage.join("__exact_canvas.d.ts"),
         RECORDER_TYPES.as_bytes(),
     )?;
     write_changed(&stage.join(DECLARATIONS), declarations.as_bytes())?;
-    // And beside app.ts, so an editor type-checks the module against its plan: never captured or
-    // committed, written only when it changes, so a watcher sees one event per contract change.
-    if development {
+    // The composer's roster is available only in this bake. Publish its editor
+    // declarations before checking app.ts, including when that check fails.
+    if development || composer.is_some() {
         write_changed(&app.join(DECLARATIONS), declarations.as_bytes())?;
     }
     // A development build's `local-network` lines admit loopback too (LLP 1133.036 D5), as
@@ -1142,7 +1151,7 @@ fn bake_in(
     let id = contract::Manifest::read(&app)
         .map(|m| m.id)
         .unwrap_or_default();
-    let mut entry = format!("import * as app from './app';\nimport type {{ Answer }} from './app.contract.d.ts';\nexport const appId: string = (app as unknown as {{ appId?: string }}).appId ?? {};\nexport const grants: string = {grants};\nexport const answer: Answer = app.answer;\n", serde_json::to_string(&id).unwrap_or_default());
+    let mut entry = format!("import * as app from './app';\nimport type {{ TypeScriptAnswer }} from './app.contract.d.ts';\nexport const appId: string = (app as unknown as {{ appId?: string }}).appId ?? {};\nexport const grants: string = {grants};\nexport const answer: TypeScriptAnswer = app.answer;\n", serde_json::to_string(&id).unwrap_or_default());
     entry.push_str(OPTIONAL_ENTRY);
     entry.push_str("// __exact_canvas_entry\n");
     write_changed(&stage.join("__exact_entry.ts"), entry.as_bytes())?;
@@ -1193,10 +1202,7 @@ fn bake_in(
         .iter()
         .map(|(name, arity)| (name.clone(), (*arity).into()))
         .collect();
-    let rust_sources = composer
-        .as_ref()
-        .map(|c| c.rust_sources.clone())
-        .unwrap_or_default();
+    let rust_sources = rust_sources.to_vec();
     // The first frame bakes through the declared owners (LLP 1027.002 §5
     // step 0): the app's composer in a Cargo bake; the previous plan's
     // values for the Rust half a development producer cannot run.

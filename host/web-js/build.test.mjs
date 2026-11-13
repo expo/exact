@@ -1336,6 +1336,77 @@ test('a mixed bake selects its Rust source without copying the TypeScript compos
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a mixed contract build leaves the Cargo provider types even when checking fails', async () => {
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/mixed-provider-types-'));
+  const { patchLines } = await import('../../scripts/app.mjs');
+  const env = { ...process.env, EXACT_APP_DIR: dir, CARGO_TARGET_DIR: resolve(dir, 'target'), CARGO_NET_OFFLINE: 'true', HERMES_LEAN_SYS_OFFLINE: '1' };
+  const write = (name, text) => writeFileSync(resolve(dir, name), text);
+  const run = () => spawnSync(process.execPath, [resolve(root, 'scripts/exact.mjs'), 'contract', 'build', 'app.contract'], { cwd: dir, env, encoding: 'utf8', timeout: 240_000 });
+  const declarations = () => readFileSync(resolve(dir, 'app.contract.d.ts'), 'utf8');
+  try {
+    mkdirSync(resolve(dir, 'web/src'), { recursive: true });
+    write('Cargo.toml', `[workspace]\nmembers = ["web"]\nresolver = "2"\n[profile.dev]\ndebug = 0\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
+    write('web/Cargo.toml', `[package]\nname = "provider-web"\nversion = "0.1.0"\nedition = "2021"\n[build-dependencies]\nexact-js-bake = { path = ${JSON.stringify(resolve(root, 'js/bake'))} }\nexact-data = { path = ${JSON.stringify(resolve(root, 'data'))} }\nexact-runner = { path = ${JSON.stringify(resolve(root, 'runner'))} }\n`);
+    write('web/src/lib.rs', '');
+    const script = `
+mod provider_data {
+    pub const RUST_SOURCES: &[&str] = &["rust"];
+    pub struct Rust;
+    impl exact_runner::DataSource for Rust {
+        fn app_id(&self) -> &str { "test.providers" }
+        fn query(&mut self, _: &str, _: &[exact_runner::Value]) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Ok(exact_runner::Value::str("Rust"))
+        }
+    }
+}
+fn main() {
+    exact_js_bake::build_mixed_with(
+        std::path::Path::new(".."), "web", &provider_data::Rust, provider_data::RUST_SOURCES,
+        |javascript| Box::new(exact_data::Mixed::new(javascript, provider_data::Rust,
+            if provider_data::RUST_SOURCES.is_empty() { &["javascript", "rust"] } else { &["javascript"] },
+            provider_data::RUST_SOURCES).unwrap()),
+    ).unwrap();
+}
+`;
+    write('web/build.rs', script);
+    write('app.json', JSON.stringify({ name: 'Provider', app: { id: 'test.providers', name: 'Provider' }, deploy: { store: { web: '0' } } }));
+    write('app.contract', 'component App\n  resource javascript = javascript() as shape string\n  resource rust = rust() as shape string\n  view\n    column\n      text javascript\n      text rust\n');
+    const source = `import type { TypeScriptSources, TypeScriptAnswer } from './app.contract.d.ts';
+export const grants = '';
+const sources: TypeScriptSources = { javascript: () => 'TypeScript' };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
+`;
+    write('app.ts', source);
+    const locked = spawnSync('cargo', ['generate-lockfile', '--offline'], { cwd: dir, env, encoding: 'utf8', timeout: 60_000 });
+    expect(locked.status, locked.stdout + locked.stderr).toBe(0);
+    let checked = run();
+    expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+    expect(declarations()).toContain('Exclude<Source, "rust">');
+    checked = run();
+    expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+    write('app.ts', source.replace("{ javascript: () => 'TypeScript' }", '{}'));
+    checked = run();
+    expect(checked.status).toBe(1);
+    expect(checked.stdout + checked.stderr).toContain("Property 'javascript' is missing");
+    expect(declarations()).toContain('Exclude<Source, "rust">');
+    write('app.ts', source);
+    write('web/build.rs', script.replace('&["rust"];', '&[];'));
+    checked = run();
+    expect(checked.status).toBe(1);
+    expect(checked.stdout + checked.stderr).toContain("Property 'rust' is missing");
+    expect(declarations()).toContain('export type TypeScriptSource = Source;');
+    write('app.ts', source.replace("javascript: () => 'TypeScript'", "javascript: () => 'TypeScript', rust: () => 'Moved'"));
+    checked = run();
+    expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+    write('web/build.rs', script);
+    write('app.ts', source.replace("{ javascript: () => 'TypeScript' }", '{}'));
+    checked = run();
+    expect(checked.status).toBe(1);
+    expect(checked.stdout + checked.stderr).toContain("Property 'javascript' is missing");
+    expect(declarations()).toContain('Exclude<Source, "rust">');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 300_000);
+
 test('compiler reuse is invalidated by dependency manifests and the workspace lockfile', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-compiler-fresh-'));
   const product = resolve(dir, 'compiler'), crate = resolve(dir, 'dep'), source = resolve(crate, 'src/lib.rs');

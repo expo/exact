@@ -123,13 +123,6 @@ pub fn set_bootstrap_extent(px: f64) {
     }
 }
 
-/// Candidates from one accepted geometry report. The second edge may run only
-/// after a pure no-op first action. State changes defer it until settlement.
-pub(crate) struct CollectionEdges {
-    pub first: EventKind,
-    pub end_after_noop: bool,
-}
-
 #[derive(Debug)]
 struct Mounted {
     position: usize,
@@ -157,6 +150,7 @@ pub(crate) struct Collection {
     /// later, on a report, is in.
     pub(crate) around: super::theme::Around,
     preview: Option<reorder::Preview>,
+    pending_drops: Vec<reorder::PendingDrop>,
     /// The gap a grouped session opens here as its target (LLP 1094 D4).
     incoming: Option<reorder_group::Incoming>,
     /// The dragged row's identity while a ghost stands for it (D6).
@@ -480,6 +474,7 @@ impl Collection {
                 ..u.theme.clone()
             },
             preview: None,
+            pending_drops: Vec::new(),
             incoming: None,
             hidden: None,
             instant: false,
@@ -600,7 +595,11 @@ impl Collection {
         }
         self.instant = instant;
         let anchor = if changed { self.anchor()? } else { None };
-        let drop_anchor = if changed { self.drop_anchor()? } else { None };
+        let drop_anchor = if changed {
+            self.drop_anchor(u.env.now_ms)?
+        } else {
+            None
+        };
         // Items that changed in place: the same keys in the same order, and
         // no input of the rows' bodies or keys changed (a live tick's prices).
         let mut in_place: Option<Vec<usize>> = None;

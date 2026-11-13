@@ -318,10 +318,16 @@ final class BarPress: NSObject {
         // A popover that is no menu, named with no press of its own, opens
         // from the item (`MenuHost.openFromBar`); with a press, after it
         // (`MenuHost.invoke`).
-        if !node.handlers.contains("press"), let invocation = host.presenter.invocation(of: node), invocation.opensPopover,
-           !host.presenter.menus.pullsDown(invocation.target) {
-            _ = host.presenter.menus.openFromBar(node)
-            return
+        if !node.handlers.contains("press"), let invocation = host.presenter.invocation(of: node) {
+            if invocation.opensPopover, !host.presenter.menus.pullsDown(invocation.target) {
+                _ = host.presenter.menus.openFromBar(node)
+                return
+            }
+            // A dialog it shows modally, as its command says (`MenuHost.invoke`'s bar item).
+            if invocation.action == .showModal {
+                if !node.disabled { host.presenter.press(id) }
+                return
+            }
         }
         _ = host.act(id, 0)
     }
@@ -419,7 +425,9 @@ extension NavigationHost {
             case nil: return ["error": "unsupported: bar item #\(id) opens its menu as UIKit's pull-down from the bar, which only a real touch opens: under --touch platform `tap` opens it and `tap <row>` picks a row (LLP 1021 D4)"]
             }
         }
-        guard node.handlers.contains("press"), !node.disabled else { return ["error": "bar item #\(id) is disabled or presses nothing"] }
+        // A button with no press of its own that shows a dialog modally: its command, as `BarPress` runs it.
+        let showsModal = presenter.invocation(of: node)?.action == .showModal
+        guard node.handlers.contains("press") || showsModal, !node.disabled else { return ["error": "bar item #\(id) is disabled or presses nothing"] }
         presenter.press(node.id)
         return ["tapped": id, "pressed": id, "delivery": "host-activation", "native": "bar-button-item"]
     }

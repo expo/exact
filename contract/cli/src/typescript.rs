@@ -13,13 +13,19 @@ use std::fmt::Write;
 /// @ref LLP 1039 D1
 /// This is a build-time artifact, never a runtime import or committed file.
 pub fn typescript(plan: &Plan) -> Result<String, String> {
-    typescript_exporting(plan, None)
+    typescript_exporting(plan, None, &[])
 }
 
 /// [`typescript`], its `ColorToken` union bounded by the design's `exports`
 /// when it lists them ([`design_exports`]): what a binding may name (LLP
-/// 1121 D7), though a view may name more.
-pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<String, String> {
+/// 1121 D7), though a view may name more. `rust_sources` is the composer's
+/// ownership list: `TypeScriptSources` and `TypeScriptAnswer` exclude it,
+/// while `Sources` and `Answer` describe the complete data seam.
+pub fn typescript_exporting(
+    plan: &Plan,
+    exports: Option<&[String]>,
+    rust_sources: &[String],
+) -> Result<String, String> {
     // Public callers may construct a Plan directly. Refuse malformed tables
     // before following any indices, just as the runtime decoder does.
     plan.redecode()
@@ -29,7 +35,7 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
         "// @generated from Contract source signatures; do not edit.\n\
          // Static types do not replace runtime shape, identity, or grant checks.\n",
     );
-    summary(plan, &mut out);
+    summary(plan, rust_sources, &mut out);
     out.push('\n');
     // Ibex2 owns the storage surface. Include its declaration source directly:
     // this compiler needs neither its Rust runtime nor a JavaScript engine.
@@ -176,6 +182,21 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
          /** What a resource shows while writes affect it: its answer with them laid over it. Synchronous, with no effects; `undefined` shows the answer and stops showing every answered write. */\n\
          export type Overlay = <S extends Source>(source: S, args: Args<S>, answer: Result<S>, writes: readonly Write[]) => Result<S> | undefined;\n",
     );
+    let rust: BTreeSet<_> = rust_sources.iter().map(|s| quoted(s)).collect();
+    writeln!(
+        out,
+        "\n/** Sources this build delegates to TypeScript (LLP 1027 D8). */\nexport type TypeScriptSource = {};",
+        if rust.is_empty() {
+            "Source".into()
+        } else {
+            format!("Exclude<Source, {}>", rust.into_iter().collect::<Vec<_>>().join(" | "))
+        }
+    )
+    .unwrap();
+    out.push_str(
+        "export type TypeScriptSources = Pick<Sources, TypeScriptSource>;\n\
+         export type TypeScriptAnswer = <S extends TypeScriptSource>(source: S, args: Args<S>, store: Store, storage: Storage, native?: NativeModule | null) => Result<S> | Promise<Result<S>>;\n",
+    );
     tokens(plan, exports, &mut out);
     // Canvas types describe the data seam even when `draw` is exported from
     // another module; no producer needs to inspect app.ts to include them (LLP 1056 D1).
@@ -245,7 +266,7 @@ fn tokens(plan: &Plan, exports: Option<&[String]>, out: &mut String) {
 /// The file's top (LLP 1116.006 D7): what `app.ts` writes, one line each, so a builder reads
 /// these lines and not the declarations below. Each source the data module implements with its
 /// arguments and answer, then each named shape those carry, as TypeScript types; comments only.
-fn summary(plan: &Plan, out: &mut String) {
+fn summary(plan: &Plan, rust_sources: &[String], out: &mut String) {
     let sources: Vec<_> = plan
         .sources
         .iter()
@@ -254,6 +275,7 @@ fn summary(plan: &Plan, out: &mut String) {
             !exact_plan::runner_owned_source(name)
                 && plan.module_named(name).is_none()
                 && plan.fetch_named(name).is_none()
+                && !rust_sources.iter().any(|source| source == name)
         })
         .collect();
     if sources.is_empty() {
@@ -267,7 +289,7 @@ fn summary(plan: &Plan, out: &mut String) {
             .collect::<Vec<_>>()
     };
     out.push_str(
-        "//\n// What app.ts writes, in brief (the declarations follow): `sources: Sources` has one\n\
+        "//\n// What app.ts writes, in brief (the declarations follow): `sources: TypeScriptSources` has one\n\
          // function per source, given its arguments as an array (then store, storage, native) and\n\
          // answering its shape, or a Promise of it.\n",
     );

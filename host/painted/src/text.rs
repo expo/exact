@@ -22,6 +22,8 @@ pub(crate) mod cache;
 mod catalog;
 mod catalog_recipe;
 pub(crate) mod decorations;
+#[cfg(test)]
+mod edges_tests;
 mod fallback;
 pub(crate) mod field;
 mod flow;
@@ -111,6 +113,9 @@ pub struct Run {
     /// An image in the paragraph (LLP 1011.002): the box reserved in place of
     /// this run's text, which is shaped as none.
     pub inline: Option<exact_kernel::InlineBox>,
+    /// Its inline boxes' padding, border and margin before its first glyph
+    /// and after its last (`TextRun::edges`), shaped as advance beside them.
+    pub edges: exact_kernel::InlineEdges,
 }
 
 #[cfg(test)]
@@ -137,6 +142,7 @@ impl Clone for Run {
             href: self.href.clone(),
             bold_text: self.bold_text,
             inline: self.inline,
+            edges: self.edges,
         }
     }
 }
@@ -166,6 +172,7 @@ impl Run {
             href: String::new(),
             bold_text: style.bold_text,
             inline: None,
+            edges: exact_kernel::InlineEdges::default(),
         }
     }
 
@@ -173,6 +180,7 @@ impl Run {
     pub fn from_kernel(run: &exact_kernel::TextRun<'_>) -> Self {
         Self {
             inline: run.inline,
+            edges: run.edges,
             ..Self::from_style(&run.text, run.style)
         }
     }

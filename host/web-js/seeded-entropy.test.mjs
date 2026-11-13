@@ -3,7 +3,79 @@ import { cpSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { open } from '../../scripts/agent.mjs';
+import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { webCompiler } from './module.mjs';
+
+test('module-body crypto refuses direct calls, helpers and async continuations before drawing browser entropy', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/entropy-module-test-'));
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Entropy module', app: { id: 'test.entropy-module', name: 'Entropy module' } }));
+    writeFileSync(resolve(dir, 'app.contract'), `component App
+  resource report = report() as shape string else empty()
+  view
+    text report testId="report"
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = '';
+const refused: string[] = [];
+const view = new Uint8Array([42]);
+try { crypto.randomUUID(); refused.push('UNGUARDED'); }
+catch (error) { refused.push(String(error)); }
+try { crypto.getRandomValues(view); refused.push('UNGUARDED'); }
+catch (error) { refused.push(String(error)); }
+function helper(api: string) {
+  return api === 'randomUUID' ? crypto.randomUUID() : crypto.getRandomValues(view);
+}
+for (const api of ['randomUUID', 'getRandomValues']) {
+  try { helper(api); refused.push('UNGUARDED'); }
+  catch (error) { refused.push(String(error)); }
+}
+const id = (async () => { await Promise.resolve(); return crypto.randomUUID(); })();
+const reaction = Promise.resolve().then(() => crypto.randomUUID());
+const pending = [id, reaction].map(work => work.then(() => 'UNGUARDED', error => String(error)));
+export async function answer(): Promise<string> {
+  const deferred = await Promise.all(pending);
+  await Promise.resolve();
+  return JSON.stringify({ refused: [...refused, ...deferred], untouched: view[0],
+    id: crypto.randomUUID(), bytes: Array.from(crypto.getRandomValues(new Uint8Array(4))) });
+}
+`);
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'entropy-module', '--out', resolve(dir, 'dist'), '--render', 'none'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+      const path = new URL(req.url).pathname;
+      return new Response(Bun.file(resolve(dir, 'dist', path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.addInitScript(() => {
+      globalThis.entropyCalls = { randomUUID: 0, getRandomValues: 0 };
+      for (const api of Object.keys(globalThis.entropyCalls)) {
+        const draw = crypto[api].bind(crypto);
+        crypto[api] = (...args) => { globalThis.entropyCalls[api]++; return draw(...args); };
+      }
+    });
+    await page.goto(server.url.href);
+    await page.waitForFunction(() => document.querySelector('[data-testid=report]')?.textContent.startsWith('{'));
+    const report = JSON.parse(await page.getByTestId('report').textContent());
+    const refusal = (api, phase) => `Error: crypto.${api}() is unavailable ${phase}; call it inside an answer`;
+    expect(report.refused).toEqual([
+      ...Array.from({ length: 2 }, () => ['randomUUID', 'getRandomValues'].map(api => refusal(api, 'during module initialization'))).flat(),
+      ...Array.from({ length: 2 }, () => refusal('randomUUID', 'outside an answer')),
+    ]);
+    expect(report.untouched).toBe(42);
+    expect(report.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(report.bytes).toHaveLength(4);
+    // Only the answer's two draws reach the browser, after its awaits.
+    expect(await page.evaluate(() => globalThis.entropyCalls)).toEqual({ randomUUID: 1, getRandomValues: 1 });
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
 
 test('a crypto draw requires a pending turn and refuses before consuming entropy', async () => {
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/entropy-lifetime-test-'));

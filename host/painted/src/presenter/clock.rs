@@ -41,12 +41,12 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// The Canvas reader's frame turn, also driven headlessly in tests.
+    /// The Canvas reader's frame turn: timers fire only while the display owns time.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_clock(&mut self, now: f64, live: bool) -> Option<String> {
         let error = if self.wants_frames() && live {
             self.animation_frame(now)
-        } else if self.wake_due_ms().is_some_and(|due| due <= now) {
+        } else if live && self.wake_due_ms().is_some_and(|due| due <= now) {
             self.advance(now)
         } else {
             None

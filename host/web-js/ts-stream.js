@@ -172,9 +172,9 @@ function handle(transport, owner) {
 // (http-body.js `received`) through the mapper to the commit, and the stub
 // decode the mapper calls. A page with no agent has none of it.
 const gate = () => globalThis.exact?.streamGate;
-export function open({ input, init, redirect, protocols }, conv, grantSet, deliver, controller) {
+export function open({ input, init, redirect, protocols, origin }, conv, grantSet, deliver, controller) {
   let req;
-  try { req = request(input, init, redirect, protocols); req.forced = !!controller.forced; } catch (e) { return Promise.resolve({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }); }
+  try { req = request(input, init, redirect, protocols); req.forced = !!controller.forced; req.origin = origin; } catch (e) { return Promise.resolve({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }); }
   // The caller's signal ends the stream too, before a body is read from a file
   // or after. The stream hears it, while it lasts, through a signal of its own
   // (ts-fetch.js `ownSignal`), whose abort event the app's listeners on the

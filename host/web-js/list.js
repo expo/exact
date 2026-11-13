@@ -181,7 +181,7 @@ class SizeIndex {
   }
   // @ref runner/src/instance/collection/index.rs `Anchor`, `capture_anchor_excluding`, `anchor_at` and
   // `restore_anchor`: this is their port, so a change to either names the other (#1095 7b0352262f: `beyond`, `raw`).
-  anchor(offset, port, follow, excluded = null) {
+  anchor(offset, port, follow, excluded = []) {
     // The end is judged where the port is, the padding before the rows included (index.rs).
     const raw = offset, max = this.maxOffset(port), at = Math.max(-this.leading, Math.min(offset, max));
     offset = Math.max(0, at);
@@ -190,7 +190,7 @@ class SizeIndex {
     // `capture_anchor`): CSS scroll anchoring selects none at a zero offset.
     let row = offset <= 0 && !follows ? null : find(this.t, offset, false);
     let within = row === null ? 0 : Math.max(0, offset - this.prefix(row));
-    if (!follows && row !== null && this.order[row] === excluded) {
+    while (!follows && row !== null && excluded.includes(this.order[row])) {
       row = find(this.t, this.prefix(row + 1), false);
       if (row !== null && this.prefix(row) >= offset + port) row = null;
       within = row === null ? offset : offset - this.prefix(row);

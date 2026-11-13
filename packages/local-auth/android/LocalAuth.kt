@@ -40,6 +40,9 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
             "BIOMETRIC_WEAK" to Authenticators.BIOMETRIC_WEAK,
             "DEVICE_CREDENTIAL" to Authenticators.DEVICE_CREDENTIAL,
         )
+        /** The negative button's code, which the framework names only in BiometricConstants (hidden) and reports as
+         * the button's click, not an error: the module answers it as androidx's BiometricPrompt does. */
+        private const val NEGATIVE_BUTTON = 13
     }
 
     private val app: Context get() = context.application
@@ -119,8 +122,7 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
     /** D1's code for a BiometricPrompt error, with the platform's own beside it. */
     private fun failure(code: Int, message: CharSequence?): JSONObject {
         val word = when (code) {
-            // 13: the negative button, which the framework names only in BiometricConstants (hidden).
-            BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED, 13 -> "USER_CANCEL"
+            BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED, NEGATIVE_BUTTON -> "USER_CANCEL"
             BiometricPrompt.BIOMETRIC_ERROR_CANCELED, BiometricPrompt.BIOMETRIC_ERROR_TIMEOUT -> "SYSTEM_CANCEL"
             BiometricPrompt.BIOMETRIC_ERROR_LOCKOUT, BiometricPrompt.BIOMETRIC_ERROR_LOCKOUT_PERMANENT -> "LOCKOUT"
             BiometricPrompt.BIOMETRIC_ERROR_HW_UNAVAILABLE, BiometricPrompt.BIOMETRIC_ERROR_HW_NOT_PRESENT,
@@ -151,17 +153,26 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
                      done: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit, crypto: BiometricPrompt.CryptoObject?) {
         val signal = CancellationSignal()
         signals[signal] = request
+        // Success, an error, the negative button and a refusal each end the prompt; only the first answers.
+        var answered = false
+        val end = { result: BiometricPrompt.AuthenticationResult?, error: JSONObject? ->
+            if (!answered) {
+                answered = true
+                signals -= signal
+                done(result, error)
+            }
+        }
         try {
-            build(activity, reason, authenticators, words, done, crypto, signal)
+            build(activity, reason, authenticators, words, end, crypto, signal)
         } catch (e: RuntimeException) {
-            signals -= signal
-            done(null, JSONObject().put("error", "SYSTEM_CANCEL").put("message", "BiometricPrompt refused the prompt: ${e.message}"))
+            end(null, JSONObject().put("error", "SYSTEM_CANCEL").put("message", "BiometricPrompt refused the prompt: ${e.message}"))
         }
     }
 
-    /** The prompt, with the module's words, the hatch, then what the module owns again, started under [signal]. */
+    /** The prompt, with the module's words, the hatch, then what the module owns again, started under [signal]. [end]
+     * answers once. */
     private fun build(activity: android.app.Activity, reason: String, authenticators: Int, words: JSONObject,
-                      done: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit, crypto: BiometricPrompt.CryptoObject?,
+                      end: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit, crypto: BiometricPrompt.CryptoObject?,
                       signal: CancellationSignal) {
         val credential = authenticators and Authenticators.DEVICE_CREDENTIAL != 0
         val own = { b: BiometricPrompt.Builder ->
@@ -175,15 +186,16 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
         words.optString("description").takeIf { it.isNotEmpty() }?.let { builder.setDescription(it) }
         if (words.has("confirmationRequired")) builder.setConfirmationRequired(words.getBoolean("confirmationRequired"))
         val executor = activity.mainExecutor
-        // Biometrics alone need a negative button; the platform's own Cancel unless the call names one.
+        // Biometrics alone need a negative button; the platform's own Cancel unless the call names one. The platform
+        // reports its press only to this listener, never as an authentication error (`BiometricPrompt.onDialogDismissed`).
         if (!credential) {
             val text = words.optString("negativeButtonText").ifEmpty { activity.getString(android.R.string.cancel) }
-            builder.setNegativeButton(text, executor) { _, _ -> }
+            builder.setNegativeButton(text, executor) { _, _ -> end(null, failure(NEGATIVE_BUTTON, null)) }
         }
         hatch?.let { it(builder); own(builder) }
         val callback = object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { signals -= signal; done(result, null) }
-            override fun onAuthenticationError(code: Int, message: CharSequence?) { signals -= signal; done(null, failure(code, message)) }
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = end(result, null)
+            override fun onAuthenticationError(code: Int, message: CharSequence?) = end(null, failure(code, message))
         }
         val built = builder.build()
         if (crypto != null) built.authenticate(crypto, signal, executor, callback) else built.authenticate(signal, executor, callback)

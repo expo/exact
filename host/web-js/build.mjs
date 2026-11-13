@@ -110,7 +110,8 @@ for (const note of manifestNotes) console.log(note);
 writeFileSync(resolve(out, 'manifest.json'), JSON.stringify(webManifest, null, 2) + '\n');
 // Rust data: the app's own module (`rust.module`), or a module generated
 // from the DataSource its web build bakes with (host/web-js/module.mjs).
-const rust = !!manifest.rust?.module || !!bakedRustSource(appDir);
+const rustSource = bakedRustSource(appDir);
+const rust = !!manifest.rust?.module || !!rustSource;
 // A TypeScript source (`app.ts`) runs in the page, bundled with it; beside a
 // Rust one (LLP 1027.002), the Rust module answers what it owns and the
 // TypeScript module the rest (ts-data.js, rust-data.js). A synthetic plan
@@ -294,15 +295,25 @@ const wakelock = existsSync(resolve(gen, 'wakelock.flag'));
 const orientationlock = existsSync(resolve(gen, 'orientationlock.flag'));
 // A dialog, an alertdialog, a menu or a popover (prompt-glue.js, alert-message.js, menu-rows.js; LLP 1047.002 D1).
 const dialogs = existsSync(resolve(gen, 'dialogs.flag'));
-// App generation may create files imported by app.ts. Run it before reading
-// the declaration, as the wasm build does.
+// App generation may create files imported by app.ts. A mixed app's composer
+// also owns the Rust source roster, so take its declarations from that bake.
 const webScript = resolve(appDir, 'web/build.rs');
-if (ts && existsSync(webScript) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(webScript, 'utf8'))) {
+const composed = mixed && rustSource?.call === 'exact_js_bake::build_mixed_with';
+if (ts && existsSync(webScript) && (composed || !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(webScript, 'utf8')))) {
   // With what its bake watches named, as every baking build is (`bakeWatchEnv`): unset, a check reruns it every time.
   // The workspace's lock is checked first, as every build's is, and `--locked` keeps the check from rewriting it (LLP 1153 D2.1).
   resolveApp(appDir).rust();
-  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', resolve(appDir, 'web/Cargo.toml')], { cwd: root, stdio: 'inherit', env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }) } });
+  const crate = resolve(appDir, 'web/Cargo.toml');
+  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', crate, '--message-format=json-render-diagnostics'], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }) } });
+  const messages = (r.stdout ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  for (const message of messages) if (message.reason === 'compiler-message' && message.message.rendered) process.stderr.write(message.message.rendered);
   if (r.status !== 0) { console.error(`${app}: its web build script failed`); process.exit(1); }
+  if (composed) {
+    const owner = messages.find(m => m.reason === 'compiler-artifact' && resolve(m.manifest_path) === crate)?.package_id;
+    const baked = messages.find(m => m.reason === 'build-script-executed' && m.package_id === owner)?.out_dir;
+    if (!baked) throw new Error(`${app}: Cargo did not report its mixed bake output`);
+    cpSync(resolve(baked, 'app.contract.d.ts'), resolve(gen, 'app.contract.d.ts'));
+  }
 }
 // `app.ts` is captured and type-checked as the native bake does it: the
 // same configuration and check (js/bake/src/typescript.mjs) over the same
@@ -384,7 +395,7 @@ async function typecheck(checking) {
   const optional = "import type { Overlay } from './app.contract.d.ts';\ntype Optional<K extends string> = K extends keyof typeof app ? (typeof app)[K] : undefined;\nexport const overlay: Overlay | undefined = (app as { overlay?: unknown }).overlay as Optional<'overlay'>;\nexport const tools = (app as { tools?: unknown }).tools as Optional<'tools'>;\n";
   // The app's id is app.json's; app.ts need not name it, and one it names is checked against it below.
   const id = (await import('../../scripts/app.mjs')).readManifest(appDir, app).app.id;
-  writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from './app';\nimport type { Answer } from './app.contract.d.ts';\nexport const appId: string = (app as unknown as { appId?: string }).appId ?? ${JSON.stringify(id)};\nexport const grants: string = app.grants;\nexport const answer: Answer = app.answer;\n` + optional
+  writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from './app';\nimport type { TypeScriptAnswer } from './app.contract.d.ts';\nexport const appId: string = (app as unknown as { appId?: string }).appId ?? ${JSON.stringify(id)};\nexport const grants: string = app.grants;\nexport const answer: TypeScriptAnswer = app.answer;\n` + optional
     + "export const draw: ((surface: string, args: any, ctx: any, frame: any) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
   writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({ app: realpathSync(appDir), mounts, target: 'web' }));
   writeFileSync(resolve(stage,'__exact_backend_source.json'), JSON.stringify(readFileSync(resolve(stage,'app.ts'),'utf8')));
@@ -672,7 +683,7 @@ writeFileSync(resolve(gen, 'grant-admission.js'), admitsNothing ? emptyGrantAdmi
 const admission = readFileSync(resolve(here, 'admission.js'), 'utf8');
 const stubbed = [
   ["import { faultMessage, takeFault } from '../web/faults.js';", "const takeFault = () => false, faultMessage = () => '';"],
-  ["import { redirectFor, reachRefusal } from '../web/address-space.js';", 'const redirectFor = (origin, redirect) => redirect, reachRefusal = () => null;'],
+  ["import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';", "const redirectFor = (origin, redirect) => redirect, reachRefusal = () => null, UNATTRIBUTED = 'unattributed';"],
 ].reduce((text, [line, stub]) => {
   if (!admission.includes(line)) throw new Error(`host/web-js/admission.js: build.mjs replaces a line it no longer has: ${line}`);
   return admitsNothing ? text.replace(line, stub) : text;

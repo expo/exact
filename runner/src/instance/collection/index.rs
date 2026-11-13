@@ -650,18 +650,18 @@ impl SizeIndex {
         viewport: f64,
         follow_end: bool,
     ) -> Result<Anchor, IndexError> {
-        self.capture_anchor_excluding(raw, viewport, follow_end, None)
+        self.capture_anchor_excluding(raw, viewport, follow_end, &[])
     }
 
-    /// A committed reorder anchors another visible row. If the source fills
-    /// the port, keep the offset instead. `within` is signed: a successor
-    /// below the port's top must stay below it after the move.
+    /// A committed reorder anchors a visible row none of its drops moved. If
+    /// those fill the port, keep the offset instead. `within` is signed: a
+    /// successor below the port's top must stay below it after the move.
     pub(crate) fn capture_anchor_excluding(
         &self,
         raw: f64,
         viewport: f64,
         follow_end: bool,
-        excluded: Option<&str>,
+        excluded: &[&str],
     ) -> Result<Anchor, IndexError> {
         let offset = self.clamp_offset(raw, viewport)?;
         // The end is judged where the port is, padding before the rows
@@ -676,7 +676,9 @@ impl SizeIndex {
             self.tree.find(offset, false)
         };
         let mut within = row.map_or(0.0, |i| (offset - self.tree.prefix(i)).max(0.0));
-        if !follows_end && row.is_some_and(|i| self.key(i) == excluded) {
+        while !follows_end
+            && row.is_some_and(|i| self.key(i).is_some_and(|k| excluded.contains(&k)))
+        {
             let next = self.tree.prefix(row.unwrap() + 1);
             row = self
                 .tree
@@ -692,6 +694,36 @@ impl SizeIndex {
             beyond: (raw - max).max(0.0),
             raw,
         })
+    }
+
+    /// The anchors a committed reorder chooses from: the first visible row's,
+    /// then, while that row is one of `dropped`, the next visible row's. An
+    /// update anchors the first whose row it did not move by a drop.
+    pub(crate) fn capture_drop_anchors(
+        &self,
+        raw: f64,
+        viewport: f64,
+        follow_end: bool,
+        dropped: &[&str],
+    ) -> Result<Vec<Anchor>, IndexError> {
+        let mut skipped = Vec::new();
+        let mut anchors = Vec::new();
+        loop {
+            let anchor = self.capture_anchor_excluding(raw, viewport, follow_end, &skipped)?;
+            // An anchor that follows the end holds no row to skip.
+            let key = Self::anchor_key(&anchor).filter(|_| !anchor.follows_end);
+            let key = key.and_then(|k| dropped.iter().copied().find(|d| *d == k));
+            anchors.push(anchor);
+            match key {
+                Some(k) => skipped.push(k),
+                None => return Ok(anchors),
+            }
+        }
+    }
+
+    /// The key of the row an anchor holds.
+    pub(crate) fn anchor_key(anchor: &Anchor) -> Option<&str> {
+        anchor.row.map(|i| anchor.order[i].as_ref())
     }
 
     /// A drop moved a surviving key past an old neighbour. Insertions and

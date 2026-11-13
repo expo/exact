@@ -1097,9 +1097,10 @@ impl<D: DataSource> Host<D> {
     /// system to open (the web's one allowlist); anything else is refused.
     /// Whether it was handed on.
     pub(crate) fn open_url(&mut self, url: &str) -> bool {
-        let allowed = ["http://", "https://", "mailto:", "tel:"]
-            .iter()
-            .any(|p| url.len() > p.len() && url[..p.len()].eq_ignore_ascii_case(p));
+        // Bytes, not a `str` slice, which panics off a character boundary.
+        let allowed = ["http://", "https://", "mailto:", "tel:"].iter().any(|p| {
+            url.len() > p.len() && url.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())
+        });
         let handed = allowed && !url.chars().any(|c| c.is_control() || c.is_whitespace());
         if handed {
             self.outbound.push(url.to_string());

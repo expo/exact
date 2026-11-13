@@ -152,6 +152,27 @@ for (let i = 0; i < 20 && large < 200_001; i++) {
 }
 check('a 200,000-byte read arrives whole, with no error', large === 200_001 && largeErrors.length === 0, JSON.stringify({ large, largeErrors }));
 await s.call('close', { connection: big.connection });
+
+// A closed handle controls nothing, though its `SerialPort` is opened again: the new connection is another's.
+const again = await s.call('open', { port: other.id, baudRate: 9600 });
+const stale = { connection: big.connection };
+const refused = [
+  await s.call('write', { ...stale, data: b64(Buffer.from('Q')) }),
+  await s.call('setSignals', { ...stale, dataTerminalReady: false }),
+  await s.call('getSignals', stale),
+  await s.call('close', stale),
+];
+check('a closed handle cannot write, set or read signals, or close the port opened again', refused.every((r) => r?.error === 'InvalidStateError') && (await s.eval(() => __ports[1].written.length + __ports[1].signals.length)) === 0 && (await s.call('serialConnection', { connection: again.connection })).open === true, JSON.stringify(refused));
+// Writes still waiting their turn when the connection closes are aborted, and reach neither it nor the next.
+const queued = await s.eval(async (connection) => {
+  const writes = [__impl.write({ connection, data: btoa('one') }), __impl.write({ connection, data: btoa('two') })];
+  const closing = __impl.close({ connection });
+  return [await Promise.all(writes), await closing];
+}, again.connection);
+const third = await s.call('open', { port: other.id, baudRate: 9600 });
+await s.call('write', { connection: third.connection, data: b64(Buffer.from('three')) });
+check('writes queued before close are aborted, and the next connection gets only its own', queued[0].every((r) => r?.error === 'AbortError') && queued[1] === null && Buffer.from(await s.eval(() => __ports[1].written)).toString() === 'three', JSON.stringify(queued));
+await s.call('close', { connection: third.connection });
 await s.call('forget', { port: other.id });
 check('forget forgets the port', (await s.eval(() => __ports[1].forgotten)) === true && !(await s.call('getPorts')).some((p) => p.id === other.id));
 check('the readers of the list were asked again', (await s.eval(() => __changed)).includes('serial.getPorts'));

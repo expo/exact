@@ -1282,6 +1282,11 @@ bun exact.mjs contract rust app.contract -o /tmp/shapes.rs
 ```
 
 Use those generated declarations with the existing TypeScript/Rust integration.
+A mixed app imports `TypeScriptSources` and `TypeScriptAnswer` from
+`app.contract.d.ts`; its `build_mixed_with` bake excludes Rust-owned providers.
+Run `bun exact.mjs contract build app.contract` to generate and check that narrowed
+declaration. Standalone `contract types` has no Rust roster; `Sources` always
+describes the complete seam. See [the provider types](reference.md#generate-typescript-data-source-types).
 A shape has no exported name in the `.d.ts`: name one by its source,
 `type Recipe = Result<'recipe'>` (a list's element: `Result<'recipes'>[number]`;
 an optional answer is `… | null`, so `NonNullable<Result<'find'>>`).

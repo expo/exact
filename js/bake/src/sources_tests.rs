@@ -168,6 +168,95 @@ fn mixed_bake_reads_rust_identity_and_own_grants_without_executing_it() {
 }
 
 #[test]
+fn mixed_provider_types_follow_the_composer_and_survive_development_bakes() {
+    use super::{bake_in, BakeMode, Composer, Producer, Seed, Tools};
+    use exact_runner::{DataError, DataSource, Value};
+
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    struct Rust;
+    impl DataSource for Rust {
+        fn app_id(&self) -> &str {
+            "test.mixed"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::str("Rust"))
+        }
+    }
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let stage = Scratch::new(&std::env::temp_dir()).unwrap();
+    std::fs::write(
+        app.0.join("app.contract"),
+        "component App\n  resource javascript = javascript() as shape string\n  resource rust = rust() as shape string\n  mutation written as shape string\n  action write\n    send written = rustWrite()\n  view\n    column\n      text javascript\n      text rust\n",
+    )
+    .unwrap();
+    let source = "import type { TypeScriptSources, TypeScriptAnswer } from './app.contract.d.ts';\nexport const appId = 'test.mixed';\nexport const grants = '';\nconst sources: TypeScriptSources = { javascript: () => 'TypeScript' };\nexport const answer: TypeScriptAnswer = (source, args, store, storage, native) => sources[source](args, store, storage, native);\n";
+    std::fs::write(app.0.join("app.ts"), source).unwrap();
+    let composer = || Composer {
+        rust_sources: vec!["rust".into(), "rustWrite".into()],
+        compose: Box::new(|module| {
+            Box::new(
+                exact_data::Mixed::new(module, Rust, &["javascript"], &["rust", "rustWrite"])
+                    .unwrap(),
+            )
+        }),
+    };
+    let tools = Tools::default();
+    let baked = bake_in(
+        &app.0,
+        &tools,
+        &stage.0,
+        &mut Default::default(),
+        BakeMode::Production,
+        Some(composer()),
+        None,
+    )
+    .unwrap();
+    let output = app.0.join("dist");
+    baked.write_new(&output).unwrap();
+    let mut seed = Seed::read(
+        Some(&output.join("app.plan")),
+        Some(&output.join("app.module.json")),
+    )
+    .unwrap()
+    .unwrap();
+    let mut producer = Producer::new(tools).unwrap();
+    for _ in 0..2 {
+        let development = producer.bake(&app.0, Some(&seed)).unwrap();
+        assert_eq!(development.declarations, baked.declarations);
+        assert_eq!(
+            std::fs::read_to_string(app.0.join("app.contract.d.ts")).unwrap(),
+            baked.declarations
+        );
+        let receipt: serde_json::Value = serde_json::from_str(&development.receipt).unwrap();
+        assert_eq!(
+            receipt["rustSources"],
+            serde_json::json!(["rust", "rustWrite"])
+        );
+        seed = Seed::new(&development.plan, &["rust".into(), "rustWrite".into()]).unwrap();
+    }
+    std::fs::write(
+        app.0.join("app.ts"),
+        source.replace("{ javascript: () => 'TypeScript' }", "{}"),
+    )
+    .unwrap();
+    let error = producer.bake(&app.0, Some(&seed)).err().unwrap();
+    assert!(
+        error.contains("javascript") && error.contains("TS2741"),
+        "{error}"
+    );
+
+    std::fs::write(app.0.join("app.ts"), source).unwrap();
+    let changed = Seed::new(&baked.plan, &["rust".into()]).unwrap();
+    let error = producer.bake(&app.0, Some(&changed)).err().unwrap();
+    assert!(
+        error.contains("rustWrite") && error.contains("TS2741"),
+        "{error}"
+    );
+}
+
+#[test]
 fn captures_fonts_and_complete_static_trees_without_following_links() {
     let app = Scratch::new(&std::env::temp_dir()).unwrap();
     let inputs = [

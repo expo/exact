@@ -163,3 +163,137 @@ pub(crate) fn inline_image(arena: &NodeArena, slot: u32) -> InlineImage {
         ),
     }
 }
+
+/// The rows an inline run's edges are made of (`inline_edges`).
+pub(crate) const EDGE_ROWS: [crate::generated::StyleId; 8] = {
+    use crate::generated::StyleId;
+    [
+        StyleId::PaddingLeft,
+        StyleId::PaddingRight,
+        StyleId::BorderWidthLeft,
+        StyleId::BorderWidthRight,
+        StyleId::BorderStyleLeft,
+        StyleId::BorderStyleRight,
+        StyleId::MarginLeft,
+        StyleId::MarginRight,
+    ]
+};
+
+/// What the inline box a `text` inside a paragraph is takes along the line
+/// beside its text (`TextRun::edges`): its padding, border and margin on
+/// each inline side. A percentage is not read, as for an image (LLP 1011.002
+/// §4).
+pub(crate) fn inline_edges(arena: &NodeArena, slot: u32) -> crate::text::InlineEdges {
+    let (inside, margin) = box_sides(arena, slot);
+    crate::text::InlineEdges {
+        start: inside.start + margin.start,
+        end: inside.end + margin.end,
+    }
+}
+
+/// How far the padding box of the inline box `slot` is stands out from its
+/// text on each side: its own padding and border, and the room of the boxes
+/// inside it that start with its first run or end with its last. Its
+/// background covers it (CSS 2 §14.2, `background-clip: border-box`).
+pub(crate) fn background_reach(arena: &NodeArena, slot: u32) -> crate::text::InlineEdges {
+    let (inside, _) = box_sides(arena, slot);
+    crate::text::InlineEdges {
+        start: inside.start + inner(arena, slot, true),
+        end: inside.end + inner(arena, slot, false),
+    }
+}
+
+/// The room the boxes inside `slot` take at its first run (`first`) or its
+/// last: down the chain of its first (last) child that makes a run.
+fn inner(arena: &NodeArena, slot: u32, first: bool) -> f32 {
+    if arena.node_type(slot) != crate::NodeType::Text
+        || arena.props(slot).str(crate::PropId::Text).is_some()
+    {
+        return 0.0;
+    }
+    let children = arena.children(slot);
+    let mut order: Box<dyn Iterator<Item = &u32>> = if first {
+        Box::new(children.iter())
+    } else {
+        Box::new(children.iter().rev())
+    };
+    let Some(&child) = order.find(|c| makes_run(arena, **c)) else {
+        return 0.0;
+    };
+    if arena.node_type(child) != crate::NodeType::Text {
+        return 0.0;
+    }
+    let edges = inline_edges(arena, child);
+    (if first { edges.start } else { edges.end }) + inner(arena, child, first)
+}
+
+/// Whether `slot` inside a paragraph makes at least one of its runs.
+fn makes_run(arena: &NodeArena, slot: u32) -> bool {
+    match arena.node_type(slot) {
+        crate::NodeType::Text => {
+            arena.props(slot).str(crate::PropId::Text).is_some()
+                || arena.children(slot).iter().any(|c| makes_run(arena, *c))
+        }
+        crate::NodeType::Image => arena.is_run_image(slot),
+        _ => false,
+    }
+}
+
+/// An inline box's padding and border, and its margin, on each inline side,
+/// as its taffy style resolves them, start and end by its paragraph's
+/// direction, in which hosts lay its runs out: a box's own `direction`
+/// reorders nothing without `unicode-bidi`, so its `padding-right` is on
+/// its right in a left-to-right paragraph.
+fn box_sides(arena: &NodeArena, slot: u32) -> (crate::text::InlineEdges, crate::text::InlineEdges) {
+    use crate::generated::StyleId;
+    use crate::text::InlineEdges;
+    use taffy::style::CompactLength;
+    // Most runs say none of these rows: no taffy style is made for them.
+    let own = arena.style(slot);
+    if !EDGE_ROWS.iter().any(|row| own.mask.has(*row)) {
+        return (InlineEdges::default(), InlineEdges::default());
+    }
+    let style = crate::style::taffy_style(arena, slot);
+    let length = |raw: CompactLength| {
+        (raw.tag() == CompactLength::LENGTH_TAG)
+            .then(|| raw.value())
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0)
+    };
+    let inside =
+        |pad: CompactLength, border: CompactLength| length(pad).max(0.0) + length(border).max(0.0);
+    let (left, right) = (
+        inside(style.padding.left.into_raw(), style.border.left.into_raw()),
+        inside(
+            style.padding.right.into_raw(),
+            style.border.right.into_raw(),
+        ),
+    );
+    let (margin_left, margin_right) = (
+        length(style.margin.left.into_raw()),
+        length(style.margin.right.into_raw()),
+    );
+    let paragraph = arena.measure_owner(slot);
+    let sides = |a: f32, b: f32| match arena
+        .computed_source(paragraph, StyleId::Direction)
+        .direction
+    {
+        crate::Direction::Rtl => InlineEdges { start: b, end: a },
+        _ => InlineEdges { start: a, end: b },
+    };
+    (sides(left, right), sides(margin_left, margin_right))
+}
+
+impl crate::NodeRef<'_> {
+    /// For a `text` inside a paragraph, how far its padding box stands out
+    /// from its text at its first run and its last: what its background
+    /// covers beside its glyphs (`TextRun::edges` is the room its line gives
+    /// it, margins included). Zero for any other node.
+    /// At its paragraph's fit scale, as its runs are (LLP 1116.001 D1.4).
+    pub fn inline_background_reach(&self) -> crate::InlineEdges {
+        if !self.arena.is_inline_run(self.slot) {
+            return crate::InlineEdges::default();
+        }
+        background_reach(self.arena, self.slot).scaled(self.arena.fit_scale(self.slot))
+    }
+}

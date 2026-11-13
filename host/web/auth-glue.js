@@ -55,6 +55,11 @@ export function arm(op, env) {
   const matches = url => {
     try { const u = new URL(url); return u.origin === want.origin && u.pathname === want.pathname; } catch { return false; }
   };
+  // Every same-origin tab hears the channel: a callback there is this tab's only when its one `state` is this
+  // session's. One from this tab's own popup is, whatever it carries, and the runner checks it.
+  const ours = url => {
+    try { const states = new URL(url).searchParams.getAll('state'); return states.length === 1 && states[0] === reply.present.state; } catch { return false; }
+  };
   const accept = (url, via) => {
     if (!live || !matches(url)) return;
     env.log(`auth ${op.ticket}: a callback arrived (${via})`);
@@ -69,7 +74,7 @@ export function arm(op, env) {
   let channel = null;
   try {
     channel = new BroadcastChannel('exact-auth');
-    channel.onmessage = event => { if (event.data?.type === 'exact-auth') accept(String(event.data.url), 'channel'); };
+    channel.onmessage = event => { if (event.data?.type === 'exact-auth' && ours(String(event.data.url))) accept(String(event.data.url), 'channel'); };
   } catch {}
   addEventListener('message', onMessage);
   let closedSince = null;

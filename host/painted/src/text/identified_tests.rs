@@ -580,6 +580,7 @@ mod owned_spec {
             href: String::new(),
             bold_text: false,
             inline: None,
+            edges: exact_kernel::InlineEdges::default(),
         }
     }
     fn spec(text: &str) -> Spec {

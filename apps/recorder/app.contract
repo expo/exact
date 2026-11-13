@@ -55,6 +55,7 @@ component Recorder
   derive recording = recorderId != ""
   derive visibleTakes = library.takes.filter(t => t.name != takeName)
   derive busy = pending(opened) or pending(started) or pending(saved)
+  derive startFailure = match failure(started) { case some(f) => f.code, case none => "" }
   derive denied = mic.state == "denied"
   derive cannotRecord = busy or (not recording and (denied or not mic.available))
   derive speechOff = speech.state == "denied"
@@ -96,6 +97,15 @@ component Recorder
       case none
         recorderId = ""
         takeName = ""
+  // A recorder that did not start leaves the track opened for its take: the track is stopped and the take
+  // forgotten. A failure is the latest start's only, so the track is that start's, never a newer take's.
+  task abandon when failed(started) key=true
+    change(abandoned)
+  action abandoned
+    if trackId != ""
+      send stopped = stopTrack(track=trackId)
+    trackId = ""
+    takeName = ""
   action listened
     match listening
       case some(r)
@@ -162,6 +172,8 @@ component Recorder
           text (rec.state == "paused" ? "Paused " : "● ") + formatDecimal(round(rec.duration / 100), 1) + " s" testId="elapsed" font-size=14 color="-exact-secondary-label" font-variant-numeric="tabular-nums"
         else
           text (mic.available ? "Ready" : "Recording is not available here.") testId="status" font-size=14 color="-exact-secondary-label"
+      if startFailure != "" and not busy
+        text ("Recording didn’t start (" + startFailure + ").") testId="start-failed" font-size=13 color="-exact-secondary-label"
       if pending(opened)
         button press=cancelRecord testId="cancel-record"
           text "Cancel"

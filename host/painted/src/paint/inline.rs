@@ -21,6 +21,8 @@ pub(super) fn focus_fragments(
                         id: focus,
                         color: [255; 4],
                         radii: [const { exact_kernel::Dimension::Points(2.0) }; 4],
+                        reach: exact_kernel::InlineEdges::default(),
+                        outer: Vec::new(),
                     });
                 }
                 at = kernel.node(id).and_then(|n| n.parent);
@@ -77,8 +79,9 @@ pub(crate) fn text_palette(
 
 /// Each canonical run's inline `background-color`, in [`text_palette`]'s
 /// order: its own, else its nearest inline ancestor's (CSS: a container's
-/// background covers its descendants' fragments). The paragraph's own
-/// background is its box's, painted with the box.
+/// background covers its descendants' fragments), with the ancestors' it
+/// stands in under it. The paragraph's own background is its box's,
+/// painted with the box.
 pub(super) fn text_backgrounds(
     kernel: &Kernel,
     node: &NodeRef<'_>,
@@ -86,15 +89,7 @@ pub(super) fn text_backgrounds(
     reveal: Option<exact_kernel::ViewId>,
 ) -> Vec<Option<InlineBackground>> {
     let mut out = Vec::new();
-    let mut nested = std::collections::HashSet::new();
-    collect_backgrounds(kernel, node, None, dark, reveal, &mut out, &mut nested);
-    // One background per leaf cannot paint an ancestor under a descendant's
-    // own background. Keep both square so their seam never exposes the page.
-    for background in out.iter_mut().flatten() {
-        if nested.contains(&background.id) {
-            background.radii = [const { exact_kernel::Dimension::Points(0.0) }; 4];
-        }
-    }
+    collect_backgrounds(kernel, node, None, dark, reveal, &mut out);
     out
 }
 
@@ -105,8 +100,7 @@ fn collect_backgrounds(
     dark: bool,
     reveal: Option<exact_kernel::ViewId>,
     out: &mut Vec<Option<InlineBackground>>,
-    nested: &mut std::collections::HashSet<exact_kernel::ViewId>,
-) -> bool {
+) {
     let own = |n: &NodeRef<'_>| {
         let _accent = super::accent_scope(n);
         n.style
@@ -132,13 +126,13 @@ fn collect_backgrounds(
                     n.style.border_radius_bottom_left.clone(),
                 ]
                 .map(|d| d.resolve(&kernel.env_of(n.id))),
+                reach: n.inline_background_reach(),
+                outer: Vec::new(),
             })
     };
-    if let Some(text) = node.props.str(PropId::Text) {
+    if node.props.str(PropId::Text).is_some() {
         out.push(inherited);
-        !text.is_empty()
     } else {
-        let mut emitted = false;
         for child in node.children() {
             let Some(child) = kernel.node(child) else {
                 continue;
@@ -149,26 +143,22 @@ fn collect_backgrounds(
             if child.node_type == NodeType::Text {
                 // A hidden box contributes no background; a visible ancestor
                 // still covers its characters.
+                // Inside another's, its own paints over that one, each box
+                // its own (`InlineBackground::outer`).
                 let own = super::paints(kernel, child.id, reveal)
                     .then(|| own(&child))
-                    .flatten();
-                if collect_backgrounds(
-                    kernel,
-                    &child,
-                    own.clone().or_else(|| inherited.clone()),
-                    dark,
-                    reveal,
-                    out,
-                    nested,
-                ) {
-                    emitted = true;
-                    if let (Some(parent), Some(child)) = (inherited.as_ref(), own.as_ref()) {
-                        nested.extend([parent.id, child.id]);
-                    }
-                }
+                    .flatten()
+                    .map(|mut own| {
+                        if let Some(mut parent) = inherited.clone() {
+                            own.outer = std::mem::take(&mut parent.outer);
+                            own.outer.insert(0, parent);
+                        }
+                        own
+                    });
+                let background = own.or_else(|| inherited.clone());
+                collect_backgrounds(kernel, &child, background, dark, reveal, out);
             }
         }
-        emitted
     }
 }
 

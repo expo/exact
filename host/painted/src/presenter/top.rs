@@ -22,7 +22,7 @@
 //!
 //! **What crosses.** Out, on the one channel (`requests.rs`, kind 7): the
 //! surface as a statement, told when it is not what the shell was last told
-//! (it opened, a press lit a row, the scheme or the font scale changed, it
+//! (it opened, a press lit a row, a type or colour preference changed, it
 //! closed), with its size, its place and its stream. In, one call
 //! ([`Presenter::surface_event`]): a touch in the window at the surface's
 //! own points, a key, that the system dismissed the window (a tap outside a
@@ -345,6 +345,7 @@ impl<D: DataSource> Presenter<D> {
         Inputs {
             dark: self.dark(),
             contrast: self.colors.contrast.palette,
+            bold_text: self.host.kernel().bold_text_weights(0),
             font_scale: if scale.is_finite() && scale > 0.0 {
                 scale
             } else {
@@ -1259,7 +1260,7 @@ impl<D: DataSource> Presenter<D> {
     /// Before the shell is told: an open surface whose node is gone, whose
     /// route no longer shows or whose rows are no longer its shape closes,
     /// running nothing; one that says something else, or is shown under
-    /// another scheme, font scale or window, is measured again.
+    /// another colour or type preference or window, is measured again.
     pub(super) fn sync_surface(&mut self) {
         let Some(open) = &self.top.open else {
             return;

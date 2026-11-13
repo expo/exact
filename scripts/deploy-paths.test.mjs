@@ -232,7 +232,7 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   for (const name of ['conform', 'conform-firefox', 'conform-webkit']) expect(step(name)[2].slice(0, 3)).toEqual(['host/web-js/conform.mjs', 'caltrain', '--synthetic']);
   expect(step('glue')[2].at(-1)).toContain('./host/web/a.test.mjs');
   for (const name of ['prepare', 'ios']) expect(step(name)).toBeDefined();
-  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion']) expect(step(name)).toBeUndefined();
+  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
   expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-painted']);
   expect(asyncLane.covers('conform-webkit', selection)).toEqual(['conform:caltrain']);
   expect(asyncLane.covers('ios', selection)).toBe(null);
@@ -246,11 +246,35 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   expect(ranTwo.failures).toEqual(['ios: ExactKitTests.CTests testC failed', 'ios: exit 65 (see log)']);
   const full = asyncLane.checks('new', 'old', {lane:[], glue:['./x.test.mjs']});
   expect(full.find(([n]) => n === 'test')[2]).toEqual(expect.arrayContaining(['cargo', 'test', '--workspace']));
-  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion']) expect(full.some(([n]) => n === name)).toBe(true);
+  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(full.some(([n]) => n === name)).toBe(true);
   // A parity leg builds its gallery's Linux host, then drives the smoke on a fresh web build
   expect(full.find(([n]) => n === 'parity-svg').slice(1)).toEqual(['sh', ['-c', 'cargo build --profile host-dev -p svg-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs svg --hosts linux']]);
   // What a selection can leave out is what a full run has and an empty selection has not.
-  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-firefox', 'conform-webkit', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-firefox', 'conform-webkit', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+});
+
+test('async runs each module drive whole and keeps its failure until it runs again', () => {
+  const drives = [
+    ['moduleSeams', 'module-seams', ['contract/cli/tests/bell/seams.mjs']],
+    ['notificationsWeb', 'notifications-web', ['packages/notifications/test/drive.mjs', 'web']],
+  ];
+  const daily = asyncLane.laneSelection([], { full: true, root: import.meta.dir });
+  for (const [flag, name, args] of drives) {
+    const command = ['env', ['EXACT_REQUIRED=1', 'bun', ...args]];
+    const step = selection => asyncLane.checks('new', 'old', selection).find(([n]) => n === name);
+    expect(step({ ...asyncLane.nothing(), [flag]: true }).slice(1)).toEqual(command);
+    expect(step({ ...daily, lane: [], glue: [] }).slice(1)).toEqual(command);
+    expect(asyncLane.covers(name, { ...asyncLane.nothing(), [flag]: true })).toBe(null);
+    const found = failures(name, 'FAIL web permission: denied\n', 1);
+    expect(found).toEqual([`${name}: web permission`]);
+    expect(failures(name, 'browser is missing\n', 1)).toEqual([`${name}: exit 1 (see log)`]);
+    const skipped = { checks: {}, failures: [] };
+    retainSkippedFailures(found, skipped);
+    expect(skipped.failures).toEqual(found);
+    const ran = { checks: { [name]: { status: 0, complete: true } }, failures: [] };
+    retainSkippedFailures(found, ran);
+    expect(ran.failures).toEqual([]);
+  }
 });
 
 test('async compiles tvOS per commit with no simulator, and tier 2 installs it', () => {

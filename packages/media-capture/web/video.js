@@ -120,6 +120,8 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
         say(`${t.id}: opened again`);
       } catch (e) {
         say(`${t.id}: could not open again: ${failure(e).error}`);
+        // A superseded open's failure is not the track's: a later lease's open may already have adopted.
+        if (t.lease !== lease) return;
         t.active = false;
         return end(t, failure(e).error);
       }

@@ -278,7 +278,7 @@ fn build(options: &Options) -> ExitCode {
     let declaration = format!("{input}.d.ts");
     if !stdin && Path::new(&declaration).is_file() {
         let exports = contract::design_exports(Path::new(&input));
-        let types = match contract::typescript_exporting(&plan, exports.as_deref()) {
+        let types = match contract::typescript_exporting(&plan, exports.as_deref(), &[]) {
             Ok(types) => types,
             Err(message) => return report(&error("contract-types", message, Some(input)), json, 1),
         };

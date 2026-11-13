@@ -232,6 +232,7 @@ impl RegionTextRequest {
             .map(|(text, style)| TextRun {
                 text: (&**text).into(),
                 style: *style,
+                edges: Default::default(),
                 inline: None,
             })
             .collect();

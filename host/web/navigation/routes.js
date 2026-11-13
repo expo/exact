@@ -500,7 +500,7 @@ function barItems(route, header) {
       // a layer, the bar's segments, its search field, or what its author wrote `appearance: none` on (iOS projects none of it): no item
       if (child.matches(heading)) {
         headings++;
-      } else if (child.matches(press) || opensPopover(child) || disabled(child) && !holds(child)) {
+      } else if (child.matches(press) || opens(child) || disabled(child) && !holds(child)) {
         if (!tap && child.matches(press) && holds(child)) {
           walk(tap = child);
         } else {
@@ -530,14 +530,16 @@ export function markBars(node) {
     markBars(child);
   }
 }
-// Whether a button shows or toggles a popover, a header's menu (kernel/src/invocation.rs `opens_popover`).
-function opensPopover(el) {
+// Whether a button opens what it names, a header's item with no press of its own: a popover it shows or toggles, or a
+// dialog it shows modally (kernel/src/invocation.rs `opens`).
+function opens(el) {
   if (el.localName !== "button") {
     return false;
   }
   const commanded = document.getElementById(el.getAttribute("commandfor") || "");
   if (commanded) {
-    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(el.getAttribute("command") ?? "");
+    const command = el.getAttribute("command") ?? "";
+    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(command) || commanded.localName === "dialog" && /^show-modal$/i.test(command);
   }
   return !!document.getElementById(el.getAttribute("popovertarget") || "")?.hasAttribute("popover") && !/^hide$/i.test(el.getAttribute("popovertargetaction") ?? "");
 }

@@ -156,6 +156,7 @@
     var PlatformCryptoKey = global.CryptoKey;
     var keysDoor = global.__exact_keys; // the web realm's IndexedDB, for kept keys
     delete global.__exact_keys;
+    var keeping = new Map(); // a name whose pair keepKey is writing -> the newest call's handle
     var ownNativeKey = global.__exact_key;
     delete global.__exact_key;
     var nativeKeys = new WeakMap(); // natively: CryptoKey -> its handle
@@ -340,9 +341,23 @@
           return Promise.resolve();
         }
         if (!keysDoor) throw new Error(api + ": this host keeps no keys");
-        var handle = "exact.key:" + platformUuid();
-        env.store().set(name, handle);
-        return hostWork(keysDoor.put(handle, { privateKey: pair.privateKey, publicKey: pair.publicKey }));
+        // The name holds the new handle only once IndexedDB has the pair, so
+        // a refused write leaves the key it held. A later keepKey, set or
+        // forget of the name while the pair is written supersedes it.
+        var key = String(name),
+          handle = "exact.key:" + platformUuid();
+        keeping.set(key, handle);
+        return hostWork(keysDoor.put(handle, { privateKey: pair.privateKey, publicKey: pair.publicKey })).then(
+          function () {
+            if (keeping.get(key) !== handle) return;
+            keeping.delete(key);
+            env.store().set(name, handle);
+          },
+          function (e) {
+            if (keeping.get(key) === handle) keeping.delete(key);
+            throw e;
+          }
+        );
       } catch (e) {
         return Promise.reject(e);
       }
@@ -384,6 +399,10 @@
     Object.defineProperty(global, "SubtleCrypto", { value: SubtleCrypto, writable: true, configurable: true });
     Object.defineProperty(global, "Crypto", { value: Crypto, writable: true, configurable: true });
     fixed(global, "crypto", cryptoObject);
-    return { keepKey: keepKey, keptKey: keptKey };
+    // A set or forget of the name supersedes a pair still being written.
+    function supersede(name) {
+      keeping.delete(String(name));
+    }
+    return { keepKey: keepKey, keptKey: keptKey, supersede: supersede };
   };
 })(globalThis);

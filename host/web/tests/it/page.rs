@@ -517,3 +517,122 @@ fn the_launch_place_and_date_are_the_first_batchs() {
     // A root initializer reading the locale slot reads the launch's.
     assert!(batch.contains("ar-EG/120/ar"), "{batch}");
 }
+
+#[test]
+fn a_direct_stored_boot_knows_the_launch_facts_before_settlement() {
+    use exact_runner::time::{Launch, Place, WallTime};
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Observed(Rc<RefCell<Vec<Vec<Value>>>>);
+    impl DataSource for Observed {
+        fn query(&mut self, _: &str, args: &[Value]) -> Result<Value, DataError> {
+            self.0.borrow_mut().push(args.to_vec());
+            Ok(Value::str("observed"))
+        }
+    }
+    let mut plan = contract::compile(
+        r#"shape Time
+  epochAtZero: number
+  utcOffset: number
+  locale: string
+  formatLocale: string
+  timeZone: string
+  seed: number
+component App
+  state language = "en"
+  state seen = language
+  resource time = exactTime() as shape Time
+  state started = performanceNow()
+  resource observed = observe(time, seen, started) as shape string
+  view
+    text observed
+"#,
+    )
+    .unwrap();
+    plan.locale = Some(exact_plan::SlotsId(0));
+    let format = exact_plan::StrId(plan.strings.len() as u32);
+    plan.strings.push("");
+    for language in ["en", "ar"] {
+        let name = exact_plan::StrId(plan.strings.len() as u32);
+        plan.strings.push(language);
+        plan.locales.push(exact_plan::LocalesRow {
+            name,
+            rtl: language == "ar",
+            format,
+            texts: Default::default(),
+        });
+    }
+    let plan = plan.encode();
+    let mut facts = Launch {
+        time: Some(WallTime {
+            epoch_at_zero: 1_790_000_000_000.,
+            utc_offset: 120.,
+        }),
+        place: Some(Place {
+            locale: "ar-EG".into(),
+            format_locale: "en-KR-u-hc-h23".into(),
+            time_zone: "Europe/Berlin".into(),
+            seed: 42.,
+        }),
+        clock: Some(250.),
+        ..Launch::NONE
+    };
+    let expected = |facts: &Launch| {
+        let time = facts.time.unwrap();
+        let place = facts.place.as_ref().unwrap();
+        Value::Record(
+            vec![
+                Value::Number(time.epoch_at_zero),
+                Value::Number(time.utc_offset),
+                Value::str(&place.locale),
+                Value::str(&place.format_locale),
+                Value::str(&place.time_zone),
+                Value::Number(place.seed),
+            ]
+            .into(),
+        )
+    };
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let (mut host, first) = Host::boot_stored(
+        &plan,
+        Observed(calls.clone()),
+        Vec::new(),
+        Default::default(),
+        "/",
+        facts.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        *calls.borrow(),
+        vec![vec![
+            expected(&facts),
+            Value::str("ar"),
+            Value::Number(250.)
+        ]]
+    );
+    assert_eq!(host.runner().slot("seen"), Some(&Value::str("ar")));
+    assert_eq!(host.runner().now_ms(), 250.);
+    assert!(first.contains("observed"), "{first}");
+
+    host.advance(1250.);
+    let carried = host.carry();
+    facts.time.as_mut().unwrap().epoch_at_zero += 1000.;
+    facts.clock = Some(9000.);
+    let current = expected(&facts);
+    calls.borrow_mut().clear();
+    let (host, _) = exact_runner::time::launching_with(facts, || {
+        Host::boot_with(
+            &plan,
+            Observed(calls.clone()),
+            Some(&carried),
+            Default::default(),
+            "/",
+        )
+    })
+    .unwrap();
+    assert_eq!(host.runner().now_ms(), 1250.);
+    assert_eq!(
+        *calls.borrow(),
+        vec![vec![current, Value::str("ar"), Value::Number(250.)]]
+    );
+}

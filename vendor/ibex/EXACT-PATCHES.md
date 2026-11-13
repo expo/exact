@@ -365,7 +365,10 @@ equal. Exact keeps a chosen file across launches under the name it was
 chosen by (exact2 LLP 1069.010.000 D4), and a Mac bookmark follows the file
 when it is renamed, so the two differ after a rename. The provider still
 decides what the name admits; Ibex still opens only `leaf`, refuses every
-path beneath it, and refuses `rm`, `mkdir` and `readdir` on it. `bindings/storage.d.ts` declares
+path beneath it, and refuses `rm` on it. After admission, `readdir` on the
+selected file reports `ENOTDIR` and `mkdir` reports `EEXIST` without touching
+the leaf, even if it is absent or replaced by a directory.
+`bindings/storage.d.ts` declares
 `fs.recentDocuments()` and `fs.forgetDocument(path)`, which Exact's prelude
 answers from the host's kept list; no Ibex source runs either. Replay both on
 a refresh.
@@ -887,3 +890,14 @@ transport. Both Darwin transports (`transport/darwin.rs`,
 Data Mode; the portable transport ignores the field.
 Exact sets it on a preload, a request made before the app asks for it
 (LLP 1162.000 D4, LLP 1162 D7). Unset, nothing changes. Replay it on a refresh.
+
+## Local patch 38, rusqlite 0.41
+
+`ibex2-sqlite` requires rusqlite 0.41.1, whose `libsqlite3-sys` 0.39.1
+bundles SQLite 3.54.1: earlier SQLite reads uninitialized page-cache memory
+through a WAL whose page size differs from its database's
+(RUSTSEC-2026-0459). rusqlite 0.41 returns `column_names()` as an iterator,
+takes `&mut` to install the authorizer, and reports a failed prepare as
+`SqlInputError`, whose text appends the whole SQL and an offset;
+`sql_error` reads SQLite's message from it, so a refusal and a batch's
+shortened statement read as before. Replay on a refresh.

@@ -86,7 +86,11 @@ backslash traversal, alternate-stream and reserved-device forms are refused.
 
 Snapback4 consumers use release **0.4.33**: the CLI is pinned in `bun.lock`;
 Cargo pins the device and its client to the matching release source commit
-`3653cae823145170df3e720f5e321bd1b5b4d79d`. `snapback4/` is one client for an
+`3653cae823145170df3e720f5e321bd1b5b4d79d`. The root `package.json` overrides
+the undici 0.4.33 pins with 8.12.2, the version 0.4.43 pins, for the eight
+advisories on 8.11.2 (among them
+[GHSA-qrxm-fqhp-jwvm](https://github.com/nodejs/undici/security/advisories/GHSA-qrxm-fqhp-jwvm));
+a pin at 0.4.43 or later drops the override. `snapback4/` is one client for an
 app's Rust and TypeScript on every host ([its README](../snapback4/README.md)):
 the protocol in Rust without I/O, the native device, the web's wasm, and the
 TypeScript driver an app mounts with `typescript.sources`. The client is its
@@ -341,7 +345,9 @@ app's bundle identity: its name in the menu bar, its Dock tile, and the
 document types Finder's Open With reads. `install` also writes a shim named by
 the manifest's `app.command` into the first of `~/.local/bin`, `/usr/local/bin`,
 `~/bin` that is already on `PATH` (`EXACT_BIN_DIR` overrides), and prints the
-line to add when none is.
+line to add when none is. It replaces only this app's own: a bundle with
+another bundle identifier, a command it did not write, or a link at either
+path is refused, and nothing is changed. `exact uninstall` leaves them too.
 
 A standalone macOS app treats `kill -TERM <pid>` as an orderly quit: its
 `beforeunload` handlers can cancel, pending storage gets the same five-second
@@ -1008,6 +1014,11 @@ plan cannot reach (LLP 1036.000 §5–§10). `--bundle` prints the stable Mac bu
 `<target>/clients/<source-key>/<id>/macos/<Name>.app`; `scripts/exact.mjs`,
 `agent --app` and metrics use that same resolver. `--host` leaves both standalone
 and sample products; simulator and device bundles have separate destinations.
+On the Mac the sample host is a bundle beside the app's, `<Name> Host.app`, which
+`agent host` launches. Under the app's macOS profile it embeds that profile and takes
+the app's id and entitlements (iCloud, push, a keychain group), so its two sessions
+keep what the app's do; with none it is `<id>.host`. It registers no document type or
+link scheme, which stay the app's.
 Two apps can build together. A second Apple build of the same source/app fails
 with its owner's PID and lock path before baking; remove a stale lock only after
 verifying that owner is no longer running. Failed packaging retains the previous
@@ -1560,6 +1571,28 @@ Generated declarations are build artifacts, not files to commit. A development
 build writes them beside `app.ts` for an editor: the web build and the native
 development bake both do.
 
+For a mixed Rust/TypeScript app, annotate the map as `TypeScriptSources` and
+the dispatcher as `TypeScriptAnswer`, imported from the same declaration:
+
+```ts
+import type { TypeScriptSources, TypeScriptAnswer } from './app.contract.d.ts';
+const sources: TypeScriptSources = { greeting: () => 'Hello' };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) =>
+  sources[source](args, store, storage, native);
+```
+
+The app's `build_mixed_with` bake derives these types from its `rust_sources`
+argument; no ownership list goes in `app.json` or TypeScript. Every remaining
+provider is required. Run `bun exact.mjs contract build app.contract` to obtain
+the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
+Cargo bake, which writes the declaration before checking `app.ts`, even if
+the check fails. Native bakes use it too, and a development producer keeps
+the roster from the previous bake's `rustSources` receipt. Rebuild after
+changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
+describe every app-owned source, including Rust's.
+Standalone `contract types` has no composer and treats every app-owned source
+as TypeScript's; for a TypeScript-only app the two provider types are equivalent.
+
 Development builds also expose `resourceStatus`: opaque request and displayed-answer
 generations, the last successful generation, pending status, and `displayed`
 (`fallback`, `current`, `retained`). `argumentsEqual` compares full arguments using
@@ -1617,7 +1650,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
 | `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
-| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts |
+| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Outside a drive the web writes it to the browser's console too, and an Android development build to logcat under the tag `exact-app` (`adb logcat -s exact-app`). An Android release build and the other native hosts keep it for `logs` alone |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
 under one domain (`https://*.example.com`), or a whole scheme, written as CSP
@@ -3598,7 +3631,8 @@ platform under `platforms.<platform>.placement`; `EXACT_TYPESCRIPT_PLACEMENT`
 and `EXACT_RUST_PLACEMENT` override a bake for a measurement. A change is a new
 compatibility id, never an update. `build_mixed_with` bakes a mixed app through
 its own composer, so a resource only Rust owns needs no TypeScript placeholder;
-the development producer keeps such a resource's last Cargo-baked value.
+the development producer keeps such a resource's last Cargo-baked value and
+the composer's ownership roster for the generated TypeScript provider types.
 
 Native module clients can supply a `Module` factory to `exact_apple::host!`
 (the sixth argument) and apply an `ExactGeneration` containing an `ExactModule`

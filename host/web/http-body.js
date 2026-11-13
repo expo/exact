@@ -443,7 +443,7 @@ export async function waitForInflight(waiting, deadline) {
 
 import { admitsNetwork, admittingGrant, coversPath, grantError, scopedGrantSet } from './grant-admission.js';
 import { faultMessage, takeFault } from './faults.js';
-import { reachRefusal, redirectFor } from './address-space.js';
+import { reachRefusal, redirectFor, UNATTRIBUTED } from './address-space.js';
 
 // Network and page-module requests share admission and the byte ceiling.
 // Called after the enclosing batch, so even an immediate refusal cannot re-enter it.
@@ -617,9 +617,11 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
 // A stream on the JS target (host/web-js: rust-data.js, ts-data.js): `request`
 // over a source's request with the wasm host's admission and ownership.
 // Only the TypeScript adapter opts into ordered protocol frames (D7) and
-// byte streams. An inline body goes as its bytes, copied once.
+// byte streams. An inline body goes as its bytes, copied once. `req.origin`
+// is the asking commit's (LLP 1133.036 D6); a request without one is
+// checked as a non-app one is, never taken for the app's.
 export function streamed(req, grantSet, message, controller, bodyFile, protocol) {
-  return request({ method: req.method ?? 'GET', url: req.url, headers: req.headers ?? [], body: '', bodyBytes: req.raw?.length ? Uint8Array.from(req.raw) : undefined, bodyFrom: req.bodyFrom, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, redirect: req.redirect, longPoll: req.longPoll, upload: req.upload, timeoutMs: req.timeoutMs, idleTimeoutMs: req.idleTimeoutMs, protocols: req.protocols, stream: true, maxResponseBytes: req.maxResponseBytes, scope: req.scope },
+  return request({ method: req.method ?? 'GET', url: req.url, headers: req.headers ?? [], body: '', bodyBytes: req.raw?.length ? Uint8Array.from(req.raw) : undefined, bodyFrom: req.bodyFrom, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, redirect: req.redirect, longPoll: req.longPoll, upload: req.upload, timeoutMs: req.timeoutMs, idleTimeoutMs: req.idleTimeoutMs, protocols: req.protocols, stream: true, maxResponseBytes: req.maxResponseBytes, scope: req.scope, origin: req.origin ?? UNATTRIBUTED },
     { grantSet, controllers: new Set(), controller, message, bodyFile, protocol, localAssetURL: url => new URL(url, location.href).href,
       loadPageNative: () => Promise.reject(new Error('a stream is not a page-module request')) });
 }

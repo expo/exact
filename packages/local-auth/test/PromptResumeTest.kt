@@ -2,6 +2,7 @@ package exact.localauth
 
 import android.app.Activity
 import android.hardware.biometrics.BiometricPrompt
+import android.os.Looper
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
@@ -15,11 +16,13 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowBiometricPrompt
 
 /** When `authenticate` shows its prompt (LLP 1133.010 D8): over the resumed activity, which a call made while the
- * activity shows paused (a permission dialog's answer) waits for. The hatch is given each prompt's builder as it is
- * shown, so it records the prompts. */
+ * activity shows paused (a permission dialog's answer) waits for; and that each prompt answers once, however it ends.
+ * The hatch is given each prompt's builder as it is shown, so it records the prompts. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [Host::class])
 class PromptResumeTest {
@@ -44,9 +47,9 @@ class PromptResumeTest {
         Extensions.front = { Exact.reader?.get() }
     }
 
-    private fun authenticate(reason: String = "Unlock", request: Int? = null) {
+    private fun authenticate(reason: String = "Unlock", request: Int? = null, biometricOnly: Boolean = false) {
         module.context.request = request
-        module.later("authenticate", JSONObject().put("reason", reason)) { answers += it }
+        module.later("authenticate", JSONObject().put("reason", reason).put("biometricOnly", biometricOnly)) { answers += it }
     }
     private val errors get() = answers.map { it.optString("error") }
 
@@ -114,6 +117,45 @@ class PromptResumeTest {
         assertEquals(listOf("SYSTEM_CANCEL"), errors)
         Extensions.resumed()
         assertEquals(emptyList<String>(), shown)
+        assertEquals(1, answers.size)
+    }
+
+    /** The platform's dismissal of the current prompt for [reason] (`BiometricPrompt.DISMISSED_REASON_*`, hidden), as
+     * SystemUI reports it to the prompt's receiver. */
+    private fun dismiss(reason: Int) {
+        val prompt = ShadowBiometricPrompt.getCurrentPrompt()
+        val receiver = BiometricPrompt::class.java.getDeclaredField("mBiometricServiceReceiver").apply { isAccessible = true }.get(prompt)
+        receiver.javaClass.getMethod("onDialogDismissed", Int::class.javaPrimitiveType).invoke(receiver, reason)
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    /** Biometrics alone carry a Cancel button, whose press the platform gives only to its listener: it answers
+     * USER_CANCEL once, leaves no prompt for the session's end to cancel, and the next call prompts afresh. */
+    @Test fun theNegativeButtonAnswersUserCancelOnce() {
+        authenticate(request = 1, biometricOnly = true)
+        dismiss(2)
+        assertEquals(listOf("USER_CANCEL"), errors)
+        module.cancel(1)
+        ShadowBiometricPrompt.cancelCurrentSession()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, answers.size)
+
+        authenticate(request = 2, biometricOnly = true)
+        ShadowBiometricPrompt.authenticateCurrentSessionSuccessfully()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("prompt", "prompt"), shown)
+        assertEquals(listOf("USER_CANCEL", ""), errors)
+        assertTrue(answers.last().has("timestamp"))
+    }
+
+    /** Back, or the system ending the prompt, comes as an authentication error, answered once. */
+    @Test fun backAnswersUserCancelOnce() {
+        authenticate(biometricOnly = true)
+        ShadowBiometricPrompt.authenticateCurrentSessionWithError(BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED, "back")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("USER_CANCEL"), errors)
+        module.destroy {}
+        shadowOf(Looper.getMainLooper()).idle()
         assertEquals(1, answers.size)
     }
 }

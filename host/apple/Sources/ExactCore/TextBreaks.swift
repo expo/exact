@@ -67,8 +67,10 @@ package struct LineBreakPlan {
         func suggest(_ room: Double) -> Int {
             plan.suggest(typesetter, start: start, room: room, offerWidth: offerWidth, breakWord: breakWord, length: length, text: text)
         }
-        return TextEngine.fitSoftHyphen(start: start, count: suggest(room), room: room, boundaries: boundaries, source: source,
-                                        typesetter: typesetter, length: length, retry: suggest)
+        let count = TextEngine.fitSoftHyphen(start: start, count: suggest(room), room: room, boundaries: boundaries, source: source,
+                                             typesetter: typesetter, length: length, retry: suggest)
+        return TextEngine.breakBeforeRoom(typesetter, source: source, start: start, count: count, room: room, boundaries: boundaries,
+                                          hard: hardIndex < hardEnds.count ? hardEnds[hardIndex] : length)
     }
 
     /// CSS `text-wrap-style: balance` (LLP 1001 §6, as Chrome does it): the

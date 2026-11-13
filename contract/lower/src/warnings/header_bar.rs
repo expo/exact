@@ -22,7 +22,7 @@ enum Part {
     Search,
     /// `role="tablist"`: the bar's segmented control.
     Tablist,
-    /// A button that presses, or opens a popover: a bar item.
+    /// A button that presses, or opens a popover or a dialog: a bar item.
     Pressable,
     /// `role="status"`: a readout, a bar item that nothing presses (LLP
     /// 1075.003 §9.15), what it holds its face.
@@ -50,8 +50,16 @@ fn part(node: &Node) -> Part {
     }
     // A link navigates, given the benefit as a pressed thing; a disabled button is a dimmed item.
     let disabled = |a: &Attr| a.name == "disabled" && !matches!(a.value, Expr::Bool(false, _));
+    // A command that opens what it names (`Invocation::opens`); a computed one is given the benefit.
+    let opens = |c: &str| {
+        ["show-modal", "show-popover", "toggle-popover"]
+            .iter()
+            .any(|w| c.eq_ignore_ascii_case(w))
+    };
     let item = attrs.iter().any(disabled)
-        || (has(attrs, "popovertarget") && literal(attrs, "popovertargetaction") != Some("hide"));
+        || (has(attrs, "popovertarget") && literal(attrs, "popovertargetaction") != Some("hide"))
+        || (has(attrs, "commandfor")
+            && (computed(attrs, "command") || literal(attrs, "command").is_some_and(opens)));
     if has(attrs, "press") || (tag == "button" && item) || tag == "link" {
         return Part::Pressable;
     }
@@ -201,7 +209,7 @@ pub(super) const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\
 /// bar takes one heading as its title (with the symbol images beside it in
 /// its row, `title_row`), the first text after it as the
 /// subtitle (a filled box before it as the avatar), one search field, one
-/// tablist, the buttons that press, open a popover or are disabled, and the
+/// tablist, the buttons that press, open a popover or a dialog or are disabled, and the
 /// readouts (`role="status"`, LLP 1075.003 §9.15); the rest of the header is hidden
 /// with it. With two headings the bar takes nothing and the header is shown
 /// as written: `lower-header-no-bar`'s (LLP 1116.003 D2.2). With none, the
