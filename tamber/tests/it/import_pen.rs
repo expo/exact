@@ -6,13 +6,11 @@
 
 use crate::common::vocab;
 use exact_tamber::import::dtcg::pen;
-use exact_tamber::import::Import;
+use exact_tamber::import::{measure_work, Import, WORK_LIMIT as IMPORT};
 use exact_tamber::{apply_all, check, parse};
 use serde_json::Value;
 
 const EMPTY: &str = "tamber app\n";
-/// A fresh import's budget, as `crate::budget::IMPORT` has it.
-const IMPORT: u64 = 3 << 24;
 const EMPTY_PEN: &str = r#"{"version":"2.21"}"#;
 
 fn fixture(name: &str) -> String {
@@ -911,10 +909,9 @@ fn round_3_recheck_7_a_refusal_carried_down_a_long_chain_is_one_charged_walk() {
     }
 }
 
-/// The lead's sweep (2026-10-23): one hostile file for each pass that walks or folds the design or keeps in
-/// proportion to its input, each under the wire's 1 MiB. Through the real budget each is done or refused within
-/// a bound of time; through a budget of a few times its own size each is refused, and at once: no pass runs
-/// uncharged past what it was given.
+/// One hostile file for each pass that walks, folds or copies the design,
+/// each under the wire's 1 MiB. A small work budget refuses multiplication;
+/// ordinary values still map or report their own refusal.
 #[test]
 fn every_pass_over_a_hostile_file_is_charged_to_the_budget() {
     let axes = |n: usize| {
@@ -1042,22 +1039,42 @@ fn every_pass_over_a_hostile_file_is_charged_to_the_budget() {
     ));
     for (what, text, design) in &files {
         assert!(text.len() < 1 << 20, "{what}: {} bytes", text.len());
-        let t = std::time::Instant::now();
-        let full = pen::import_within("x.pen", text, "pen", design, &vocab(), IMPORT);
+        let (full, spent) = measure_work(IMPORT, || {
+            pen::import_with("x.pen", text, "pen", design, &vocab())
+        });
+        // Work ceilings leave room above the measured charges, while bounding
+        // each fixture's repeated resolution, probes and landing folds.
+        let (mapped, reported, ops, ceiling) = match *what {
+            "wide" => (16_000, 0, 8_006, 40_000_000),
+            "strings" => (100, 0, 56, 21_000_000),
+            "expression" => (0, 19, 1, 3 * text.len() as u64),
+            "uses" => (2_000, 0, 2_004, 2_000_000),
+            "landing" => (0, 6_000, 6, 30_000_000),
+            "chain" => {
+                assert_eq!(spent, IMPORT);
+                let all = full.as_ref().unwrap_err();
+                assert!(
+                    all.iter().any(|d| d.id == "tamber-import-source"
+                        && d.message.contains(&format!(
+                            "expands past what one import may do ({IMPORT} steps)"
+                        ))),
+                    "{all:?}"
+                );
+                (0, 0, 0, IMPORT)
+            }
+            _ => unreachable!(),
+        };
         assert!(
-            t.elapsed() < std::time::Duration::from_secs(20),
-            "{what}: {:?} on the real budget",
-            t.elapsed()
+            spent > text.len() as u64 && spent <= ceiling,
+            "{what}: {spent} steps, at most {ceiling}"
         );
-        // What each reaches, asserted: the families are resolved, probed and laid (each made or said why); the
-        // expressions are reported as no numbers, never folded.
-        if *what == "strings" {
-            let import = full.as_ref().expect("families within the budget");
-            assert!(
-                import.counted.mapped + import.counted.reported >= 50,
-                "{:?}",
-                import.counted
-            );
+        if let Ok(import) = &full {
+            assert_eq!(import.counted.mapped, mapped, "{what}");
+            assert_eq!(import.counted.reported, reported, "{what}");
+            assert_eq!(import.counted.source, mapped + reported, "{what}");
+            assert_eq!(import.ops.len(), ops, "{what}");
+        } else {
+            assert_eq!(*what, "chain", "{full:?}");
         }
         if *what == "expression" {
             let import = full
@@ -1069,26 +1086,24 @@ fn every_pass_over_a_hostile_file_is_charged_to_the_budget() {
                 .filter(|u| u.why.contains("no number"))
                 .count();
             assert_eq!(reported, 19, "{:?}", import.unmapped);
-            assert_eq!(import.counted.mapped, 0, "none mapped");
         }
-        // A budget of three times the file: done or refused, and either quickly (what multiplies is refused;
-        // the expressions, reported at once, are done).
-        let t = std::time::Instant::now();
-        let small = pen::import_within(
-            "x.pen",
-            text,
-            "pen",
-            design,
-            &vocab(),
-            3 * text.len() as u64,
-        );
-        let took = t.elapsed();
-        assert!(
-            took < std::time::Duration::from_secs(2),
-            "{what}: {took:?} on a small budget"
-        );
+        let limit = 3 * text.len() as u64;
+        let (small, spent) = measure_work(limit, || {
+            pen::import_within("x.pen", text, "pen", design, &vocab(), limit)
+        });
         if *what != "expression" {
-            assert!(small.is_err(), "{what}: done within three times its size");
+            let all = small.unwrap_err();
+            assert_eq!(spent, limit, "{what}");
+            assert!(
+                all.iter().any(|d| d.id == "tamber-import-source"
+                    && d.message.contains(&format!(
+                        "expands past what one import may do ({limit} steps)"
+                    ))),
+                "{what}: {all:?}"
+            );
+        } else {
+            assert_eq!(small.unwrap().counted, full.unwrap().counted);
+            assert!(spent < limit);
         }
     }
 }

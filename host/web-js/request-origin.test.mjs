@@ -44,7 +44,7 @@ beforeAll(async () => {
   // A TypeScript source that streams: asked by whichever origin `asker` names.
   writeFileSync(resolve(dir, 'source.js'), `import {fetch} from './ts-fetch.js';
 export const answer = (_name, [url]) => fetch(url, { exactStream: e => e.type === 'error' ? e.message : e.type });`);
-  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>globalThis.asker};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();');
+  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>globalThis.asker};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export {painted as canvasCommitted};');
   writeFileSync(resolve(dir, 'rt-link.js'), 'export const rt = { journal: [], clock: { now: 0 } };\n');
   writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes={};');
   const grants = normalized(`net.fetch http://192.168.1.40\nnet.fetch https://public.example\nnet.websocket ws://192.168.1.40`);

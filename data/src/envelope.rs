@@ -271,6 +271,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         .transpose()?
         .unwrap_or_default();
     let request = Request {
+        module: None,
         surface: None,
         // The runner stamps who asked when the request goes out.
         reach: Default::default(),

@@ -376,7 +376,7 @@ fn types(
     }
     if let Ok(warnings) = contract::resource_clock_warnings(path) {
         for finding in warnings {
-            eprintln!("warning: {finding}");
+            eprintln!("{}", warning(finding));
         }
     }
     let result = generate(path);
@@ -418,13 +418,33 @@ fn types(
 /// declaration is the last GPU build's, which a bake rewrites and checks.
 fn surface_warnings(surfaces: &contract::SurfaceFindings) {
     for finding in &surfaces.findings {
-        eprintln!("warning: {finding}");
+        eprintln!("{}", warning(finding.clone()));
     }
     if let (false, Some(newer)) = (surfaces.findings.is_empty(), &surfaces.newer) {
-        eprintln!(
-            "warning: .shells/surfaces.json is older than {}: it names the arguments of the game's last GPU build; a web or native build rewrites it",
-            newer.display()
-        );
+        let stale = contract::CompileError {
+            pass: "warning",
+            id: "surface-declaration-stale".into(),
+            message: ".shells/surfaces.json is older than this file: it names the arguments of the game's last GPU build; a web or native build rewrites it".into(),
+            span: contract_syntax::Span {
+                line: 1,
+                col: 1,
+                end_col: 1,
+                source_id: 0,
+            },
+            file: Some(newer.as_path().into()),
+            related: Box::new([]),
+        };
+        eprintln!("{stale}");
+    }
+}
+
+/// `finding` as a warning, which prints as a lowering warning does
+/// (`file:line:col warning [id] message`), the shape the editor's problem
+/// matcher reads (editors/vscode, `$exact-contract`).
+fn warning(finding: contract::CompileError) -> contract::CompileError {
+    contract::CompileError {
+        pass: "warning",
+        ..finding
     }
 }
 

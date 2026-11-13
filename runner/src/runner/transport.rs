@@ -22,9 +22,13 @@ impl<D: DataSource> Runner<D> {
         }
         let mut seen = Vec::with_capacity(self.plan.sequences.len());
         for row in self.plan.sequences.iter() {
-            let on = self.eval(row.gate, &[], &[])? == Value::Bool(true);
+            let on = self.eval(row.gate, &[], &[]).map_err(|e| {
+                e.evaluated(|| format!("sequence {:?} gate", self.plan.str(row.name)))
+            })? == Value::Bool(true);
             let key = if row.keyed && on {
-                let value = self.eval(row.key, &[], &[])?;
+                let value = self.eval(row.key, &[], &[]).map_err(|e| {
+                    e.evaluated(|| format!("sequence {:?} key", self.plan.str(row.name)))
+                })?;
                 Some(
                     crate::instance::key_text(&value).ok_or_else(|| RunnerError::TaskKey {
                         task: self.plan.str(row.name).to_string(),
@@ -35,15 +39,22 @@ impl<D: DataSource> Runner<D> {
             };
             let mut args = Vec::new();
             if on {
-                for code in [
+                for (k, code) in [
                     row.tracks,
                     row.bpm,
                     row.from,
                     row.count_in,
                     row.clock,
                     row.clock_out,
-                ] {
-                    args.push(self.eval(code, &[], &[])?);
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    args.push(self.eval(code, &[], &[]).map_err(|e| {
+                        e.evaluated(|| {
+                            format!("sequence {:?} argument {}", self.plan.str(row.name), k + 1)
+                        })
+                    })?);
                 }
             }
             seen.push(Seen { on, key, args });

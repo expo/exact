@@ -387,7 +387,13 @@ what to write. Nothing runs because a value changed (no `useEffect` or watch).
   the trap until it evaluates to a value again, and the app goes on; an `if`,
   `match` or `for` subject, a key, a row's state initializer, a surface
   argument or a virtualized list's own options stops the runner (LLP 1090,
-  LLP 1017.003 D3).
+  LLP 1017.003 D3). Every build keeps `Trap(Kind { pc: N })` verbatim, then
+  names the evaluation and bound in words: a derive or action's name, a resource
+  argument, a state initializer, or the view and plan site with its event
+  argument, subject, key, initializer, surface argument or list option. The JS
+  target names the site alone. Arguments count from 1. A binding already names
+  its site and row, so it adds only the bound. An inlined child derive or `fn`
+  names its reader; the pc is local to that code body, not a source location.
 - A state's initializer runs before any resource answers and before any derive:
   it reads props, injects and the states declared above it, nothing else
   (`type-initializer-scope`). Derive a value from a resource instead, or keep
@@ -1807,6 +1813,16 @@ types and the app's `file_handlers`. For audio, declare `audio/mpeg`, `audio/wav
 `audio/*` remains outside the admitted wildcard types. XHTML uses
 `application/xhtml+xml` in the same way. On Linux the agent can answer a held
 picker, but the live picker is unavailable (LLP 1069.002, "Any-type input").
+Android uses the system Photo Picker for `image/*`, `video/*`, or both wildcards,
+when the picker is available. Specific MIME types and other lists
+use the document picker; unknown extensions leave its filter unrestricted, with
+`accept` checked after import. Both support `multiple` and return copies; no
+photo-library or storage permission prompt is needed. Back fires `cancel`.
+HEIC/HEIF stays original for an empty `accept`, `*/*`, `image/*` or an explicit
+HEIC/HEIF type or extension. A specific list containing `image/jpeg`, `.jpg` or
+`.jpeg` also offers HEIC/HEIF in the document picker, then converts it to upright
+JPEG at quality 0.9 without location metadata. The delivered type
+must still match `accept`; conversion failures fire `cancel` with a journal reason.
 
 The view forms are element, component use, `if`/`else` (and `else if`),
 keyed `for`, exhaustive option `match`, and `children`. Wrap root regions in a
@@ -3064,8 +3080,11 @@ is checked against the table, but any other computed string is not checked, so
 always build locations with `path()`. A route's parameter fields are strings, with
 empty strings for absent fields. `select` takes a tab name, not a URL.
 
-`open` replaces one tab's stack and leaves the others as they were. Signing
-out of an app with tabs, `open(nav, "/")` alone keeps the last account's
+`open` replaces the destination tab's stack with its declared route chain, from
+root through destination, and leaves the other tabs as they were. For a direct
+child this is `[root, child]`, so Back returns to the root; deeper destinations
+retain their declared intermediate ancestors. Use `push` to retain the visited
+screens instead. Signing out of an app with tabs, `open(nav, "/")` alone keeps the last account's
 screens in the other tabs: open each tab's root, the tab to land on last,
 nested because an action's writes land when it ends
 (`nav = open(open(nav, "/history"), "/")`).
@@ -5314,7 +5333,7 @@ that restates a constant is weaker evidence than the user's actual sequence.
 | A `button` inside a `button`, as a React Native `Pressable` in another (`lower-nested-button`): a press is the inner one's alone, but the outer's accessible name reads both ("Note Listen") | A `row` of the outer's content as one `button` (`flex=1`) and the inner one beside it |
 | A heading at the top of a route's content that says its `header` heading again, which shows twice under the iOS bar (`lower-title-twice`) | Drop it; the bar's title names the screen. A heading below names a section: `text "Results" role="heading" aria-level=2` |
 | An SVG `use` whose literal `href="#id"` targets a `foreignObject` or a subtree containing one (`lower-svg-use-foreign-object`). Only unconditional literal SVG ids from one source definition resolve. Repeated copies must all contain a `foreignObject`; a conditional copy, a copy without one, ids from different source definitions, dynamic hrefs and dynamic ids stay quiet. References inside the target are not followed | A `foreignObject` draws nothing through `use`. Place it directly in the SVG for the web; native hosts refuse it. For content on every host, position an ordinary box over the SVG |
-| A list and its detail (or a form) swapped by `if showingDetail` / `else` or complementary sibling `if`s (also with the same viewport-only `or` term), each with its heading, at the top of the view or inside a route; or pages named by one state, `page == "detail"`, in three arms or sibling `if`s or more, with or without headings (`lower-screen-by-state`). A tab bar's state and a radio group's stay quiet | Each screen a route: `routes`, a row that `push`es its detail, `back` to return; the web gets Back, reload and links, a wide window the split (`contract vocab screen`) |
+| A list and its detail (or a form) swapped by `if showingDetail` / `else` or complementary sibling `if`s (also with the same viewport-only `or` term), each with its heading, at the top of the view or inside a route; or pages named by one state, `page == "detail"`, in three arms or sibling `if`s or more, with or without headings (`lower-screen-by-state`). A tab bar's state, a radio group's, and a slot component's choice of how to wrap its `children` (the same content in a canvas or a plain scroll) stay quiet | Each screen a route: `routes`, a row that `push`es its detail, `back` to return; the web gets Back, reload and links, a wide window the split (`contract vocab screen`) |
 | `column padding=24 width="100%"`, as wide as its parent's content plus the padding: it runs past the screen's right side (`lower-width-padding`) | Drop the width (a block or a stretched flex item fills its parent), or `box-sizing="border-box"` |
 | An absolute width ceiling containing scalable text stays bounded at accessibility sizes (`lower-text-px-width`). The lint follows `width` and `max-width` through their bounds: a fixed maximum alone caps growth; a minimum alone does not. A fixed minimum can override a smaller cap, but a growing or unknown minimum makes the lint stay silent. Absolute lengths include numbers, px, pt and absolute `calc()`; `em` is fixed against an authored absolute font. Flex can supersede width on a row’s main axis; zero grow with an auto basis keeps its ceiling, and flex does not size a column child’s width. Effective classes, declaration order and parent direction count. Unresolved classes and uncertain sizing stay silent. A computed display leaves the node uncertain but its children are still checked; known-hidden subtrees are skipped. Text in absolute positioning, popovers and dialogs is checked inside that subtree, without counting against enclosing boxes. Text inherits the platform root font. Native Apple controls use the Apple control font, which can scale with Dynamic Type; web controls inherit, and Linux control defaults are fixed. An absolute font size stops scaling within that boundary; `inherit` and `unset` use the parent font even on controls. The warning reads lowering’s grouped-list typography and checks layout boxes containing text runs or text fields, including HTML inside SVG `foreignObject`; an inline run’s own width does not constrain its paragraph | Express the width and its bounds in `rem`, such as `width="3rem"` or `max-width="3rem"`, so they follow the root font, or let the content determine the width |
 | `text "Results" aria-level=2`, a level with no role, which is no heading to a screen reader on any platform, gets no heading style and is not the iOS bar's title (`lower-level-without-heading`) | `text "Results" role="heading" aria-level=2`; `role="heading"` alone is level 2 |
@@ -5496,9 +5515,15 @@ A box outside every route clears the status bar with
 
 Sizes, padding and radii clamp negative results to zero; margins and insets keep
 them. `env(titlebar-area-x|y|width|height)` is the title bar beside a Mac window's
-traffic lights under `viewport-fit="cover"` (in the tall title row an app without routes
-gets from `"display_override": ["window-controls-overlay"]` in `app.json`) and is undefined
-elsewhere, so give it a fallback (`contract vocab titlebar-area`). Unsupported: `em`, a unitless number where a length goes
+traffic lights under `viewport-fit="cover"`. It is zero in full screen or while the
+session's toolbar fills the title bar. Once navigation history retains a toolbar,
+it stays (LLP 1115.000, retention as built). In a single-location app, a root header
+can bring a toolbar before history retains one; it goes away when that header hides
+or its route says `navigationBar="none"`. Routes that all withhold their bars before
+history retains a toolbar bring none; an authored toolbar or sidebar can still
+supply one. With no toolbar of the session's own, `"display_override": ["window-controls-overlay"]`
+in `app.json` gives the page the platform's tall title row and its title-bar area,
+routes or not. Elsewhere the area is undefined, so give it a fallback (`contract vocab titlebar-area`). Unsupported: `em`, a unitless number where a length goes
 (write `0px`, not `0`), a `var()` naming neither a design token nor one of those four, more than 32 values or 32 levels (LLP 1001 §2,
 "Comparisons").
 

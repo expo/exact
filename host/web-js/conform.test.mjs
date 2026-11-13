@@ -648,3 +648,15 @@ test('the marker marks every comparison kind on a marked target and leaves Linux
   expect(report.marked.markdown.steps).toEqual(['boot', 'tap a']);
   expect(report.failures.map(f => f.what)).toEqual(['linux state slots.x: wasm 1 linux 2', 'layout editor.h: wasm 10.00 kernel 12.00']);
 });
+
+test('bound comparisons include the evaluation and words while joining view and site identities', () => {
+  const source = comparisonSource.slice(comparisonSource.indexOf('const BOUND ='), comparisonSource.indexOf('const boundReasons ='));
+  const start = comparisonSource.indexOf('const boundReasons =');
+  const end = comparisonSource.indexOf('}).filter((r, i, all) => r !== all[i - 1]);', start) + '}).filter((r, i, all) => r !== all[i - 1]);'.length;
+  const reasons = new Function(source + comparisonSource.slice(start, end) + '; return boundReasons;')();
+  const suffix = ': past the 65,536 list steps one evaluation may take';
+  expect(reasons([`poisoned: Instance(Trap(IterationLimit { pc: 17 })) in view 12 (site 58) each subject${suffix}`]))
+    .toEqual(reasons([`poisoned: Instance(Trap(IterationLimit { pc: 17 })) in site 58 each subject${suffix}`]));
+  expect(reasons([`refused: Trap(IterationLimit { pc: 17 }) in derive "a"${suffix}`]))
+    .not.toEqual(reasons([`refused: Trap(IterationLimit { pc: 17 }) in derive "b"${suffix}`]));
+});

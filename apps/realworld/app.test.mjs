@@ -130,3 +130,37 @@ for (const scheme of ['light', 'dark']) {
     }
   }, 30000);
 }
+
+test('replies from a previous reader leave the next reader alone', async () => {
+  const { answer } = await import('./app.ts');
+  const kept = new Map([['realworld.jwt', 'alice']]);
+  const store = { get: k => kept.get(k), set: (k, v) => kept.set(k, v), forget: k => kept.delete(k) };
+  const held = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = url => new Promise(resolve => held.push({ url: String(url), resolve }));
+  const reply = (i, status, body) => held[i].resolve(new Response(JSON.stringify(body), { status }));
+  const settle = () => new Promise(r => setTimeout(r, 0));
+  try {
+    const alice = answer('currentUser', [], store);
+    await settle();
+    const login = answer('login', ['bob@example.invalid', 'secret'], store);
+    await settle();
+    reply(1, 200, { user: { username: 'bob', token: 'bob' } });
+    expect((await login).ok).toBe(true);
+    reply(0, 401, { errors: { token: ['expired'] } });
+    await alice;
+    expect(kept.get('realworld.jwt')).toBe('bob');
+
+    const favourite = answer('favorite', ['story', true, 0], store);
+    await settle();
+    await answer('logout', [], store);
+    reply(2, 200, { article: { favorited: true, favoritesCount: 1 } });
+    await favourite;
+    const shown = answer('article', ['story'], store);
+    await settle();
+    reply(3, 200, { article: { slug: 'story', title: 'Story', favorited: false, favoritesCount: 0, author: {} } });
+    expect(await shown).toMatchObject({ favorited: false, favoritesCount: 0 });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

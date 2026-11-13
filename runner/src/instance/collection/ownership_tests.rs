@@ -362,7 +362,10 @@ fn a_trapping_scroll_restoration_is_refused_like_every_binding() {
     assert!(
         matches!(
             error,
-            InstanceError::Trap(crate::vm::Trap::UnwrapNone { .. })
+            InstanceError::Evaluation {
+                trap: crate::vm::Trap::UnwrapNone { .. },
+                ..
+            }
         ),
         "{error:?}"
     );

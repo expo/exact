@@ -64,7 +64,12 @@ fn walk(
             }
             Child::Region(r) => {
                 if u.stale(&sites.deps.regions[r.region.0 as usize]) {
-                    region(u, r, frames, parent, out)?;
+                    region(u, r, frames, parent, out).map_err(|e| {
+                        match (parent, u.env.plan.region(r.region).parent) {
+                            (Some(view), Some(site)) => e.at_view(view, site),
+                            _ => e,
+                        }
+                    })?;
                 }
             }
         }
@@ -109,7 +114,19 @@ fn region(
             let (want, mut new_frame) = if !u.stale(&sites.deps.subjects[index]) {
                 (*arm, frame.scope())
             } else {
-                match (&row.kind, u.eval(row.subject, frames)?) {
+                match (
+                    &row.kind,
+                    u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            if row.kind == RegionKind::When {
+                                "when"
+                            } else {
+                                "match"
+                            }
+                        )
+                    })?,
+                ) {
                     (RegionKind::When, Value::Bool(true)) => (Some(0), Frame::default()),
                     (RegionKind::When, Value::Bool(false)) => (Some(1), Frame::default()),
                     (RegionKind::Match, Value::Option(Some(v))) => (

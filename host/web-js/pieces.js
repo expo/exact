@@ -1,10 +1,11 @@
 // The pieces a plan loads after first paint, each only where the plan uses it: a canvas's GPU or Canvas 2D surface,
 // native module views, presence, motion, text flow, page geometry, the Markdown editor and the web host's input piece.
 import { rt as Link } from './rt-link.js';
+import { committedCanvas } from './request-send.js';
 import { releaseAsset as rel } from './elements.js';
 import { liveById, sheetLeaves, inertAncestor } from './navigation.js';
 import { startDecoration, decorationPiece } from './editor.js';
-import { Owner, onEnd, effect, say, inflight, data, journal, After, Before, Hosts, Probes, Media } from './rt.js';
+import { Owner, onEnd, effect, say, inflight, data, journal, After, Before, Finishes, Hosts, Probes, Media } from './rt.js';
 import { clock, advance } from './clock.js';
 import { Views, Ids, viewId, Hooks } from './tree.js';
 import { OnHooks } from './events.js';
@@ -85,9 +86,13 @@ export function gs(e, name, values) {
  * fetched two frames after the first 2D canvas mounts (a loaded
  * capability); `types` are the arguments' declared types where known. */
 let Canvas2d = null;
+const CanvasMounts = new Set();
+export const canvasCommitted = (surface, active = () => true) => committedCanvas(surface, active, Finishes, () => Canvas2d, CanvasMounts);
+Link.canvasCommitted = canvasCommitted;
 export function c2(e, name, values, types, names) {
   const c = { e, name, types, names, mounted: clock.now, args: null };
-  onEnd(() => Canvas2d?.then(m => m?.gone(c)));
+  CanvasMounts.add(c);
+  onEnd(() => { CanvasMounts.delete(c); Canvas2d?.then(m => m?.gone(c)); });
   effect(() => {
     c.args = values();
     if (typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;

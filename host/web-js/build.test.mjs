@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { bakedRustSource, buildModule, buildScriptDir, crateDir, depInfoOf, moduleGrants, webCompiler, fresh, freshCompiler } from './module.mjs';
+import { bakedRustSource, buildModule, moduleGrants, webCompiler } from './module.mjs';
 import { spawnOwned } from '../../scripts/test-children.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
@@ -331,15 +331,15 @@ test.each([
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 1024, bytes = [];
   const u32 = n => bytes.push(n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255);
   const string = s => { const b = new TextEncoder().encode(s); u32(b.length); bytes.push(...b); };
-  u32(10); bytes.push(0); string('test.grants'); string(grants);
+  u32(11); bytes.push(0); string('test.grants'); string(grants);
   new Uint8Array(memory.buffer, out, bytes.length).set(bytes);
   const output = mock(() => out);
-  let abi = 10;
+  let abi = 11;
   const instantiate = spyOn(WebAssembly, 'instantiate').mockResolvedValue({ instance: { exports: {
     memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
     exact_logic_call(_session, pointer, length) {
       const request = new DataView(memory.buffer, pointer, length);
-      return length === 5 && request.getUint32(0, true) === 10 && request.getUint8(4) === 0 ? 0 : 1;
+      return length === 5 && request.getUint32(0, true) === 11 && request.getUint8(4) === 0 ? 0 : 1;
     },
     exact_logic_output: output, exact_logic_output_len: () => bytes.length,
   } } });
@@ -348,7 +348,7 @@ test.each([
     expect(output).toHaveBeenCalledTimes(1);
     expect(actual).toBe(grants);
     abi = 9;
-    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 9 is not 10');
+    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 9 is not 11');
   } finally {
     instantiate.mockRestore();
     rmSync(dir, { recursive: true, force: true });
@@ -838,6 +838,13 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     expect([file.headers['cache-control'], /^"[\w-]+"$/.test(file.headers.etag ?? '')]).toEqual(['no-cache', true]);
     expect(await get('/item/7')).toMatchObject({ status: 200, body: expect.not.stringContaining('The note, rendered.') });
     expect((await get('/no/such/route')).status).toBe(404);
+    // A bad percent escape is no file, and a link in the build to a file outside it is not served (render.mjs
+    // --serve serves through the same `serve`).
+    writeFileSync(resolve(dir, 'outside.txt'), 'outside the build\n');
+    symlinkSync(resolve(dir, 'outside.txt'), resolve(out, 'leak.js'));
+    const statuses = await Promise.all(['/%', '/%ZZ', '/leak.js'].map(async (path) => (await fetch(`http://127.0.0.1:${serve.port}${path}`)).status));
+    expect(statuses).toEqual([404, 404, 404]);
+    rmSync(resolve(out, 'leak.js'));
     // Asked as curl asks (any type, or no Accept), a page rendered per request is sent as to a browser; the client's
     // route is no such page, and a request for another type gets the 404 page.
     const asked = async (path, headers) => { const r = await fetch(`http://127.0.0.1:${serve.port}${path}`, { headers }); return [r.status, (await r.text()).includes(`>${path}<`)]; };
@@ -1423,52 +1430,6 @@ export const answer: TypeScriptAnswer = (source, args, store, storage, native) =
     expect(declarations()).toContain('Exclude<Source, "rust">');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 300_000);
-
-test('compiler reuse is invalidated by dependency manifests and the workspace lockfile', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-compiler-fresh-'));
-  const product = resolve(dir, 'compiler'), crate = resolve(dir, 'dep'), source = resolve(crate, 'src/lib.rs');
-  const lock = resolve(import.meta.dir, '../../Cargo.lock'), previous = statSync(lock), fast = process.env.EXACT_WEB_COMPILER;
-  try {
-    mkdirSync(resolve(crate, 'src'), { recursive: true });
-    writeFileSync(source, 'pub fn run() {}'); writeFileSync(resolve(crate, 'Cargo.toml'), '[package]\nname="fixture"\nversion="0.1.0"\n');
-    writeFileSync(product, 'compiler fixture'); writeFileSync(`${product}.d`, `${product}: ${source}\n`);
-    const built = Date.now() / 1000 + 10;
-    utimesSync(product, built, built);
-    process.env.EXACT_WEB_COMPILER = product;
-    expect(freshCompiler(product)).toBe(true); expect(webCompiler().cmd).toBe(product);
-    utimesSync(resolve(crate, 'Cargo.toml'), built + 1, built + 1);
-    expect(fresh(product, `${product}.d`)).toBe(true);
-    expect(freshCompiler(product)).toBe(false); expect(webCompiler().cmd).not.toBe(product);
-    utimesSync(resolve(crate, 'Cargo.toml'), built - 1, built - 1);
-    utimesSync(lock, built + 1, built + 1);
-    expect(fresh(product, `${product}.d`)).toBe(true);
-    expect(freshCompiler(product)).toBe(false); expect(webCompiler().cmd).not.toBe(product);
-  } finally {
-    utimesSync(lock, previous.atime, previous.mtime);
-    if (fast === undefined) delete process.env.EXACT_WEB_COMPILER; else process.env.EXACT_WEB_COMPILER = fast;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('a Windows compiler is found by its .exe beside the dep-info Cargo names without it', () => {
-  expect(depInfoOf('C:\\t\\debug\\exact-web-js.exe')).toBe('C:\\t\\debug\\exact-web-js.d');
-  expect(depInfoOf('/t/debug/exact-web-js')).toBe('/t/debug/exact-web-js.d');
-  expect(crateDir('C:\\w\\contract\\src\\lib.rs')).toBe('C:\\w\\contract');
-  expect(crateDir('/w/contract/src/lib.rs')).toBe('/w/contract');
-  expect(crateDir('C:\\w\\Cargo.lock')).toBe(null);
-  expect(buildScriptDir('C:\\t\\debug\\build\\kernel-0a1b\\out\\tables.rs')).toBe('C:\\t\\debug\\build\\kernel-0a1b');
-  expect(buildScriptDir('/t/debug/build/kernel-0a1b/out/tables.rs')).toBe('/t/debug/build/kernel-0a1b');
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-compiler-exe-'));
-  try {
-    const product = resolve(dir, 'compiler.exe'), source = resolve(dir, 'dep/src/lib.rs');
-    mkdirSync(dirname(source), { recursive: true });
-    writeFileSync(source, ''); writeFileSync(resolve(dir, 'dep/Cargo.toml'), '[package]\nname="fixture"\n');
-    writeFileSync(product, 'compiler fixture'); writeFileSync(resolve(dir, 'compiler.d'), `${product}: ${source}\n`);
-    const built = Date.now() / 1000 + 10;
-    utimesSync(product, built, built);
-    expect(freshCompiler(product)).toBe(true);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
 
 test('web builds expose their version inputs in the view and delivery state', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');

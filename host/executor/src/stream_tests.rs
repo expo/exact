@@ -22,6 +22,8 @@ use std::{
 /// The test's end of one open body: bytes to send, or a drop to close.
 type Feed = Sender<Vec<u8>>;
 
+const HANG: Duration = Duration::from_secs(30);
+
 struct Fed {
     rx: Receiver<Vec<u8>>,
     signal: AbortSignal,
@@ -59,6 +61,7 @@ impl BodySource for Fed {
 #[derive(Default)]
 struct Script {
     feeds: Mutex<Vec<Option<Feed>>>,
+    held: Arc<(Mutex<usize>, Condvar)>,
     ended: Arc<(Mutex<usize>, Condvar)>,
     read: Arc<(Mutex<usize>, Condvar)>,
     opened: Condvar,
@@ -198,10 +201,26 @@ impl Transport for Scripted {
         }
         // A held reply: until the test ends it (retirement aborts it).
         if request.url.ends_with("/hold") {
-            let end = Instant::now() + Duration::from_secs(5);
-            while !signal.aborted() && Instant::now() < end {
-                std::thread::sleep(Duration::from_millis(2));
-            }
+            let held = self.0.held.clone();
+            let _registration = signal.register(move || {
+                let _guard = held.0.lock().unwrap();
+                held.1.notify_all();
+            });
+            let mut held = self.0.held.0.lock().unwrap();
+            *held += 1;
+            self.0.held.1.notify_all();
+            let (held, timeout) = self
+                .0
+                .held
+                .1
+                .wait_timeout_while(held, HANG, |_| !signal.aborted())
+                .unwrap();
+            assert!(
+                !timeout.timed_out(),
+                "the test never aborted its held reply"
+            );
+            drop(held);
+            signal.check()?;
         }
         let status = if request.url.ends_with("/plain") {
             404
@@ -292,7 +311,7 @@ fn feed(script: &Script, at: usize) -> Feed {
     let feeds = script.feeds.lock().unwrap();
     let (mut feeds, _) = script
         .opened
-        .wait_timeout_while(feeds, Duration::from_secs(5), |feeds| {
+        .wait_timeout_while(feeds, HANG, |feeds| {
             feeds.get(at).is_none_or(Option::is_none)
         })
         .unwrap();
@@ -303,15 +322,28 @@ fn feed(script: &Script, at: usize) -> Feed {
 }
 
 fn next(core: &Core, woke: &Receiver<()>) -> (u64, Outcome) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG;
     loop {
         core.begin_pump();
         if let Some(done) = core.drain().pop() {
             return (done.0, done.1);
         }
         woke.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .expect("an outcome within five seconds");
+            .expect("the stream never delivered an outcome");
     }
+}
+
+fn wait_held(script: &Script, count: usize) {
+    let held = script.held.0.lock().unwrap();
+    let (held, _) = script
+        .held
+        .1
+        .wait_timeout_while(held, HANG, |n| *n < count)
+        .unwrap();
+    assert_eq!(
+        *held, count,
+        "the held requests never reached the transport"
+    );
 }
 
 /// The next outcome but an upload's start (`UPLOAD_SENDING`), which comes
@@ -600,7 +632,7 @@ fn a_stream_opens_while_every_independent_worker_holds_a_reply() {
         )
         .unwrap();
     }
-    std::thread::sleep(Duration::from_millis(20));
+    wait_held(&script, INDEPENDENT);
     core.run_owned(stream(100, "/events", 4096), None).unwrap();
     let tx = feed(&script, 0);
     tx.send(b"data: moving\n\n".to_vec()).unwrap();
@@ -1020,7 +1052,7 @@ fn an_uploads_bytes_sent_coalesce_while_the_runner_has_not_taken_them() {
     core.run_owned(upload(1, "/upload-burst", 4000), None)
         .unwrap();
     reported
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(HANG)
         .expect("the bytes sent were reported");
     // The start is a message of its own; the first two counts fold into the newest.
     match next(&core, &woke).1 {
@@ -1287,11 +1319,7 @@ fn an_upload_waiting_for_its_lanes_room_starts_when_a_request_let_go_frees_it() 
         };
         core.run_owned(image, None).unwrap();
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while core.shared.state.lock().unwrap().bytes[1] < 60 << 20 {
-        assert!(Instant::now() < deadline, "the images never started");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_held(&script, 3);
     core.run_owned(upload_within(4, "/upload", 4096, 2 << 20), None)
         .unwrap();
     assert_eq!(core.shared.uploads.waiting().0, 1, "it waits for room");

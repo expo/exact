@@ -184,7 +184,17 @@ fn a_leader_that_exits_first_leaves_no_group_behind() {
 }
 
 #[test]
+fn a_group_gone_after_its_signal_ends_the_stream() {
+    group_gone_ends_stream(false);
+}
+
+#[test]
+#[ignore = "async lane: measures stream completion before the ten-second signal grace"]
 fn a_group_gone_after_its_signal_ends_the_stream_before_the_grace() {
+    group_gone_ends_stream(true);
+}
+
+fn group_gone_ends_stream(check_latency: bool) {
     let (core, woke, _) = core("process.spawn /bin/sh");
     // The leader exits and its member holds no pipe, so the signal that
     // ends the group is the last thing the supervisor sees of it.
@@ -196,10 +206,12 @@ fn a_group_gone_after_its_signal_ends_the_stream_before_the_grace() {
     let took = start.elapsed();
     let leader = spawned_pid(&out);
     assert!(!os::group_alive(leader), "the group outlived the stream");
-    assert!(
-        took < Duration::from_secs(5),
-        "the stream waited out the grace: {took:?}"
-    );
+    if check_latency {
+        assert!(
+            took < Duration::from_secs(5),
+            "the stream waited out the grace: {took:?}"
+        );
+    }
 }
 
 /// Rewrite every entry of the record at `path` with `change`.
@@ -313,17 +325,28 @@ fn a_stale_record_ends_no_group_that_is_not_the_apps() {
 
 #[test]
 fn a_quit_ends_every_group() {
+    quit_ends_every_group(false);
+}
+
+#[test]
+#[ignore = "async lane: measures the five-second quit grace on the wall clock"]
+fn a_quit_keeps_its_five_second_grace() {
+    quit_ends_every_group(true);
+}
+
+fn quit_ends_every_group(check_latency: bool) {
     use std::io::{BufRead, Read, Write};
     use std::process::{Command, Stdio};
 
     const CHILD: &str = "EXACT_PROCESS_QUIT_TEST";
     if std::env::var_os(CHILD).is_none() {
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "process::real::tests::a_quit_ends_every_group",
-                "--nocapture",
-            ])
+            .args(["--exact", "--include-ignored", "--nocapture"])
+            .arg(if check_latency {
+                "process::real::tests::a_quit_keeps_its_five_second_grace"
+            } else {
+                "process::real::tests::a_quit_ends_every_group"
+            })
             .env(CHILD, "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -339,8 +362,8 @@ fn a_quit_ends_every_group() {
                 break serde_json::from_str(pids).unwrap();
             }
         };
-        // Setup is outside the measurement. The interval includes quit and
-        // every atexit callback, with 2 s for scheduling beyond the 5 s grace.
+        // The ordinary case waits for exit. Only the latency qualification
+        // measures the grace, including every atexit callback.
         let started = Instant::now();
         child.stdin.take().unwrap().write_all(b"quit\n").unwrap();
         let status = loop {
@@ -356,9 +379,7 @@ fn a_quit_ends_every_group() {
         };
         let took = started.elapsed();
         stdout.read_to_string(&mut output).unwrap();
-        while groups.iter().any(|g| os::group_alive(*g))
-            && started.elapsed() < Duration::from_secs(7)
-        {
+        while groups.iter().any(|g| os::group_alive(*g)) && started.elapsed() < BOUND {
             std::thread::sleep(Duration::from_millis(50));
         }
         let alive: Vec<_> = groups.into_iter().filter(|g| os::group_alive(*g)).collect();
@@ -367,10 +388,12 @@ fn a_quit_ends_every_group() {
         }
         assert!(status.is_some_and(|s| s.success()), "{status:?}: {output}");
         assert!(alive.is_empty(), "groups outlived exit: {alive:?}");
-        assert!(
-            (Duration::from_secs(5)..Duration::from_secs(7)).contains(&took),
-            "quit through process exit took {took:?}: {output}"
-        );
+        if check_latency {
+            assert!(
+                (Duration::from_secs(5)..Duration::from_secs(7)).contains(&took),
+                "quit through process exit took {took:?}: {output}"
+            );
+        }
         return;
     }
 
@@ -395,9 +418,11 @@ fn a_quit_ends_every_group() {
     std::io::stdin().read_line(&mut go).unwrap();
     assert_eq!(go, "quit\n");
     drop(core);
-    // The caller's thread does not wait: the escalation runs off it, and
-    // the groups, which ignore the quit's signal, are alive when it returns.
-    assert!(groups.iter().all(|g| os::group_alive(*g)));
+    if check_latency {
+        // Escalation runs off the caller's thread. Only the latency case
+        // requires observing the groups before their grace ends.
+        assert!(groups.iter().all(|g| os::group_alive(*g)));
+    }
     std::process::exit(0);
 }
 

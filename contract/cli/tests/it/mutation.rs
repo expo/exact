@@ -716,7 +716,10 @@ fn poison_leaks_no_effects_from_the_failed_commit() {
     assert!(matches!(
         r.act("go", vec![]),
         Err(RunnerError::Instance(
-            exact_runner::instance::InstanceError::Trap(exact_runner::Trap::StringTooLong { .. })
+            exact_runner::instance::InstanceError::Evaluation {
+                trap: exact_runner::Trap::StringTooLong { .. },
+                ..
+            }
         ))
     ));
     assert!(r.is_poisoned());

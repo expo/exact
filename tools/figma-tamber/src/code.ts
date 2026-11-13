@@ -209,7 +209,9 @@ async function write(plan: Plan, before: Plan | null, fresh = false, seen?: stri
       }
     }
     c.id = col.id;
-    c.contextIds = Object.fromEntries(c.modes.map(mode => [c.contexts[mode], ids[mode]]));
+    // Under every context a mode stands for (its light twins, `also`, too), so
+    // a later export that keeps another of them for the mode still finds it.
+    c.contextIds = Object.fromEntries(c.modes.flatMap(mode => [c.contexts[mode], ...(c.also?.[mode] ?? [])].map(ctx => [ctx, ids[mode]])));
     if (parked.length) c.parked = Object.fromEntries(parked);
   }
 }

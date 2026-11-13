@@ -164,7 +164,6 @@ export function injectedProfiles(app, workspace = app.workspace) {
   for (const [name, table] of Object.entries(profiles)) walk(['profile', key(name)], table);
   return flags;
 }
-
 /** The root's crates.io patches as they must appear in an outside workspace
  * at `from`: each vendored crate, by a path relative to it. Two copies of taffy
  * or cosmic-text in one build fail far from the cause, so `exact new` writes

@@ -257,8 +257,8 @@ globalThis.exact.canvas2dGlue = function canvas2dGlue(o) {
   // computed size (fractional, as the observer's), less padding and border where the box sizes its border; none for a
   // canvas with no box (`display: none` here or above: its computed size is the authored one); and inline then block,
   // as the observer's entry gives it, in a vertical writing mode.
-  function firstGeometry(id, el) {
-    if (!waiting.has(id) || watched.get(id) !== el) return;
+  function firstGeometry(id, el, refresh = false) {
+    if ((!refresh && !waiting.has(id)) || watched.get(id) !== el) return;
     if (o.views.get(id) !== el) forget(id);
     else if (!el.getClientRects().length) report(id, el, 0, 0);
     else {
@@ -323,6 +323,18 @@ globalThis.exact.canvas2dGlue = function canvas2dGlue(o) {
   document.fonts?.addEventListener("loadingdone", () => exact.send(exact.wasm.exact_canvas_fonts()));
   return {
     op(op) {
+      if (op.prepareCapture !== undefined) {
+        if (!op.held()) { op.resolve(); return; }
+        for (const [id, el] of watched) firstGeometry(id, el, true);
+        exact.send(exact.wasm.exact_canvas_capture_ready(op.prepareCapture));
+        op.resolve(); return;
+      }
+      if (op.capture) {
+        const c = op.capture;
+        this.capture(c.id, c.lifetime, c.generation, c.w, c.h, c.sequence,
+          () => exact.wasm.exact_canvas_snapshotted(c.ticket)).then(op.resolve, op.reject);
+        return;
+      }
       if (op.forget) { forget(op.id); return; }
       if (op.images) { for (const src of op.images) load(src); return; }
       if (op.frames !== undefined && op.id === undefined) {
@@ -340,7 +352,25 @@ globalThis.exact.canvas2dGlue = function canvas2dGlue(o) {
       const r = canvases.get(op.id);
       if (!r || r.lifetime !== op.lifetime || r.generation !== op.generation) return;
       // Each list is `[address, length]` in the wasm's memory, read in place.
-      for (const [at, len] of op.lists ?? []) if (!r.apply(new DataView(exact.wasm.memory.buffer, at, len))) console.error(`exact: canvas ${op.id}: unreadable list`);
+      let completed = true;
+      for (const [at, len] of op.lists ?? []) if (!r.apply(new DataView(exact.wasm.memory.buffer, at, len))) { completed = false; console.error(`exact: canvas ${op.id}: unreadable list`); }
+      if (completed && op.seq > 0) r.sequence = op.seq;
+    },
+    /** Read layout after a commit, before capturing a canvas whose box may have changed. */
+    geometry(id) { const el = watched.get(id); if (el) firstGeometry(id, el, true); },
+    /** A capture (LLP 1056 D9, as amended for #188): the element's own
+     *  bitmap as the browser encodes it, a straight-alpha sRGB PNG. */
+    capture(id, lifetime, generation, w, h, sequence, snapshotted = () => true) {
+      return new Promise((resolve, reject) => {
+        const r = canvases.get(id);
+        if (!r || !sequence || !(r.sequence >= sequence) || r.lifetime !== lifetime || r.generation !== generation || r.el.width !== w || r.el.height !== h)
+          throw new Error("the requested canvas generation has not been drawn");
+        // Freeze the kept bitmap before marking the job snapshotted or yielding to encoding.
+        const copy = document.createElement("canvas"); copy.width = w; copy.height = h;
+        copy.getContext("2d", { colorSpace: "srgb" }).drawImage(r.el, 0, 0);
+        if (!snapshotted()) throw new Error("the capture's drawing boundary is no longer available");
+        copy.toBlob(b => (b ? resolve(b) : reject(new Error("the browser did not encode the bitmap"))), "image/png");
+      });
     },
     /** Resolves once every watched canvas has reported its first geometry. */
     settled() {

@@ -19,11 +19,20 @@ pub(super) fn resource(
     let Some((list, key)) = plan.resource_each(r) else {
         return Ok(None);
     };
-    let mut part = |c| {
-        code::expression(plan, plan.code(c), top, uses)
-            .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))
+    let mut part = |c, role: &str| {
+        code::expression(
+            plan,
+            plan.code(c),
+            &code::evaluation(
+                top,
+                format!("resource {:?} each {role}", plan.str(r.name)),
+                false,
+            ),
+            uses,
+        )
+        .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))
     };
-    let (list, key) = (part(list)?, part(key)?);
+    let (list, key) = (part(list, "subject")?, part(key, "key")?);
     let elem = plan.types[r.ty.0 as usize]
         .elem
         .ok_or("a list resource's type")?;
@@ -72,8 +81,13 @@ pub(super) fn arguments(
         props.push(format!("context:{}", r.context));
     }
     if let Some(gate) = r.gate.iter().next() {
-        let g = code::expression(plan, plan.code(plan.arg(gate).expr), top, uses)
-            .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;
+        let g = code::expression(
+            plan,
+            plan.code(plan.arg(gate).expr),
+            &code::evaluation(top, format!("resource {:?} gate", plan.str(r.name)), false),
+            uses,
+        )
+        .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;
         props.push(format!("gate:()=>{g}"));
     }
     Ok(match props.is_empty() {

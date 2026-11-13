@@ -26,6 +26,10 @@ impl Ink {
     /// Flatten overflowing clips into one mask, so every child sees their intersection.
     pub(super) fn combined_clip(&mut self, mask: Option<Coverage>) -> Result<CoverageClip> {
         let rect = [0., 0., self.size[0] as f32, self.size[1] as f32];
+        let bounds = self.encoder.clip_bounds();
+        let bounds = mask.map_or(bounds, |mask| {
+            bounds.intersect(Scissor::from_rect(mask.rect))
+        });
         let mut encoder = self.encoder.fork();
         encoder
             .push(
@@ -65,8 +69,13 @@ impl Ink {
         };
         Ok(CoverageClip {
             texture,
-            rect,
-            uv: [0., 0., 1., 1.],
+            rect: bounds.rect(),
+            uv: [
+                bounds.x as f32 / self.size[0] as f32,
+                bounds.y as f32 / self.size[1] as f32,
+                bounds.width as f32 / self.size[0] as f32,
+                bounds.height as f32 / self.size[1] as f32,
+            ],
         })
     }
 

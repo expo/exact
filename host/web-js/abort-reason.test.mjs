@@ -32,6 +32,7 @@ test('an aborted fetch rejects with its signal\'s reason; an exactTimeout is sti
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
     for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
     // Data code's fetch over it, with the same grants
+    cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
     cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
     writeFileSync(resolve(dir, 'admission-data.js'), `import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(${run.stdout});\n`);
     const { createGrantSet, fetchWith, FetchError } = await import(resolve(dir, 'admission.js'));
@@ -125,6 +126,7 @@ test('preload and prefetch validate options and leave web requests as written', 
   try {
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
     for (const name of ['grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
+    cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
     cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
     const { cmd, pre } = webCompiler(), grants = resolve(dir, 'grants.txt');
     if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');

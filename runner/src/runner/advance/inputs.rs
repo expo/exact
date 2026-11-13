@@ -16,7 +16,7 @@ pub(super) struct Held {
 }
 
 enum Input {
-    Event(ViewId, Event),
+    Event(ViewId, Event, Option<Box<dyn FnOnce(bool) + Send>>),
     Forward(ViewId),
 }
 
@@ -24,7 +24,21 @@ impl<D: DataSource> Runner<D> {
     /// [`Runner::dispatch_at`]'s input, held until the work due by `now_ms`
     /// has run.
     pub(super) fn hold_event(&mut self, view: ViewId, event: Event, now_ms: f64) -> Advanced {
-        self.hold_input(Input::Event(view, event), now_ms)
+        self.hold_input(Input::Event(view, event, None), now_ms)
+    }
+
+    /// Dispatch as [`Runner::dispatch_at`], reporting whether this event committed its
+    /// receipt, independently of timer or later host errors. A deferred event owns
+    /// the callback until it runs; dropping the runner drops it without calling it.
+    /// Hosts can keep imported resources here until the event publishes them.
+    pub fn dispatch_at_with_receipt(
+        &mut self,
+        view: ViewId,
+        event: Event,
+        now_ms: f64,
+        committed: impl FnOnce(bool) + Send + 'static,
+    ) -> Advanced {
+        self.hold_input(Input::Event(view, event, Some(Box::new(committed))), now_ms)
     }
 
     /// [`Runner::host_forward_at`]'s input, likewise.
@@ -81,7 +95,13 @@ impl<D: DataSource> Runner<D> {
             }
             let held = self.clock.held.pop_front().expect("a held input");
             let ran: Result<Option<CommitReceipt>, RunnerError> = match held.input {
-                Input::Event(view, event) => self.dispatch(view, event).map(Some),
+                Input::Event(view, event, committed) => {
+                    let result = self.dispatch(view, event);
+                    if let Some(committed) = committed {
+                        committed(result.is_ok());
+                    }
+                    result.map(Some)
+                }
                 Input::Forward(root) => self.host_forward(root),
             };
             match ran {

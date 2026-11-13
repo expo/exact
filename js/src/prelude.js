@@ -13,7 +13,7 @@
   // (op, a, b) -> string | undefined, js/src/door.rs's ops: 1 a request, 2-4 and 18-20 the store, 5 storage,
   // 6 native, 7 pure, 8 secure randomness drawn, 9/10 canvas, 11 the agent's random bytes, 12 auth, 13 a journal line,
   // 16 a request withdrawn unsent, 21 the runner's clock as the call began, 22 module work's state (module-work.js), 23
-  // a handed-out request the app aborted.
+  // a handed-out request the app aborted, 27 a native request/call id.
   var host = global.__exact_host;
   delete global.__exact_host;
   var browserSecrets = global.__exact_browser_secrets;
@@ -183,6 +183,11 @@
   });
   delete global.__exact_crypto;
   // --- fetch: a request the host runs; a Promise for its reply (fetch.js) --
+  // Native ids survive runtime retirement and are shared across modules.
+  var nextLocalId = 1;
+  function nextId() {
+    return bytesDoor ? Number(host(27, "", "")) : nextLocalId++;
+  }
   // ticket -> { resolve, reject, call, claimed, stream, signal, release }:
   // `claimed` once a settle has handed the executor its request, `release`
   // ends its watch on `signal`.
@@ -366,6 +371,7 @@
     handSocketOps = sockets.hand;
   // `fetch`, `Response` and `exactListen` (fetch.js).
   var fetches = global.__exact_fetch({
+    nextId: nextId,
     host: host,
     binary: binary,
     journal: journal,
@@ -462,7 +468,6 @@
 
   // --- the seam ------------------------------------------------------------
   var calls = new Map(),
-    nextCall = 1,
     gcOwed = false; // calls: id -> { id, status, value, error, tickets }
   // Large native strings travel beside the JSON skeleton by explicit paths (no property
   // spelling reserved); the serializer owns getters, toJSON, omissions and cycles. One
@@ -704,7 +709,7 @@
   global.__exact_call = function (source, argsJson, mutation) {
     initializing = false;
     var call = {
-      id: nextCall++,
+      id: nextId(),
       status: "pending",
       value: undefined,
       error: undefined,
@@ -1035,7 +1040,7 @@
     // wasm.
     var mine = moduleWide
       ? {
-          id: nextCall++,
+          id: nextId(),
           status: "pending",
           tickets: [],
           storage: 0,

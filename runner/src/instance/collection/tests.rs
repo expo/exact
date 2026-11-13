@@ -1314,7 +1314,10 @@ fn a_repeated_key_is_kept_and_a_later_vm_trap_refuses_without_publication() {
     h.slots[0] = Value::list(next);
     assert!(matches!(
         h.update(),
-        Err(InstanceError::Trap(Trap::UnwrapNone { .. }))
+        Err(InstanceError::Evaluation {
+            trap: Trap::UnwrapNone { .. },
+            ..
+        })
     ));
     assert_eq!(h.snapshot(), before);
     assert_eq!(h.collection().keys.as_ptr(), keys);
@@ -1331,7 +1334,10 @@ fn a_key_repeating_a_reused_row_still_refuses_at_a_later_vm_trap() {
     h.slots[0] = Value::list(next);
     assert!(matches!(
         h.update(),
-        Err(InstanceError::Trap(Trap::UnwrapNone { .. }))
+        Err(InstanceError::Evaluation {
+            trap: Trap::UnwrapNone { .. },
+            ..
+        })
     ));
     assert_eq!(h.snapshot(), before);
 }
@@ -1364,7 +1370,10 @@ fn key_reuse_changed_row_trap_is_not_hidden_by_unchanged_key_field() {
     h.slots[0] = Value::list(next);
     assert!(matches!(
         h.update(),
-        Err(InstanceError::Trap(Trap::UnwrapNone { .. }))
+        Err(InstanceError::Evaluation {
+            trap: Trap::UnwrapNone { .. },
+            ..
+        })
     ));
     assert_eq!(h.snapshot(), before);
 }

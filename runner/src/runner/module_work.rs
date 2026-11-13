@@ -16,8 +16,9 @@ use std::collections::BTreeMap;
 /// What the journal and `state.pending` call a kept request.
 pub(super) const NAME: &str = "module work";
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Authority {
+    module: Option<super::ModuleInstance>,
     origin: CallOrigin,
     invocation: u64,
     causes: Causes,
@@ -45,6 +46,22 @@ pub(super) struct ModuleWork {
 }
 
 impl<D: DataSource> Runner<D> {
+    pub(super) fn failed_module_work(&self) -> Vec<(u64, String)> {
+        self.module_work
+            .tickets
+            .iter()
+            .filter_map(|(ticket, (_, authority))| {
+                Some((*ticket, authority.module.as_ref()?.failure()?.to_owned()))
+            })
+            .collect()
+    }
+
+    pub(super) fn drop_module_work(&mut self, ticket: u64) {
+        self.module_work.tickets.remove(&ticket);
+        self.module_work.fetches.retain(|_, t| *t != ticket);
+        self.module_work.refused.retain(|(t, ..)| *t != ticket);
+    }
+
     /// Whether `ticket` is a kept request's.
     pub(super) fn is_module_work(&self, ticket: u64) -> bool {
         self.module_work.tickets.contains_key(&ticket)
@@ -99,6 +116,11 @@ impl<D: DataSource> Runner<D> {
     /// not cancelled: as a browser's `Promise.race`, the loser runs on.
     pub(super) fn keep_running(&mut self, ticket: u64, token: u64, fetch: Option<u64>) {
         let authority = Authority {
+            module: self
+                .pending
+                .iter()
+                .find(|p| p.ticket == ticket)
+                .and_then(|p| p.module.clone()),
             origin: self.ticket_origin(ticket),
             invocation: self.ticket_id(ticket),
             causes: self.ticket_causes(ticket),
@@ -126,6 +148,7 @@ impl<D: DataSource> Runner<D> {
         }
         if p.admitted_effects() && !self.poisoned {
             let authority = Authority {
+                module: p.module.clone(),
                 origin: self.ticket_origin(p.ticket),
                 invocation: self.ticket_id(p.ticket),
                 causes: self.ticket_causes(p.ticket),
@@ -204,7 +227,7 @@ impl<D: DataSource> Runner<D> {
             if let Some(token) = token {
                 self.module_work
                     .tickets
-                    .insert(p.ticket, (token, *authority));
+                    .insert(p.ticket, (token, authority.clone()));
                 if let Some(fetch) = p.fetch {
                     self.module_work.fetches.insert(fetch, p.ticket);
                 }
@@ -245,7 +268,9 @@ impl<D: DataSource> Runner<D> {
                         let next = r.next_ticket;
                         r.next_ticket += 1;
                         request.reach = r.reach_of(authority.origin);
-                        r.module_work.tickets.insert(next, (token, authority));
+                        r.module_work
+                            .tickets
+                            .insert(next, (token, authority.clone()));
                         r.requests.push(RequestOut {
                             class: crate::RequestClass::Ordered,
                             ticket: next,

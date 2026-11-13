@@ -64,16 +64,24 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(crate) fn frame_for(&mut self, target: FrameTarget) -> Option<Arc<Pixmap>> {
+        self.frame_with_canvas_tick(target, true)
+    }
+
+    pub(crate) fn frame_with_canvas_tick(
+        &mut self,
+        target: FrameTarget,
+        canvas_frame: bool,
+    ) -> Option<Arc<Pixmap>> {
         #[cfg(windows)]
         let window_damage = self.surfaces.direct_window.is_some() && self.dirty();
         // Its session's roles, whatever else lives on the thread (LLP 1121 stage 5).
         let _roles = self.host.runner().bind_roles();
         let frame = crate::text::cache::deferring_eviction(|| {
-            let frame = self.paint_frame(target);
+            let frame = self.paint_frame(target, canvas_frame);
             // A field's caret, or a fragment's target as pictures arrive
             // (LLP 1153 D5), moved by this frame's layout: paint again.
             if self.last_frame_succeeded && (self.reveal_field_cursor() | self.hold_fragment()) {
-                self.paint_frame(target)
+                self.paint_frame(target, false)
             } else {
                 frame
             }
@@ -89,7 +97,7 @@ impl<D: DataSource> Presenter<D> {
     pub fn last_frame_succeeded(&self) -> bool {
         self.last_frame_succeeded
     }
-    fn paint_frame(&mut self, target: FrameTarget) -> Option<Arc<Pixmap>> {
+    fn paint_frame(&mut self, target: FrameTarget, canvas_frame: bool) -> Option<Arc<Pixmap>> {
         self.brush.composition = self.ime_paint();
         self.alert_sync();
         self.prepare_overlay();
@@ -99,8 +107,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.brush.placements = self.surfaces.placements(&self.host, true);
         self.brush.composites.canvases = self.surfaces.composites();
-        self.host
-            .sync_canvases(self.brush.scale as f64, true, &self.assets);
+        self.draw_and_capture_canvases(canvas_frame);
         let previous = std::mem::replace(&mut self.brush.canvases, self.host.canvas_snapshots());
         self.brush.canvases.extend(self.surfaces.pixels(
             &mut self.host,

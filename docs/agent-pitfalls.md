@@ -337,6 +337,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   press. (Bake-off r25, timetable: Saved and back took the board from 07:34 to
   05:00.)
 
+- **A mixed native bake alone does not include its Rust source in the JS web build.**
+  A source composed with `exact_js_bake::build_mixed_with` still needs a module
+  crate exporting that source through `exact_logic_abi::export!`, named by
+  `rust.module.package` in app.json. Without it, the JS target calls TypeScript
+  for the Rust source and gets `UnknownSource`. The canvas gallery's `logic/`
+  crate and manifest show the declaration. (Web capture smoke, 2026-11-12.)
+
 - **A data answer past 16 MiB fails only on the JS target.** A 64 MiB string from
   a Rust source loaded on the wasm web host and on Linux, and on the JS target
   the resource failed (`Rust module rejected the call`). Cause: the JS target's
@@ -444,6 +451,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   by the root's `navigationBack`, and a route that declares one that is disabled
   refuses it (the log says "back gesture refused" and why). A route with no such
   control always goes back (LLP 1115 D5). Fix: enable the control, or leave it out.
+- **Browser Back restores a screen, but its Back returns to the screen just left.**
+  Cause: an in-app transition used `open`, which replaced the current visit with
+  the destination's declared chain. Browser Back then pushed the discarded URL
+  above that destination. Fix: use `push` to keep the caller. `open` also keeps
+  every current visit when the selected stack is a prefix of the declared chain;
+  use it then to include an intermediate parent, or for a deliberate return such
+  as Home (LLP 1038 §3, D7).
 - **A `link` to a route does nothing on iOS or the Mac.** On the web the browser's
   Back and Forward and a `link` to a declared route work with no `navigate` handler:
   the runner pops or goes there itself (LLP 1115 D5, LLP 1115.000 D4.3). A native host

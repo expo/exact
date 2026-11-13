@@ -32,6 +32,7 @@ pub use android::{buffer_frame, window_ready};
 pub(crate) use android::{device_pending as gpu_device_pending, prepare as prepare_gpu, sensors};
 #[cfg(target_os = "macos")]
 pub(crate) mod apple;
+mod capture;
 #[path = "surface_controls.rs"]
 pub(crate) mod controls;
 mod period;
@@ -47,8 +48,7 @@ type Read = unsafe extern "C" fn(u32) -> u32;
 type Text = unsafe extern "C" fn(u32, *const u8, usize) -> u32;
 
 struct Abi {
-    // Symbols never outlive this library; gpu_unload joins acquisition workers
-    // and drops thread-local state before dlclose.
+    // gpu_unload joins workers and drops thread-local state before dlclose; no symbol outlives the library.
     library: Library,
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
@@ -458,6 +458,8 @@ pub(crate) struct Surfaces {
     restore_read: bool,
     pub(crate) error: Option<String>,
     work: Vec<RequestOut>,
+    /// Canvas captures, served once this turn's 2D lists are applied.
+    pub(crate) captures: Vec<RequestOut>,
     outcomes: Vec<(u64, Outcome)>,
     /// Records taken after a frame presented, for the next sync (`owe_records`).
     owed: Vec<(String, String)>,
@@ -513,6 +515,9 @@ impl Surfaces {
     }
 
     pub(crate) fn enqueue(&mut self, request: RequestOut, admitted: &str) {
+        if let Some(SurfaceRequest::Canvas { .. }) = request.request.surface.as_deref() {
+            return self.captures.push(request);
+        }
         let oversized = matches!(
             request.request.surface.as_deref(),
             Some(SurfaceRequest::Restore { bytes, .. }) if bytes.len() > MAX_HOST_WORK_BYTES
@@ -848,6 +853,7 @@ impl Surfaces {
             let (name, restore) = match *surface {
                 SurfaceRequest::Capture { name } => (name, None),
                 SurfaceRequest::Restore { name, bytes } => (name, Some(bytes)),
+                SurfaceRequest::Canvas { .. } => unreachable!("enqueue keeps captures apart"),
             };
             let matches: Vec<_> = self
                 .canvases
@@ -1030,6 +1036,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Settle mounted GPU surfaces after first pixel and forward their public state.
     pub fn sync_surfaces(&mut self) {
+        self.sync_surfaces_with_canvas_tick(false);
+    }
+
+    pub(crate) fn sync_surfaces_with_canvas_tick(&mut self, canvas_frame: bool) {
         // The module's GPU tier is the page's (LLP 1139.003 D2).
         if let Some(tier) = self.surfaces.tier() {
             let page = self.host.runner().page();
@@ -1042,13 +1052,10 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        // LLP 1056: the 2D canvases' draws for this turn's commits.
-        self.dirty |= self
-            .host
-            .sync_canvases(self.brush.scale as f64, false, &self.assets);
-        // A publication/message may change the canvas arguments. Drain to a fixed
-        // point; an app feedback loop is refused rather than hanging the carrier.
-        for _ in 0..16 {
+        // A publication/message may change the canvas arguments or ask for another capture.
+        // Drain to a fixed point; refuse an app feedback loop rather than hang the carrier.
+        for turn in 0..16 {
+            self.draw_and_capture_canvases(canvas_frame && turn == 0);
             let changed = self
                 .surfaces
                 .sync(&mut self.host, &self.compat, &self.assets);
@@ -1401,11 +1408,10 @@ impl<D: DataSource> Presenter<D> {
 }
 
 #[cfg(test)]
-mod tests;
-
-#[cfg(test)]
 #[path = "surface_controls_tests.rs"]
 mod control_tests;
+#[cfg(test)]
+mod tests;
 
 mod retire;
 mod tier;

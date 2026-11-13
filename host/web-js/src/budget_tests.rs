@@ -64,8 +64,8 @@ fn a_metered_body_declares_one_counter_and_join_steps_at_its_call() {
     );
     assert!(labels.contains("x_join("), "{labels}");
     assert!(
-        js.contains("(()=>{let $s=0;"),
-        "a metered binding is called in place: {js}"
+        js.contains("tg(e2,2,\"text\",()=>{let $s=0;"),
+        "a metered binding is evaluated by its guard: {js}"
     );
 }
 
@@ -201,4 +201,17 @@ fn a_binding_that_can_trap_unsets_its_row() {
     assert!(js.contains("tg(e1,1,\"text\",()=>"), "{js}");
     assert!(js.contains("tg(e1,1,\"opacity\",()=>"), "{js}");
     assert!(!js.contains("tg(e2,"), "{js}");
+}
+
+#[test]
+fn labels_are_only_built_on_the_trap_path() {
+    let (_, js) = js("component App\n  state n = 1\n  derive visible = range(n)\n  action grow(v: number)\n    n = range(n).length\n  view\n    column\n      button press=grow(range(n).length)\n        text \"grow\"\n");
+    for (name, label) in [("d_0", "derive \"visible\""), ("a_0", "action \"grow\"")] {
+        let body = decl(&js, name);
+        let quoted = serde_json::to_string(label).unwrap();
+        assert!(
+            body.contains(&format!("catch($e){{$E($e,{quoted},0)")),
+            "{body}"
+        );
+    }
 }

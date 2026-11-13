@@ -21,10 +21,20 @@ pub(super) fn timers(em: &mut Em<'_>, body: &mut String) -> Result<(), String> {
     for t in plan.timers.iter() {
         let name = serde_json::to_string(plan.str(t.name)).unwrap();
         if t.gated || t.keyed {
-            let mut f = |c| code::expression(plan, plan.code(c), &top, &mut em.uses);
-            let gate = f(t.gate).map_err(|e| format!("task {name}: {e}"))?;
+            let mut f = |c, role: &str| {
+                code::expression(
+                    plan,
+                    plan.code(c),
+                    &code::evaluation(&top, format!("task {name} {role}"), false),
+                    &mut em.uses,
+                )
+            };
+            let gate = f(t.gate, "gate").map_err(|e| format!("task {name}: {e}"))?;
             let key = if t.keyed {
-                format!("()=>{}", f(t.key).map_err(|e| format!("task {name}: {e}"))?)
+                format!(
+                    "()=>{}",
+                    f(t.key, "key").map_err(|e| format!("task {name}: {e}"))?
+                )
             } else {
                 "0".into()
             };
@@ -160,19 +170,25 @@ pub(super) fn sequences(em: &mut Em<'_>, body: &mut String) -> Result<(), String
     let mut entries = Vec::new();
     for q in plan.sequences.iter() {
         let name = serde_json::to_string(plan.str(q.name)).unwrap();
-        let mut f = |c| {
-            code::expression(plan, plan.code(c), &top, &mut em.uses)
-                .map_err(|e| format!("sequence {name}: {e}"))
+        let mut f = |c, role: &str| {
+            code::expression(
+                plan,
+                plan.code(c),
+                &code::evaluation(&top, format!("sequence {name} {role}"), false),
+                &mut em.uses,
+            )
+            .map_err(|e| format!("sequence {name}: {e}"))
         };
-        let gate = f(q.gate)?;
+        let gate = f(q.gate, "gate")?;
         let key = if q.keyed {
-            format!("()=>{}", f(q.key)?)
+            format!("()=>{}", f(q.key, "key")?)
         } else {
             "0".into()
         };
         let args = [q.tracks, q.bpm, q.from, q.count_in, q.clock, q.clock_out]
             .into_iter()
-            .map(&mut f)
+            .enumerate()
+            .map(|(k, c)| f(c, &format!("argument {}", k + 1)))
             .collect::<Result<Vec<_>, _>>()?;
         let ended = q.ended.map_or("null".into(), |a| format!("a_{}", a.0));
         entries.push(format!(

@@ -28,6 +28,7 @@ enum Recorded {
         args: Vec<Value>,
     },
     Resume {
+        continuation: Option<u64>,
         fetch: Option<u64>,
         rust: bool,
         target: Option<Target>,
@@ -41,8 +42,8 @@ enum Recorded {
 /// outcome for the request its turn yielded.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
-    Turn,
-    Yielded,
+    Turn(u64),
+    Yielded(Option<u64>),
 }
 
 /// A call's stages are keyed by the runner's target when it named one,
@@ -101,13 +102,15 @@ struct Running {
 pub struct Mixed<J, R> {
     javascript: J,
     rust: R,
+    generations: [Option<exact_runner::ModuleInstance>; 2],
     sources: BTreeMap<String, bool>,
     javascript_reached: bool,
     app_id: String,
     grants: String,
     revision: String,
     retain_rust: Option<Retain<R>>,
-    continuations: BTreeMap<u64, (bool, u64)>,
+    // The last bit keeps a tool reply's child token through dispatch.
+    continuations: BTreeMap<u64, (bool, u64, bool)>,
     next_continuation: u64,
     /// The ordered sets a worker child makes (none when both children are
     /// on `main`), and which set each child belongs to.
@@ -237,7 +240,10 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                 }
             }
         }
+        let generations = [&javascript as &dyn DataSource, &rust as &dyn DataSource]
+            .map(|s| s.module_identity("").map(|m| m.instance()));
         Ok(Self {
+            generations,
             javascript,
             rust,
             sources,
@@ -306,7 +312,12 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         }
     }
 
-    fn route_answer(&mut self, rust: bool, mut answer: Answer) -> Result<Answer, DataError> {
+    fn route_answer(
+        &mut self,
+        rust: bool,
+        mut answer: Answer,
+        tool: bool,
+    ) -> Result<Answer, DataError> {
         if let Answer::Later(request) = &mut answer {
             let grants = if rust {
                 self.rust.grants()
@@ -324,7 +335,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             }
             if let Some(child) = request.continuation {
                 let token = self.token()?;
-                self.continuations.insert(token, (rust, child));
+                self.continuations.insert(token, (rust, child, tool));
                 request.continuation = Some(token);
             }
         }
@@ -336,8 +347,9 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         rust: bool,
         target: Option<Target>,
         answer: Answer,
+        tool: bool,
     ) -> Result<Answer, DataError> {
-        let answer = self.route_answer(rust, answer)?;
+        let answer = self.route_answer(rust, answer, tool)?;
         if let (Some(target), Answer::Later(_)) = (target, &answer) {
             let requests = if rust {
                 self.rust.more_for(target)
@@ -346,11 +358,15 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             };
             let mut more = Vec::new();
             for request in requests {
-                if let Answer::Later(request) = self.route_answer(rust, Answer::Later(request))? {
+                if let Answer::Later(request) =
+                    self.route_answer(rust, Answer::Later(request), tool)?
+                {
                     more.push(request);
                 }
             }
-            self.more.insert(target, more);
+            if !more.is_empty() {
+                self.more.insert(target, more);
+            }
         }
         Ok(answer)
     }
@@ -358,6 +374,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
     /// Record an ordered member's call; it runs at dispatch, one turn at a
     /// time per set, against the store as committed then.
     fn record(&mut self, set: usize, k: Key, recorded: Recorded) -> Result<Answer, DataError> {
+        let instance = self.generations[k.0 as usize].clone();
         let token = self.token()?;
         let fetch = match &recorded {
             Recorded::Resume { fetch, .. } => *fetch,
@@ -367,9 +384,10 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         self.stages
             .entry((k, fetch))
             .or_default()
-            .push_back(Stage::Turn);
+            .push_back(Stage::Turn(token));
         let mut request = Request::continuation(token);
         request.fetch = fetch;
+        request.module = instance;
         Ok(Answer::Later(request))
     }
 
@@ -409,9 +427,18 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                     args,
                     outcome,
                     fetch,
+                    continuation,
                     ..
                 } => self
-                    .child_parse_fetch(rust, target, fetch, &mut scratch, &source, &args, outcome)
+                    .child_parse_fetch(
+                        rust,
+                        target,
+                        (fetch, continuation),
+                        &mut scratch,
+                        &source,
+                        &args,
+                        outcome,
+                    )
                     .and_then(|answer| {
                         answer.ok_or_else(|| unavailable("a worker turn was expected"))
                     }),
@@ -478,8 +505,17 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                 args,
                 outcome,
                 fetch,
+                continuation,
                 ..
-            } => self.child_parse_fetch(rust, target, fetch, &mut local, &source, &args, outcome),
+            } => self.child_parse_fetch(
+                rust,
+                target,
+                (fetch, continuation),
+                &mut local,
+                &source,
+                &args,
+                outcome,
+            ),
         };
         let outcome = envelope::encode_optional(result, vec![], &mut local, Vec::new());
         Dispatch::Run(Work::Now(Box::new(move || outcome)))
@@ -560,9 +596,51 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         Mixed::take_logs(self)
     }
 
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let rust = self.owner(source)?;
+        if self.set_of[rust as usize].is_some() {
+            return self
+                .parse_with_request(None, (fetch, continuation), store, source, args, outcome)?
+                .ok_or_else(|| unavailable("the tool still has requests in flight"));
+        }
+        let child = continuation
+            .and_then(|token| self.continuations.remove(&token).map(|(_, child, _)| child));
+        if continuation.is_some() && child.is_none() {
+            return Err(unavailable("the tool continuation is no longer in flight"));
+        }
+        let grants = self.child_grants(rust);
+        let answer = store.with_grants(&grants, |store| {
+            if rust {
+                self.rust
+                    .parse_tool(fetch, child, store, source, args, outcome)
+            } else {
+                self.javascript
+                    .parse_tool(fetch, child, store, source, args, outcome)
+            }
+        })?;
+        self.route_set(rust, None, answer, true)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        if source.is_empty() || !self.owner(source).ok()? {
+            self.javascript.module_identity(source)
+        } else {
+            self.rust.module_identity(source)
+        }
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         let mut aborted = DataSource::take_aborted(&mut self.javascript);
         aborted.extend(DataSource::take_aborted(&mut self.rust));
+        self.sync_generations();
         aborted
     }
     fn abort_wake(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
@@ -701,13 +779,15 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     }
 
     fn host_continuation(&self, token: u64) -> bool {
-        self.continuations.get(&token).is_some_and(|(rust, child)| {
-            if *rust {
-                self.rust.host_continuation(*child)
-            } else {
-                self.javascript.host_continuation(*child)
-            }
-        })
+        self.continuations
+            .get(&token)
+            .is_some_and(|(rust, child, _)| {
+                if *rust {
+                    self.rust.host_continuation(*child)
+                } else {
+                    self.javascript.host_continuation(*child)
+                }
+            })
     }
 
     fn dispatch(&mut self, token: u64, store: &Store) -> Dispatch {
@@ -733,7 +813,7 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
             }
             return self.start(set, token, store);
         }
-        let Some((rust, child)) = self.continuations.get(&token).copied() else {
+        let Some((rust, child, tool)) = self.continuations.get(&token).copied() else {
             return Dispatch::Missing;
         };
         let dispatch = if rust {
@@ -741,7 +821,7 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         } else {
             self.javascript.dispatch(child, store)
         };
-        if !matches!(dispatch, Dispatch::Held) {
+        if !tool && !matches!(dispatch, Dispatch::Held) {
             self.continuations.remove(&token);
         }
         dispatch
@@ -792,10 +872,10 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
                 let outer = self
                     .continuations
                     .iter()
-                    .find(|(_, (r, c))| *r == rust && *c == child)
+                    .find(|(_, (r, c, _))| *r == rust && *c == child)
                     .map(|(outer, _)| *outer);
                 if let Some(outer) = outer {
-                    if !matches!(dispatch, Dispatch::Held) {
+                    if !self.continuations[&outer].2 && !matches!(dispatch, Dispatch::Held) {
                         self.continuations.remove(&outer);
                     }
                     released.push((outer, dispatch));
@@ -818,8 +898,10 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     /// once dispatched. Each child hears what is in flight in its own tokens.
     fn forgotten(&mut self, store: &exact_runner::Store, in_flight: &[InFlight<'_>]) {
         let tokens: HashSet<u64> = in_flight.iter().filter_map(|f| f.continuation).collect();
-        self.recorded.retain(|token, _| tokens.contains(token));
-        self.continuations.retain(|token, _| tokens.contains(token));
+        self.recorded
+            .retain(|token, (_, call)| recorded_key(call).1.is_none() || tokens.contains(token));
+        self.continuations
+            .retain(|token, (_, _, tool)| *tool || tokens.contains(token));
         let recorded: HashSet<u64> = self
             .recorded
             .iter()
@@ -840,11 +922,12 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         for ((k, _), stages) in self.stages.iter_mut() {
             if k.1.is_some() && newer(k) {
                 stages.clear();
-                stages.push_back(Stage::Turn);
+                stages.push_back(Stage::Turn(live[k].expect("a recorded call")));
             }
         }
         for set in &mut self.sets {
-            set.held.retain(|token| tokens.contains(token));
+            set.held
+                .retain(|token| tokens.contains(token) || self.recorded.contains_key(token));
             let let_go = set.running.as_ref().is_some_and(|running| {
                 running.key.1.is_some()
                     && match live.get(&running.key) {
@@ -876,7 +959,7 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
                             self.recorded.get(&t),
                             running.get(&t),
                         ) {
-                            (Some((owner, child)), _, _) => (*owner == rust).then_some(*child),
+                            (Some((owner, child, _)), _, _) => (*owner == rust).then_some(*child),
                             (_, Some((_, Recorded::WorkerTurn { child, .. })), _) => Some(*child),
                             // A call recorded here that the child hasn't seen:
                             // what the child still holds for its key is stale.
@@ -901,6 +984,21 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     }
 
     fn discard(&mut self, token: u64) {
+        for set in &mut self.sets {
+            set.held.retain(|t| *t != token);
+            if set.running.as_ref().is_some_and(|r| r.token == token) {
+                let running = set.running.take().unwrap();
+                set.busy = false;
+                self.stages.retain(|(key, _), _| *key != running.key);
+                if let Some(child) = running.child {
+                    if running.key.0 {
+                        self.rust.discard(child);
+                    } else {
+                        self.javascript.discard(child);
+                    }
+                }
+            }
+        }
         match self.recorded.remove(&token) {
             Some((_, recorded)) => {
                 if let Recorded::WorkerTurn { key, child } = &recorded {
@@ -923,7 +1021,7 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
                 }
             }
             None => {
-                if let Some((rust, child)) = self.continuations.remove(&token) {
+                if let Some((rust, child, _)) = self.continuations.remove(&token) {
                     if rust {
                         self.rust.discard(child);
                     } else {
@@ -1184,7 +1282,7 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         let (token, request) = self
             .javascript
             .timer_before_reply(store, in_flight, fetch)?;
-        match self.route_answer(false, Answer::Later(request)) {
+        match self.route_answer(false, Answer::Later(request), false) {
             Ok(Answer::Later(request)) => Some((token, request)),
             _ => None,
         }
@@ -1208,7 +1306,10 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         if token == exact_runner::BACKGROUND {
             return self.javascript.continuation(token);
         }
-        let (rust, child) = self.continuations.remove(&token)?;
+        let (rust, child, tool) = *self.continuations.get(&token)?;
+        if !tool {
+            self.continuations.remove(&token);
+        }
         if rust {
             self.rust.continuation(child)
         } else {

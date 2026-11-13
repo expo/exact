@@ -31,12 +31,13 @@ const statOf = (path) => { try { return lstatSync(path); } catch { return null; 
 const shimMark = (app) => `written by \`exact install ${app.name}\``;
 // `open` and not the executable: it hands the files to a copy that is
 // already running instead of starting a second one, and it returns to the
-// shell instead of holding it.
+// shell instead of holding it. `--` ends `open`'s options, so a file whose
+// name starts with `-` is still a file to open.
 /** The bundle path is single-quoted: inside double quotes `sh` still expands `$` and backticks, which a bundle or home directory name may hold. */
 export const shimText = (app, target) => `#!/bin/sh
 # ${app.displayName} — ${shimMark(app)}. Delete it or
 # run \`exact uninstall ${app.name}\` to take it away.
-exec /usr/bin/open -a '${target.replaceAll("'", "'\\''")}' "$@"
+exec /usr/bin/open -a '${target.replaceAll("'", "'\\''")}' -- "$@"
 `;
 
 /** A bundle's `CFBundleIdentifier`, or null. */

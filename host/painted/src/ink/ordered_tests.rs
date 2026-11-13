@@ -105,6 +105,7 @@ pub struct Fake {
     textures: HashMap<TextureId, Submission>,
     events: Vec<Event>,
     submitted: Submission,
+    copies: Vec<([u32; 2], [u32; 2])>,
 }
 impl Device for Fake {
     type Buffer = Buffer;
@@ -138,7 +139,7 @@ impl Device for Fake {
         Ok(self.textures[&id])
     }
     fn generate_mips(&mut self, _: TextureId) -> Result<Submission> {
-        unreachable!()
+        Ok(self.submitted)
     }
     fn resize_target(&mut self, id: TextureId, _: u32, _: u32) -> Result<TextureId> {
         Ok(id)
@@ -146,11 +147,13 @@ impl Device for Fake {
     fn copy_region(
         &mut self,
         _: TextureId,
-        _: [u32; 2],
+        origin: [u32; 2],
         _: TextureId,
-        _: [u32; 2],
-        _: [u32; 2],
+        dst: [u32; 2],
+        size: [u32; 2],
     ) -> Result<Submission> {
+        assert_eq!(dst, [0, 0]);
+        self.copies.push((origin, size));
         Ok(self.submitted)
     }
     fn render(&mut self, f: &Frame, target: TextureId, _: Option<[f64; 4]>) -> Result<Submission> {
@@ -262,4 +265,73 @@ fn every_glyph_pass_flushes_before_sampling_including_masks_found_later() {
     let end = checkpoint(&ink, c, t);
     assert!(ink.error.is_none());
     println!("ordered glyph passes: intermediate group, opacity, backdrop, later masks; {end} queue events");
+}
+
+#[test]
+fn small_effects_copy_their_region_in_a_large_viewport() {
+    let mut ink = Ink::from_device(Selected::Fake(Fake::default()));
+    ink.begin(1920., 1080., 1.);
+    let pixels = Arc::new(Pixmap::new(1, 1).unwrap());
+    ink.island_image(pixels, (120., 80., 20., 10.), Transform::identity(), 1);
+    ink.backdrop_filter(
+        &Shape::rect((300., 200., 30., 20.)),
+        &exact_kernel::style::BackdropFilter(vec![exact_kernel::style::BackdropOp::Blur(4.)]),
+        Transform::identity(),
+    );
+    assert!(ink.error.is_none(), "{:?}", ink.error);
+    let Selected::Fake(d) = &ink.device else {
+        unreachable!()
+    };
+    assert_eq!(d.copies.len(), 2);
+    let area: u32 = d.copies.iter().map(|(_, size)| size[0] * size[1]).sum();
+    println!("small effects: copied {area} pixels, {:?}", d.copies);
+    assert!(area < 2000, "copied {area} pixels: {:?}", d.copies);
+}
+
+#[test]
+fn destination_copies_follow_transforms_clips_and_filter_support() {
+    use exact_kernel::style::{BackdropFilter, BackdropOp};
+    let mut ink = Ink::from_device(Selected::Fake(Fake::default()));
+    ink.begin(1920., 1080., 1.);
+    let pixels = Arc::new(Pixmap::new(1, 1).unwrap());
+    let clip = Shape::rect((250., 220., 15., 10.));
+    ink.push_clip(&clip, Transform::identity());
+    ink.island_image(
+        pixels.clone(),
+        (10., 20., 30., 40.),
+        Transform::from_row(0., 1., -1., 0., 300., 200.),
+        1,
+    );
+    ink.backdrop_filter(
+        &Shape::rect((100., 100., 600., 400.)),
+        &BackdropFilter(vec![BackdropOp::Blur(4.)]),
+        Transform::identity(),
+    );
+    ink.backdrop_filter(
+        &Shape::rect((100., 100., 600., 400.)),
+        &BackdropFilter(vec![BackdropOp::Blur(f32::MAX)]),
+        Transform::identity(),
+    );
+    ink.pop_clip();
+    ink.push_clip(&Shape::rect((0., 0., 1., 1.)), Transform::identity());
+    ink.island_image(pixels, (100., 100., 50., 50.), Transform::identity(), 1);
+    ink.pop_clip();
+    assert!(ink.error.is_none(), "{:?}", ink.error);
+    let Selected::Fake(d) = &ink.device else {
+        unreachable!()
+    };
+    assert_eq!(d.copies.len(), 3, "invisible effects need no snapshot");
+    assert_eq!(d.copies[0], ([250, 220], [15, 10]));
+    let (origin, size) = d.copies[1];
+    assert!(
+        origin[0] < 250 && origin[1] < 220,
+        "blur samples beyond its clip"
+    );
+    assert!(origin[0] + size[0] > 265 && origin[1] + size[1] > 230);
+    assert!(
+        size[0] < 60 && size[1] < 60,
+        "sampling support: {:?}",
+        d.copies[1]
+    );
+    assert_eq!(d.copies[2], ([100, 100], [600, 400]));
 }

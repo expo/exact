@@ -524,3 +524,65 @@ pub fn split_compound(w: &str) -> Vec<&str> {
     out.push(&w[start..]);
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn a_colour_alias_walk_visits_at_most_257_declarations() {
+        let n = 10_000;
+        let decls: Vec<Decl> = (0..=n)
+            .map(|k| {
+                let value = if k == n {
+                    "#102030".to_string()
+                } else {
+                    format!("var(--color-c{})", k + 1)
+                };
+                (
+                    "@theme".into(),
+                    format!("--color-c{k}"),
+                    value,
+                    vec![(None, false), (None, true)],
+                )
+            })
+            .collect();
+        let names = name(&decls, |var| Some(var.replace("--color-", "tw.")));
+        let visits = Cell::new(0);
+        let literal = |value: &str| {
+            visits.set(visits.get() + 1);
+            crate::import::colour_literal(value)
+        };
+        let read = Read {
+            winners: decls
+                .iter()
+                .enumerate()
+                .flat_map(|(k, (_, var, _, targets))| {
+                    targets.iter().map(move |at| ((at.clone(), var.clone()), k))
+                })
+                .collect(),
+            decls: &decls,
+            names: &names,
+            literal: &literal,
+            memo: Default::default(),
+        };
+        for dark in [false, true] {
+            let at = (None, dark);
+            visits.set(0);
+            assert_eq!(read.seen(&at, "--color-c0"), (None, usize::MAX));
+            assert_eq!(visits.get(), 257);
+            assert_eq!(read.seen(&at, "--color-c0"), (None, usize::MAX));
+            assert_eq!(visits.get(), 257, "the refusal is memoized");
+
+            visits.set(0);
+            let (colour, links) = read.seen(&at, &format!("--color-c{}", n - 256));
+            assert!(colour.is_some());
+            assert_eq!(links, 256);
+            assert_eq!(visits.get(), 257, "256 aliases and their literal");
+            visits.set(0);
+            assert!(read.seen(&at, &format!("--color-c{n}")).0.is_some());
+            assert_eq!(visits.get(), 0, "the resolved tail is memoized");
+        }
+    }
+}

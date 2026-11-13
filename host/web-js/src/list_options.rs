@@ -93,8 +93,29 @@ impl Em<'_> {
         for b in bindings.iter().map(|b| plan.binding(b)) {
             let value = match style::literal(plan, plan.code(b.expr)) {
                 Some(v) => value_js(&v),
-                None => code::expression(plan, plan.code(b.expr), scope, &mut self.uses)
-                    .map_err(|x| format!("node {i}: {x}"))?,
+                None => code::expression(
+                    plan,
+                    plan.code(b.expr),
+                    &code::evaluation(
+                        scope,
+                        format!(
+                            "site {i} list option {}",
+                            match b.kind {
+                                BindingKind::Prop => PropId::from_wire(b.id).map_or_else(
+                                    || format!("prop {}", b.id),
+                                    |p| p.name().to_string()
+                                ),
+                                BindingKind::Style => StyleId::from_bit(b.id as u32).map_or_else(
+                                    || format!("style {}", b.id),
+                                    |s| s.name().replace('_', "-")
+                                ),
+                            }
+                        ),
+                        true,
+                    ),
+                    &mut self.uses,
+                )
+                .map_err(|x| format!("node {i}: {x}"))?,
             };
             match b.kind {
                 BindingKind::Style

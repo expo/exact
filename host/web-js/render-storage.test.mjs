@@ -23,6 +23,48 @@ async function build(dir) {
   return dist;
 }
 
+test('a caught canvas capture stays pending in a render and captures after adoption', async () => {
+  const dir = scratch();
+  let site, browser;
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=build
+
+component App
+  resource image = capture() as shape string else empty()
+  view
+    main
+      canvas surface=ink() width=20 height=20
+      text image testId="image"
+      text (pending(image) ? "pending" : "answered") testId="state"
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `import type { Ctx2D } from './app.contract.d.ts';
+export const appId = 'test.render-storage';
+export const grants = 'fs.write app:/tmp';
+export const answer = () => captureCanvas('ink', 'app:/tmp/ink.png').then(c => c.path).catch(() => '');
+export const surfaces = { ink: 0 };
+export function draw(name: string, args: unknown[], ctx: Ctx2D) { ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 20, 20); return false; }
+`);
+    const dist = await build(dir), html = readFileSync(resolve(dist, 'index.html'), 'utf8');
+    const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(html)[1]);
+    expect(checkpoint.pending).toEqual(['image']);
+    expect(checkpoint.answers).toEqual([]);
+    expect(html).toMatch(/data-testid="state"[^>]*>pending</);
+    site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/') return new Response(html, { headers: { 'content-type': 'text/html' } });
+      const asset = Bun.file(resolve(dist, path.slice(1)));
+      return await asset.exists() ? new Response(asset) : new Response(null, { status: 404 });
+    } });
+    browser = await open({ host: 'web', url: new URL('/?storage=render-capture', site.url).href });
+    await browser.clock('settle');
+    const journal = await browser.carrier.evaluate('globalThis.exact.journal');
+    expect(journal.some(l => l.endsWith('adopted the document')), journal.join('\n')).toBe(true);
+    expect(await browser.carrier.evaluate(`['image', 'state'].map(id => document.querySelector('[data-testid="' + id + '"]').textContent)`), journal.join('\n'))
+      .toEqual(['app:/tmp/ink.png', 'answered']);
+  } finally { await browser?.close(); site?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 120000);
+
 test.each(['TypeScript', 'Rust'])('a JavaScript render refuses %s store writes and deletions on every request', async language => {
   const dir = scratch();
   const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('public') });

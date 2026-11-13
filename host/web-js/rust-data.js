@@ -3,13 +3,13 @@ import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
 import { rt } from './rt-link.js'; // (rt.js's own, as a lazy chunk takes them)
 import { heldReply } from './held.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 10,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 11,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime shows its compiled value or placeholder and asks again at `ready`.
-const ABI = 10, utf8 = new TextEncoder(), text = new TextDecoder(), CALL = Symbol('call');
+const ABI = 11, utf8 = new TextEncoder(), text = new TextDecoder(), CALL = Symbol('call');
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -132,6 +132,11 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // an in-flight request is not kept for newer arguments whose request differs only in being held.
       return { req: { method, url, headers, cache, ...(prefetch ? { prefetch: true } : {}), held, body: text.decode(body), raw: body, http: held ? `${http} held` : http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, cancel: tag < 9 && /^(GET|HEAD)$/i.test(method), socket: tag === 11, protocols, longPoll } };
     }
+    if (tag === 16) {
+      const surface = r.str(), path = r.str(), scoped = r.u8(), scope = r.str();
+      if (scoped > 1) throw new Error('invalid grant scope tag');
+      return { req: { canvas: { surface, path }, scope: scoped ? scope : null } };
+    }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
     if (tag === 5) { const payload = r.bytes(r.u32()), scoped = r.u8() === 1, scope = r.str(); return { req: { storage: text.decode(payload), scope: scoped ? scope : null } }; }
@@ -199,11 +204,13 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     return { ops, overload: over === 1 ? why : null };
   };
   // One call (`call_request`): source, arguments by type, admitted secret names, the store's
-  // snapshot, its socket turn; its reply (`call_reply`): a store read, writes, socket operations, the result.
-  // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3).
-  let threwRead = false;
+  // snapshot, its socket turn; its reply (`call_reply`): a store read, the topics it watched, its draws of randomness,
+  // writes, socket operations, the result.
+  // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3);
+  // and what it watched: its resource watches it too, as the runner's failed ask does.
+  let threwRead = false, threwWatches = null;
   const callWith = (code, source, args, store, outcome, turn) => {
-    threwRead = false;
+    threwRead = false; threwWatches = null;
     const r = op(code, w => {
       w.str(source); w.u8(6); w.u32(args.length);
       const t = (sources[source] ?? '').split('|')[0]; let i = 0; for (const a of args) i = encode(w, a, t, i);
@@ -227,18 +234,28 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       socketTurn(w, turn);
     });
     if (r.u8() !== 2) throw new Error('expected a call reply');
-    const observed = r.u8() === 1;
+    const observed = r.u8() === 1, topics = [];
+    for (let n = r.u32(); n--;) topics.push(r.str());
+    r.u32(); // draws of randomness, which only a bake reads (LLP 1069.005 D2)
     const writes = [];
-    for (let n = r.u32(); n--;) { const k = r.str(); const v = r.u8() ? r.str() : null; if (!admitsSecret(rustGrantSet, k)) throw new Error(`secret ${k} is not granted`); writes.push([k, v]); }
+    // A write's tag: bit 0, a value follows; bit 1, written under a lease (the page's store keeps no lease).
+    for (let n = r.u32(); n--;) {
+      const k = r.str(), tag = r.u8();
+      if (tag > 3) throw new Error('invalid write tag');
+      const v = tag & 1 ? r.str() : null;
+      if (!admitsSecret(rustGrantSet, k)) throw new Error(`secret ${k} is not granted`);
+      writes.push([k, v]);
+    }
     const { ops, overload } = socketOps(r);
     let out;
     try { out = result(r); } catch (error) {
-      threwRead = observed; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
+      threwRead = observed; threwWatches = topics.length ? new Set(topics) : null; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
       if (ops.length) said(turn, error.message);
       throw error;
     }
     if (!globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
     if (observed) out.store = true;
+    if (topics.length) out.watches = new Set(topics);
     // A mapper's call past D7's bounds fails its frame, whatever it answered (LLP 1016.003 D4).
     if (overload) { if (ops.length) said(turn, overload); throw new Error(overload); }
     if (!ops.length) return out;
@@ -265,8 +282,9 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     if (!globalThis.__exactRender && carry(out.req, call)) out.call = call;
     return out;
   };
-  const ts = data.ts, tsThrewRead = data.threwRead;
+  const ts = data.ts, tsThrewRead = data.threwRead, tsThrewWatches = data.threwWatches;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
+  data.threwWatches = () => { const w = threwWatches ?? tsThrewWatches?.() ?? null; threwWatches = null; return w; };
   data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store, target, mutation); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
   // A stream's messages that arrived together (request-send.js): each parsed in order (LLP 1016.000 D4), the last
   // one's answer theirs; one that answers with a request (the stream asked again) ends them there.
@@ -323,9 +341,9 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   data.fetch = (req, message, controller) => {
     if (!req.stream) {
       const call = req[CALL];
-      if (!call) return run(req, controller?.signal);
+      if (!call) return run(req, controller?.signal, controller);
       // A held request's reply, a failure too, is a held reply for `clock held` (the runner's `held_replies`).
-      return run(req, controller?.signal).then(o => {
+      return run(req, controller?.signal, controller).then(o => {
         if (call.held) { call.held = 0; heldReply(call); }
         o[CALL] = call;
         return o;

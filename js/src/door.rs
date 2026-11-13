@@ -281,6 +281,15 @@ pub(crate) unsafe extern "C" fn host_door(
             }
             Err(_) => Err("abort: a ticket that is not a number".into()),
         },
+        27 => {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if id < (1 << 53) {
+                Ok(Some(id.to_string()))
+            } else {
+                Err("data module request ids exhausted".into())
+            }
+        }
         24 | 26 if state.baking || state.validating || state.readonly_secrets => Err(
             "shared secrets are unavailable during bake, validation, or a read-only snapshot"
                 .into(),

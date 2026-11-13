@@ -506,6 +506,18 @@ impl<D: DataSource> Host<D> {
         changed
     }
 
+    /// A canvas capture (`exact_runner::canvas_capture`), carried out on
+    /// the bitmaps as [`Host::sync_canvases`] left them.
+    pub(crate) fn capture_canvas(&mut self, r: &RequestOut) -> exact_runner::Outcome {
+        let found = r
+            .request
+            .take_canvas_capture()
+            .expect("a canvas capture request");
+        let (roots, grants) = (self.app_roots(), self.grants());
+        let scope = r.request.grants.as_deref();
+        crate::canvas2d::capture(&self.canvas2d, found, roots, &grants, scope)
+    }
+
     /// Each 2D canvas's latest bitmap, for the painters.
     pub(crate) fn canvas_snapshots(&self) -> BTreeMap<ViewId, crate::canvas2d::CanvasPaint> {
         self.canvas2d.snapshots()

@@ -324,7 +324,7 @@ impl Machine {
         let independent = owners
             .next()
             .flatten()
-            .or_else(|| parsed().ok().map(|g| host().endow(g)));
+            .or_else(|| super::independent_bindings(grants, &host));
         let worker_budget = Arc::new(workers::Budget::default());
         let transport = |lane: usize, b: Option<ibex2::host::Bindings>| {
             b.map(|b| {

@@ -333,233 +333,7 @@ impl Collection {
         advance(&mut self.revision)?;
         Ok(())
     }
-    pub(super) fn create(
-        u: &mut Update<'_>,
-        node: NodesId,
-        view: ViewId,
-        frames: &[Frame],
-    ) -> Result<Option<Box<Self>>, InstanceError> {
-        let plan = u.env.plan;
-        let descriptor = plan.node(node);
-        let mut enabled = false;
-        let mut follow_end = false;
-        let mut smooth = false;
-        let mut at_end = false;
-        let mut reach = reach::Margin::default();
-        let mut keep = Vec::new();
-        let (mut estimate, mut gap) = (None, None);
-        let mut initial: Option<usize> = None;
-        let mut axis = ListAxis::Vertical;
-        // The list's own literal size on each axis (`height=399`), which
-        // bounds the rows its first frame needs: [vertical, horizontal].
-        let mut declared: [Option<f64>; 2] = [None, None];
-        for binding in descriptor.bindings.iter().map(|b| plan.binding(b)) {
-            if binding.kind == BindingKind::Style {
-                use exact_kernel::StyleId;
-                let slot = match binding.id {
-                    id if id == StyleId::Height as u16 || id == StyleId::MaxHeight as u16 => {
-                        Some(0)
-                    }
-                    id if id == StyleId::Width as u16 || id == StyleId::MaxWidth as u16 => Some(1),
-                    _ => None,
-                };
-                if let Some(slot) = slot {
-                    if let Value::Number(n) = u.eval(binding.expr, frames)? {
-                        if n.is_finite() && n > 0.0 {
-                            declared[slot] = Some(declared[slot].map_or(n, |d: f64| d.min(n)));
-                        }
-                    }
-                }
-            }
-            // A flex list is CSS's row (the compiler refuses the other
-            // directions); its main axis is horizontal.
-            if binding.kind == BindingKind::Style
-                && binding.id == exact_kernel::StyleId::Display as u16
-                && u.eval(binding.expr, frames)?.as_str() == Some("flex")
-            {
-                axis = ListAxis::Horizontal;
-            }
-            if binding.kind == BindingKind::Style
-                && binding.id == exact_kernel::StyleId::ScrollBehavior as u16
-                && u.eval(binding.expr, frames)?.as_str() == Some("smooth")
-            {
-                smooth = true;
-            }
-            if binding.kind == BindingKind::Prop && binding.id == PropId::Virtualized as u16 {
-                enabled = u.eval(binding.expr, frames)? == Value::Bool(true);
-            }
-            if binding.kind == BindingKind::Prop && binding.id == PropId::ScrollFollowEnd as u16 {
-                follow_end = u.eval(binding.expr, frames)? == Value::Bool(true);
-            }
-            if binding.kind == BindingKind::Prop && binding.id == PropId::ReachMargin as u16 {
-                let margin = u.eval(binding.expr, frames)?;
-                reach = margin
-                    .as_str()
-                    .and_then(reach::Margin::parse)
-                    .ok_or_else(|| {
-                        invalid("reach margin must be one or two nonnegative px or % lengths")
-                    })?;
-            }
-            if binding.kind == BindingKind::Prop && binding.id == PropId::KeepMounted as u16 {
-                keep = keep::idents(&u.eval(binding.expr, frames)?).unwrap_or_default();
-            }
-            if binding.kind == BindingKind::Prop && binding.id == PropId::ScrollStart as u16 {
-                at_end = u.eval(binding.expr, frames)?.as_str() == Some("end");
-            }
-            if binding.kind == BindingKind::Prop
-                && (binding.id == PropId::EstimatedItemHeight as u16
-                    || binding.id == PropId::EstimatedItemWidth as u16)
-            {
-                estimate = Some(u.eval(binding.expr, frames)?);
-            }
-            if binding.kind == BindingKind::Style
-                && binding.id == exact_kernel::StyleId::ColumnGap as u16
-            {
-                gap = Some(u.eval(binding.expr, frames)?);
-            }
-            if binding.kind == BindingKind::Prop && binding.id == PropId::InitialItemCount as u16 {
-                let Value::Number(count) = u.eval(binding.expr, frames)? else {
-                    return Err(invalid("initial item count must be a number"));
-                };
-                if !(count.fract() == 0.0 && (1.0..=64.0).contains(&count)) {
-                    return Err(invalid(
-                        "initial item count must be a whole number from 1 to 64",
-                    ));
-                }
-                initial = Some(count as usize);
-            }
-        }
-        if !enabled {
-            return Ok(None);
-        }
-        if descriptor.node_type != exact_kernel::NodeType::List as u8 {
-            return Err(invalid("virtualized requires List"));
-        }
-        let child_sites = u.sites.children(Some(node), descriptor.arm);
-        let [(_, Site::Region(region))] = child_sites else {
-            return Err(invalid("collection needs one direct `for`"));
-        };
-        let region = *region;
-        let row = plan.region(region);
-        if row.kind != RegionKind::Each || row.arms.len != 1 {
-            return Err(invalid("collection needs one `for` arm"));
-        }
-        if !matches!(
-            u.sites.children(None, row.arms.iter().next()),
-            [(_, Site::Node(_))]
-        ) {
-            return Err(invalid("collection row needs one flow root"));
-        }
-        let sizing = Sizing::read(axis, estimate, gap)?;
-        let estimated_height = sizing.extent();
-        let inner = traversal::validate_nesting(plan, u.sites, region)?;
-        let reuse = reuse::Reuse::new(plan, u.sites, region);
-        let nested = inner.is_some();
-        let port = declared[match axis {
-            ListAxis::Vertical => 0,
-            ListAxis::Horizontal => 1,
-        }];
-        // A list's reads of its own options are its structure, as a region's
-        // subject is: a trap here still poisons (LLP 1017.003 D3).
-        let mut manual = false;
-        for b in descriptor.bindings.iter().map(|b| plan.binding(b)) {
-            if b.kind == BindingKind::Prop && b.id == PropId::ScrollRestoration as u16 {
-                manual |= u.eval(b.expr, frames)?.as_str() == Some("manual");
-            }
-        }
-        let mut this = Box::new(Self {
-            // What a later row is in, not the visit's re-theme of the rest.
-            around: super::theme::Around {
-                retheme: false,
-                ..u.theme.clone()
-            },
-            preview: None,
-            pending_drops: Vec::new(),
-            incoming: None,
-            hidden: None,
-            instant: false,
-            view,
-            axis,
-            region,
-            index: {
-                let mut index = SizeIndex::new(estimated_height).map_err(index_error)?;
-                index
-                    .resize(estimated_height, sizing.gap, &[])
-                    .map_err(index_error)?;
-                index
-            },
-            estimated_height,
-            sizing,
-            // The provisional extent ([`set_bootstrap_extent`]), capped at
-            // sixteen rows, unless the list says how many (`initial-item-count`).
-            // Actual nested-scrollport feedback determines the real window.
-            bootstrap_rows: initial.unwrap_or(
-                ((f64::from_bits(BOOTSTRAP_EXTENT.load(std::sync::atomic::Ordering::Relaxed))
-                    / estimated_height)
-                    .ceil()
-                    .min(
-                        port.filter(|_| in_collection_row(plan, frames))
-                            .map_or(f64::INFINITY, |p| (p / estimated_height).ceil() + 1.0),
-                    )
-                    .clamp(1.0, BOOTSTRAP_ROWS as f64)) as usize,
-            ),
-            declared_port: port,
-            items: Items::default(),
-            keys: Vec::new(),
-            dups: BTreeMap::new(),
-            string_keys: true,
-            mounted: Vec::new(),
-            any_awaiting: false,
-            spacers: Vec::new(),
-            children: Vec::new(),
-            revision: 0,
-            data_generation: 0,
-            next_epoch: 0,
-            zero_heights: Default::default(),
-            geometry: None,
-            correction: None,
-            follow_end,
-            smooth,
-            edge_handlers: [EventKind::Reachstart, EventKind::Reachend].map(|event| {
-                descriptor
-                    .handlers
-                    .iter()
-                    .any(|h| plan.handler(h).event == event)
-            }),
-            reorderable: descriptor
-                .handlers
-                .iter()
-                .any(|h| plan.handler(h).event == EventKind::Reorderdrop),
-            edge_armed: [true; 2],
-            edge_fired: [None, None],
-            pending: false,
-            parent: None,
-            nested,
-            inner,
-            inner_pins: Default::default(),
-            kept: Default::default(),
-            manual,
-            restored: false,
-            restored_at: None,
-            target: None,
-            scrolling: false,
-            animating: false,
-            view_offset: None,
-            port_unknown: false,
-            request: 0,
-            into_view_status: None,
-            covered: [0.0; 2],
-            start_offset: 0.0,
-            reach,
-            keep,
-            at_end,
-            end_travel: 0,
-            end_sent: f64::NAN,
-            reuse,
-        });
-        this.update_data(u, frames, true, false)?;
-        Ok(Some(this))
-    }
+
     /// Bring the rows up to date when the subject, the keys' other inputs or
     /// anything a mounted row reads changed; `fresh` on creation, `remount`
     /// when the rows it keeps mounted changed.
@@ -606,7 +380,19 @@ impl Collection {
         let (last, count) = (self.last_key(), self.index.len());
         if data_changed {
             let descriptor = u.env.plan.region(self.region);
-            let Value::List(items) = u.eval(descriptor.subject, frames)? else {
+            let Value::List(items) = u
+                .eval_named(descriptor.subject, frames, || "each subject".into())
+                .map_err(|e| {
+                    e.at_view(
+                        self.view,
+                        u.env
+                            .plan
+                            .region(self.region)
+                            .parent
+                            .expect("collection parent"),
+                    )
+                })?
+            else {
                 return Err(InstanceError::SubjectKind {
                     region: self.region,
                 });
@@ -1163,7 +949,20 @@ impl Collection {
         let arm = plan.region(self.region).arms.iter().next();
         for (i, s) in plan.slots.iter().enumerate() {
             if s.owner.is_some() && s.owner == arm {
-                let value = u.eval(s.init, &inner)?;
+                let value = u
+                    .eval_named(s.init, &inner, || {
+                        format!("state {:?} initializer", plan.str(s.name))
+                    })
+                    .map_err(|e| {
+                        e.at_view(
+                            self.view,
+                            u.env
+                                .plan
+                                .region(self.region)
+                                .parent
+                                .expect("collection parent"),
+                        )
+                    })?;
                 if !value.conforms(plan, s.ty) {
                     return Err(InstanceError::slot_type(
                         plan,

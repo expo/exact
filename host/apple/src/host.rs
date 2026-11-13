@@ -35,6 +35,8 @@ mod arrange_group_tests;
 mod arrange_tests;
 #[path = "canvas2d.rs"]
 pub(crate) mod canvas2d;
+#[path = "canvas_capture.rs"]
+mod canvas_capture;
 #[path = "canvas_performance.rs"]
 mod canvas_performance;
 #[path = "colors.rs"]
@@ -235,6 +237,9 @@ pub struct Host<D: DataSource> {
     engine: Engine,
     paint: paint::Paint,
     holds: BTreeMap<u64, HoldToken>,
+    /// Canvas captures the presenter is encoding, or refused (`canvas_capture.rs`).
+    canvas_capture_waiting: Vec<(RequestOut, Option<String>)>,
+    canvas_captures: BTreeMap<u64, canvas_capture::Pending>,
     height_owner: Option<NodeKey>,
     height_handles: BTreeMap<NodeKey, HeightHandle>,
     height_auto_owned: bool,
@@ -315,7 +320,6 @@ impl<D: DataSource> Host<D> {
             None,
         )
     }
-
     /// Boot carrying an earlier host's state (the dev reload, LLP 1007 §6):
     /// slots by name where their types still fit, settled resources where
     /// their arguments still match, the clock.
@@ -338,7 +342,6 @@ impl<D: DataSource> Host<D> {
             None,
         )
     }
-
     /// Boot with the app's kept secrets (LLP 1018 D6): `snapshot` is what
     /// the platform's store holds under the granted names, read before this
     /// call (a carried boot takes the carried store instead); `secrets` is
@@ -377,7 +380,6 @@ impl<D: DataSource> Host<D> {
         host.commit_boot();
         Ok((host, batch))
     }
-
     /// Boot with one action over the accepted plan before its first layout.
     /// The Apple ABI uses this for synchronous font registration without decoding the plan twice.
     #[allow(clippy::too_many_arguments)]
@@ -593,6 +595,8 @@ impl<D: DataSource> Host<D> {
             },
             paint: paint::Paint::default(),
             holds: BTreeMap::new(),
+            canvas_capture_waiting: Vec::new(),
+            canvas_captures: BTreeMap::new(),
             height_owner: None,
             height_handles: BTreeMap::new(),
             height_auto_owned: false,
@@ -700,7 +704,6 @@ impl<D: DataSource> Host<D> {
         let batch = host.write(batch, None);
         Ok((host, batch))
     }
-
     /// Release effects only after the containing app accepted every candidate.
     pub(crate) fn commit_boot(&mut self) {
         if let Some(note) = self.delivery.and_then(|hooks| (hooks.take_note)()) {
@@ -712,12 +715,10 @@ impl<D: DataSource> Host<D> {
             preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
         }
     }
-
     /// The runner.
     pub fn runner(&self) -> &Runner<D> {
         &self.runner
     }
-
     /// The runner, mutably: an auth session's arm (LLP 1069.006).
     pub fn runner_mut(&mut self) -> &mut Runner<D> {
         &mut self.runner
@@ -1219,6 +1220,8 @@ impl<D: DataSource> Host<D> {
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
         crate::doc_watch::sync(&mut self.doc_watch, &mut self.runner);
         let (mut batch, error) = self.resize_rounds(batch, error);
+        self.drain_canvas_captures(&mut batch);
+        self.forget_canvas_captures();
         self.state_onto(&mut batch);
         self.write(batch, error.as_deref())
     }

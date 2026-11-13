@@ -621,7 +621,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js']) cpSync(resolve(here, f), resolve(gen, f));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'facts.js', 'fetches.js', 'modules.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js']) cpSync(resolve(here, f), resolve(gen, f));
 writeFileSync(resolve(gen, 'modules.js'), localImports(readFileSync(resolve(here, 'modules.js'), 'utf8')));
 // The web host's own pieces the runtime loads (glue.mjs).
 stageHostGlue(root, gen);

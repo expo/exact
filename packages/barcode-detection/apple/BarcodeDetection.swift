@@ -46,6 +46,8 @@ public final class BarcodeDetectionModule: ExactPackage {
     let work = DispatchQueue(label: "exact.barcode-detection", qos: .userInitiated)
     #if !os(tvOS)
     private var scans: [String: Scan] = [:]
+    /// The runner's argument groups reading each scan: the scan ends when the last is released.
+    private var groups: [String: Set<String>] = [:]
     #endif
 
     public init(context: ExactPackageContext) { self.context = context }
@@ -247,6 +249,7 @@ public final class BarcodeDetectionModule: ExactPackage {
             scans[key] = s
             say("scan \(key): observing \(track)")
         }
+        groups[key, default: []].insert(Self.argumentGroup(args))
         scans[key]?.analyse(reply)
         #endif
     }
@@ -255,7 +258,16 @@ public final class BarcodeDetectionModule: ExactPackage {
     public func release(_ name: String, args: [String: Any]) {
         guard name == "detectedBarcodes", let track = args["track"] as? String else { return }
         let (keep, _) = Self.asked(args["formats"])
-        end(Scan.key(track, keep), "released")
+        let key = Scan.key(track, keep)
+        groups[key]?.remove(Self.argumentGroup(args))
+        if groups[key]?.isEmpty ?? true { end(key, "released") }
+    }
+
+    /// A runner argument group, as Android names it: object key order is
+    /// immaterial; an array's order and the interval are not.
+    static func argumentGroup(_ args: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: args, options: [.sortedKeys]) else { return "\(args)" }
+        return String(decoding: data, as: UTF8.self)
     }
 
     public func release(_ name: String) {
@@ -263,6 +275,7 @@ public final class BarcodeDetectionModule: ExactPackage {
     }
 
     private func end(_ key: String, _ why: String) {
+        groups[key] = nil
         guard let s = scans.removeValue(forKey: key) else { return }
         s.stop()
         say("scan \(key): \(why)")

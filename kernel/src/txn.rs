@@ -657,6 +657,7 @@ pub(crate) fn continue_document(
                     if arena.slot_of(*id).is_some() {
                         continue; // live no-op
                     }
+                    selectors.references.clear();
                     let slot = arena
                         .alloc(*id, *node_type)
                         .map_err(|_| ApplyError::Internal {
@@ -691,6 +692,7 @@ pub(crate) fn continue_document(
                 }
                 Op::DestroyView { id } => {
                     let slot = live_slot(arena, op_index, *id)?;
+                    selectors.references.clear();
                     if let Some(exit) = exit(arena, created, left, slot) {
                         receipt.exits.push(exit);
                     }
@@ -886,6 +888,7 @@ pub(crate) fn continue_document(
                     if arena.children(slot) == new.as_slice() {
                         continue;
                     }
+                    selectors.references.clear();
                     let context = arena.default_context(slot);
                     let old: Vec<u32> = arena.children(slot).to_vec();
                     let retained: IdSet<u32> = new.iter().copied().collect();

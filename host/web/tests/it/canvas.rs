@@ -173,3 +173,356 @@ fn r13_named_empty_and_short_contract_calls_survive_web_batch() {
         assert!(batch.contains(&format!("\"values\":{values}")), "{batch}");
     }
 }
+
+#[test]
+fn a_same_action_rust_capture_waits_for_the_resized_browser_box() {
+    use exact_runner::{Answer, Request, Store};
+    struct Ink;
+    impl DataSource for Ink {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            Ok(Answer::Later(Request::capture_canvas(
+                "ink",
+                "app:/tmp/shot.png",
+            )))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("ink".into(), 0)]
+        }
+        fn draw_2d(
+            &mut self,
+            _: &str,
+            _: &[Value],
+            ctx: &exact_runner::exact_canvas::Context2d,
+            frame: &exact_runner::exact_canvas::Frame,
+        ) -> Result<bool, exact_runner::exact_canvas::DrawError> {
+            ctx.set_fill_style_str("red");
+            ctx.fill_rect(0., 0., frame.width, frame.height);
+            Ok(false)
+        }
+    }
+    for superseded in [false, true] {
+        let plan = contract::compile(
+            r#"component App
+  state width = 100
+  mutation image as shape string
+  action capture
+    width = 200
+    send image = capture()
+  action resize
+    width = 300
+  view
+    column
+      button press=capture testId="capture"
+        text "Capture"
+      button press=resize testId="resize"
+        text "Resize"
+      canvas surface=ink() width=width height=50 testId="ink"
+"#,
+        )
+        .unwrap();
+        exact_web::link(exact_web_capabilities::ALL);
+        let (mut host, _) = Host::boot(&plan.encode(), Ink, Default::default(), "/").unwrap();
+        host.data_ready();
+        let id = |host: &Host<Ink>, name: &str| {
+            let k = host.runner().kernel();
+            k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+        };
+        let canvas = id(&host, "ink");
+        host.canvas_geometry(canvas, 100., 50., 2.);
+        let button = id(&host, "capture");
+        let batch: serde_json::Value =
+            serde_json::from_str(&host.dispatch(button, Event::Press)).unwrap();
+        assert!(
+            !batch["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|op| op["op"] == "canvasCapture"),
+            "the old geometry cannot decide the capture: {batch}"
+        );
+        let prepare = batch["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["op"] == "canvasCapturePrepare")
+            .unwrap();
+        let ticket = prepare["ticket"].as_u64().unwrap();
+        if superseded {
+            let resize = id(&host, "resize");
+            host.dispatch(resize, Event::Press);
+        }
+        let draw: serde_json::Value = serde_json::from_str(&host.canvas_geometry(
+            canvas,
+            if superseded { 300. } else { 200. },
+            50.,
+            2.,
+        ))
+        .unwrap();
+        let fresh = draw["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["op"] == "canvas2d" && op["fresh"] == true)
+            .unwrap();
+        assert_eq!(fresh["generation"], 1);
+        assert_eq!(fresh["w"], if superseded { 600 } else { 400 });
+        let answer: serde_json::Value =
+            serde_json::from_str(&host.canvas_capture_ready(ticket)).unwrap();
+        let capture = answer["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["op"] == "canvasCapture")
+            .unwrap();
+        assert_eq!(capture["generation"], 1);
+        assert_eq!(capture["w"], if superseded { 600 } else { 400 });
+        assert_eq!(capture["h"], 100);
+        assert_eq!(capture["scale"], 2);
+    }
+}
+
+#[test]
+fn a_frames_capture_survives_its_animation_draw() {
+    struct Animated;
+    impl DataSource for Animated {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn answer(
+            &mut self,
+            _: &mut exact_runner::Store,
+            _: &str,
+            _: &[Value],
+        ) -> Result<exact_runner::Answer, DataError> {
+            Ok(exact_runner::Answer::Later(
+                exact_runner::Request::capture_canvas("ink", "app:/tmp/frame.png"),
+            ))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("ink".into(), 0)]
+        }
+        fn draw_2d(
+            &mut self,
+            _: &str,
+            _: &[Value],
+            ctx: &exact_runner::exact_canvas::Context2d,
+            _: &exact_runner::exact_canvas::Frame,
+        ) -> Result<bool, exact_runner::exact_canvas::DrawError> {
+            ctx.fill_rect(0., 0., 4., 4.);
+            Ok(true)
+        }
+    }
+    let plan = contract::compile("component App\n  mutation image as shape string\n  action capture\n    send image = capture()\n  task save mount\n    every(frame, capture)\n  view\n    canvas surface=ink() width=40 height=40 testId=\"ink\"\n").unwrap();
+    exact_web::link(exact_web_capabilities::ALL);
+    let (mut host, _) = Host::boot(&plan.encode(), Animated, Default::default(), "/").unwrap();
+    host.data_ready();
+    let k = host.runner().kernel();
+    let id = k.node_by_key(k.find_by_test_id("ink")[0]).unwrap().id;
+    host.canvas_geometry(id, 40., 40., 1.);
+    let batch: serde_json::Value = serde_json::from_str(&host.frame(16.)).unwrap();
+    let ticket = batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "canvasCapturePrepare")
+        .unwrap()["ticket"]
+        .as_u64()
+        .unwrap();
+    let capture = host.canvas_capture_ready(ticket);
+    assert!(capture.contains("\"op\":\"canvasCapture\""), "{capture}");
+}
+
+#[test]
+fn a_capture_retries_canvases_skipped_by_the_draw_byte_budget() {
+    struct Budget;
+    impl DataSource for Budget {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn answer(
+            &mut self,
+            _: &mut exact_runner::Store,
+            _: &str,
+            _: &[Value],
+        ) -> Result<exact_runner::Answer, DataError> {
+            Ok(exact_runner::Answer::Later(
+                exact_runner::Request::capture_canvas("ink", "app:/tmp/ink.png"),
+            ))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("large".into(), 1), ("ink".into(), 0)]
+        }
+        fn draw_2d(
+            &mut self,
+            name: &str,
+            _: &[Value],
+            ctx: &exact_runner::exact_canvas::Context2d,
+            _: &exact_runner::exact_canvas::Frame,
+        ) -> Result<bool, exact_runner::exact_canvas::DrawError> {
+            for _ in 0..if name == "large" { 220_000 } else { 1 } {
+                ctx.fill_rect(0., 0., 1., 1.);
+            }
+            Ok(false)
+        }
+    }
+    for count in [2, 3, 17] {
+        let canvases = (0..count)
+            .map(|i| {
+                format!("      canvas surface=large(n) width=10 height=10 testId=\"large{i}\"\n")
+            })
+            .collect::<String>();
+        let plan = contract::compile(&format!("component App\n  state n = 0\n  mutation image as shape string\n  action capture\n    n = 1\n    send image = capture()\n  view\n    column\n      button press=capture testId=\"capture\"\n        text \"Capture\"\n{canvases}      canvas surface=ink() width=10 height=10 testId=\"ink\"\n")).unwrap();
+        exact_web::link(exact_web_capabilities::ALL);
+        let (mut host, _) = Host::boot(&plan.encode(), Budget, Default::default(), "/").unwrap();
+        host.data_ready();
+        let id = |host: &Host<Budget>, name: &str| {
+            let k = host.runner().kernel();
+            k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+        };
+        let mut views = (0..count)
+            .map(|i| id(&host, &format!("large{i}")))
+            .collect::<Vec<_>>();
+        views.push(id(&host, "ink"));
+        for view in &views {
+            host.canvas_geometry(*view, 10., 10., 1.);
+        }
+        let button = id(&host, "capture");
+        let first: serde_json::Value =
+            serde_json::from_str(&host.dispatch(button, Event::Press)).unwrap();
+        let ops = first["ops"].as_array().unwrap();
+        let draws = ops
+            .iter()
+            .filter(|op| op["op"] == "canvas2d")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            draws.len(),
+            1,
+            "the first canvas exhausts the turn's budget"
+        );
+        assert!(
+            draws[0]["lists"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| l[1].as_u64().unwrap())
+                .sum::<u64>()
+                > 8 << 20
+        );
+        let ticket = ops
+            .iter()
+            .find(|op| op["op"] == "canvasCapturePrepare")
+            .unwrap()["ticket"]
+            .as_u64()
+            .unwrap();
+        // Unchanged browser geometry produces no extra turn before this callback.
+        let mut draws = Vec::new();
+        loop {
+            let ready: serde_json::Value =
+                serde_json::from_str(&host.canvas_capture_ready(ticket)).unwrap();
+            let ops = ready["ops"].as_array().unwrap();
+            let capture = ops.iter().position(|op| op["op"] == "canvasCapture");
+            let turn = ops[..capture.unwrap_or(ops.len())]
+                .iter()
+                .filter(|op| op["op"] == "canvas2d")
+                .map(|op| op["id"].as_u64().unwrap() as u32)
+                .collect::<Vec<_>>();
+            assert!(turn.len() <= 16, "one callback keeps its retry bound");
+            draws.extend(turn);
+            if capture.is_some() {
+                break;
+            }
+            assert!(
+                ops.iter()
+                    .any(|op| op["op"] == "canvasCapturePrepare" && op["ticket"] == ticket),
+                "budget-deferred capture schedules the next callback without another event"
+            );
+            assert!(draws.len() < views.len(), "every callback makes progress");
+        }
+        assert_eq!(
+            draws,
+            views[1..],
+            "every retry is replayed before the snapshot"
+        );
+        assert!(host.canvas_snapshotted(ticket));
+    }
+}
+
+#[test]
+fn a_rejected_capture_draw_answers_instead_of_parking() {
+    use exact_runner::{Answer, DrawReply, DrawRequest, Drawn, Request, Store};
+    struct Rejected(bool);
+    impl DataSource for Rejected {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            self.0 = true;
+            Ok(Answer::Later(Request::capture_canvas(
+                "ink",
+                "app:/tmp/shot.png",
+            )))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: exact_runner::Outcome,
+        ) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::str(
+                &exact_runner::canvas_capture::captured_image(&outcome).unwrap_err(),
+            )))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("ink".into(), 0)]
+        }
+        fn draw(
+            &mut self,
+            _: &DrawRequest<'_>,
+            _: &exact_runner::exact_canvas::Context2d,
+        ) -> Drawn {
+            Drawn::Now(DrawReply {
+                lists: if self.0 { vec![vec![0xff; 8]] } else { vec![] },
+                ..Default::default()
+            })
+        }
+    }
+    let plan = contract::compile("component App\n  mutation image as shape string\n  action capture\n    send image = capture()\n  view\n    column\n      button press=capture testId=\"capture\"\n        text \"Capture\"\n      canvas surface=ink() width=10 height=10 testId=\"ink\"\n").unwrap();
+    exact_web::link(exact_web_capabilities::ALL);
+    let (mut host, _) =
+        Host::boot(&plan.encode(), Rejected(false), Default::default(), "/").unwrap();
+    host.data_ready();
+    let id = |host: &Host<Rejected>, name: &str| {
+        let k = host.runner().kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    };
+    host.canvas_geometry(id(&host, "ink"), 10., 10., 1.);
+    let batch: serde_json::Value =
+        serde_json::from_str(&host.dispatch(id(&host, "capture"), Event::Press)).unwrap();
+    let ticket = batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "canvasCapturePrepare")
+        .unwrap()["ticket"]
+        .as_u64()
+        .unwrap();
+    let ready: serde_json::Value =
+        serde_json::from_str(&host.canvas_capture_ready(ticket)).unwrap();
+    assert!(
+        !host.runner().holds(ticket),
+        "a rejected drawing must answer its capture: {ready}"
+    );
+    assert!(exact_runner::agent::state(host.runner()).contains("EncodingError"));
+    assert!(
+        !ready["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["op"] == "canvasCapture"),
+        "no PNG may replace the destination"
+    );
+}

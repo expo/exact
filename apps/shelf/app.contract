@@ -149,7 +149,9 @@ component Shelf
   resource time = exactTime() as shape Time
   resource lib = library() as shape Library else empty(ready=false, goal=12, avgText="—")
   resource works = subjectWorks(subject) as shape Subject else empty(ok=true)
-  mutation changed as shape Ack queue refreshes lib
+  mutation changed as shape Ack queue refreshes lib then saved
+  // The add sheet's own: the sheet closes only once the book is stored.
+  mutation added as shape Ack queue refreshes lib then addEnded
   // The tools' own: a call's `fails when` reads its reply, never a page
   // turn the person made while the call waited for `lib`.
   mutation logged as shape Ack queue refreshes lib
@@ -306,8 +308,18 @@ component Shelf
     submitted = true
     if titleError == "" and pagesError == ""
       let author = draftAuthor.trim() == "" ? "Unknown author" : draftAuthor.trim()
-      send changed = addBook(draftTitle.trim(), author, pagesValue(draftPages), draftStatus, "", "", time.epochAtZero + performanceNow())
+      send added = addBook(draftTitle.trim(), author, pagesValue(draftPages), draftStatus, "", "", time.epochAtZero + performanceNow())
+  action addEnded
+    let ok = match added { case some(a) => a.ok, case none => false }
+    if not ok
+      showModal("not-saved")
+    else if current.name == "add"
       nav = back(nav)
+  // An edit that was not stored: the library refreshes to what is, and the
+  // alert says so.
+  action saved
+    if match changed { case some(a) => not a.ok, case none => false }
+      showModal("not-saved")
 
   // A book
   action setStatus(id: string, s: string)
@@ -593,7 +605,7 @@ component Shelf
                     if canScan
                       button press=openScan aria-label="Scan Barcode" testId="scan-barcode"
                         image "symbol:camera"
-                    button press=save buttonStyle="bordered-prominent" testId="add-save"
+                    button press=save buttonStyle="bordered-prominent" disabled=pending(added) testId="add-save"
                       text "Save"
                   list id="add-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                     section
@@ -806,6 +818,10 @@ component Shelf
           text "Open Link"
         button commandfor="not-on-shelf" command="close" testId="found-cancel"
           text "Cancel"
+      dialog id="not-saved" role="alertdialog" aria-label="Couldn’t Save" testId="not-saved"
+        text "Shelf couldn’t store this change. Try again."
+        button commandfor="not-saved" command="close" testId="not-saved-ok"
+          text "OK"
       dialog id="tag-said" role="alertdialog" aria-label=tagSaid testId="tag-said"
         button press=tagSaidDone commandfor="tag-said" command="close" testId="tag-said-ok"
           text "OK"
@@ -841,12 +857,12 @@ component BookRow
           text book.title font="-exact-headline" line-clamp=2 testId=`book-title-${book.id}`
           text book.author font="-exact-subheadline" color="-exact-secondary-label"
           row align-items="center" gap=6
-            text (book.status == "reading" ? `${percent(book.currentPage, book.pages)}% · page ${book.currentPage} of ${book.pages}` : statusLabel(book.status)) font="-exact-footnote"
+            text (book.status == "reading" and book.pages > 0 ? `${percent(book.currentPage, book.pages)}% · page ${book.currentPage} of ${book.pages}` : statusLabel(book.status)) font="-exact-footnote"
               color="-exact-secondary-label"
               testId=`book-status-${book.id}`
             if book.status == "done" and book.rating > 0
               Stars(value=book.rating, tid=`book-stars-${book.id}`)
-          if book.status == "reading"
+          if book.status == "reading" and book.pages > 0
             Meter(value=percent(book.currentPage, book.pages), tid=`book-progress-${book.id}`)
         image "symbol:forward-chevron" aria-hidden=true
           font="-exact-footnote"

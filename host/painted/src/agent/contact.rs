@@ -147,7 +147,7 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
             }
             "hold" => {
                 let ms = duration(request)?;
-                let (_, failure) = p.clock(from + ms);
+                let (_, failure) = sensors::hold_framed(p, from + ms);
                 if let Some(error) = failure {
                     return Err(error.into());
                 }

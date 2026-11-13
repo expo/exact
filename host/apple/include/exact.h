@@ -551,6 +551,8 @@ uint32_t exact_pump(ExactRuntime rt, double now_ms);
 /* Presenter-owned surface work uses the ordinary runner ticket. Kinds are
  * 2 refused, 3 unsupported, 4 aborted, 6 captured bytes, 7 restored. */
 uint8_t exact_request_active(ExactRuntime rt, uint64_t ticket);
+/* The host owns the pixel copy. Call on the runtime owner before encoding. */
+uint8_t exact_canvas_snapshotted(ExactRuntime rt, uint64_t ticket);
 uint32_t exact_fulfill_surface(ExactRuntime rt, uint64_t ticket, uint32_t kind, size_t len, double now_ms);
 
 /* LLP 1038 D5/D8: input URL -> UTF-8 canonical location in exact_out.

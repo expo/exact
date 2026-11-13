@@ -663,6 +663,26 @@ data_source! {
         Vec::new()
     }
 
+    /// Resume one untargeted tool invocation by the request the runner holds.
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let _ = (fetch, continuation);
+        self.parse(store, source, args, outcome)
+    }
+
+    /// The module owning `source`; an empty name selects background work.
+    fn module_identity(&self, source: &str) -> Option<super::ModuleIdentity> {
+        let _ = source;
+        None
+    }
+
     /// The host's wake, for a source that hears an abort off the host's
     /// thread (a worker's let-go): it calls `wake` after it has one to take.
     fn abort_wake(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
