@@ -11,6 +11,10 @@ let libName = ProcessInfo.processInfo.environment["EXACT_LIB"] ?? "caltrain_appl
 // The app's module launch parts. `build.mjs` generates this target when the
 // manifest's `launch` names any; otherwise the empty default is used.
 let launchParts = ProcessInfo.processInfo.environment["EXACT_LAUNCH_PARTS"] ?? "Sources/ExactLaunchParts"
+// The app's launch modules compile at its own minimum, where Swift checks their availability; the rest of the
+// package compiles at the floor every app shares (EXACT_IOS_DEPLOYMENT). swiftc takes the last `-target`, and a
+// module may import one compiled for an earlier target. Set by build.mjs for iOS and tvOS.
+let launchPartsTarget = ProcessInfo.processInfo.environment["EXACT_LAUNCH_PARTS_TARGET"].flatMap { $0.isEmpty ? nil : $0 }
 
 let composition = ProcessInfo.processInfo.environment["EXACT_APP_COMPOSITION"] ?? "embedded"
 precondition(["embedded", "updating"].contains(composition), "EXACT_APP_COMPOSITION must be embedded or updating")
@@ -82,7 +86,8 @@ let core: [Target] = [
     .target(name: "ExactAuthSession", dependencies: ["ExactKit"], path: "Sources/ExactAuthSession"),
     .target(name: "ExactNumerals", dependencies: ["ExactKit"], path: "Sources/ExactNumerals"),
     .target(name: "ExactTips", dependencies: ["ExactKit"], path: "Sources/ExactTips"),
-    .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts),
+    .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts,
+            swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
     .target(name: "ExactComposition", dependencies: [.target(name: "ExactKit")] + (composition == "updating" ? [.target(name: "ExactUpdates")] : [])
                 + capabilities.map { .target(name: $0.target) },
             path: composition == "updating" ? "Sources/ExactUpdating" : "Sources/ExactEmbedded",
