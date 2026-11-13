@@ -1112,8 +1112,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
  * point or more is layout the host kept from what happened before (a fold and back, a swipe let go), which a
  * person sees until something re-renders. The restart keeps the app's state but not a component's own `state`, so
  * the boxes are compared only when the tree it builds is the one the steps left (each node's type, props and focus);
- * otherwise `unkept` names the first node that differs. A screen that does not settle, or a plan that does not
- * apply again (a request it must wait for), is `skipped`, with the reason. Returns `{ differences, unkept, skipped }`,
+ * otherwise `unkept` names the first node that differs. A screen that does not settle, a plan that does not
+ * apply again (a request it must wait for), or a keyboard the fresh build does not raise or lower as the steps left
+ * it, is `skipped`, with the reason. Returns `{ differences, unkept, skipped }`,
  * the outermost box first.
  */
 export async function freshBuildDifferences(s) {
@@ -1124,8 +1125,11 @@ export async function freshBuildDifferences(s) {
     if (tree?.error) throw new Error(`tree: ${tree.error}`);
     return placed(tree, boxes);
   };
+  // The docked keyboard is the host's, as focus is, and the screen's layout follows it (LLP 1127.000 D9)
+  const keys = async () => (await s.op({ op: 'state' }))?.keyboard?.visible === true;
   const before = await read();
   if (!before) return { differences: [], skipped: 'the screen the test ended on did not settle' };
+  const keysBefore = await keys();
   const r = await s.op({ op: 'rebuild' });
   if (r?.error) return { differences: [], skipped: r.error };
   // What the fresh build sets off after it settles (the keyboard coming back for the focus it kept) is read
@@ -1139,6 +1143,8 @@ export async function freshBuildDifferences(s) {
     after = next;
   }
   if (!after) return { differences: [], skipped: 'the fresh build did not settle' };
+  // A fresh build raises the keyboard again only for a focus it can give back (a bar's search field opens on a tap)
+  if (keysBefore !== await keys()) return { differences: [], skipped: `the keyboard ${keysBefore ? 'up' : 'down'} when the steps ended is not ${keysBefore ? 'up' : 'down'} in the fresh build` };
   const unkept = treeDifference(before.nodes, after.nodes);
   return { differences: unkept ? [] : frameDifferences(before, after), unkept };
 }
