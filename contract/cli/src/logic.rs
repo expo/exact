@@ -147,9 +147,10 @@ const NATIVE_HOSTS: [&str; 6] = [
 /// key or `package` in `[dependencies]` or a `[target.….dependencies]` table, the tables `exact.mjs update` edits.
 /// SQLite counts anywhere outside a comment, as `ibex2-sqlite` or as the `ibex2_sqlite` the entry names (a renamed or
 /// inherited key), so a crate that may have it is left to Cargo. The scan reads one line at a time, so a manifest
-/// with a multi-line string, whose lines it cannot tell from declarations, is left to Cargo too.
+/// with a multi-line string, whose lines it cannot tell from declarations, or an escape (`\\`), which may spell a key
+/// it does not decode, is left to Cargo too.
 fn lacks_sqlite(manifest: &str) -> bool {
-    if manifest.contains("\"\"\"") || manifest.contains("'''") {
+    if manifest.contains("\"\"\"") || manifest.contains("'''") || manifest.contains('\\') {
         return false;
     }
     let mut host = false;
@@ -559,6 +560,8 @@ mod tests {
             "[dev-dependencies]\nexact-apple = { path = \"x\" }\n",
             "[build-dependencies]\nexact-linux = { path = \"x\" }\n",
             "[package.metadata]\nexample = \"\"\"\n[dependencies.exact-apple]\n\"\"\"\n",
+            // TOML decodes this key to `ibex2-sqlite`.
+            "[dependencies]\nexact-apple = { path = \"x\" }\n\"ibex2\\u002dsqlite\".workspace = true\n",
         ] {
             assert!(!super::lacks_sqlite(not_host), "{not_host}");
         }
