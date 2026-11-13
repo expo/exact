@@ -120,8 +120,8 @@ pub fn native_storage_constructor(
 /// declares only its host. rustc would refuse the entry with E0433 and Cargo's hint to `cargo add` a crates.io crate,
 /// where the fix is the SDK's vendored one (expo/exact-build#147). Only from a build script (`CARGO_CFG_TARGET_ARCH`
 /// is a build script's) for a native target. A crate without a host (a render crate) writes the entry but never
-/// compiles it, so it is left alone. The test is `exact.mjs update`'s (`game/update-manifests.mjs`, `nativeHosts`),
-/// so the update the message names always adds the line, and any line naming `ibex2-sqlite` counts.
+/// compiles it, so it is left alone. A host is found where `exact.mjs update` looks for one
+/// (`game/update-manifests.mjs`, `nativeHosts`), so the update the message names adds the line.
 fn shell_without_sqlite() -> Option<String> {
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").ok()?;
     if arch == "wasm32" {
@@ -143,18 +143,75 @@ const NATIVE_HOSTS: [&str; 6] = [
     "exact-windows",
 ];
 
-/// Whether a manifest names a native host and no `ibex2-sqlite`, reading each line outside a comment as words of
-/// `[A-Za-z0-9_-]` (a dependency key, a `package =` name or a `[dependencies.<name>]` table).
+/// Whether a manifest declares a native host as a dependency and names no `ibex2-sqlite`. A host counts only as a
+/// key or `package` in `[dependencies]` or a `[target.….dependencies]` table, the tables `exact.mjs update` edits.
+/// SQLite counts anywhere outside a comment, as `ibex2-sqlite` or as the `ibex2_sqlite` the entry names (a renamed or
+/// inherited key), so a crate that may have it is left to Cargo.
 fn lacks_sqlite(manifest: &str) -> bool {
-    let words = || {
-        manifest
-            .lines()
-            .filter(|line| !line.trim_start().starts_with('#'))
-            .flat_map(|line| {
-                line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-            })
-    };
-    words().any(|w| NATIVE_HOSTS.contains(&w)) && !words().any(|w| w == "ibex2-sqlite")
+    let mut host = false;
+    let mut sqlite = false;
+    let mut table = None::<bool>; // Some(true): a dependency table; Some(false): one dependency's own table.
+    for line in manifest.lines().map(uncommented) {
+        sqlite |= line
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .any(|w| w.replace('-', "_") == "ibex2_sqlite");
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_matches(|c| c == '[' || c == ']' || c == ' ');
+            let (path, name) = match header.rsplit_once("dependencies") {
+                Some((before, after))
+                    if before.is_empty()
+                        || before.starts_with("target.") && before.ends_with('.') =>
+                {
+                    (true, after.strip_prefix('.'))
+                }
+                _ => (false, None),
+            };
+            table = path.then_some(name.is_none());
+            host |= name.is_some_and(is_host);
+        } else if let Some((key, value)) = line.split_once('=') {
+            let key = key
+                .trim()
+                .split('.')
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c| c == '"' || c == '\'');
+            host |= match table {
+                Some(true) => is_host(key) || package(value).is_some_and(is_host),
+                Some(false) => {
+                    key == "package"
+                        && is_host(value.trim().trim_matches(|c| c == '"' || c == '\''))
+                }
+                None => false,
+            };
+        }
+    }
+    host && !sqlite
+}
+
+fn is_host(name: &str) -> bool {
+    NATIVE_HOSTS.contains(&name)
+}
+
+/// The `package = "…"` an inline dependency table renames.
+fn package(value: &str) -> Option<&str> {
+    let (_, rest) = value.split_once("package")?;
+    let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    rest[1..].split(quote).next()
+}
+
+/// A manifest line without its comment: from the first `#` outside a quoted string.
+fn uncommented(line: &str) -> &str {
+    let mut quote = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (None, '#') => return line[..i].trim(),
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), _) if c == q => quote = None,
+            _ => {}
+        }
+    }
+    line.trim()
 }
 
 fn sqlite_refusal(manifest: &std::path::Path) -> String {
@@ -492,11 +549,28 @@ mod tests {
         assert!(!super::lacks_sqlite(
             "[dependencies]\n# exact-apple = { path = \"x\" }\n"
         ));
+        // A host only in a comment, another field or a table `exact.mjs update` does not edit is no host.
+        for not_host in [
+            "[package]\ndescription = \"beside exact-apple\"\n[dependencies]\nexact-render = { path = \"x\" } # with exact-apple\n",
+            "[dev-dependencies]\nexact-apple = { path = \"x\" }\n",
+            "[build-dependencies]\nexact-linux = { path = \"x\" }\n",
+        ] {
+            assert!(!super::lacks_sqlite(not_host), "{not_host}");
+        }
+        for host in [
+            "[dependencies.exact-apple]\npath = \"x\"\n",
+            "[target.'cfg(target_os = \"ios\")'.dependencies]\nexact-apple.workspace = true\n",
+            "[dependencies.host]\npackage = \"exact-windows\"\npath = \"x\"\n",
+        ] {
+            assert!(super::lacks_sqlite(host), "{host}");
+        }
         for named in [
             "ibex2-sqlite = { path = \"../exact2/vendor/ibex/crates/ibex2-sqlite\" }",
             "ibex2-sqlite.workspace = true",
             "[dependencies.ibex2-sqlite]",
             "sql = { package = \"ibex2-sqlite\", path = \"x\" }",
+            // The workspace root renames it to the name the entry uses.
+            "ibex2_sqlite.workspace = true",
         ] {
             assert!(
                 !super::lacks_sqlite(&format!("{before}{named}\n")),
