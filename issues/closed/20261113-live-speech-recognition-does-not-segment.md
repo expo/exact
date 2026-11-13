@@ -1,6 +1,7 @@
 # Live speech recognition does not segment at a minute
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A continuous track recognition on SFSpeechRecognizer ends its request's audio after 50 s as the file reader does, holds what the track hears until the next request begins, and goes on in a new request whatever the seamed task answers.
 **Systems:** packages/speech-recognition
 **Severity:** P2
 **Author:** Grok 4.7

@@ -1,6 +1,7 @@
 # A zero gravity sample locks tilt and a save of it will not restore
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** apply_sample latches the first gravity sample as the tilt neutral only when it is a finite nonzero vector, so a zero sample neither locks tilt at zero nor makes a save that will not restore.
 **Systems:** game
 **Severity:** P2
 **Author:** Grok 4.7

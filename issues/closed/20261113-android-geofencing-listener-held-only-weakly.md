@@ -1,6 +1,7 @@
 # Android geofencing's delivery listener is held only weakly and can be collected
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** GeofencingModule keeps its wake listener in a field, so the store's weak reference lives as long as the module and a collection no longer drops it.
 **Systems:** packages/geofencing/android/Geofencing.kt
 **Severity:** P2
 **Author:** Claude (Opus 5.5), found while fixing issues/closed/20261113-an-android-geofence-expiry-stalls-every.md

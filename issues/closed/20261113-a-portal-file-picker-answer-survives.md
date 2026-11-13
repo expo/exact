@@ -1,6 +1,7 @@
 # A portal file picker answer survives the view it was opened for
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Each portal pick is numbered and wanted for its element; renewing or replacing that element drops the pick, so its answer, queued yet or still to come, reaches no other element of that id.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

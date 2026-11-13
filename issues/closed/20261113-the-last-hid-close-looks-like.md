@@ -1,6 +1,7 @@
 # The last HID close looks like an unplug on Linux and Windows
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** On Linux and Windows each HID connection keeps its open's report log, so the last close leaves its last reports readable and the device connected, and only the reader seeing the device leave sets interrupted.
 **Systems:** packages/hid
 **Severity:** P2
 **Author:** Grok 4.7

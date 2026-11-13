@@ -54,7 +54,7 @@ component Recorder
   mutation installed as shape SpeechRecognitionInstall refreshes language, speech
   derive recording = recorderId != ""
   derive visibleTakes = library.takes.filter(t => t.name != takeName)
-  derive busy = pending(opened) or pending(started) or pending(saved)
+  derive busy = pending(opened) or pending(started) or pending(saved) or pending(transcribed)
   derive startFailure = match failure(started) { case some(f) => f.code, case none => "" }
   derive denied = mic.state == "denied"
   derive cannotRecord = busy or (not recording and (denied or not mic.available))
@@ -71,6 +71,8 @@ component Recorder
       send saved = stopMediaRecorder(recorder=recorderId)
       if recognitionId != ""
         send transcribed = stopSpeechRecognition(recognition=recognitionId)
+        // Cleared now, so the stop's answer, however late, cannot clear the next take's.
+        recognitionId = ""
       else
         // Supersedes a start still in flight: its recognition is aborted when its answer comes (D7).
         send listening = abortSpeechRecognition(recognition="")
@@ -129,7 +131,6 @@ component Recorder
         recorderId = recorderId
   // The live transcript is complete when it ended by this stop, not aborted or by an error.
   action noted
-    recognitionId = ""
     match transcribed
       case some(t)
         send transcriptKept = keepTranscript(t)

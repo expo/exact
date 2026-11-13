@@ -1,6 +1,7 @@
 # `@exact/oauth`'s `signOut` leaves the provider's browser session, so the next sign-in completes silently as the same account
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** signOut(store, { endSession: true }) opens the provider's end_session_endpoint (from discovery or endpoints.endSession, kept with the session) with id_token_hint, client_id, the callback and state, revokes as before, and reports a browser step that does not finish as ok with code end_session.
 **Systems:** packages/oauth/index.ts, packages/oauth/index.d.ts, docs/recipes/oauth.md, LLP 1146 D5
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

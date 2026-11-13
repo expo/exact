@@ -1,6 +1,7 @@
 # `deploy` refuses an app whose folder shares no top folder with the checkout
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A generated .exact/shells workspace names the exact2 checkout by a relative path always, rewritten when the app or the checkout moves, so a deploy's capture of an app under another top folder resolves into the captured checkout.
 **Systems:** scripts/app-shells.mjs (generated `.exact/shells`), scripts/deploy.mjs (source capture)
 **Severity:** P2
 **Author:** Claude (Opus 5.5), found while fixing issues/closed/20261113-deploy-and-push-refuse-typescript-app-with-live-activities.md

@@ -115,6 +115,7 @@ fn the_dialog_and_the_menu_keep_materials_metrics() {
         dark: false,
         font_scale: 1.0,
         window: (width, 800.0),
+        room: 792.0,
     };
     let row = |title: &str, cancel: bool| Row {
         node: 1,

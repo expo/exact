@@ -20,9 +20,9 @@ export interface OAuthSession {
 /** What `signIn()` and `signOut()` answer; `OAuthResult` in Contract. */
 export interface OAuthResult {
   ok: boolean;
-  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "auth_session", "network", "server", "config", "invalid_response", or the provider's OAuth error code. */
+  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "auth_session", "network", "server", "config", "invalid_response", the provider's OAuth error code, or, on a sign-out that is ok, "end_session": the provider's own sign-in may stand. */
   code: string;
-  /** A sentence for the person; "" when ok. */
+  /** A sentence for the person; "" when ok with no `code`. */
   error: string;
   /** Trying again later may succeed. */
   retryable: boolean;
@@ -33,8 +33,8 @@ export interface OAuthResult {
 export interface OAuthConfig {
   /** The issuer. Discovery reads `<issuer>/.well-known/openid-configuration`, then RFC 8414's document. */
   issuer?: string;
-  /** Endpoints for a provider without discovery. With an exact `issuer` (no `issuerTemplate`), `authorization` and `token` both given make no discovery: the ID token and a callback's `iss` are still checked against `issuer`, a callback without `iss` is taken, and sign-out revokes only at `revocation`. Otherwise they override what discovery found. */
-  endpoints?: { authorization?: string; token?: string; revocation?: string };
+  /** Endpoints for a provider without discovery. With an exact `issuer` (no `issuerTemplate`), `authorization` and `token` both given make no discovery: the ID token and a callback's `iss` are still checked against `issuer`, a callback without `iss` is taken, and sign-out revokes only at `revocation`. Otherwise they override what discovery found. `endSession` is where `signOut`'s `endSession` ends the provider's own sign-in (`end_session_endpoint`, OpenID Connect RP-Initiated Logout 1.0 §2). */
+  endpoints?: { authorization?: string; token?: string; revocation?: string; endSession?: string };
   clientId: string;
   scopes: string[];
   /** The `secret.keep` name the session is kept under. */
@@ -67,6 +67,8 @@ export interface OAuthConfig {
   cancelCodes?: string[];
   /** Ask the browser for a private session with no shared cookies, to choose another account. */
   ephemeral?: boolean;
+  /** The end-session request's parameter that names the callback, for a provider that does not call it `post_logout_redirect_uri` (RP-Initiated Logout 1.0 §2). */
+  logoutRedirectParam?: string;
   /** The callback; the default is `authCallback()`. With `signIn`'s `authorize`, the redirect URI the provider registered. */
   callback?: string;
   /** The statuses an API answers an expired access token with: `[401]` by default (RFC 6750 §3.1); `[401, 403]` for a gateway that answers 403. `fetch` and `json` refresh once on each. A token an API refused right after the refresh that brought it refreshes again only once it has expired by the API's `Date`, or, its expiry unknown, a minute after that refusal; where the app cannot read the API's `Date` (from another origin, a browser shows it only when the API exposes it), each read the API refuses refreshes once, as without this limit. */
@@ -114,6 +116,16 @@ export interface OAuthSignIn {
   authorize?: (request: OAuthAuthorization) => Promise<string>;
 }
 
+export interface OAuthSignOut {
+  /** Also end the person's sign-in at the provider (OpenID Connect RP-Initiated Logout 1.0), so that the next sign-in
+   *  shows the provider's page instead of completing as the same account. The browser opens the provider's end-session
+   *  endpoint with the ID token as `id_token_hint`, `client_id`, the callback and `state`; the provider must send the
+   *  person back to the callback with that `state`, so register the callback as a post-logout redirect URI. Send it from
+   *  a press, as `signIn`. The session is forgotten and revoked either way; a browser step that does not finish, or a
+   *  provider that names no end-session endpoint, is answered as `ok` with code "end_session" and a sentence in `error`. */
+  endSession?: boolean;
+}
+
 /** A failed authorized request. A resource source that throws it keeps its last answer (LLP 1016 D4). */
 export declare class OAuthError extends Error {
   code: string;
@@ -138,8 +150,8 @@ export interface OAuthProvider {
   session(store: OAuthStore): Promise<OAuthSession>;
   /** Opens the provider's sign-in, then exchanges and keeps the tokens. Send it from a press. With `authorize`, the app's own sign-in sends the authorization request instead. */
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
-  /** Forgets the session, then asks the provider to revoke it. */
-  signOut(store: OAuthStore): Promise<OAuthResult>;
+  /** Forgets the session, then asks the provider to revoke it. With `endSession`, also ends the person's sign-in at the provider. */
+  signOut(store: OAuthStore, options?: OAuthSignOut): Promise<OAuthResult>;
   /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
    *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or
    *  `session_changed` when the person has signed in again since it was sent. */

@@ -503,8 +503,7 @@ impl exact_runner::DataSource for Items {
     }
 }
 
-#[test]
-fn bound_transition_stacking_matches_kernel() {
+pub(super) fn transition_values() -> Vec<String> {
     let mut values: Vec<String> = [
         "200ms linear(0, 1)",
         "width 1s, opacity 1s",
@@ -516,6 +515,11 @@ fn bound_transition_stacking_matches_kernel() {
         "color 1s",
         "border-color 200ms",
         "all 1s",
+        "all 1s, d 2s",
+        "d 1s",
+        "d 1s, 200ms ease",
+        "d 1s, opacity 1s",
+        "opacity 1s, d 2s",
         "opacity 1s",
         "1s opacity",
         "translate 1s",
@@ -561,7 +565,7 @@ fn bound_transition_stacking_matches_kernel() {
     let properties = exact_motion::Property::ALL
         .into_iter()
         .flat_map(|p| [p.name(), p.css_name()])
-        .chain(["all", "border-color", "width", "", "opacity scale"]);
+        .chain(["all", "border-color", "d", "width", "", "opacity scale"]);
     let easings = [
         "linear",
         "ease",
@@ -657,6 +661,12 @@ fn bound_transition_stacking_matches_kernel() {
         ]
         .map(str::to_owned),
     );
+    values
+}
+
+#[test]
+fn bound_transition_stacking_matches_kernel() {
+    let values = transition_values();
     let plan = fixture_plan("", "2>1>");
     let (_, expression) = crate::paint::binding(
         &plan,
@@ -667,6 +677,7 @@ fn bound_transition_stacking_matches_kernel() {
             expr: Default::default(),
             written: true,
         },
+        crate::paint::transitions,
     )
     .unwrap();
     let script = format!(
@@ -895,6 +906,7 @@ fn bound_animation_stacking_matches_kernel() {
             expr: Default::default(),
             written: true,
         },
+        crate::paint::transitions,
     )
     .unwrap();
     let script = format!(

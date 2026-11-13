@@ -22,6 +22,30 @@ fn motion_words() -> String {
     )
 }
 
+/// The transition grammar, its paint policy and the last curve covering layout.
+#[allow(clippy::field_reassign_with_default)]
+pub fn transitions() -> String {
+    let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
+        .iter()
+        .flat_map(|p| [p.name(), p.css_name()])
+        .chain(["all", "border-color", "d"])
+        .filter_map(|name| {
+            let transition = exact_motion::Transitions::parse(name).ok()?;
+            let mut style = StyleProps::default();
+            style.transition = transition;
+            style.mask.set(StyleId::Transition);
+            Some((name, own(&style).policy))
+        })
+        .collect();
+    include_str!("../transition-paint.js")
+        .replace(
+            "MAX_TRANSITIONS",
+            &exact_motion::MAX_TRANSITIONS.to_string(),
+        )
+        .replace("WORDS", &motion_words())
+        .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
+}
+
 fn own(style: &StyleProps) -> paint_order::Own {
     paint_order::own_from(paint_order::Facts {
         style,
@@ -169,6 +193,7 @@ pub fn needed(plan: &Plan, parts: &[Option<exact_web::host::template::Parts>]) -
                             plan,
                             NodeType::from_wire(plan.nodes.get(i).unwrap().node_type).unwrap(),
                             &b,
+                            transitions,
                         )
                         .is_some()
                 })
@@ -178,7 +203,12 @@ pub fn needed(plan: &Plan, parts: &[Option<exact_web::host::template::Parts>]) -
 /// The attribute and its value expression, with `v` the binding's value.
 /// The tests are own_from's value tests, in the row's authored vocabulary.
 #[allow(clippy::field_reassign_with_default)]
-pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, String)> {
+pub fn binding(
+    plan: &Plan,
+    kind: NodeType,
+    b: &BindingsRow,
+    transitions: impl FnOnce() -> String,
+) -> Option<(String, String)> {
     let bits = |value: String| Some((format!("data-exact-f-{}-{}", b.kind as u8, b.id), value));
     let flag = |bit: u32, test: &str| bits(format!("({test})?{bit}:0"));
     if b.kind == BindingKind::Prop {
@@ -204,35 +234,15 @@ pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, 
         StyleId::WrapFlow => return flag(WRAP, "v===\"both\""),
         StyleId::TintColor if kind == NodeType::Image => return flag(POLICY, "v!=null"),
         StyleId::Isolation => return flag(ISOLATION | STACK, "v===\"isolate\""),
-        // Set where the kernel accepts a value named by the binding.
-        StyleId::LayoutTransition | StyleId::ExitAnimation => {
-            let (bits, values) = if id == StyleId::LayoutTransition {
-                (LAYOUT | POLICY, crate::presence::layout_transitions(plan, plan.code(b.expr)))
-            } else {
-                (POLICY, crate::presence::exit_animations(plan, plan.code(b.expr), false))
-            };
+        StyleId::LayoutTransition => return flag(LAYOUT | POLICY, &format!("({})(v,false)?.held", transitions())),
+        // Exits still resolve names and keyframes at build time.
+        StyleId::ExitAnimation => {
+            let values = crate::presence::exit_animations(plan, plan.code(b.expr), false);
             let table = serde_json::to_string(&values.held.keys().collect::<Vec<_>>()).unwrap();
-            return flag(bits, &format!("typeof v===\"string\"&&{table}.includes(v)"));
+            return flag(POLICY, &format!("typeof v===\"string\"&&{table}.includes(v)"));
         }
         StyleId::Transition => {
-            let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
-                .iter()
-                .flat_map(|p| [p.name(), p.css_name()])
-                .chain(["all", "border-color"])
-                .filter_map(|name| {
-                    let transition = exact_motion::Transitions::parse(name).ok()?;
-                    // This row is behind DerefMut; it cannot be a StyleProps initializer.
-                    let mut style = StyleProps::default();
-                    style.transition = transition;
-                    style.mask.set(StyleId::Transition);
-                    Some((name, own(&style).policy))
-                })
-                .collect();
-            let predicate = include_str!("../transition-paint.js")
-                .replace("MAX_TRANSITIONS", &exact_motion::MAX_TRANSITIONS.to_string())
-                .replace("WORDS", &motion_words())
-                .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
-            return flag(POLICY, &format!("({predicate})(v)"));
+            return flag(POLICY, &format!("({})(v,false)?.stacks", transitions()));
         }
         StyleId::Animation => {
             let names: Vec<_> = plan

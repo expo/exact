@@ -33,6 +33,8 @@ struct Wanted {
     source: String,
     /// The device pixels asked for last.
     asked: (u32, u32),
+    /// The device pixels the picture shown was asked at.
+    showing: (u32, u32),
     /// The ask in flight, whose answer alone is taken.
     ticket: Option<u64>,
     /// A picture is shown.
@@ -170,14 +172,16 @@ impl Images {
             Ok(pixels) => {
                 let natural = (pixels.width(), pixels.height());
                 let bytes = u64::from(natural.0) * u64::from(natural.1) * 4;
-                let Ok(reservation) = self.backend.session.reserve_allocation(bytes) else {
-                    // No room in the budget now: asked again at a later sync.
-                    return Vec::new();
-                };
-                let Ok(charge) = reservation.commit(bytes) else {
+                // No room in the budget now: asked again at a later sync, at the
+                // size shown being the one satisfied, so a growth is asked again too.
+                let Some(charge) = (self.backend.session.reserve_allocation(bytes).ok())
+                    .and_then(|reservation| reservation.commit(bytes).ok())
+                else {
+                    w.asked = w.showing;
                     return Vec::new();
                 };
                 w.shown = true;
+                w.showing = w.asked;
                 self.bitmaps
                     .insert(id, Arc::new(Bitmap::decoded(pixels, natural, charge)));
                 vec![(id, Some((natural.0 as f32, natural.1 as f32)))]
