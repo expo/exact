@@ -78,23 +78,35 @@ test "a page has its section, a rule under the header, previous and next, and th
   expect tree has "page-next"
   expect tree has "updated"
 
-test "the rail has Edit page, the AI actions, and Copy markdown copies the page"
+test "the page header has Edit page, and Copy link copies the page's address"
   size 1440x900
   at "/recipes/website"
-  expect tree has "ai-actions"
+  expect tree has "edit-page"
+  tap "copy-link"
+  expect text "copy-link" == "Copied"
+
+test "the Actions menu copies the Markdown and opens the page in each AI app"
+  size 1440x900
+  at "/recipes/website"
+  tap "actions"
+  expect tree has "open-claude"
+  expect tree has "open-claude-code"
+  expect tree has "open-cursor"
+  expect tree has "open-chatgpt"
+  expect tree has "open-codex"
   tap "copy-markdown"
   expect text "copy-markdown" == "Copied"
 
-test "Open in Claude and Open in ChatGPT each offer the web chat and the coding app"
+test "Is this helpful thanks a yes, and a no offers the page's issue"
   size 1440x900
   at "/recipes/website"
-  expect tree missing "ai-claude-choices"
-  tap "ai-claude"
-  expect tree has "ai-claude-choices"
-  tap "ai-openai"
-  expect tree has "ai-openai-choices"
-  tap "ai-claude"
-  expect tree missing "ai-claude-choices"
+  tap "helpful-yes"
+  expect tree has "helpful-thanks"
+  expect tree missing "helpful-issue"
+  expect tree missing "helpful-no"
+  reload
+  tap "helpful-no"
+  expect tree has "helpful-issue"
 
 test "a collapsible opens, and steps, prerequisites and a file tree render"
   size 1440x900

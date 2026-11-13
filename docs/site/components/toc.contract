@@ -1,75 +1,97 @@
-use Page, Hit from "./shapes.contract"
+use Page from "./shapes.contract"
 
 style Label
-  text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-secondary)" margin-bottom=4
+  text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" font-weight=500 letter-spacing="-0.5px" color="var(--color-text-tertiary)" margin-bottom=4
 
-style Action
-  font-size="var(--text-sm)" color="var(--color-text-secondary)"
+style PillText
+  font-size="var(--text-xs)" font-weight=500 line-height=1.6 color="var(--color-text-secondary)" white-space="nowrap"
 
-component RailLink
+style Round
+  display="flex" align-items="center" padding=8 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-3xl)"
+
+style Item
+  display="flex" align-items="center" gap=8 padding="6px 8px" border-radius=6
+
+style ItemText
+  font-size="var(--text-sm)" color="var(--color-text-default)" white-space="nowrap"
+
+component Helpful
   props
     href: string
-    icon: string
-    label: string
+    voted: string
+    vote: action
+    place: string
   view
-    link href=href target="_blank" align-self="flex-start" class=Hit
-      row align-items="center" gap=8
-        image icon aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
-        text label class=Action
+    column gap=8 align-items="flex-start" testId=`helpful${place}`
+      text "Is this helpful" class=Label
+      if voted == ""
+        row gap=4 padding="4px 0"
+          button press=vote("yes") appearance="none" aria-label="Yes" class=Round testId=`helpful-yes${place}`
+            image "symbol:icon.check" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          button press=vote("no") appearance="none" aria-label="No" class=Round testId=`helpful-no${place}`
+            image "symbol:icon.xclose" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+      else
+        column gap=4 padding="4px 0"
+          text (voted == "yes" ? "Thanks for the feedback." : "Sorry about that.") font-size="var(--text-sm)" color="var(--color-text-secondary)" testId=`helpful-thanks${place}`
+          if voted == "no"
+            link href=href target="_blank" testId=`helpful-issue${place}`
+              text "Tell us what to improve" font-size="var(--text-sm)" color="var(--color-text-default)" text-decoration="underline"
 
-// A link to an app's own URL scheme (Claude Code's `claude-cli:`, Codex's `codex:`), which `link` does not
-// navigate to: `openURL` hands it to the browser, which asks before it opens the app (app.json `open_url`).
-component AppLink
+component PageActions
   props
-    href: string
-    icon: string
-    label: string
-  action open
-    openURL(href)
+    page: Page
+    copyLink: action
+    linked: bool
+    copyMarkdown: action
+    copied: bool
+  action openApp(url: string)
+    hidePopover("page-menu")
+    openURL(url)
   view
-    button press=open appearance="none" display="flex" align-items="center" gap=8 align-self="flex-start" class=Hit
-      image icon aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
-      text label class=Action
-
-// One provider's two places to read the page: its web chat (a link) and its coding app (a URL scheme).
-// The button opens the two choices below it; nothing opens until the reader picks one.
-component ProviderMenu
-  props
-    label: string
-    icon: string
-    web: string
-    webLabel: string
-    app: string
-    appLabel: string
-    appIcon: string
-    id: string
-  state open = false
-  action toggle
-    open = not open
-  view
-    column gap=10 align-self="flex-start"
-      button press=toggle appearance="none" display="flex" align-items="center" gap=8 align-self="flex-start" aria-expanded=open class=Hit testId=`ai-${id}`
-        image icon aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
-        text label class=Action
-        image "symbol:back" aria-hidden=true font-size="var(--text-xs)" color="var(--color-icon-tertiary)" transition="rotate 200ms ease" rotate=(open ? "90deg" : "270deg")
-      if open
-        column gap=10 padding-left=24 testId=`ai-${id}-choices`
-          RailLink(href=web, icon=icon, label=webLabel)
-          AppLink(href=app, icon=appIcon, label=appLabel)
+    row gap=4 align-items="center" flex-shrink=0 margin-left=-12 testId="page-actions"
+      link href=page.editUrl target="_blank" display="flex" align-items="center" gap=4 padding="4px 12px" border-radius="var(--radius-full)" testId="edit-page"
+        image "symbol:icon.edit" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+        text "Edit page" class=PillText
+      row align-items="center" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)"
+        button press=copyLink appearance="none" display="flex" align-items="center" gap=4 padding="4px 2px 4px 12px" border-radius="var(--radius-full) 0 0 var(--radius-full)" testId="copy-link"
+          image (linked ? "symbol:checkmark" : "symbol:icon.copy") aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text (linked ? "Copied" : "Copy link") class=PillText
+        button popovertarget="page-menu" appearance="none" display="flex" align-items="center" padding="4px 12px 4px 2px" border-radius="0 var(--radius-full) var(--radius-full) 0" aria-label="More page actions" testId="actions"
+          image "symbol:icon.chevrondown" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+      column id="page-menu" popover="auto" role="menu" aria-label="Page actions" position="absolute" position-area="bottom span-left" margin="4px 0 0" padding=4 min-width=200 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-lg)" background-color="var(--color-background-default)" box-shadow="0 4px 16px rgba(0, 0, 0, 0.08)" testId="actions-menu"
+        button press=copyMarkdown appearance="none" class=Item testId="copy-markdown"
+          image (copied ? "symbol:checkmark" : "symbol:copy") aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text (copied ? "Copied" : "Copy markdown") class=ItemText
+        link href=page.markdownPath target="_blank" class=Item testId="view-markdown"
+          image "symbol:document" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text "View as Markdown" class=ItemText
+        link href=page.claudeUrl target="_blank" class=Item testId="open-claude"
+          image "symbol:icon.claude" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text "Open in Claude" class=ItemText
+        button press=openApp(page.claudeCodeUrl) appearance="none" class=Item testId="open-claude-code"
+          image "symbol:icon.claude" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text "Open in Claude Code" class=ItemText
+        link href=page.cursorUrl target="_blank" class=Item testId="open-cursor"
+          image "symbol:icon.cursor" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text "Open in Cursor" class=ItemText
+        link href=page.chatgptUrl target="_blank" class=Item testId="open-chatgpt"
+          image "symbol:icon.openai" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text "Open in ChatGPT" class=ItemText
+        button press=openApp(page.codexUrl) appearance="none" class=Item testId="open-codex"
+          image "symbol:icon.codex" aria-hidden=true width=14 height=14 color="var(--color-icon-default)"
+          text "Open in Codex" class=ItemText
 
 component Rail
   props
     page: Page
     roomy: bool
     active: string
-    copyMarkdown: action
-    copied: bool
+    voted: string
+    vote: action
   view
     nav aria-label="Page" inert=(not roomy) width="calc(13rem - clamp(0px, (1280px - 100vw) * 1000, 13rem))" overflow="hidden" flex-shrink=0 margin-left="calc(56px - clamp(0px, (1280px - 100vw) * 1000, 56px))" padding="calc(4px - clamp(0px, (1280px - 100vw) * 1000, 4px)) 0 0 calc(8px - clamp(0px, (1280px - 100vw) * 1000, 8px))" position="sticky" top=24 align-self="flex-start" testId="toc"
-      column gap=28
-        column gap=10
-          RailLink(href=page.editUrl, icon="symbol:pencil", label="Edit page")
-          RailLink(href=page.markdownPath, icon="symbol:document", label="View as Markdown")
+      column gap=24
+        Helpful(href=page.feedbackUrl, voted=voted, vote=vote, place="")
         if page.toc.length > 0
           column gap=8 border-left="1px solid var(--color-border-secondary)" padding-left=12
             text "On this page" class=Label
@@ -77,29 +99,3 @@ component Rail
               link href=`${page.path}${i.href}` margin-left=-13 padding-left=12 border-left=(i.href == `#${active}` ? "1px solid var(--color-text-default)" : "1px solid transparent") testId=(i.href == `#${active}` ? "toc-active" : `toc-${i.id}`)
                 row
                   text i.title font-size="var(--text-sm)" color=(i.href == `#${active}` ? "var(--color-text-default)" : "var(--color-text-secondary)")
-        column gap=10 testId="ai-actions"
-          text "AI" class=Label
-          button press=copyMarkdown appearance="none" display="flex" align-items="center" gap=8 align-self="flex-start" class=Hit testId="copy-markdown"
-            image (copied ? "symbol:checkmark" : "symbol:copy") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
-            text (copied ? "Copied" : "Copy markdown") class=Action
-          ProviderMenu(label="Open in Claude", icon="symbol:icon.claude", web=page.claudeUrl, webLabel="Claude", app=page.claudeCodeUrl, appLabel="Claude Code", appIcon="symbol:icon.claude", id="claude")
-          RailLink(href=page.cursorUrl, icon="symbol:icon.cursor", label="Open in Cursor")
-          ProviderMenu(label="Open in ChatGPT", icon="symbol:icon.openai", web=page.chatgptUrl, webLabel="ChatGPT", app=page.codexUrl, appLabel="Codex", appIcon="symbol:icon.codex", id="openai")
-
-// The rail's actions as one wrapping row under the page header, for windows too narrow for the rail
-// (below 1280px, where the rail's width clamps to 0).
-component PageActions
-  props
-    page: Page
-    roomy: bool
-    copyMarkdown: action
-    copied: bool
-  view
-    row flex-wrap="wrap" column-gap=16 row-gap=8 overflow="hidden" inert=roomy max-height="clamp(0px, (1280px - 100vw) * 1000, 400px)" margin="clamp(0px, (1280px - 100vw) * 1000, 12px) -8px 0" padding="clamp(0px, (1280px - 100vw) * 1000, 4px) 8px" testId="page-actions"
-      RailLink(href=page.editUrl, icon="symbol:pencil", label="Edit page")
-      button press=copyMarkdown appearance="none" display="flex" align-items="center" gap=8 align-self="flex-start" class=Hit
-        image (copied ? "symbol:checkmark" : "symbol:copy") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
-        text (copied ? "Copied" : "Copy markdown") class=Action
-      ProviderMenu(label="Claude", icon="symbol:icon.claude", web=page.claudeUrl, webLabel="Claude", app=page.claudeCodeUrl, appLabel="Claude Code", appIcon="symbol:icon.claude", id="claude-compact")
-      RailLink(href=page.cursorUrl, icon="symbol:icon.cursor", label="Cursor")
-      ProviderMenu(label="ChatGPT", icon="symbol:icon.openai", web=page.chatgptUrl, webLabel="ChatGPT", app=page.codexUrl, appLabel="Codex", appIcon="symbol:icon.codex", id="openai-compact")

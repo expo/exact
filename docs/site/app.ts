@@ -132,6 +132,7 @@ const sources: Sources = {
     if (!response.ok) throw new Error(`The page's Markdown answered ${response.status}.`);
     return { text: await response.text() };
   },
+  pageAddress: async ([path]): Promise<Result<'pageAddress'>> => ({ url: new URL(path, import.meta.url).href }),
 };
 
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);

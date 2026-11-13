@@ -132,6 +132,9 @@ shape Moved
 shape Markdown
   text: string
 
+shape Address
+  url: string
+
 shape Viewport
   width: number
 
