@@ -78,6 +78,13 @@ test "a page has its section, a rule under the header, previous and next, and th
   expect tree has "page-next"
   expect tree has "updated"
 
+test "previous and next follow the sidebar, within its tab"
+  size 1440x900
+  at "/agents"
+  expect tree missing "page-next"
+  tap "page-previous"
+  expect tree has "h-a-deep-link"
+
 test "the rail has Edit page, the AI actions, and Copy markdown copies the page"
   size 1440x900
   at "/recipes/website"
