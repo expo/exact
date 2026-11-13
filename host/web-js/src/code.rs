@@ -27,6 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// What names a body may read, from where it is compiled.
 #[derive(Clone, Default)]
 pub struct Scope {
+    /// JavaScript label, evaluated only in the trap catch; whether it poisons a tree update.
+    pub evaluation: Option<(String, bool)>,
     /// JavaScript getters for the enclosing region frames, innermost last:
     /// (item, index, bound).
     pub frames: Vec<Frame>,
@@ -162,6 +164,7 @@ pub fn function(
     let ins: Vec<Instruction> = instructions(code)
         .collect::<Result<_, _>>()
         .map_err(|t| format!("malformed code: {t:?}"))?;
+    let before = uses.metered;
     let mut t = Translator {
         plan,
         scope,
@@ -183,9 +186,11 @@ pub fn function(
             Body::Expr(e) => format!("return {e};"),
             Body::Stmts => String::new(),
         };
-        return Ok(format!("{head}=>{{let $s=0;{}{out}{ret}}}", t.decls()));
+        let f = format!("{head}=>{{let $s=0;{}{out}{ret}}}", t.decls());
+        return Ok(evaluated(f, scope, before, uses));
     }
-    Ok(wrap(&head, &t, body))
+    let f = wrap(&head, &t, body);
+    Ok(evaluated(f, scope, before, uses))
 }
 
 /// `code` as one JavaScript expression evaluated where it is written: the
@@ -198,10 +203,42 @@ pub fn expression(
     uses: &mut Uses,
 ) -> Result<String, String> {
     let f = function(plan, code, scope, 0, uses)?;
-    Ok(match f.strip_prefix("()=>") {
+    Ok(called_expression(f))
+}
+
+pub fn called_expression(f: String) -> String {
+    match f.strip_prefix("()=>") {
         Some(e) if !e.starts_with('{') => e.to_string(),
         _ => format!("({f})()"),
-    })
+    }
+}
+
+pub fn evaluated(f: String, scope: &Scope, before: usize, uses: &mut Uses) -> String {
+    let Some((label, instance)) = &scope.evaluation else {
+        return f;
+    };
+    if uses.metered == before {
+        return f;
+    }
+    let guard = uses.budget("$E");
+    let (head, body) = f.split_once("=>").expect("function");
+    let body = if body.starts_with('{') {
+        body[1..body.len() - 1].to_string()
+    } else {
+        format!("return {body};")
+    };
+    format!(
+        "{head}=>{{try{{{body}}}catch($e){{{guard}($e,{label},{});}}}}",
+        *instance as u8
+    )
+}
+
+/// A scope whose label is only constructed if this evaluation traps.
+pub fn evaluation(scope: &Scope, label: String, instance: bool) -> Scope {
+    Scope {
+        evaluation: Some((serde_json::to_string(&label).unwrap(), instance)),
+        ..scope.clone()
+    }
 }
 
 fn wrap(head: &str, t: &Translator<'_>, body: Body) -> String {

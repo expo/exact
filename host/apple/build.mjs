@@ -739,9 +739,6 @@ async function main(args, lockHeld = false) {
     // made SwiftPM compile the whole host again whenever the minimum differed from the last build's (~33 s on a Linux
     // builder, expo/exact-build#176), so every product links with every app's arguments.
     else if (compiled.ios !== targets.ios) recordedMinimum = targets.ios;
-    // A development device archive ships no dSYM. Its debug map names the object files it was linked from, under the
-    // app's build directory, whose path holds the app's id; relative to that directory, the executable names no app.
-    if (device && args.includes('--development')) executableLink.push('-Xlinker', '-oso_prefix', '-Xlinker', `${appleArtifacts(app, { destination }).owner}/`);
   } else {
     // The same `--sysroot` on macOS: clang reads no SDK version from it, so the link recorded
     // the deployment target as the SDK (`sdk 14.0`), and AppKit, which keys its macOS 26 design
@@ -1241,6 +1238,11 @@ async function main(args, lockHeld = false) {
       const executable = p === 'ExactClip' ? clipBin : resolve(binDir, p === product ? paths.executable : p);
       copyFileSync(resolve(swiftBinDir, p), executable);
       if (recordedMinimum) recordMinimumOS(executable, recordedMinimum);
+      // A development device archive ships no dSYM, and its debug map (the stabs naming each object it was linked
+      // from) holds paths under the app's build directory, which name the app. They go after the link: a per-app
+      // -oso_prefix in the link made SwiftPM compile the scratch again for every app (expo/exact-build#177).
+      const debugMap = device && args.includes('--development') ? read('strip', ['-S', executable]) : null;
+      if (debugMap && debugMap.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${debugMap.stderr || debugMap.error?.message || debugMap.status}`);
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.

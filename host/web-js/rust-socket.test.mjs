@@ -33,7 +33,7 @@ function standIn(url) {
   const reply = fill => {
     const bytes = [], u8 = v => bytes.push(v), u16 = v => bytes.push(v & 255, v >>> 8 & 255), u32 = v => bytes.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255);
     const string = v => { const e = new TextEncoder().encode(v); u32(e.length); bytes.push(...e); };
-    u32(10); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(11); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   // A call (`call_request`) as a Rust source receives it.
   const decode = at => {
@@ -57,7 +57,7 @@ function standIn(url) {
     return { code, source, outcome, kind, own, open };
   };
   const exports = {
-    memory, exact_logic_abi: () => 10, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 11, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
@@ -97,7 +97,7 @@ function standIn(url) {
       } else if (call.outcome?.event !== undefined) result = { value: Array.isArray(call.outcome.data) ? `bytes ${call.outcome.data.join(',')}` : call.outcome.data };
       else result = { value: 'ended' };
       reply(w => {
-        w.u8(2); w.u8(0); w.u32(0);
+        w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u32(0);
         w.u32(ops.length);
         for (const [id, op] of ops) {
           w.u32(id); w.u8(op[0]);

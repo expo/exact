@@ -302,6 +302,23 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     fn take_logs(&mut self) -> Vec<String> {
         self.module.take_logs()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.module
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.module.module_identity(source)
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.module.take_aborted()
     }

@@ -741,8 +741,8 @@ export function refreshTypes(dir, binary = resolve(ROOT, 'target/debug', process
   if (!quiet) console.error(`app.contract.d.ts: ${before === null ? 'written' : 'regenerated, since a source\'s signature changed'} (the types app.ts imports)`);
   return true;
 }
-/** `exact new`: check the machine first, since a missing Cargo fails the
- * scaffold itself; then write the app and say what its builds will still need. */
+/** `exact new`: check the machine first, since a game's or a Snapback app's scaffold needs Cargo (an app's does
+ * not); then write it and say what its builds will still need. */
 function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, snapback = null, title, id} = {}) {
   if (update) {
     console.log(createApp(path, {update, without, with: platforms}));
@@ -758,7 +758,10 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
   if (game && !path) throw new Error('Usage: exact new <path> --game [--assets] (the last part names the game: lowercase-hyphenated, no host suffix)');
   // The web's rows alone for an app (LLP 1153 D1.6); a native platform's are checked by the verb that first needs it.
   const report = sdkReport(process.env, game ? {} : { only: 'web' });
-  if (report.some(row => row.name === 'rustup' && !row.ok)) {
+  // An app compiles no Rust to be made, so a machine without it (an agent's sandbox for a build service) can make one;
+  // a game resolves its crates now, and a Snapback app wires a device build.
+  const noRust = report.some(row => row.name === 'rustup' && !row.ok);
+  if (noRust && (game || snapback)) {
     printReport(report, {onlyMissing: true});
     throw new Error('exact new needs Rust (rustup) to build exact2\'s own tools, the compiler among them; install it, then run exact new again');
   }
@@ -767,7 +770,7 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
   // A game's cache note is what to do next, so it comes after the compiler's line and the table.
   const note = created.indexOf(`\n${UNCACHED_CRATES}`);
   console.log(note < 0 ? created : created.slice(0, note));
-  prebuildCompiler();
+  if (!noRust) prebuildCompiler();
   if (report.some(row => !row.ok)) {
     // Builders read a bare "still needs" list as the reason a later command failed (bench diaries,
     // 2026-10-07/08): say when nothing on it blocks the app.
@@ -778,6 +781,7 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
     printReport(report, {onlyMissing: true});
   }
   if (note >= 0) console.log(created.slice(note));
+  if (noRust) console.log('\nWithout Rust, this machine cannot check or build the app locally: `bun exact.mjs contract build app.contract` and every local build or dev loop compile exact2\'s tools first. A build service builds it as it is; to check here, install rustup (https://rustup.rs).');
 }
 
 const USAGE = `exact — run an Exact app from the command line (macOS)

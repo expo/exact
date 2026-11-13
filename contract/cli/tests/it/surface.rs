@@ -337,9 +337,25 @@ fn a_stale_surface_declaration_warns_and_hides_nothing() {
         "under --json the stale declaration's findings are the array's warnings"
     );
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+    // Printed as the editor's problem matcher reads a warning (editors/vscode,
+    // `$exact-contract`): `file:line:col warning [id] message`.
     let out = run(&["build", path.to_str().unwrap()]);
-    assert!(String::from_utf8_lossy(&out.stderr)
-        .contains("warning: .shells/surfaces.json is older than"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stale = format!(
+        "{}:1:1 warning [surface-declaration-stale] .shells/surfaces.json is older than this file",
+        lib.canonicalize().unwrap().display()
+    );
+    assert!(stderr.lines().any(|l| l.starts_with(&stale)), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains(" warning [analyze-surface-arguments] ")),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.lines().any(|l| l.starts_with("warning:")),
+        "{stderr}"
+    );
     // Without the type error the build passes, and `contract rust` writes its shapes either way.
     std::fs::write(
         &path,
@@ -363,7 +379,7 @@ fn a_stale_surface_declaration_warns_and_hides_nothing() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(String::from_utf8_lossy(&out.stderr).contains("warning:"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains(" warning [analyze-surface-arguments] "));
     let out = run(&["build", path.to_str().unwrap(), "--json"]);
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("analyze-surface-arguments"),

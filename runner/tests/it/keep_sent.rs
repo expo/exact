@@ -748,3 +748,61 @@ mod tool_authority {
         }
     }
 }
+
+fn retirement_before_reply(during_commit: bool) {
+    #[derive(Default)]
+    struct Retires(exact_runner::ModuleIdentity, bool);
+    impl DataSource for Retires {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
+            if args[0] == Value::Number(1.) {
+                return Ok(Answer::Now(Value::str("new")));
+            }
+            let mut request = Request::post_json("https://example.test/write", "{}");
+            request.fetch = Some(7);
+            Ok(Answer::Later(request))
+        }
+        fn keep_sent(&mut self, _: &Store, calls: &[InFlight<'_>], _: bool) -> Vec<Option<u64>> {
+            if self.1 && !calls.is_empty() {
+                self.0.retire("heap exhausted".into());
+            }
+            calls.iter().map(|call| call.fetch).collect()
+        }
+        fn module_identity(&self, _: &str) -> Option<exact_runner::ModuleIdentity> {
+            Some(self.0.clone())
+        }
+        fn module_landed(&mut self, _: &mut Store, _: u64, _: Outcome) -> Result<(), DataError> {
+            panic!("a retired executor must never receive the reply");
+        }
+    }
+    let plan = contract::compile("component App\n  state n = 0\n  resource row = row(n) as shape string\n  action replace\n    n = 1\n  view\n    text row\n").unwrap();
+    let identity = exact_runner::ModuleIdentity::default();
+    let mut r = Runner::boot(
+        plan,
+        Retires(identity.clone(), during_commit),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let old = r.take_requests().remove(0);
+    r.act("replace", vec![]).unwrap();
+    if !during_commit {
+        identity.retire("heap exhausted".into());
+    }
+    r.fulfill(old.ticket, ok()).unwrap();
+    assert!(exact_runner::agent::logs(&r, 0).contains("executor retired: heap exhausted"));
+    assert!(r.pending().is_empty());
+}
+
+#[test]
+fn retirement_during_keep_sent_is_heard_before_an_immediate_reply() {
+    retirement_before_reply(true);
+}
+
+#[test]
+fn retirement_after_keep_sent_is_heard_before_an_immediate_reply() {
+    retirement_before_reply(false);
+}

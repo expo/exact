@@ -117,6 +117,7 @@ impl Module {
         if adopted.ok().as_deref() != Some("adopted") {
             return None;
         }
+        self.work.keep_ticket(ticket);
         let parked = &mut self.parked[at].1;
         parked.ticket = TIMER;
         parked.effects = false;

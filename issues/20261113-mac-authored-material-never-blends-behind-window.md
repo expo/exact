@@ -39,3 +39,33 @@ better than a new knob, per LLP 1115's "say less". A behind-window material
 needs the window's background under it to be clear, which the page's
 `background-color` would cover; the fix has to state what the root paints
 there.
+
+## Verification
+
+`MaterialTableTests` checks an authored sidebar under a painted ancestor,
+including changes to other materials and back. It uses behind-window blending
+and preserves the ancestor's paint. `VisibilityMacTests` checks that authored
+fills and content remain above materials. Caltrain's Mac host also ran a
+Contract fixture with a sidebar beside an in-window material over a red page.
+
+Desktop pixels could not be qualified: the window server supplied no picture
+of the fixture window, reporting an asleep display or locked screen. The
+existing `SheetSurfaceMacTests.testAuthoredGroundMatchesAnAppKitSheetInDarkMode`
+likewise failed reading its standalone AppKit reference picture before testing
+Exact's material. The known-failure tool reports that failure as unknown on
+origin/main. No window background or ancestor fill was cleared.
+
+
+## Capture still owed
+
+A WindowServer capture was retried with `/usr/sbin/screencapture -x -o -l`
+on an AppKit `.sidebar` / `.behindWindow` reference over a solid blue window,
+with red content beside the material. The reference was visible but could not
+become key. `screencapture` exited 1 with “could not create image from window”.
+No desktop-pixel comparison was possible.
+
+The eleven `MaterialTableTests` and `VisibilityMacTests` pass: the blending
+mode is built and authored fill and content remain above the material. The
+issue remains open until an unlocked-display capture compares the authored
+sidebar over a painted ancestor with the AppKit reference and confirms both
+the backdrop and the authored paint above it.

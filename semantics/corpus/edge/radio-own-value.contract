@@ -1,0 +1,29 @@
+// A `type` step on a radio: a radio reports its own value as it becomes
+// checked, its `value` attribute or "on" without one. The runner delivers
+// that text and refuses any other.
+component App
+  state color = "red"
+  state size = ""
+  action pick(value: string)
+    color = value
+  action pickSize(value: string)
+    size = value
+  view
+    column
+      input type="radio" name="color" value="red" checked=color == "red" change=pick testId="red" aria-label="Red"
+      input type="radio" name="color" value="green" checked=color == "green" change=pick testId="green" aria-label="Green"
+      input type="radio" name="size" checked=size == "on" change=pickSize testId="large" aria-label="Large"
+
+test "its own value"
+  type "green" "green"
+  expect state color == "green"
+  type "red" "red"
+  expect state color == "red"
+
+test "on without a value"
+  type "large" "on"
+  expect state size == "on"
+
+test "another value"
+  type "green" "red"
+  expect state color == "red"

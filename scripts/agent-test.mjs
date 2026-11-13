@@ -768,7 +768,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const now = await s.state().catch((e) => { throw new Error(`reload: could not read the fault table to carry: ${e.message}`); });
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
-      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; resetLogs(s); s.notes = notes; return; }
+      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); s.notes = notes; return; }
       await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port }); s.notes = notes;
       for (const [name, value] of Object.entries(media)) {
         const r = await s.prefer({ [name]: value });
@@ -1170,7 +1170,8 @@ export async function reloadWeb(s) {
   }
   const now=await s.state();
   await s.carrier.reset({keep:true, failFetch: now.faults ? faultSpecOf(now.faults) : undefined});
-  s.now=0; resetLogs(s);
+  // The carrier released the contact; the new document has none.
+  s.now=0; s.contact=null; resetLogs(s);
   return {reloaded:true};
 }
 

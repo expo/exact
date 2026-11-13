@@ -115,11 +115,12 @@ internal class Requests(private val activity: ExactActivity) {
                     // The surface, then its message's JSON.
                     SURFACE_HAPTIC -> (haptics ?: SurfaceHaptics(activity, paused).also { haptics = it }).told(words[body], string(words, body + 1).first)
                     SOUND -> sounds(string(words, body).first)
+                    FILES -> files(id, words, body)
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
                 Log.w(TAG, "request $id kind $kind: $e")
-                if (kind == SHARE && sharing.remove(id)) Exact.answer(id, e.message ?: e.javaClass.simpleName)
+                if (kind == FILES || (kind == SHARE && sharing.remove(id))) Exact.answer(id, e.message ?: e.javaClass.simpleName)
             }
         }
     }
@@ -171,6 +172,16 @@ internal class Requests(private val activity: ExactActivity) {
             Log.e(TAG, "picker $kind: $e")
             answer(null)
         }
+    }
+
+    private fun files(id: Int, words: IntArray, body: Int) {
+        var at = body + 3
+        val accept = List(words[body + 2]) {
+            val (type, next) = string(words, at)
+            at = next
+            type
+        }
+        FilePicker.show(activity, accept, words[body + 1] != 0) { Exact.answer(id, it) }
     }
 
     /** A link that leaves the app: an `http` or `https` URL in the browser (or the app that claims it), `mailto:` in
@@ -273,7 +284,7 @@ internal class Requests(private val activity: ExactActivity) {
     }
 
     companion object {
-        /** No activity can launch a browser, but process-owned waits still receive their cleanup. */
+        /** No activity can open UI, but process-owned waits still receive their cleanup. */
         fun detached(words: IntArray) {
             var i = 0
             while (i + 3 <= words.size) {
@@ -281,6 +292,7 @@ internal class Requests(private val activity: ExactActivity) {
                 i = body + words[i + 2]
                 if (i > words.size) return
                 when (kind) {
+                    FILES -> Exact.answer(id, "file picker: activity unavailable")
                     AUTH -> Exact.answer(id, "cancelled")
                     AUTH_END -> Auth.end(words[body])
                 }
@@ -309,7 +321,8 @@ internal class Requests(private val activity: ExactActivity) {
         const val SURFACE_HAPTIC = 15
         const val SOUND = 16
         const val AUTH = 17
-        const val AUTH_END = 18
+        const val AUTH_END = 19
+        const val FILES = 18
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         private const val DISMISSED_MS = 500L
     }

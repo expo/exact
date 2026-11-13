@@ -43,7 +43,8 @@ impl<G: Game> Sim<G> {
             && self.asset_sprite_names.is_empty();
         let delay = self.settle_delay.get();
         let pending = self.world.published_pending.get();
-        let messages = self.take_messages();
+        // Kept as the world holds them: `take_messages` marks them for the host.
+        let messages = std::mem::take(&mut *self.world.messages.borrow_mut());
         // These are driver outputs/ownership, not dependencies of Game::tick.
         // Keep them outside the rebuild just like advance_with's callback.
         if mode == Paranoid::FreshGame {

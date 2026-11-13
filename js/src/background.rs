@@ -152,6 +152,9 @@ impl Module {
     /// are, within `bound`; what is left then is dropped and said. An
     /// operation the store already has completes on disk regardless.
     pub(crate) fn finish_background(&mut self, bound: std::time::Duration) {
+        if self.retire_oom().is_some() {
+            return;
+        }
         let deadline = std::time::Instant::now() + bound;
         self.read_background();
         self.host.between_answers = true;
@@ -162,6 +165,9 @@ impl Module {
         }
         self.read_background();
         loop {
+            if self.retire_oom().is_some() {
+                break;
+            }
             let left = self.background.state.queued + self.background.state.in_flight;
             if left == 0 {
                 break;

@@ -12,7 +12,22 @@ impl Em<'_> {
         let plan = self.plan;
         let row = &plan.regions[r as usize];
         let subject = self
-            .f(row.subject, scope)
+            .f(
+                row.subject,
+                &code::evaluation(
+                    scope,
+                    format!(
+                        "site {} {} subject",
+                        region_site(plan, r),
+                        match row.kind {
+                            RegionKind::Each => "each",
+                            RegionKind::When => "when",
+                            RegionKind::Match => "match",
+                        }
+                    ),
+                    true,
+                ),
+            )
             .map_err(|x| format!("region {r}: {x}"))?;
         let subject = self.status_subject(r, parent, subject);
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
@@ -106,8 +121,21 @@ impl Em<'_> {
         for &k in self.answers.slots(arm) {
             scope.row_slots.insert(k);
             let slot = &plan.slots[k];
-            let init = code::expression(plan, plan.code(slot.init), scope, &mut self.uses)
-                .map_err(|x| format!("child state {}: {x}", plan.str(slot.name)))?;
+            let init = code::expression(
+                plan,
+                plan.code(slot.init),
+                &code::evaluation(
+                    scope,
+                    format!(
+                        "site {} state {:?} initializer",
+                        region_site(plan, plan.arms[arm as usize].region.0),
+                        plan.str(slot.name)
+                    ),
+                    true,
+                ),
+                &mut self.uses,
+            )
+            .map_err(|x| format!("child state {}: {x}", plan.str(slot.name)))?;
             // Typed as a root slot is: its initializer and every write
             // conform, or the runner refuses (SlotType).
             let ty = serde_json::to_string(&type_code(plan, slot.ty)).unwrap();
@@ -139,7 +167,22 @@ impl Em<'_> {
         let plan = self.plan;
         let row = &plan.regions[r as usize];
         let subject = self
-            .f(row.subject, scope)
+            .f(
+                row.subject,
+                &code::evaluation(
+                    scope,
+                    format!(
+                        "site {} {} subject",
+                        region_site(plan, r),
+                        match row.kind {
+                            RegionKind::Each => "each",
+                            RegionKind::When => "when",
+                            RegionKind::Match => "match",
+                        }
+                    ),
+                    true,
+                ),
+            )
             .map_err(|x| format!("region {r}: {x}"))?;
         let subject = self.status_subject(r, parent, subject);
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
@@ -150,8 +193,29 @@ impl Em<'_> {
             index: Some(index.clone()),
             bound: None,
         });
-        let key = code::expression(plan, plan.code(row.key), &inner, &mut self.uses)
-            .map_err(|x| format!("region {r} key: {x}"))?;
+        let before = self.uses.metered;
+        let key = code::function(
+            plan,
+            plan.code(row.key),
+            &Scope {
+                evaluation: None,
+                ..inner.clone()
+            },
+            0,
+            &mut self.uses,
+        )
+        .map_err(|x| format!("region {r} key: {x}"))?;
+        let pure = crate::reads::pure_key(&key, &item, &index);
+        let key = code::called_expression(code::evaluated(
+            key,
+            &code::evaluation(
+                &inner,
+                format!("site {} each key", region_site(plan, r)),
+                true,
+            ),
+            before,
+            &mut self.uses,
+        ));
         // The row's own slots, started from their initializers when
         // the row is created and kept with its key (LLP 1017 P4c).
         let rows_decl = self.owned(arms[0], &format!("$r{r}"), &mut inner, None)?;
@@ -169,11 +233,7 @@ impl Em<'_> {
             }
             None => {
                 let each = self.uses.rt("each");
-                let pure = if crate::reads::pure_key(&key, &item, &index) {
-                    ",1"
-                } else {
-                    ""
-                };
+                let pure = if pure { ",1" } else { "" };
                 // A development build names the region, for inspect mode's
                 // instance paths (rt.js `Eaches`, LLP 1122 T2b).
                 let pure = match (self.dev_reload, pure) {
@@ -201,8 +261,17 @@ pub(super) fn root_slot(
     body: &mut String,
 ) -> Result<(), String> {
     let r = &plan.slots[i];
-    let init = code::expression(plan, plan.code(r.init), top, uses)
-        .map_err(|e| format!("slot {}: {e}", plan.str(r.name)))?;
+    let init = code::expression(
+        plan,
+        plan.code(r.init),
+        &code::evaluation(
+            top,
+            format!("state {:?} initializer", plan.str(r.name)),
+            false,
+        ),
+        uses,
+    )
+    .map_err(|e| format!("slot {}: {e}", plan.str(r.name)))?;
     let ty = serde_json::to_string(&type_code(plan, r.ty)).unwrap();
     // A persisted slot starts from the store's value where it fits, and is
     // kept after each commit (LLP 1116 D5, persist.js).
@@ -236,5 +305,18 @@ fn string_name(plan: &Plan, slot: &exact_plan::SlotsRow) -> String {
         format!(",{}", serde_json::to_string(plan.str(slot.name)).unwrap())
     } else {
         String::new()
+    }
+}
+
+fn region_site(plan: &Plan, mut region: u32) -> u32 {
+    loop {
+        let row = &plan.regions[region as usize];
+        if let Some(parent) = row.parent {
+            return parent.0;
+        }
+        let Some(arm) = row.arm else {
+            return 0;
+        };
+        region = plan.arms[arm.0 as usize].region.0;
     }
 }

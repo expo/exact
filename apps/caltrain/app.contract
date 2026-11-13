@@ -96,8 +96,10 @@ component Caltrain
 
   state trainDelay = 0
   // The start's reply names the activity until the source lists it; after an
-  // end it names nothing, so a later tap sends no id it no longer owns.
+  // end it names nothing, so a later tap sends no id it no longer owns. While
+  // a start is out nothing names one, and Follow, Delay and End wait for it.
   state following = false
+  mutation started as shape ActivityHandle
   mutation activitySend as shape ActivityHandle
   mutation alertSend as shape ActivityHandle
   state alertStarted = false
@@ -107,28 +109,35 @@ component Caltrain
   resource clock = exactTime() as shape Clock
   derive realOffset = clock.epochAtZero - seededEpoch
   derive tracked = first(activities.activities.filter(a => a.kind == "departure" and (a.activityState == "active" or a.activityState == "stale")))
-  derive trackedId = match tracked { case some(a) => a.id, case none => following ? match activitySend { case some(a) => a.id, case none => "" } : "" }
+  derive trackedId = match tracked { case some(a) => a.id, case none => following and not pending(started) ? match started { case some(a) => a.id, case none => "" } : "" }
+  derive canFollow = trackedId == "" and not pending(started)
   derive departureState = DepartureState(station=station.name, headsign="San Francisco", train=101, at=seededEpoch + 600000 + trainDelay + realOffset, status=(trainDelay > 0 ? "Delayed by 10 minutes" : "On time"))
   action startTracking
-    send activitySend = startActivity("departure", departureState)
-    following = true
+    if canFollow
+      send started = startActivity("departure", departureState)
+      following = true
   action delayTrain
-    send activitySend = updateActivity(trackedId, DepartureState(departureState, at=departureState.at + 600000, status="Delayed by 10 minutes"))
-    trainDelay = trainDelay + 600000
+    if trackedId != ""
+      send activitySend = updateActivity(trackedId, DepartureState(departureState, at=departureState.at + 600000, status="Delayed by 10 minutes"))
+      trainDelay = trainDelay + 600000
   action endTracking
-    send activitySend = endActivity(trackedId, DepartureState(departureState, status="Arrived"), "immediate")
-    trainDelay = 0
-    following = false
+    if trackedId != ""
+      send activitySend = endActivity(trackedId, DepartureState(departureState, status="Arrived"), "immediate")
+      trainDelay = 0
+      following = false
 
   derive trackedAlert = first(activities.activities.filter(a => a.kind == "service-alert" and (a.activityState == "active" or a.activityState == "stale")))
-  derive alertId = match trackedAlert { case some(a) => a.id, case none => alertStarted ? match alertSend { case some(a) => a.id, case none => "" } : "" }
+  derive alertId = match trackedAlert { case some(a) => a.id, case none => alertStarted and not pending(alertSend) ? match alertSend { case some(a) => a.id, case none => "" } : "" }
   derive alertFollowing = alertId != ""
+  derive canStartAlert = not alertFollowing and not pending(alertSend)
   action startAlert
-    send alertSend = startActivity("service-alert", ServiceAlertState(title="Delay", message="Northbound trains delayed by 10 minutes.", updatedAt=nowMs + realOffset))
-    alertStarted = true
+    if canStartAlert
+      send alertSend = startActivity("service-alert", ServiceAlertState(title="Delay", message="Northbound trains delayed by 10 minutes.", updatedAt=nowMs + realOffset))
+      alertStarted = true
   action endAlert
-    send alertSend = endActivity(alertId, ServiceAlertState(title="Service restored", message="Trains are running normally.", updatedAt=nowMs + realOffset), "immediate")
-    alertStarted = false
+    if alertId != ""
+      send alertSend = endActivity(alertId, ServiceAlertState(title="Service restored", message="Trains are running normally.", updatedAt=nowMs + realOffset), "immediate")
+      alertStarted = false
 
   resource location = defaultLocation() as shape Location
   derive selectedId = match stationId { case some(id) => id, case none => "mv" }
@@ -224,7 +233,7 @@ component Caltrain
             // The sky or the plain page around the same content, written once:
             // `Sky` declares a slot and the content is what is indented under it.
             Sky(on=skyOn, material=material, selectedId=selectedId, dim=tv)
-              Content(activities=activities, startTracking=startTracking, delayTrain=delayTrain, endTracking=endTracking, startAlert=startAlert, endAlert=endAlert, alertFollowing=alertFollowing, tv=tv, station=station, selectedId=selectedId, screen=e.name, material=material, deck=deck, focus=focus, nowMs=nowMs, query=query, sky=skyOn, hoverId=hoverId, hoverOn=hoverOn, searchFocused=searchFocused, lastKey=lastKey, northBoard=northBoard, southBoard=southBoard, nearby=nearby, allStations=allStations, matches=matches, delivery=delivery, openStations=openStations, openDeck=openDeck, setScheme=chooseScheme, setMaterial=setMaterial, toggleDeck=toggleDeck, toggleSky=toggleSky, focusDeparture=focusDeparture, selectStation=selectStation, setQuery=setQuery, goBack=goBack, hoverStation=hoverStation, focusSearch=focusSearch, blurSearch=blurSearch, searchKey=searchKey, activateUpdate=activateUpdate, reloadApp=reloadApp)
+              Content(activities=activities, startTracking=startTracking, delayTrain=delayTrain, endTracking=endTracking, startAlert=startAlert, endAlert=endAlert, canFollow=canFollow, tracking=(trackedId != ""), alertFollowing=alertFollowing, canStartAlert=canStartAlert, tv=tv, station=station, selectedId=selectedId, screen=e.name, material=material, deck=deck, focus=focus, nowMs=nowMs, query=query, sky=skyOn, hoverId=hoverId, hoverOn=hoverOn, searchFocused=searchFocused, lastKey=lastKey, northBoard=northBoard, southBoard=southBoard, nearby=nearby, allStations=allStations, matches=matches, delivery=delivery, openStations=openStations, openDeck=openDeck, setScheme=chooseScheme, setMaterial=setMaterial, toggleDeck=toggleDeck, toggleSky=toggleSky, focusDeparture=focusDeparture, selectStation=selectStation, setQuery=setQuery, goBack=goBack, hoverStation=hoverStation, focusSearch=focusSearch, blurSearch=blurSearch, searchKey=searchKey, activateUpdate=activateUpdate, reloadApp=reloadApp)
       // @ref LLP 1048.003 D1 — a link preview's summary; the title stays the app's.
       head description="The next Caltrain departures, north and south, from the station nearest you."
 
@@ -258,7 +267,10 @@ component Content
     endTracking: action
     startAlert: action
     endAlert: action
+    canFollow: bool
+    tracking: bool
     alertFollowing: bool
+    canStartAlert: bool
     tv: bool
     station: Station
     selectedId: string
@@ -329,17 +341,19 @@ component Content
                   text "Web deck" font-size="0.75em" font-weight=600
               if activities.linked
                 column gap=6 align-items="flex-end"
-                  button press=startTracking testId="start-activity"
-                    text "Follow train"
-                  button press=delayTrain testId="delay-train"
-                    text "Delay train"
-                  button press=endTracking testId="end-activity"
-                    text "End activity"
+                  if canFollow
+                    button press=startTracking testId="start-activity"
+                      text "Follow train"
+                  if tracking
+                    button press=delayTrain testId="delay-train"
+                      text "Delay train"
+                    button press=endTracking testId="end-activity"
+                      text "End activity"
                   // The system-surface smoke starts both kinds through the app's controls.
                   if alertFollowing
                     button press=endAlert testId="end-alert"
                       text "End alert"
-                  else
+                  else if canStartAlert
                     button press=startAlert testId="start-alert"
                       text "Follow service alert"
               // The small buttons get room for a focus ring (a TV remote, Tab, VoiceOver);

@@ -232,6 +232,7 @@ export const pageFile = (name) => (path, grants) => (globalThis.exact[name] ? Pr
 // @ref LLP 1043.000 §3 D7/D8 — optional executor, absent from ordinary boots.
 host.textflow = null;
 host.flowLoading = null;
+host.flowFailed = false;
 host.flowContexts = [];
 host.flowDue = null;
 host.flowLanding = false;

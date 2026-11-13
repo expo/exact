@@ -268,6 +268,9 @@ void set_binding(jsi::Runtime&, jsi::Object&, const char*, uint32_t, const void*
 // replaced intrinsics, including methods changed before a later freeze.
 // Retained JavaScript bindings fail closed after detach; they never dereference
 // a destroyed adapter. Detach clears all JSI roots before the runtime is destroyed.
+// Native engine exceptions propagate unchanged. Hermes heap OOM requires
+// detaching/destroying this adapter and destroying its runtime immediately:
+// never report it to JS, drain jobs, collect or reuse the runtime.
 class Adapter {
 public:
   // `bytecode_version` is the owning engine's supported HBC version when it

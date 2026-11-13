@@ -158,6 +158,12 @@ export function tools(table) {
     if (wake) { const i = clock.timers.indexOf(wake); if (i >= 0) clock.timers.splice(i, 1); wake = null; }
     look();
     for (;;) {
+      // A waiting call's 5 s runs out whatever holds it: a wake or another call.
+      while (waiting.length && clock.now >= waiting[0].arrived + WAIT) {
+        const c = waiting.shift();
+        say(`tool ${c.name}: refused, busy (a wake or another call is running)`);
+        finish(c, "refused", "none", "busy", null, "a wake or another call is running");
+      }
       if (current?.dispatched != null) {
         if (clock.now >= current.dispatched + BOUND) { end("timeout", "uncertain"); continue; }
         if (owns()) return again();
@@ -165,16 +171,13 @@ export function tools(table) {
         continue;
       }
       if (!waiting.length) { clearTimeout(poll); poll = 0; drive(); return; }
-      if (wakeRunning()) {
-        if (clock.now >= waiting[0].arrived + WAIT) { current = waiting.shift(); refuse("busy", "a wake or another call is running"); continue; }
-        return again();
-      }
+      if (wakeRunning()) return again();
       current = waiting.shift();
       dispatch();
     }
   }
   function again() {
-    const due = current?.dispatched != null ? current.dispatched + BOUND : waiting[0].arrived + WAIT;
+    const due = Math.min(current?.dispatched != null ? current.dispatched + BOUND : Infinity, waiting.length ? waiting[0].arrived + WAIT : Infinity);
     wake = { due, once: true, data: true, i: order(), action: () => { wake = null; step(); return true; } };
     clock.timers.push(wake); drive();
     if (!poll) poll = setTimeout(() => { poll = 0; step(); }, 20);

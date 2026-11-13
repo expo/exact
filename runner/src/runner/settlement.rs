@@ -378,7 +378,11 @@ impl<D: DataSource> Runner<D> {
                             progress = true;
                         }
                         Err(Trap::Pending { .. }) => all = false,
-                        Err(t) => return Err(t.into()),
+                        Err(t) => {
+                            return Err(RunnerError::from(t).evaluated(|| {
+                                format!("derive {:?}", self.plan.str(self.plan.derives[i].name))
+                            }))
+                        }
                     }
                 }
                 for i in 0..self.resources.len() {
@@ -488,12 +492,12 @@ impl<D: DataSource> Runner<D> {
                                 ),
                             };
                             match self.elements(i, &env) {
-                                Ok(elements) => elements?,
-                                Err(Trap::Pending { .. }) => {
+                                Ok(elements) => elements,
+                                Err(RunnerError::Trap(Trap::Pending { .. })) => {
                                     all = false;
                                     continue;
                                 }
-                                Err(t) => return Err(t.into()),
+                                Err(error) => return Err(error),
                             }
                         };
                         let (order, gone, added) = self.join(i, elements);
@@ -579,7 +583,12 @@ impl<D: DataSource> Runner<D> {
                                     all = false;
                                     continue;
                                 }
-                                Err(t) => return Err(t.into()),
+                                Err(t) => {
+                                    return Err(RunnerError::from(t).evaluated(|| {
+                                        let name = self.plan.str(self.resource_row(i).name);
+                                        format!("resource {name:?} gate")
+                                    }))
+                                }
                             }
                         }
                     };
@@ -656,7 +665,7 @@ impl<D: DataSource> Runner<D> {
                         .filter(|_| self.member(i).is_none() && !waking)
                         .filter(|_| self.unchanged(&self.sites.deps().resource_args[i], &now))
                         .map(|s| s.resource_args[i].clone());
-                    for a in row.args.iter().filter(|_| kept_args.is_none()) {
+                    for (k, a) in row.args.iter().filter(|_| kept_args.is_none()).enumerate() {
                         let code = self.plan.arg(a).expr;
                         let result = {
                             let env = Env {
@@ -699,7 +708,15 @@ impl<D: DataSource> Runner<D> {
                                 pending = true;
                                 break;
                             }
-                            Err(t) => return Err(t.into()),
+                            Err(t) => {
+                                return Err(RunnerError::from(t).evaluated(|| {
+                                    format!(
+                                        "resource {:?} argument {}",
+                                        self.plan.str(row.name),
+                                        k + 1
+                                    )
+                                }))
+                            }
                         }
                     }
                     if pending {

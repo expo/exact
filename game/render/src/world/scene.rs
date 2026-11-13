@@ -640,7 +640,13 @@ impl Owner {
                 .copied()
                 .unwrap_or_default();
             let offset = offset_of(w, at);
-            for (list, value) in [(&mut self.chain, curr), (&mut self.offsets, offset)] {
+            // A snapped link starts at its `teleport_from` landing, as the
+            // transform buffer's does; an offset has no landing.
+            let origin = w.interpolation_origin(at);
+            for (list, value, origin) in [
+                (&mut self.chain, curr, origin),
+                (&mut self.offsets, offset, None),
+            ] {
                 if list.get(length).is_none_or(|h| h.entity != at) {
                     if let Some(found) = list[length..].iter().position(|h| h.entity == at) {
                         list.swap(length, length + found);
@@ -654,7 +660,7 @@ impl Owner {
                 }
                 h.curr = value;
                 if snap(w, at, parent_changed) {
-                    h.prev = value;
+                    h.prev = origin.unwrap_or(value);
                 }
             }
             length += 1;

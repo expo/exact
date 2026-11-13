@@ -80,7 +80,8 @@ component App
 const ROWS = ['title', 'off', 'box', 'leading', 'trailing', 'turning', 'wide', 'long', 'raster', 'raster-off', 'raster-bound', 'raster-rtl'];
 const RASTERS = ['raster', 'raster-off', 'raster-bound', 'raster-rtl'];
 
-// Each row's mark as painted: the page is shot with every face hidden, so the only ink in a row is its mark's (a
+// Each row's mark as painted: the page is shot with every face hidden and no row's wash (a menu focuses its first
+// row as it opens, which washes it), so the only ink in a row is its mark's (a
 // pixel nearer the mark's colour than the menu's ground, the check's antialiased edges included). `painted`: some ink with ground among it, no larger than the em square (a check, not a block); `before`: the
 // ink ends before the face's first box starts, in the row's direction; `centred`: its middle is within a pixel of the face's.
 async function marks(s, png) {
@@ -92,7 +93,7 @@ async function marks(s, png) {
       return { id, rtl, row: [r.x, r.y, r.width, r.height], face, middle, fs: parseFloat(getComputedStyle(b).fontSize), ink: rgba(ink), ground: rgba(getComputedStyle(b.closest('[popover]')).backgroundColor) };
     });
   })()`);
-  await s.carrier.evaluate(`(() => { const h = document.createElement('style'); h.id = 'hide-faces'; h.textContent = '#menu button > * { visibility: hidden !important; }'; document.head.append(h); })()`);
+  await s.carrier.evaluate(`(() => { const h = document.createElement('style'); h.id = 'hide-faces'; h.textContent = '#menu button > * { visibility: hidden !important; } #menu button { background-image: none !important; }'; document.head.append(h); })()`);
   await s.screenshot(png);
   await s.carrier.evaluate(`document.getElementById('hide-faces').remove()`);
   const { width, data } = decodePng(readFileSync(png));

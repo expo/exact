@@ -54,8 +54,9 @@ fn the_app_compiles_deterministically_and_bakes_its_first_frame() {
     // iframe fixture, @ref LLP 1020 M1); and `nav`, the routes table's
     // location (LLP 1038 D2);
     // and the activity's delay, whether one is followed, and the mutation
-    // replies, and whether a service alert is followed (LLP 1126.001 WP9, WP14).
-    assert_eq!(a.slots.len(), 21);
+    // replies (a departure's start, its updates and ends, and the service
+    // alert's), and whether a service alert is followed (LLP 1126.001 WP9, WP14).
+    assert_eq!(a.slots.len(), 22);
     // Seven data-crate resources, `delivery` — the runner's own
     // `exactDelivery` (LLP 1030 D7), read by the update banner — and
     // `viewport`, whose `pointer` says a TV, `exactActivities`, and
@@ -292,7 +293,7 @@ fn a_reload_keeps_its_place_and_re_requests_only_what_changed() {
         Some("San Francisco")
     );
     let carried = r.carry();
-    assert_eq!(carried.slots.len(), 21);
+    assert_eq!(carried.slots.len(), 22);
     assert_eq!(carried.now_ms, 30_000.0);
 
     // The edited plan: unbaked (no compiled data) and with a visible change.
@@ -444,6 +445,49 @@ fn an_explicit_activity_update_sends_the_changed_state() {
         "{payload}"
     );
     assert!(payload.contains("\"train-id\""), "{payload}");
+}
+
+/// Before the start's reply names the activity there is nothing to follow
+/// again, delay or end: a second Follow would start a second activity, and a
+/// delay sent with no id is refused while the screen's delay still grows.
+#[test]
+fn an_activity_being_started_takes_no_second_start_delay_or_end() {
+    let mut app = caltrain::boot(caltrain::build().unwrap(), Kernel::with_monospace()).unwrap();
+    app.link_activities().unwrap();
+    app.set_time(LAUNCHED, 0.0).unwrap();
+    app.act("startTracking", vec![]).unwrap();
+    let start = app.take_requests().remove(0);
+    app.act("startTracking", vec![]).unwrap();
+    app.act("delayTrain", vec![]).unwrap();
+    app.act("endTracking", vec![]).unwrap();
+    assert!(app.take_requests().is_empty());
+    assert_eq!(app.slot("trainDelay"), Some(&Value::Number(0.0)));
+    assert!(ids_with_prefix(&app, "start-activity").is_empty());
+    assert!(ids_with_prefix(&app, "delay-train").is_empty());
+    app.fulfill(
+        start.ticket,
+        exact_runner::Outcome::Response(exact_runner::Response {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"train-id"}"#.to_vec(),
+        }),
+    )
+    .unwrap();
+    assert!(ids_with_prefix(&app, "start-activity").is_empty());
+    assert_eq!(ids_with_prefix(&app, "delay-train"), ["delay-train"]);
+    app.act("endTracking", vec![]).unwrap();
+    app.take_requests();
+    // After an end, a new start does not address the ended activity.
+    app.act("startTracking", vec![]).unwrap();
+    assert_eq!(app.take_requests().len(), 1);
+    app.act("delayTrain", vec![]).unwrap();
+    assert!(app.take_requests().is_empty());
+
+    app.act("startAlert", vec![]).unwrap();
+    app.take_requests();
+    assert!(ids_with_prefix(&app, "start-alert").is_empty());
+    app.act("startAlert", vec![]).unwrap();
+    assert!(app.take_requests().is_empty());
 }
 
 #[test]

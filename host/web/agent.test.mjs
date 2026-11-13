@@ -1035,7 +1035,8 @@ test('initial flow loading cannot hold the first frame or module activation', as
   const boot = f.boot(null).then(() => { painted = true; });
   await checkpoint();
   expect(painted).toBe(true);
-  expect(f.events).toEqual(['replace', 'batch']);
+  // The ordinary ticker keeps the clock until a flow controller is ready (wasm/flow.js).
+  expect(f.events).toEqual(['replace', 'batch', 'ticker']);
   loading.reject(new Error('flow unavailable'));
   await checkpoint();
   expect(f.logs.lines.at(-1)).toContain('textflow module: Error: flow unavailable');

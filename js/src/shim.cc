@@ -5,11 +5,15 @@
 //
 // @ref LLP 1027 D3 (the executor) / D10 (what the module can use)
 #include <hermes/hermes.h>
+#ifdef EXACT_JS_OOM
+#include <hermes/Public/JSOutOfMemoryError.h>
+#endif
 #include <jsi/jsi.h>
 #include <ibex2_jsi.h>
 #include <jsi/instrumentation.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -91,6 +95,7 @@ struct State {
   // allocation then and what it held, all of it live.
   int64_t collected_at = 0;
   int64_t live = 0;
+  std::atomic<bool> oom{false};
   std::vector<std::pair<uint64_t, jsi::WeakObject>> keys{};
 };
 
@@ -273,6 +278,15 @@ int fail(char **out, const std::string &message, int code) {
   return code;
 }
 
+// Status 4 is terminal: the owner drops all roots and the runtime. No
+// cleanup call may execute JavaScript or collect after this status.
+int out_of_memory(State *state, char **out) {
+  state->oom = true;
+  if (out && *out) { std::free(*out); *out = nullptr; }
+  return fail(out, "held more than the " + std::to_string(state->capture_limit / (1 << 20)) +
+                  " MiB a data module's heap may hold", 4);
+}
+
 }  // namespace
 
 extern "C" {
@@ -292,7 +306,7 @@ void *exact_js_create(uint32_t max_heap_bytes, HostFn host, BytesFn bytes, void 
                       .build();
     auto rt = facebook::hermes::makeHermesRuntimeNoThrow(config);
     if (!rt) return nullptr;
-    auto state = std::make_unique<State>(State{std::move(rt), {}, host, bytes, ctx, nullptr,
+    auto state = std::unique_ptr<State>(new State{std::move(rt), {}, host, bytes, ctx, nullptr,
                                                grants, max_heap_bytes, 0, {}});
     install_console(state.get());
     state->rt->evaluateJavaScript(kept_bytecode(console, console_len), "console.hbc");
@@ -320,9 +334,14 @@ void *exact_js_create(uint32_t max_heap_bytes, HostFn host, BytesFn bytes, void 
 
 int exact_js_load(void *h, const uint8_t *data, size_t len, char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   try {
     state->rt->evaluateJavaScript(kept_bytecode(data, len), "app.hbc");
     return 0;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
@@ -333,6 +352,7 @@ int exact_js_load(void *h, const uint8_t *data, size_t len, char **out) {
 // Trusted initialization only: no application code or microtasks run here.
 int exact_js_install_storage(void *h, const uint8_t *sqlite, size_t sqlite_len, char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   auto &rt = *state->rt;
   try {
     auto factory = rt.evaluateJavaScript(kept_bytecode(sqlite, sqlite_len), "storage-sqlite.hbc")
@@ -348,6 +368,10 @@ int exact_js_install_storage(void *h, const uint8_t *sqlite, size_t sqlite_len, 
         return fail(out, "storage initialization could not remove its temporary global", 1);
     }
     return 0;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
@@ -359,6 +383,7 @@ int exact_js_install_storage(void *h, const uint8_t *sqlite, size_t sqlite_len, 
 // not. Application bytecode is evaluated only after this succeeds.
 int exact_js_harden(void *h, const uint8_t *harden, size_t harden_len, char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   try {
     state->adapter->capture_intrinsics();
     // Hermes' young generation is one heap segment that keeps every page it
@@ -376,6 +401,10 @@ int exact_js_harden(void *h, const uint8_t *harden, size_t harden_len, char **ou
     state->adapter->harden(script);
     collect_garbage(state, "hardened");
     return 0;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
@@ -386,9 +415,14 @@ int exact_js_harden(void *h, const uint8_t *harden, size_t harden_len, char **ou
 // Settle one native storage promise; the caller decides when to checkpoint.
 int exact_js_deliver_storage_one(void *h, bool *delivered, char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   try {
     *delivered = state->adapter && state->adapter->deliver_one();
     return 0;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
@@ -400,6 +434,7 @@ int exact_js_deliver_storage_one(void *h, bool *delivered, char **out) {
 // `toString`, `undefined` as the empty string (`out` set, status 0).
 int exact_js_string(void *h, const char *name, char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   jsi::Runtime &rt = *state->rt;
   try {
     jsi::Value exact = rt.global().getProperty(rt, "exact");
@@ -407,6 +442,10 @@ int exact_js_string(void *h, const char *name, char **out) {
     jsi::Value v = exact.getObject(rt).getProperty(rt, name);
     if (v.isUndefined() || v.isNull()) return fail(out, "", 0);
     return fail(out, v.toString(rt).utf8(rt), 0);
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
@@ -419,6 +458,7 @@ int exact_js_string(void *h, const char *name, char **out) {
 int exact_js_call(void *h, const char *name, const char *a, const char *b, const char *c,
                   char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   clear_captures(state);
   jsi::Runtime &rt = *state->rt;
   try {
@@ -450,6 +490,10 @@ int exact_js_call(void *h, const char *name, const char *a, const char *b, const
       collect_if_due(state);
     }
     return status;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     clear_captures(state);
     return fail(out, e.getMessage(), 1);
@@ -480,15 +524,21 @@ void exact_js_clear_captures(void *h) { clear_captures(static_cast<State *>(h));
 // check, which bytecode compiled with -emit-async-break-check has in every
 // loop and function. The caller keeps the runtime alive through this call.
 void exact_js_interrupt(void *h) {
-  static_cast<State *>(h)->rt->asyncTriggerTimeout();
+  auto *state = static_cast<State *>(h);
+  if (!state->oom) state->rt->asyncTriggerTimeout();
 }
 
 // Run every queued microtask: the continuations of resolved fetches.
 int exact_js_drain(void *h, char **out) {
   auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
   try {
     state->rt->drainMicrotasks();
     return 0;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
   } catch (const jsi::JSError &e) {
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
@@ -505,6 +555,8 @@ void exact_js_take_log(void *h, void *ctx,
   }
   state->log.clear();
 }
+
+bool exact_js_out_of_memory(void *h) { return static_cast<State *>(h)->oom; }
 
 void exact_js_free(char *p) { std::free(p); }
 

@@ -281,6 +281,31 @@ the plan, so this is not an original-source revision guarantee.
 and exits nonzero when formatting differs. Plain `fmt <file>` writes the result
 explicitly. Formatting never runs automatically on save.
 
+## Contract evaluation limits
+
+Each evaluation may take 65,536 list steps, build a string of 64 MiB of
+UTF-8, or build a value of 16,777,216 nodes, 64 MiB of string bytes and
+64 levels. A bound trap keeps its `Trap(Kind { pc: N })` token and adds the
+evaluation and bound in words, in every build. For example:
+
+```text
+Trap(IterationLimit { pc: 343 }) in derive "visible": past the 65,536 list steps one evaluation may take
+```
+
+The evaluation names a derive, action, resource argument or state initializer.
+Resource and task gates, family keys and sequence evaluations name their owner too.
+A tree evaluation names its containing view and plan site, then the event
+argument, region subject, each key, state initializer, surface argument or
+list option. The JS target names the site alone. Argument numbers start at 1.
+A prop or style binding already names its site and row; its trap adds only
+the bound. A child's inlined derive or function names the evaluation that
+reads it. The pc is local to that evaluation's code body, not a source location.
+
+An action or derive trap refuses the commit. A prop or style binding trap
+unsets its row and journals it once until the binding succeeds again. Other
+tree evaluation traps poison the runner. Bake and boot errors carry the same
+evaluation and bound text (LLP 1090 D6, LLP 1017.003 D3).
+
 ## Run a terminal app
 
 `cargo build --profile host-dev -p harness-terminal -p llp-terminal` builds
@@ -1752,6 +1777,18 @@ an independent reply settles as it arrives. Leave writes, and any read whose
 parse depends on an earlier reply, in the queue. Storage steps and native
 continuations cannot opt out of it.
 
+A Hermes data module has a 64 MiB heap limit by default. With an
+exception-on-OOM engine bundle (v6 or later), terminal heap exhaustion fails
+its outstanding requests and tool invocations with
+`held more than the 64 MiB a data module's heap may hold`. The executor
+destroys that runtime, including its timers, streams and queued storage
+work. The next new request or canvas call loads a fresh runtime; failed
+requests are not retried automatically. Other modules keep running. A native
+storage write already submitted may finish, so an OOM does not establish
+whether it committed. Its completion is discarded, and queued JavaScript
+writes never start. The pinned v5 engine still aborts on heap exhaustion;
+this recovery requires the v6 pin.
+
 On Hermes each turn of an answer has 100 ms of its own time: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
 the next. Its own time is the calling thread's CPU clock where the platform keeps
@@ -3198,7 +3235,23 @@ from an action to open it. `change` receives `Picked[]` with each file's name, t
 launch and a counter, never after the file: show or upload it under `name`. A
 specific `accept` list is limited to media types and types in the app's
 `file_handlers`. The live Linux picker is unavailable;
-its agent substitute accepts any file. Image pixel readback and a canvas's
+its agent substitute accepts any file. Android uses the system photo picker for
+`image/*`, `video/*` or both wildcards on Android 13
+or Android 11 with R extension 2, and `ACTION_OPEN_DOCUMENT` otherwise. `multiple`
+works with either. Files are copied before `change`; the app needs no persistent
+access to the provider. Cancellation,
+a launch failure or a copy failure fires `cancel`, with failures journaled. A missing
+Photo Picker falls back to the document picker once. An unknown extension in `accept`
+uses an unrestricted document picker, then the selection is checked against `accept`.
+HEIC/HEIF is kept when accepted (including `image/*`); otherwise an image accept that
+requires D6's JPEG conversion receives JPEG at quality 0.9, with orientation applied
+and source metadata removed. A specific list containing `image/jpeg`, `.jpg` or
+`.jpeg` uses the document picker and includes `image/heic` and `image/heif` alongside
+the requested types. A PNG-only filter offers no HEIC conversion. The delivered result is checked against `accept`. Provider
+metadata, stream opening and copying run on a worker under the result's temporary
+read grant. Access lasts while the receiving activity's task stack remains active;
+finishing the task can end it before copying completes. No persistable permission
+is taken or released. Under the agent the picker stays held. Image pixel readback and a canvas's
 synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
 a canvas's pixels go to a file (below).
 
@@ -3305,13 +3358,15 @@ times. It resolves `{path, type, size, width, height}`, `type` the one written
 ```ts
 export const grants = 'fs.read app:/tmp\nfs.write app:/tmp';
 // files from `change` on an `input type="file"`; posts: 4000 px and 2 MB
+await storage.fs.mkdir('app:/tmp/upload');
 const out = await storage.fs.compressImage(files[0].path, `app:/tmp/upload/${seed}.jpg`,
   { maxDimension: 4000, maxBytes: 2_000_000 });
 const body = await storage.fs.readFile(out.path);
 ```
 
-Both paths are `app:/` files (`fs.read` on `from`, `fs.write` on `to`); `to` is
-replaced atomically, and left as it was on any failure. It always re-encodes, so
+Both paths are `app:/` files (`fs.read` on `from`, `fs.write` on `to`); create
+`to`'s parent directory first with `storage.fs.mkdir`. `to` is replaced atomically,
+and left as it was on any failure. It always re-encodes, so
 compare the pick's `size`, `width` and `height` first to skip it. It is one
 storage operation in the module's queue; natively it runs off the JS thread. A bad option
 (a `type` other than `'image/jpeg'`, the default, or `'image/png'` too)

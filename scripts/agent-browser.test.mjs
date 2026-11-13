@@ -7,6 +7,90 @@ import { dirname, resolve } from 'node:path';
 import { need, notApplicable } from './coverage.mjs';
 import { chromium, driveStore, exclusiveWebStore, launchFacts, removeDriveStore, webNeeds, quitBrowser, pollUntil } from './agent-launch.mjs';
 import { resolveApp } from './app.mjs';
+import { open, webFrame } from './agent.mjs';
+import { crop, decodePng } from './png.mjs';
+import { glueDeclarations } from '../host/web/tests/glue-fixture.mjs';
+
+need('chrome', chromium().unavailable)('scaled avatars keep identical pixels after loading and remounting', async () => {
+  const style = readFileSync(new URL('../host/web/index.html', import.meta.url), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
+  const events = glueDeclarations(readFileSync(new URL('../host/web/wasm/views.js', import.meta.url), 'utf8'), ['imageEvents']);
+  let requested = Promise.withResolvers(), release = Promise.withResolvers();
+  const server = Bun.serve({hostname:'127.0.0.1', port:0, async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/avatar.jpg') {
+      requested.resolve(); await release.promise;
+      return new Response(readFileSync(new URL('../apps/photos-fixture/assets/photos-fixture/agent-1.jpg', import.meta.url)));
+    }
+    if (path !== '/') return new Response(null, {status:404});
+    return new Response(`<!doctype html><style>${style}</style><div id="exact-root" data-boot-ms="0" style="width:420px;height:900px;background-color:light-dark(white,#121212)"></div>
+      <div style="position:absolute;left:800px;top:1600px;width:100px;height:100px"></div>
+      <script>
+        const imageProbes = new Map(), inflight = new Set(), IMAGE_ERROR = 'image', CORS_ERROR = 'cors';
+        ${events}
+        const root = document.getElementById('exact-root');
+        globalThis.mount = scheme => {
+          root.innerHTML = [42,52].map((size,k) => '<div style="position:absolute;left:32px;top:'+(248.4+84*k)+'px;width:'+size+'px;height:'+size+'px;display:flex;flex-direction:column;overflow:hidden;border-radius:999px;background-color:light-dark(#f2f2f7,#1c1c1e)"><img alt="" src="/avatar.jpg?'+scheme+'" style="width:'+size+'px;height:'+size+'px;object-fit:cover"><div style="position:absolute;inset:0;border:1px solid light-dark(#dce2ea99,#485b7599);border-radius:999px"></div></div>').join('');
+          for (const image of document.images) imageEvents(image, () => {});
+        };
+        globalThis.exact = {ready:Promise.resolve(), agentSettled:async () => ({})};
+      </script>`, {headers:{'content-type':'text/html'}});
+  }});
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-avatar-capture-'));
+  let session;
+  try {
+    session = await open({host:'web', url:server.url.href, size:[420,900]});
+    const {evaluate, call} = session.carrier;
+    const dpr = await evaluate(() => devicePixelRatio);
+    const pixels = [420,900].map(size => Math.round(size * dpr));
+    let viewport;
+    for (const scheme of ['light','dark']) {
+      await session.prefer({'prefers-color-scheme':scheme});
+      requested = Promise.withResolvers(); release = Promise.withResolvers();
+      await evaluate(`mount('${scheme}')`);
+      await requested.promise;
+      // Paint the background while the JPEG is still loading, then compare its settled picture with a cached mount.
+      await webFrame(evaluate);
+      await call('Page.captureScreenshot', {format:'png'});
+      release.resolve();
+      let baseline, geometry;
+      for (let mount = 0; mount < 3; mount++) {
+        if (mount) await evaluate(`mount('${scheme}')`);
+        const facts = await evaluate(async () => Promise.all([...document.images].map(async image => {
+          await image.decode();
+          return {complete:image.complete, natural:[image.naturalWidth,image.naturalHeight], rect:image.getBoundingClientRect().toJSON()};
+        })));
+        expect(facts.map(image => [image.complete, image.natural])).toEqual([[true,[480,360]],[true,[480,360]]]);
+        geometry ??= facts.map(image => image.rect);
+        expect(facts.map(image => image.rect)).toEqual(geometry);
+        for (let repeat = 0; repeat < 2; repeat++) {
+          const path = resolve(dir, `${scheme}-${mount}-${repeat}.png`);
+          await session.screenshot(path);
+          const picture = decodePng(readFileSync(path));
+          viewport = picture;
+          expect([picture.width,picture.height]).toEqual(pixels);
+          baseline ??= picture.data;
+          expect(Buffer.compare(baseline, picture.data)).toBe(0);
+        }
+        expect(await evaluate(() => [...document.images].map(image => image.getBoundingClientRect().toJSON()))).toEqual(geometry);
+      }
+    }
+    await evaluate(() => scrollTo(40, 100));
+    const scroll = await evaluate(() => [scrollX, scrollY]);
+    expect(scroll).toEqual([40,100]);
+    const path = resolve(dir, 'scrolled.png');
+    await session.screenshot(path);
+    const picture = decodePng(readFileSync(path));
+    expect([picture.width,picture.height]).toEqual(pixels);
+    const [x,y] = [40,100].map(offset => Math.round(offset * dpr));
+    const width = pixels[0] - x, height = pixels[1] - y;
+    expect(Buffer.compare(crop(picture, 0, 0, width, height).data, crop(viewport, x, y, width, height).data)).toBe(0);
+    expect(await evaluate(() => [scrollX, scrollY])).toEqual(scroll);
+  } finally {
+    release.resolve();
+    try { await session?.close(); }
+    finally { server.stop(true); rmSync(dir, {recursive:true, force:true}); }
+  }
+}, 30000);
 
 const posix = process.platform === 'win32' ? 'SingletonLock is a POSIX symlink' : null;
 for (const source of ['SingletonLock', 'browser-owner']) {

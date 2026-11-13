@@ -1,5 +1,5 @@
 // An app's Rust data source as a standalone logic module (LLP 1029.000,
-// ABI 10) for the JS runtime, when the app declares none of its own: a
+// ABI 11) for the JS runtime, when the app declares none of its own: a
 // generated crate exporting the same DataSource the web build bakes with
 // (`contract::bake` or `exact_js_bake::build_mixed_with` in web/build.rs).
 // usage: bun host/web-js/module.mjs <app> [--out <dir>] → <dir>/app.module.wasm
@@ -248,7 +248,7 @@ function ownModule(app, out, dir) {
 export async function moduleGrants(path) {
   const { instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
   const abi = e.exact_logic_abi();
-  if (abi !== 10) throw new Error(`${path}: Rust module ABI ${abi} is not 10; rebuild it with this checkout`);
+  if (abi !== 11) throw new Error(`${path}: Rust module ABI ${abi} is not 11; rebuild it with this checkout`);
   const session = e.exact_logic_create(), request = new Uint8Array(5), p = e.exact_logic_alloc(request.length);
   new DataView(request.buffer).setUint32(0, abi, true);
   new Uint8Array(e.memory.buffer, p, request.length).set(request);

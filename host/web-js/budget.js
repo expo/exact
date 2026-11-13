@@ -7,6 +7,15 @@ import { Refusal, text, segmentOf, say } from "./rt.js";
 const MAX = 67108864, NODES = 16777216;
 /** A trap: the runner's `Trap` at `pc`, journaled as its `Debug` text (D6). */
 export class Trap extends Refusal { constructor(kind, pc) { super(`Trap(${kind} { pc: ${pc} })`); this.kind = kind; this.pc = pc; } }
+const bound = x => ({ IterationLimit: ": past the 65,536 list steps one evaluation may take", StringTooLong: ": past the 64 MiB a string may hold", ValueTooLarge: ": past the 16,777,216 nodes or 64 MiB a value may hold", ValueTooDeep: ": past 64 levels" }[x.kind] ?? "");
+/** A named evaluation refused. Labels are evaluated in the emitted catch only. */
+export function $E(x, label, instance) {
+  if (!(x instanceof Trap) || x.evaluation) throw x;
+  x.evaluation = label;
+  if (instance) throw new Refusal(`Instance(${x.message}) in ${label}${bound(x)}`);
+  x.message += ` in ${label}${bound(x)}`;
+  throw x;
+}
 /** Throw a trap, where an expression stands. */
 export function $T(kind, pc) { throw new Trap(kind, pc); }
 /** Prop or style binding `f` of plan node `site` on element `e`, whose trap unsets its row `row` and the commit goes on
@@ -14,7 +23,7 @@ export function $T(kind, pc) { throw new Trap(kind, pc); }
  * read it: the element keeps which of its rows' bindings trapped last, until one evaluates to a value. */
 export const tg = (e, site, row, f) => () => {
   try { const v = f(); e.$tg?.delete(row); return v; }
-  catch (x) { if (!(x instanceof Trap)) throw x; const t = (e.$tg ??= new Set); if (!t.has(row)) { t.add(row); say(`site ${site}: ${row} trapped ${x.message}; unset`); } return null; }
+  catch (x) { if (!(x instanceof Trap)) throw x; const t = (e.$tg ??= new Set); if (!t.has(row)) { t.add(row); say(`site ${site}: ${row} trapped Trap(${x.kind} { pc: ${x.pc} })${bound(x)}; unset`); } return null; }
 };
 /** A string's UTF-8 bytes, as Rust's `str::len`; a lone surrogate is U+FFFD's 3 (LLP 1088 D2). */
 export function utf8(s, limit = Infinity) {

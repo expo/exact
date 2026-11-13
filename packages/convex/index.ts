@@ -96,6 +96,8 @@ export function convex(address: string, functions: ConvexFunctions, options: Con
     const id = new Uint8Array(16);
     crypto.getRandomValues(id);
     sync.connecting([...id].map(b => b.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5'));
+    // The connection being replaced is ended, not left open with its events ignored.
+    socket?.close(1000);
     socket = undefined;
     return fetch(url, {
       exactIndependentHttp: { maxResponseBytes: options.maxMessageBytes ?? MAX_MESSAGE_BYTES },
