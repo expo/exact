@@ -286,15 +286,19 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return false;
         }
         self.device = true;
+        if let Some(sim) = &self.sim {
+            if self.generation != sim.generation() {
+                self.generation = sim.generation();
+                self.ready_work = None;
+                self.assets_dirty = true;
+                self.dirty = true;
+            }
+        }
         self.prepare_assets(device, queue, format);
         let asset_work = self.asset_work();
         let Some(sim) = &mut self.sim else {
             return false;
         };
-        if self.generation != sim.world().presentation_generation() {
-            self.generation = sim.world().presentation_generation();
-            self.dirty = true;
-        }
         let drawable = frame.width.is_finite()
             && frame.height.is_finite()
             && frame.width > 0.0
@@ -463,6 +467,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             !G::paused(sim.args()),
             frame.seekable,
         );
+        // A tick can replace the picture. Prepare its shown assets before encoding.
+        if self.generation != sim.generation() {
+            return true;
+        }
         self.perf.ticks.push(ticks as f64);
         if self.error.is_some() {
             return false;

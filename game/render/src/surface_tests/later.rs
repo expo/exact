@@ -188,10 +188,13 @@ impl Game for Switch {
         }
         w.spawn((Transform::at(0., 0., 4.), Camera::default()));
     }
-    fn tick(w: &mut World, _: &Input, live: &Live) {
+    fn tick(w: &mut World, input: &Input, live: &Live) {
         let model = LOOKS[live.look as usize].0;
         if !matches!(&*w.require::<Mesh>("die"), Mesh::Asset(name) if name == model) {
             *w.require_mut::<Mesh>("die") = Mesh::asset(model);
+        }
+        if input.messages().iter().any(|m| m == "import") {
+            w.invalidate_presentation();
         }
     }
 }
@@ -308,4 +311,64 @@ fn an_older_upload_that_fails_after_its_replacement_arrives_is_dropped() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(s.sim().unwrap().asset_failures().next().is_none());
+}
+
+#[test]
+fn a_new_picture_from_a_message_waits_for_its_shown_texture() {
+    let Some(gpu) = gpu() else { return };
+    let (mut s, mut now) = switched(&gpu);
+    let held = Held::new(&s);
+    let generation = s.generation();
+    s.bind(&[Value::Number(1u32.into())], None).unwrap();
+    s.input(&exact_gpu::InputEvent::Message {
+        text: "import".into(),
+        at_ms: now + 1.,
+    });
+    now += 20.;
+    fixture::render(&gpu, &mut s, &live(now)).unwrap();
+    assert_eq!(s.generation(), generation + 1);
+    assert!(
+        !s.frame_ready(),
+        "the message's frame cannot present the old look"
+    );
+    for _ in 0..3 {
+        now += 20.;
+        fixture::render(&gpu, &mut s, &live(now)).unwrap();
+        assert!(!s.frame_ready(), "a pending shown texture cannot present");
+        assert!(s.ready_work.is_none());
+    }
+    assert!(!prepared(&s).contains(&"green.tex"));
+    drop(held);
+    let mut complete = None;
+    for _ in 0..500 {
+        now += 20.;
+        let pixels = fixture::render(&gpu, &mut s, &live(now)).unwrap().0;
+        if s.frame_ready() {
+            complete = Some(pixels);
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(hue(&complete.expect("the new picture became ready")), 1);
+    assert!(prepared(&s).contains(&"green.tex"));
+}
+
+#[test]
+fn invalidating_presentation_changes_the_surface_generation_without_changing_state() {
+    let mut s = surface();
+    let sim = s.sim.as_mut().unwrap();
+    let hash = sim.world().hash();
+    let save = sim.save().unwrap();
+    let generation = sim.generation();
+    sim.world_mut().invalidate_presentation();
+    assert_eq!(sim.generation(), generation + 1);
+    assert_eq!(sim.world().hash(), hash);
+    assert_eq!(sim.save().unwrap(), save);
+    assert_eq!(s.generation(), generation + 1);
+    s.sim
+        .as_mut()
+        .unwrap()
+        .world_mut()
+        .invalidate_presentation();
+    assert_eq!(s.generation(), generation + 2);
 }

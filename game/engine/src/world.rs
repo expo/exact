@@ -330,6 +330,16 @@ impl World {
     pub fn presentation_generation(&self) -> u64 {
         self.presentation_generation
     }
+    /// Declare a new picture after replacing app data in this world.
+    /// The canvas's `presented` waits for a complete frame with its shown assets
+    /// resident, as after restore. Presentation histories reset; simulation,
+    /// saves and hashes do not change. This does not rerun `Game::first_frame`.
+    pub fn invalidate_presentation(&mut self) {
+        self.presentation_generation = self
+            .presentation_generation
+            .checked_add(1)
+            .expect("presentation generation exhausted");
+    }
     /// Register a component before loading. Registration itself is not state.
     pub fn register<C: Component>(&mut self) -> &mut Self {
         C::register(self);
