@@ -43,7 +43,7 @@ shape Item
   id: number
   title: string
   summary: string
-  body: string
+  body: string[]
 shape ImageRow
   id: number
   asset: string
@@ -486,4 +486,6 @@ component Detail
           if item.id == selected
             text item.title font-size=24 font-weight=700 testId="detail-title"
             text item.summary font-size=15 color="-exact-secondary-label"
-            text item.body font-size=16 line-height="24px" testId="detail-body"
+            column gap=12 testId="detail-body"
+              for paragraph, i in item.body key=i
+                text paragraph font-size=16 line-height="24px"
