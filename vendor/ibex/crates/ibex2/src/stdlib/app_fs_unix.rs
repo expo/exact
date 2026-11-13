@@ -276,16 +276,29 @@ fn atomic(dir: &File, target: &str, data: &[u8]) -> io::Result<()> {
     result
 }
 
+/// A folder where `what` needs a file: EISDIR, the code a write to one gets
+/// from the kernel and the web's store gives every such operation.
+fn is_directory(what: &str) -> HostError {
+    error(format!(
+        "{what} needs a regular file: {}",
+        io::Error::from_raw_os_error(libc::EISDIR)
+    ))
+}
+
 /// Copy `source`'s bytes over the regular file `leaf` in `parent`, made if absent.
 fn copy(mut source: File, parent: &File, leaf: &str) -> Result<FsResult, HostError> {
+    use std::os::unix::fs::MetadataExt;
+    let a = source.metadata().map_err(error)?;
+    // Before the target is opened, which would make it: a folder copies nothing.
+    if a.is_dir() {
+        return Err(is_directory("copy"));
+    }
     let mut target = open_at(
         parent,
         leaf,
         libc::O_WRONLY | libc::O_CREAT | libc::O_NONBLOCK,
     )
     .map_err(error)?;
-    use std::os::unix::fs::MetadataExt;
-    let a = source.metadata().map_err(error)?;
     let b = target.metadata().map_err(error)?;
     if !a.is_file() || !b.is_file() || (a.dev(), a.ino()) == (b.dev(), b.ino()) {
         return Err(error("copy requires distinct regular files"));
@@ -582,7 +595,11 @@ pub(crate) fn run_below(
     match op {
         FsOp::ReadFile => {
             let file = path.open()?;
-            if !file.metadata().map_err(error)?.is_file() {
+            let meta = file.metadata().map_err(error)?;
+            if meta.is_dir() {
+                return Err(is_directory("read"));
+            }
+            if !meta.is_file() {
                 return Err(error("read needs a regular file"));
             }
             Ok(FsResult::Bytes(

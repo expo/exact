@@ -1071,7 +1071,10 @@ fn storage_refusals_carry_a_stable_code() {
             "Unavailable denied",
             "Unavailable ENOTDIR",
             "ok",
-            "Unavailable denied"
+            "Unavailable denied",
+            "Unavailable EISDIR",
+            "Unavailable EISDIR",
+            "Unavailable ENOENT"
         ]
     );
 }
