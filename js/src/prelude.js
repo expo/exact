@@ -663,7 +663,7 @@
     return new Promise(function (resolve, reject) {
       // `early`: made while its answer was still in flight (its body, or its
       // own continuation), so that answer's own, whoever else is pending.
-      var p = { resolve: resolve, reject: reject, call: call, prefetch: prefetch && /^(GET|HEAD)$/.test(method), claimed: false, stream: !!stream, signal: signal, timed: timed, release: function () {}, early: call.status === "pending", set: !stream && !poll && !upload && bodyFrom === undefined && bodyTo === undefined && /^https?:/i.test(url), bodyTo: bodyTo, head: method === "HEAD" };
+      var p = { resolve: resolve, reject: reject, call: call, claimed: false, stream: !!stream, signal: signal, timed: timed, release: function () {}, early: call.status === "pending", set: !stream && !poll && !upload && bodyFrom === undefined && bodyTo === undefined && /^https?:/i.test(url), bodyTo: bodyTo, head: method === "HEAD" };
       pending.set(ticket, p);
       // The caller's abort also makes its socket handle stale (D7); the
       // stream itself runs until the runner lets its ticket go.
@@ -1304,9 +1304,7 @@
     for (var i = 0; i < call.tickets.length; i++) {
       var p = pending.get(call.tickets[i]);
       // A stream's promise never settles (LLP 1016.000), ended or let go.
-      if (p && p.call === call) {
-        // Keep the abort watch until a prefetch's exchange ends (LLP 1162.000 D5).
-        if (p.module) { if (p.prefetch) { p.detached = true; dropped.push(p); } continue; }
+      if (p && p.call === call && !p.module) {
         settled(call.tickets[i]);
         host(16, String(call.tickets[i]), "");
         if (!p.stream) dropped.push(p);
@@ -1477,7 +1475,7 @@
   // A yielded answer's new turn: its yields resolve in the drain that follows.
   global.__exact_yielded = function (id) { var call = calls.get(Number(id)); if (call) { currentCall = call; endYields(call); } };
   global.__exact_turn = function (id) { var t = id === "module" ? work.MODULE : id ? calls.get(Number(id)) || null : null; currentCall = t === work.MODULE ? null : t; work.setTurn(t); }; global.__exact_module_discarded = function () { work.runDiscarded(); }; // the executor's turns (js/src/module_work.rs): the turn's call is current, so a plain `.then` reaction runs as it (LLP 1146 D2)
-  global.__exact_adopt = function (id, ticket) { var p = pending.get(Number(ticket)); if (!p || !p.claimed || p.stream || p.module || p.call !== calls.get(Number(id))) return ""; p.module = true; work.adopted(); return "adopted"; }; // a let-go call's retained fetch (LLP 1146 D2; LLP 1162.000 D5): only fetches handed out (`claimed`, so an abort is a cancel, door 23); forgetting the call leaves it in flight and outstanding until its reply reaches the call's continuation in a module turn
+  global.__exact_adopt = function (id, ticket) { var p = pending.get(Number(ticket)); if (!p || !p.claimed || p.stream || p.module || p.call !== calls.get(Number(id))) return ""; p.module = true; work.adopted(); return "adopted"; }; // a let-go call's fetch with effects the runner keeps (LLP 1146 D2): only fetches handed out (`claimed`, so an abort is a cancel, door 23); forgetting the call leaves it in flight and outstanding until its reply reaches the call's continuation in a module turn
   // The child-process module's seam (LLP 1133.007), natively only: js/src/process.js takes it, and it is gone.
   if (global.__exact_process_host) global.__exact_process_seam = Object.freeze({ request: function (url, init, listen, own) { return request(url, init, listen, own, true); }, socketOwner: socketOwner, host: host, copyBytes: copyBytes, toBase64: toBase64 });
   global.__exact_fulfill = function (ticket, outcomeJson) {
@@ -1487,7 +1485,6 @@
     // The continuation runs in the drain that follows, and a fetch it
     // makes belongs to this call.
     currentCall = p.module ? null : p.call; if (p.module) work.landed(); // an adopted fetch's: its let-go call's steps run as it (the async helper), a plain reaction as no answer
-    if (p.detached) return;
     // Its `AbortSignal.timeout`'s deadline passed on the host: the signal aborts.
     if (o.failed && o.failed.kind === "Timeout" && p.timed) timers.expire(p.signal);
     // A reply delivered after the signal aborts still rejects with that signal's reason.

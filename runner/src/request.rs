@@ -171,7 +171,7 @@ pub struct Request {
     pub cache: CacheMode,
     /// A preload to take by name when method and URL agree (LLP 1162.000 D1).
     pub preload: Option<Box<str>>,
-    /// Hold this read's reply for a later equal read (LLP 1162.000 D5).
+    /// Checked prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
     pub prefetch: bool,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,

@@ -6,8 +6,7 @@
 //! continuation in a module turn: outside every answer and every commit's
 //! checkpoint, inside `fulfill`, so what the turn writes to the store stands,
 //! and the commit after it reaches the host as any reply's does, presented
-//! and persisted. A prefetch retains its abort mapping through its exchange;
-//! its forgotten answer stays rejected (LLP 1162.000 D5).
+//! and persisted.
 use super::modules::{CallOrigin, Causes};
 use super::{CommitReceipt, DataSource, InFlight, PendingReq, Runner, RunnerError, Target};
 use crate::request::{Outcome, RequestOut};
@@ -31,7 +30,8 @@ pub(super) struct ModuleWork {
     /// Their module fetch tickets, so the app's abort still names one
     /// (`Runner::match_aborts`) for as long as it runs, with no cap.
     pub(super) fetches: BTreeMap<u64, u64>,
-    /// Effects and prefetches the commit let go, offered to their source.
+    /// Requests with effects the commit being made let go, offered to the
+    /// source when it ends.
     letting: Vec<(PendingReq, Authority)>,
     /// The store as the turn of a reply to a request with effects left it:
     /// a refused commit goes back to here, not to before the reply.
@@ -110,7 +110,8 @@ impl<D: DataSource> Runner<D> {
         self.keep_send(ticket);
     }
 
-    /// Offer a let-go effect or prefetch to its source when the commit ends.
+    /// Request `p` is let go by the commit being made: one with effects is
+    /// offered to its source when the commit ends.
     pub(super) fn let_go_request(&mut self, p: PendingReq) {
         // An upload let go before its reply is cut off; one the host refused
         // never reached the network and is not marked as asked; of any other
@@ -123,13 +124,7 @@ impl<D: DataSource> Runner<D> {
         } else if p.upload {
             self.upload_let_go(p.ticket);
         }
-        // A prefetch keeps its fetch-to-executor mapping until the exchange ends,
-        // so the caller can still abort after its answer is forgotten (LLP 1162.000 D5).
-        let prefetch = p.keepable.as_ref().is_some_and(|request| request.prefetch)
-            && p.refusal.is_none()
-            && !p.refused
-            && p.reask_at.is_none();
-        if (p.admitted_effects() || prefetch) && !self.poisoned {
+        if p.admitted_effects() && !self.poisoned {
             let authority = Authority {
                 origin: self.ticket_origin(p.ticket),
                 invocation: self.ticket_id(p.ticket),
@@ -187,7 +182,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// At the end of every commit, after `forgotten`: the source keeps the
-    /// let-go effects and prefetches it owns, and the host cancels the rest,
+    /// let-go requests with effects it owns, and the host cancels the rest,
     /// as it cancels any request let go. A poisoned runner keeps nothing.
     pub(super) fn keep_sent(&mut self, refused: bool) {
         let mut letting = std::mem::take(&mut self.module_work.letting);
@@ -215,7 +210,7 @@ impl<D: DataSource> Runner<D> {
                 }
                 let name = self.target_name(p.target);
                 self.log(format!(
-                    "keep request {} ({name}): its exchange runs to its end",
+                    "keep request {} ({name}): it may have changed its server, so it runs to its end",
                     p.ticket
                 ));
             }

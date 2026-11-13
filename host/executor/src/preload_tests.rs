@@ -1373,53 +1373,39 @@ fn preloads_are_speculative_on_every_hop_and_a_context_fetch_is_not() {
 mod named;
 
 #[test]
-fn launch_fetches_preloads_and_prefetches_keep_the_sources_scope_at_redirects() {
-    for asynchronous in [false, true] {
-        let first = Server::new();
-        let outside = Server::new();
-        let target = outside.request("/private").url;
-        let grants = format!(
-            "net.fetch http://{}\nnet.fetch http://{}",
-            first.address, outside.address
-        );
-        let mut request = first.request("/start");
-        request.grants = Some(format!("net.fetch http://{}", first.address));
-        for _ in 0..3 {
-            first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
-        }
-        let set = Preloads::start(
-            vec![Definition {
-                request: request.clone(),
-                ..definition(&first, "/start")
-            }],
-            &grants,
-            ibex2::host::Host::new,
-        );
-        complete_set(&set);
-        assert!(set
-            .take_journal()
-            .iter()
-            .any(|fact| fact.outcome == Event::RefusedGrant));
-        assert!(launch_fetch(
-            request.clone(),
-            &grants,
-            ibex2::host::Host::new(),
-            &AbortController::new().signal()
-        )
-        .is_err());
-        let (core, woke) = first.core_grants(asynchronous, true, &grants);
-        adopt(&core, set);
-        core.run(job(1, request.prefetch()), None).unwrap();
-        let (_, outcome, timing) = collect(&core, &woke);
-        assert!(!timing.cached);
-        assert!(matches!(
-            outcome,
-            Outcome::Failed {
-                kind: FailureKind::Refused,
-                ..
-            }
-        ));
-        assert_eq!(first.count(), 3);
-        assert_eq!(outside.count(), 0);
+fn launch_fetches_and_preloads_keep_the_sources_scope_at_redirects() {
+    let first = Server::new();
+    let outside = Server::new();
+    let target = outside.request("/private").url;
+    let grants = format!(
+        "net.fetch http://{}\nnet.fetch http://{}",
+        first.address, outside.address
+    );
+    let mut request = first.request("/start");
+    request.grants = Some(format!("net.fetch http://{}", first.address));
+    for _ in 0..2 {
+        first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
     }
+    let set = Preloads::start(
+        vec![Definition {
+            request: request.clone(),
+            ..definition(&first, "/start")
+        }],
+        &grants,
+        ibex2::host::Host::new,
+    );
+    complete_set(&set);
+    assert!(set
+        .take_journal()
+        .iter()
+        .any(|fact| fact.outcome == Event::RefusedGrant));
+    assert!(launch_fetch(
+        request.clone(),
+        &grants,
+        ibex2::host::Host::new(),
+        &AbortController::new().signal()
+    )
+    .is_err());
+    assert_eq!(first.count(), 2);
+    assert_eq!(outside.count(), 0);
 }

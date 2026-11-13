@@ -88,14 +88,9 @@ impl Machine {
             Err(outcome) => return self.answer(lane, run, outcome),
         };
         let timeout = request.timeout_ms;
-        let prefetch = request.prefetch;
         let mut req = fetch_request(request, forced);
         req.response_body = destination;
-        if prefetch {
-            super::super::preload::prefetch::observe(&self.shared, run.0, &mut req);
-        } else {
-            super::super::cache::observe(&self.shared, &mut req);
-        }
+        super::super::cache::observe(&self.shared, &mut req);
         req.max_body = Some(limit);
         // The platform's idle timeout follows the deadline a second later,
         // as on the workers.
@@ -201,9 +196,6 @@ impl FetchEvents for Events {
                 } else {
                     claim(state, self.run, Claim::Answered)
                 };
-            if accepted {
-                super::super::preload::prefetch::completed(state, self.run.0);
-            }
             (retry, accepted)
         };
         if retry {

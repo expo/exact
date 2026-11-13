@@ -1,4 +1,4 @@
-//! Replies fetched ahead of their readers (LLP 1162.000 D1, D3–D5).
+//! Replies fetched before the executor exists (LLP 1162.000 D1, D3, D4).
 use super::*;
 use ibex2::boundary::HostError;
 use ibex2::stdlib::fetch_async::{Collected, FetchEvents, HeaderCaps};
@@ -91,7 +91,6 @@ struct Ready {
     response: Response,
     visited: Vec<String>,
     completed: Instant,
-    completed_order: usize,
     bytes: usize,
     used: usize,
 }
@@ -108,8 +107,6 @@ enum ReplyState {
     Gone,
 }
 pub(super) struct Held {
-    prefetch: Option<u64>,
-    pending_bytes: usize,
     name: String,
     origin: String,
     secrets: Vec<String>,
@@ -157,8 +154,6 @@ impl Held {
             } else {
                 Equal::default()
             },
-            prefetch: None,
-            pending_bytes: 0,
             name: definition.name,
             origin,
             secrets: definition.secrets,
@@ -187,35 +182,6 @@ impl Held {
         }
     }
 }
-
-impl cache::Cache {
-    pub(super) fn holds(&self) -> impl Iterator<Item = &Held> {
-        self.preloads.iter().chain(&self.prefetches)
-    }
-    fn held_len(&self) -> usize {
-        self.preloads.len() + self.prefetches.len()
-    }
-    fn held(&self, i: usize) -> &Held {
-        if i < self.preloads.len() {
-            &self.preloads[i]
-        } else {
-            &self.prefetches[i - self.preloads.len()]
-        }
-    }
-    fn held_mut(&mut self, i: usize) -> &mut Held {
-        let launch = self.preloads.len();
-        if i < launch {
-            &mut self.preloads[i]
-        } else {
-            &mut self.prefetches[i - launch]
-        }
-    }
-}
-
-#[path = "prefetch.rs"]
-pub(super) mod prefetch;
-#[path = "preload_timer.rs"]
-pub(super) mod timer;
 
 /// Launch measurements, independent of executor adoption (LLP 1162.000 D4).
 #[derive(Clone, Copy)]
@@ -541,9 +507,7 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             if state.retired {
                 return None;
             }
-            let cache = state.cache.as_mut()?;
-            let result = f(cache);
-            timer::arm(cache);
+            let result = f(state.cache.as_mut()?);
             cache::serve_ready(&mut state);
             rouse(&shared, &state);
             shared.ready.notify_all();
@@ -569,8 +533,16 @@ impl Core {
             return Err(set);
         };
         cache.grants = self.grants.clone();
-        if let Some(machine) = &self.machine {
-            timer::install(&mut cache, &self.shared, machine);
+        if let (Some(machine), Some(due)) = (&self.machine, cache.preload_definitions_due) {
+            let destination = Arc::downgrade(&set.destination);
+            machine.timer.arm_callback(
+                due.saturating_duration_since((cache.clock)()),
+                Box::new(move || {
+                    if let Some(destination) = destination.upgrade() {
+                        update(&destination, expire);
+                    }
+                }),
+            );
         }
         state.cache = Some(*cache);
         *destination = Destination::Adopted(Arc::downgrade(&self.shared));
@@ -615,7 +587,7 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
     }
     expire(cache);
     let i = find(cache, &r.request)?;
-    if !matches!(cache.held(i).reply, ReplyState::Ready(_)) {
+    if !matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
         return None;
     }
     if !can_take(cache, &r.request, i) {
@@ -625,7 +597,7 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
     let outcome = match cache::granted(&cache.grants, &r.request) {
         Err(outcome) => outcome,
         Ok(()) => {
-            let ReplyState::Ready(ready) = &cache.held(i).reply else {
+            let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
                 unreachable!()
             };
             if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
@@ -664,9 +636,8 @@ fn find(cache: &cache::Cache, request: &Request) -> Option<usize> {
         if let Some(name) = &request.preload {
             let url = cache::identity(&request.url);
             let now = (cache.clock)();
-            if let Some(i) = cache.holds().position(|p| {
-                p.prefetch.is_none()
-                    && p.name == name.as_ref()
+            if let Some(i) = cache.preloads.iter().position(|p| {
+                p.name == name.as_ref()
                     && p.key.method == request.method
                     && p.key.url == url
                     && live_at(p, now)
@@ -682,12 +653,12 @@ pub(super) fn different_body(cache: &cache::Cache, request: &Request) -> bool {
     matching(cache, request, false).is_some()
 }
 fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option<usize> {
-    if cache.held_len() == 0 {
+    if cache.preloads.is_empty() {
         return None;
     }
     let key = Equal::of(request);
     let now = (cache.clock)();
-    cache.holds().position(|p| {
+    cache.preloads.iter().position(|p| {
         p.key == key
             && p.request
                 .as_ref()
@@ -703,7 +674,7 @@ fn live_at(held: &Held, now: Instant) -> bool {
     }
 }
 fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
-    match &cache.held(i).reply {
+    match &cache.preloads[i].reply {
         ReplyState::Ready(ready) => ready
             .visited
             .iter()
@@ -731,9 +702,7 @@ pub(super) fn waiting(state: &State, job: &Job) -> bool {
                         !c.preloads.iter().any(|p| p.name == name.as_ref())
                             && !c.preload_defined.contains(name.as_ref())
                     }))
-                || find(c, &job.request).is_some_and(|i| {
-                    c.held(i).prefetch != Some(job.ticket) && can_take(c, &job.request, i)
-                })
+                || find(c, &job.request).is_some_and(|i| can_take(c, &job.request, i))
         })
 }
 // The earliest queued request keeps room to finish before later replies
@@ -760,7 +729,7 @@ pub(super) fn effect_count(state: &State) -> usize {
     if state
         .cache
         .as_ref()
-        .is_none_or(|c| pending_due(c).is_none() && c.held_len() == 0)
+        .is_none_or(|c| pending_due(c).is_none() && c.preloads.is_empty())
     {
         return effects;
     }
@@ -789,7 +758,7 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         let job = &state.jobs[0][index];
-        if job.forgotten && !job.request.prefetch && waiting(state, job) {
+        if job.forgotten && waiting(state, job) {
             let job = state.jobs[0].remove(index).expect("forgotten preload read");
             state.counts[0] -= 1;
             state.bytes[0] -= job.charge;
@@ -808,20 +777,14 @@ pub(super) fn serve_ready(state: &mut State) {
             index += 1;
             continue;
         };
-        if cache.held(i).prefetch == Some(job.ticket) || !can_take(cache, &job.request, i) {
+        if !can_take(cache, &job.request, i) {
             index += 1;
-            continue;
-        }
-        if job.forgotten {
-            let job = state.jobs[0].remove(index).expect("forgotten preload read");
-            state.counts[0] -= 1;
-            state.bytes[0] -= job.charge;
             continue;
         }
         let outcome = match cache::granted(&cache.grants, &job.request) {
             Err(outcome) => outcome,
             Ok(()) => {
-                let ReplyState::Ready(ready) = &cache.held(i).reply else {
+                let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
                     index += 1;
                     continue;
                 };
@@ -870,50 +833,37 @@ fn response_bytes(response: &Response) -> usize {
             .sum::<usize>()
 }
 fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
-    if let Some(observer) = &cache.held(i).observer {
-        observer(&cache.held(i).name, Observation::Taken(ticket));
+    if let Some(observer) = &cache.preloads[i].observer {
+        observer(&cache.preloads[i].name, Observation::Taken(ticket));
     }
     let used = cache.touch();
-    let fact = cache.held(i).fact(Event::Taken);
-    let held = cache.held_mut(i);
+    let held = &mut cache.preloads[i];
     if let ReplyState::Ready(r) = &mut held.reply {
         r.used = used;
     }
     if !held.taken {
+        cache.journal.push(held.fact(Event::Taken));
         held.taken = true;
-        if held.prefetch.is_none() {
-            cache.journal.push(fact);
-        }
     }
 }
 pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
-    let held = cache.held_mut(i);
+    let held = &mut cache.preloads[i];
     let reply = std::mem::replace(&mut held.reply, ReplyState::Gone);
-    let mut deferred = None;
     let bytes = match reply {
         ReplyState::Pending { abort, .. } => {
-            if let Some(ticket) = held.prefetch {
-                deferred = Some((ticket, abort));
-            } else {
-                abort.abort();
-            }
-            std::mem::take(&mut held.pending_bytes)
+            abort.abort();
+            0
         }
         ReplyState::Ready(r) => r.bytes,
         ReplyState::Gone => return,
     };
-    let fact = (held.prefetch.is_none() && (event != Event::NeverTaken || !held.taken))
-        .then(|| held.fact(event));
+    if event != Event::NeverTaken || !held.taken {
+        cache.journal.push(held.fact(event));
+    }
     held.request = None;
     held.key = Equal::default();
     held.answered_at = None;
     cache.release(bytes);
-    if let Some(dropped) = deferred {
-        cache.prefetch_drops.push(dropped);
-    }
-    if let Some(fact) = fact {
-        cache.journal.push(fact);
-    }
 }
 // Completion wins over a later timer observation (LLP 1162.000 D1).
 pub(super) fn expire(cache: &mut cache::Cache) {
@@ -924,13 +874,11 @@ pub(super) fn expire(cache: &mut cache::Cache) {
     if cache.preload_launch_due.is_some_and(|due| now >= due) {
         cache.preload_launch_due = None;
     }
-    for i in 0..cache.held_len() {
-        match &cache.held(i).reply {
+    for i in 0..cache.preloads.len() {
+        match &cache.preloads[i].reply {
             ReplyState::Pending { due, .. }
-                if cache.held(i).prefetch.is_none()
-                    && now >= *due
-                    && cache
-                        .held(i)
+                if now >= *due
+                    && cache.preloads[i]
                         .answered_at
                         .as_ref()
                         .expect("pending exchange")
@@ -949,13 +897,13 @@ pub(super) fn expire(cache: &mut cache::Cache) {
     }
 }
 pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
-    for i in 0..cache.held_len() {
-        if urls.contains(&cache.held(i).key.url) {
+    for i in 0..cache.preloads.len() {
+        if urls.contains(&cache.preloads[i].key.url) {
             drop_held(cache, i, Event::DroppedByWrite);
         }
     }
 }
-pub(super) fn refresh(state: &mut State, r: &RequestOut) {
+pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
     if r.class != RequestClass::Read
         || !r.request.is_plain_http()
         || !(r.forced
@@ -966,30 +914,10 @@ pub(super) fn refresh(state: &mut State, r: &RequestOut) {
     {
         return;
     }
-    let Some(cache) = state.cache.as_mut() else {
-        return;
-    };
     let key = Equal::of(&r.request);
-    for job in state
-        .jobs
-        .iter_mut()
-        .flatten()
-        .filter(|job| job.request.prefetch)
-    {
-        let queued = Equal::of(&job.request);
+    for i in 0..cache.preloads.len() {
+        let held = &cache.preloads[i];
         let named = cache.preload_names
-            && r.request.preload.is_some()
-            && r.request.preload == job.request.preload
-            && queued.method == key.method
-            && queued.url == key.url;
-        if named || (queued == key && job.request.body == r.request.body) {
-            job.hold_prefetch = false;
-        }
-    }
-    for i in 0..cache.held_len() {
-        let held = cache.held(i);
-        let named = cache.preload_names
-            && held.prefetch.is_none()
             && r.request.preload.as_deref() == Some(held.name.as_str())
             && held.key.method == key.method
             && held.key.url == key.url;
@@ -1000,15 +928,13 @@ pub(super) fn refresh(state: &mut State, r: &RequestOut) {
                 .is_some_and(|request| request.body == r.request.body);
         if named || equal {
             drop_held(cache, i, Event::DroppedByRefresh);
-            if i < cache.preloads.len() {
-                cache::drop_preload_copy(cache, i);
-            }
+            cache::drop_preload_copy(cache, i);
         }
     }
 }
 fn drop_secret(cache: &mut cache::Cache, name: &str) {
-    for i in 0..cache.held_len() {
-        if cache.held(i).secrets.iter().any(|s| s == name) {
+    for i in 0..cache.preloads.len() {
+        if cache.preloads[i].secrets.iter().any(|s| s == name) {
             drop_held(cache, i, Event::DroppedBySecret);
             // A preload's HTTP-cache copy must not outlive its credential (D3).
             cache::drop_preload_copy(cache, i);
@@ -1016,7 +942,7 @@ fn drop_secret(cache: &mut cache::Cache, name: &str) {
     }
 }
 pub(super) fn cancel_all(cache: &mut cache::Cache) {
-    for i in 0..cache.held_len() {
+    for i in 0..cache.preloads.len() {
         drop_held(cache, i, Event::Cancelled);
     }
 }
@@ -1047,32 +973,6 @@ impl FetchEvents for Events {
         self.visited.lock().unwrap().push(url.into());
         let _ = self.send.send(Message::Hop(start));
     }
-}
-
-fn held_bytes(held: &Held) -> usize {
-    let request = held.request.as_ref().expect("live request");
-    std::mem::size_of::<Held>()
-        + held.name.capacity()
-        + held.origin.capacity()
-        + held.secrets.capacity() * std::mem::size_of::<String>()
-        + held.secrets.iter().map(String::capacity).sum::<usize>()
-        + held.key.method.capacity()
-        + held.key.url.capacity()
-        + cache::header_bytes(&held.key.headers)
-        + request.method.capacity()
-        + request.url.capacity()
-        + request.body.capacity()
-        + request.grants.as_ref().map_or(0, String::capacity)
-        + request.preload.as_ref().map_or(0, |name| name.len())
-        + request.protocols.capacity() * std::mem::size_of::<String>()
-        + request
-            .protocols
-            .iter()
-            .map(String::capacity)
-            .sum::<usize>()
-        + cache::header_bytes(&request.headers)
-        + std::mem::size_of::<Mutex<Option<Answered>>>()
-        + 2 * std::mem::size_of::<usize>()
 }
 
 fn finish(
@@ -1121,7 +1021,28 @@ fn finish(
     let bytes = response_bytes(&response)
         + visited.capacity() * std::mem::size_of::<String>()
         + visited.iter().map(String::capacity).sum::<usize>()
-        + held_bytes(held);
+        + std::mem::size_of::<Held>()
+        + held.name.capacity()
+        + held.origin.capacity()
+        + held.secrets.capacity() * std::mem::size_of::<String>()
+        + held.secrets.iter().map(String::capacity).sum::<usize>()
+        + held.key.method.capacity()
+        + held.key.url.capacity()
+        + cache::header_bytes(&held.key.headers)
+        + request.method.capacity()
+        + request.url.capacity()
+        + request.body.capacity()
+        + request.grants.as_ref().map_or(0, String::capacity)
+        + request.preload.as_ref().map_or(0, |name| name.len())
+        + request.protocols.capacity() * std::mem::size_of::<String>()
+        + request
+            .protocols
+            .iter()
+            .map(String::capacity)
+            .sum::<usize>()
+        + cache::header_bytes(&request.headers)
+        + std::mem::size_of::<Mutex<Option<Answered>>>()
+        + 2 * std::mem::size_of::<usize>();
     let request = request.clone();
     if bytes > cache::MAX_ENTRY || !cache.room(bytes) {
         drop_held(cache, index, Event::Oversized);
@@ -1132,7 +1053,6 @@ fn finish(
         response: response.clone(),
         visited,
         completed,
-        completed_order: used,
         bytes,
         used,
     });
@@ -1171,7 +1091,17 @@ fn run(
         let delay = update(destination, |cache| {
             expire(cache);
             let now = (cache.clock)();
-            timer::wake_due(cache).map(|at| at.saturating_duration_since(now))
+            cache
+                .preloads
+                .iter()
+                .filter_map(|p| match &p.reply {
+                    ReplyState::Pending { due, .. } => Some(*due),
+                    ReplyState::Ready(r) => Some(r.completed + HOLD),
+                    ReplyState::Gone => None,
+                })
+                .chain(pending_due(cache))
+                .min()
+                .map(|at| at.saturating_duration_since(now))
         });
         let Some(delay) = delay else {
             return;

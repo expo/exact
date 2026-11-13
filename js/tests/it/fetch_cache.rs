@@ -200,6 +200,51 @@ fn fetch_carries_prefetch_and_refuses_non_reads_and_invalid_values() {
     );
 }
 
-#[cfg(unix)]
-#[path = "prefetch_abort.rs"]
-mod prefetch_abort;
+#[test]
+fn a_prefetch_answer_let_go_keeps_no_module_work_or_runner_ticket() {
+    for option in ["false", "true"] {
+        let src = format!(
+            r#"
+component App
+  state option = "{option}"
+  resource result = prefetched(option) as shape string
+  action replace
+    option = "absent"
+  view
+    column
+      text result
+      button press=replace testId="replace"
+        text "Replace"
+"#
+        );
+        let mut runner = Runner::boot(
+            contract::compile(&src).unwrap(),
+            module(),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let first = runner.take_requests();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].request.prefetch, option == "true");
+        let key = runner.kernel().find_by_test_id("replace")[0];
+        let id = runner.kernel().node_by_key(key).unwrap().id;
+        runner.dispatch(id, Event::Press).unwrap();
+        let next = runner.take_requests();
+        assert_eq!(next.len(), 1);
+        assert!(!runner.holds(first[0].ticket));
+        assert_eq!(runner.data().in_flight(), 1);
+        assert_eq!(runner.data().calls_open(), Some(1));
+        runner
+            .fulfill(first[0].ticket, response(200, "old"))
+            .unwrap();
+        assert!(runner.holds(next[0].ticket));
+        runner
+            .fulfill(next[0].ticket, response(200, "next"))
+            .unwrap();
+        assert!(runner.pending().is_empty());
+        assert_eq!(runner.data().in_flight(), 0);
+        assert_eq!(runner.data().calls_open(), Some(0));
+    }
+}

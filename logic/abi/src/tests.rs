@@ -928,14 +928,20 @@ fn prefetch_crosses_the_rust_module_seam_beside_cache_and_preload() {
             end(&reader).unwrap();
         }
     }
-    let mut request = Request::get("https://example.test").prefetch();
-    request.stream = true;
-    let mut encoded = Writer::default();
-    encode_result(&mut encoded, Ok(Answer::Later(request)));
-    assert!(
-        matches!(read_result(&mut Reader::new(&encoded.into_vec())).unwrap(),
-        Err(DataError::Unavailable(why)) if why.contains("exactPrefetch"))
-    );
+    let mut stream = Request::get("https://example.test").prefetch();
+    stream.stream = true;
+    let mut independent = Request::get("https://example.test").prefetch();
+    independent.http = HttpScheduling::Independent {
+        max_response_bytes: 1024,
+    };
+    for request in [stream, independent] {
+        let mut encoded = Writer::default();
+        encode_result(&mut encoded, Ok(Answer::Later(request)));
+        assert!(
+            matches!(read_result(&mut Reader::new(&encoded.into_vec())).unwrap(),
+            Err(DataError::Unavailable(why)) if why.contains("exactPrefetch"))
+        );
+    }
     for tag in [0, 5, 6, 9, 10, 11, 14] {
         let bytes = [14, tag];
         assert!(read_result(&mut Reader::new(&bytes)).is_err());

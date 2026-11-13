@@ -1150,7 +1150,6 @@ fn a_non_app_read_checks_its_reach_outside_the_state_lock_and_can_hit() {
                 limit,
                 forgotten: false,
                 queued_deadline: None,
-                hold_prefetch: true,
                 overlap: true,
                 class: RequestClass::Read,
             });

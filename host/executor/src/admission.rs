@@ -238,9 +238,10 @@ impl Core {
             }
             return Ok(());
         }
-        preload::refresh(&mut state, &r);
+        if let Some(cache) = state.cache.as_mut() {
+            preload::refresh(cache, &r);
+        }
         state.jobs[lane].push_back(Job {
-            hold_prefetch: true,
             ticket: r.ticket,
             request: r.request,
             forced: r.forced,

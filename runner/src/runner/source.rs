@@ -588,9 +588,8 @@ data_source! {
 
     /// At the end of every commit, after [`DataSource::forgotten`] when that
     /// is called. `let_go` holds the requests with effects
-    /// ([`crate::Request::has_effects`], LLP 1146 D2) and prefetches
-    /// (LLP 1162.000 D5) the commit let go, which run to their end.
-    /// The answer has one entry per request, in order: the
+    /// ([`crate::Request::has_effects`]) the commit let go, which run to their
+    /// end (LLP 1146 D2). The answer has one entry per request, in order: the
     /// token this source takes the reply under ([`DataSource::module_landed`]),
     /// or `None`, and the host cancels that request as it cancels any it lets
     /// go. A call this source set aside is dropped unless `let_go` names it;

@@ -82,7 +82,7 @@ impl CacheMode {
 }
 
 impl super::Request {
-    /// Fetch ahead for the next screen's read (LLP 1162.000 D5).
+    /// Set the prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
     pub fn prefetch(mut self) -> Self {
         self.prefetch = true;
         self

@@ -10,11 +10,11 @@ pub(super) fn effect_read(r: &RequestOut, work: bool) -> bool {
 }
 
 pub(super) fn safe_to_forget(request: &Request, class: RequestClass) -> bool {
-    !request.prefetch && safe(request) && !matches!(class, RequestClass::Parallel(_))
+    safe(request) && !matches!(class, RequestClass::Parallel(_))
 }
 
 pub(super) fn safe_read(request: &Request, work: bool, class: RequestClass) -> bool {
-    read(request, work) && safe(request) && !matches!(class, RequestClass::Parallel(_))
+    read(request, work) && safe_to_forget(request, class)
 }
 
 // A made handoff has ended for scheduling (LLP 1120 D3). Otherwise each
@@ -115,7 +115,6 @@ fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortC
     job.charge += more;
     state.bytes[lane] += more;
     let abort = AbortController::new();
-    preload::prefetch::start(state, &mut job, &abort);
     state.running.push(Running {
         started: std::time::Instant::now(),
         ticket: job.ticket,

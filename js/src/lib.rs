@@ -179,8 +179,6 @@ struct Parked {
     /// The fetch it awaits may change its server (`Request::has_effects`):
     /// let go, it runs to its end (LLP 1146 D2).
     effects: bool,
-    /// Retain the abort watch and ticket until the exchange ends (LLP 1162.000 D5).
-    prefetch: bool,
     work_taken: bool,
     ready: bool,
     due: Option<u64>,

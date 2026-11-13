@@ -64,7 +64,6 @@ struct Job {
     /// The runner no longer wants its reply (`Core::forget`).
     forgotten: bool,
     queued_deadline: Option<forget::QueuedDeadline>,
-    hold_prefetch: bool,
     overlap: bool,
     class: RequestClass,
 }
@@ -754,16 +753,10 @@ impl WorkerBudget {
     }
 }
 
-/// Wake workers for queued jobs, disposal, or a held prefetch's expiry
-/// (LLP 1162.000 D5). An idle core without holds needs no wake.
+/// Forgetting runs after every commit; an idle core needs no worker wake
+/// unless queued jobs or disposal can make progress.
 fn rouse(shared: &Shared, state: &State) {
-    if !state.discard.is_empty()
-        || state.jobs.iter().any(|lane| !lane.is_empty())
-        || state
-            .cache
-            .as_ref()
-            .is_some_and(|cache| cache.prefetches.iter().any(|p| p.used().is_some()))
-    {
+    if !state.discard.is_empty() || state.jobs.iter().any(|lane| !lane.is_empty()) {
         #[cfg(test)]
         shared.worker_notifications.fetch_add(1, Ordering::Relaxed);
         shared.ready.notify_all();
@@ -878,8 +871,6 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     };
     let run = state.running.swap_remove(at);
     let outcome = bounded_outcome(outcome, run.limit);
-    preload::prefetch::completed(&mut state, ticket);
-    preload::prefetch::finish(&mut state, ticket, &outcome);
     cache::invalidate(&mut state, run.invalidates.as_ref(), &outcome);
     let lane = run.lane;
     // A completion frees ordered bytes a waiting job may need.
@@ -1093,20 +1084,14 @@ fn worker(
                     continue;
                 }
                 if let Some(cache) = state.cache.as_mut() {
-                    let bytes = cache.bytes;
                     preload::expire(cache);
-                    if cache.bytes != bytes {
-                        shared.ready.notify_all();
-                    }
                 }
                 if let Some(next) = reads::next_job(&shared, &mut state, lane) {
                     break next;
                 }
                 let delay = state.cache.as_ref().and_then(|cache| {
                     let now = (cache.clock)();
-                    preload::timer::wake_due(cache)
-                        .filter(|due| *due > now)
-                        .map(|due| due.saturating_duration_since(now))
+                    preload::pending_due(cache).map(|due| due.saturating_duration_since(now))
                 });
                 state = match delay {
                     Some(delay) => shared.ready.wait_timeout(state, delay).unwrap().0,
@@ -1304,13 +1289,8 @@ fn execute(
     {
         return outcome;
     }
-    let prefetch = request.prefetch;
     let mut req = fetch_request(request, forced);
-    if prefetch {
-        preload::prefetch::observe(cache_job.0, cache_job.1, &mut req);
-    } else {
-        cache::observe(cache_job.0, &mut req);
-    }
+    cache::observe(cache_job.0, &mut req);
     req.max_body = Some(limit);
     // The platform's idle timeout (URLSession's, 60 s by default) follows
     // the deadline a second later: it never ends a request before the

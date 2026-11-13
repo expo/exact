@@ -396,12 +396,11 @@ On the web the option is accepted and ignored. A TypeScript bundle naming it nee
 runtime 13 (LLP 1162.000 D1, D2).
 
 For a read the next screen will make, use `fetch(url, { exactPrefetch: true })`
-or `Request::get(url).prefetch()` in Rust. It returns the reply and holds it for
-an equal read for ten seconds from completion, even if its resource is let go.
-The caller's abort cancels it. Only the app's own reads may prefetch; a tool's,
-wake's or device's request, a send, a stream or a file-bodied request refuses it.
-Eight completed prefetches share the cache's byte bounds with launch preloads;
-a ninth drops the oldest. On the web only the browser's cache may keep it.
+or `Request::get(url).prefetch()` in Rust. The option is accepted and checked on
+every host, and the request is made as written, as an ordinary fetch. No host holds
+its reply yet. Only the app's own plain reads may use it; a tool's, wake's or
+device's request, a send, a mutation, a stream, a file-bodied or an independent
+request refuses it. In TypeScript the value must be a boolean.
 A TypeScript bundle naming it needs runtime 13; the Rust module seam is ABI 9
 (LLP 1162.000 D5).
 
