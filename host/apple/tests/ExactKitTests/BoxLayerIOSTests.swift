@@ -248,6 +248,31 @@ final class BoxLayerIOSTests: XCTestCase {
         XCTAssertEqual(n.contentBox(), CGRect(x: 0, y: 0, width: 300, height: 120), "a box sent none is its own content box")
     }
 
+    /// A layout transition's size reaches a material as well as the painted
+    /// surface: the material is a view the node holds, so without it a glass
+    /// box jumps to its laid-out size while its border animates. It takes the
+    /// laid-out bounds back when the transition ends.
+    func testLayoutResizeSizesTheMaterialAndGivesItBack() throws {
+        for kind in ["glass", "ultra-thin"] {
+            let n = node([:], size: CGSize(width: 300, height: 48))
+            n.props["backgroundMaterial"] = kind
+            n.updateMaterial()
+            n.applyBoxLayer()
+            let material = try XCTUnwrap(n.glassSlot ?? n.materialView, kind)
+            XCTAssertEqual(material.frame, n.bounds, kind)
+            n.layoutResize = CGSize(width: 120, height: -8)
+            n.applySurface()
+            XCTAssertEqual(material.frame, CGRect(x: 0, y: 0, width: 420, height: 40), "\(kind) takes the shown size")
+            n.layoutResize = CGSize(width: 60, height: 0)
+            n.applySurface()
+            XCTAssertEqual(material.frame, CGRect(x: 0, y: 0, width: 360, height: 48), "\(kind) follows each frame")
+            n.layoutResize = .zero
+            n.applySurface()
+            XCTAssertNil(n.surface, kind)
+            XCTAssertEqual(material.frame, n.bounds, "\(kind) gives the size back")
+        }
+    }
+
     private func node(_ style: NodeStyle, size: CGSize = CGSize(width: 300, height: 120)) -> NodeView {
         let p = Presenter()
         let n = NodeView(id: 1, kind: "view", presenter: p)
