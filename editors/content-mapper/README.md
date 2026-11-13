@@ -114,8 +114,11 @@ the repository's apps. They skip when `EXACT_TSC71` is not set.
 
 - Completion offers an enum attribute's values and nothing else: not attribute
   names, and nothing while the file has a syntax error.
-- A file an app uses is built with its `app.contract` as saved on disk, so an
-  unsaved edit to the app does not change the used file's errors.
+- A file an app uses is built with its `app.contract`: this file as the editor
+  holds it (`build --stdin-as`), the app's other files as saved.
+- A source is not renamed from a contract: its name is also the key of the
+  function in `app.ts` that answers it.
+- An import's alias (`use Row as TheirRow`) has no definition or rename.
 - Which tags an attribute is allowed on is prose in `contract vocab`, so hover
   shows an attribute on any tag.
 - A shape named as a vocabulary type is (`MouseEvent`, `MediaMetadata`) shares

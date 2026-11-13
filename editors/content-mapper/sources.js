@@ -9,8 +9,10 @@ import { basename, dirname, resolve } from 'node:path';
 const quote = JSON.stringify;
 
 export function sources(ctx) {
-  const calls = (ctx.contract(['symbols', ctx.fileName, '--stdin'])?.definitions ?? [])
-    .filter(d => d.kind === 'source' && ctx.here(d)).map(d => [d.name, ctx.span(d)]).filter(([name, at]) => at && ctx.content.slice(at[0], at[0] + at[1]) === name && /^[A-Za-z_$][\w$]*$/.test(name));
+  const { definitions = [], references = [] } = ctx.contract(['symbols', ctx.fileName, '--stdin']) ?? {};
+  // The compiler defines a source at its first call and reports each later call as a reference to it.
+  const called = [...definitions, ...references.filter(r => definitions[r.to]?.kind === 'source')].filter(s => (s.kind ?? 'source') === 'source' && ctx.here(s));
+  const calls = [...new Map(called.map(s => [s.name, ctx.span(s)]).filter(([name, at]) => at && ctx.content.slice(at[0], at[0] + at[1]) === name && /^[A-Za-z_$][\w$]*$/.test(name)).map(c => [c[1][0], c])).values()];
   if (!calls.length) return;
   // The compiler's own paths: app.ts in the contract's directory, the declarations at `<file>.d.ts`.
   if (existsSync(resolve(dirname(ctx.fileName), 'app.ts'))) {

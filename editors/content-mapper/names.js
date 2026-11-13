@@ -24,19 +24,31 @@ function spelling(ctx, s, text = ctx.content) {
 }
 
 export function names(ctx) {
-  const { definitions, references, shapes = {} } = ctx.contract(['symbols', ctx.fileName, '--stdin']) ?? { definitions: [], references: [] };
+  const symbols = ctx.contract(['symbols', ctx.fileName, '--stdin']) ?? {}, { references = [] } = symbols;
+  // Files read on their own may each declare a shape of one name: this file's are its own.
+  const shapes = Object.fromEntries((symbols.shapes ?? []).filter(s => s.file === undefined || ctx.here(s)).map(s => [s.name, s.type]));
   const contract = s => s.file !== undefined && extname(s.file) === '.contract';
   const elsewhere = d => !ctx.here(d) && contract(d);
+  const text = file => { try { return readFileSync(file, 'utf8'); } catch { return null; } };
+  /** A definition's name as its own file writes it. An import that meets a name of this file is `Row__row` to the
+   * compiler and `Row` where it is declared, which is the name its file's mapping holds it by. */
+  const written = d => {
+    const other = elsewhere(d) ? text(d.file) : null, at = other && ctx.span(d, other), authored = at && other.slice(at[0], at[0] + at[1]);
+    return authored && IDENTIFIER.test(authored) && d.name.startsWith(`${authored}__`) ? authored : d.name;
+  };
+  const definitions = (symbols.definitions ?? []).map(d => ({ ...d, name: written(d), compiled: d.name }));
   // Another file is as the compiler read it, from disk; its own mapping places its names.
-  const placed = d => { if (ctx.here(d)) return spelling(ctx, d); if (!elsewhere(d)) return null; try { return spelling(ctx, d, readFileSync(d.file, 'utf8')); } catch { return null; } };
-  const renamable = definitions.map(d => placed(d) !== null), used = definitions.map(() => false);
+  const placed = d => { if (ctx.here(d)) return spelling(ctx, d); const other = elsewhere(d) ? text(d.file) : null; return other === null ? null : spelling(ctx, d, other); };
+  // A source's name is also the key of the function in app.ts that answers it, which a rename here would not reach.
+  const renamable = definitions.map(d => d.kind !== 'source' && placed(d) !== null), used = definitions.map(() => false);
   /** Each place in this file the compiler names a use at, with every definition it says the use is of. */
   const uses = new Map();
   for (const r of references) {
-    const d = definitions[r.to], at = ctx.here(r) ? spelling(ctx, r) : null;
-    if (at && r.name === d.name) { const use = uses.get(`${at[0]}:${at[1]}`) ?? uses.set(`${at[0]}:${at[1]}`, { at, of: [] }).get(`${at[0]}:${at[1]}`); use.of.push(r.to); used[r.to] = true; }
-    // A use TypeScript is not shown would be left out of a rename.
-    else if (ctx.here(r) || !contract(r) || r.name !== d.name) renamable[r.to] = false;
+    const d = definitions[r.to], named = r.name === d.compiled, at = ctx.here(r) && named ? spelling(ctx, { ...r, name: d.name }) : null;
+    if (at) { const use = uses.get(`${at[0]}:${at[1]}`) ?? uses.set(`${at[0]}:${at[1]}`, { at, of: [] }).get(`${at[0]}:${at[1]}`); use.of.push(r.to); used[r.to] = true; }
+    // A use TypeScript is not shown would be left out of a rename. A renamed import's alias (`use Row as TheirRow`)
+    // is no use of the name: it stays as it is when the name changes.
+    else if (d.compiled === d.name && (ctx.here(r) || !contract(r) || !named)) renamable[r.to] = false;
   }
   // Renaming one of a use's several definitions would leave the use naming the others.
   for (const { of } of uses.values()) if (of.length > 1) for (const i of of) renamable[i] = false;

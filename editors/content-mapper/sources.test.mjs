@@ -115,3 +115,23 @@ test('realworld: every source call the compiler reports resolves to its function
     expect(await server.diagnostics(ts)).toEqual([]);
   } finally { server.close(); p.end(); }
 }, 120_000);
+
+test('each call of a source reaches its function, and a source is not renamed from the contract', async () => {
+  if (!ready()) return;
+  // The compiler defines `greeting` at its first call (line 8) and reports the second (line 9) as a reference.
+  const twice = hello.replace('  state liked = false\n', '  resource again = greeting("Again") as shape Greeting\n  state liked = false\n');
+  const p = app({ 'app.contract': twice, 'app.ts': helloTs }), f = p.file('app.contract'), ts = p.file('app.ts'), server = await open(process.env.EXACT_TSC71, p.dir);
+  try {
+    expect(calls(f).map(c => c.line)).toEqual([8]);
+    server.openFile(f);
+    const fn = [ts, 6, 3, 11], first = [f, 8, 23, 31], second = [f, 9, 20, 28];
+    expect(await implementation(server, f, 8, 23)).toEqual([fn]);
+    expect(await implementation(server, f, 9, 20)).toEqual([fn]);
+    server.openFile(ts, 'typescript');
+    expect(await server.references(ts, 6, 3)).toEqual([fn, first, second]);
+    // Renaming the call would leave the key in app.ts, which answers by that name.
+    const refused = at => server.request('textDocument/prepareRename', { textDocument: { uri: pathToFileURL(f).href }, position: { line: at[1] - 1, character: at[2] - 1 } }).then(() => 'renames', e => e.message);
+    expect(await refused(first)).toContain('You cannot rename this element');
+    expect(await refused(second)).toContain('You cannot rename this element');
+  } finally { server.close(); p.end(); }
+}, 60_000);

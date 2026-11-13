@@ -175,12 +175,14 @@ test('a name the compiler places wrongly, or whose use names several definitions
   // `navigationBack="back"` is one use of two `id="back"` definitions.
   const shelf = project(app('shelf')), g = shelf.file('app.contract'), other = await open(tsc, shelf.dir);
   try {
-    const { definitions, references } = symbols(g), back = references.filter(r => r.line === 410 && r.name === 'back');
-    expect(back.map(r => definitions[r.to].line)).toEqual([553, 590]);
+    // Found by what it is, not where: the app's lines move.
+    const { definitions, references } = symbols(g), named = references.filter(r => r.name === 'back' && definitions[r.to].kind === 'id');
+    const back = named.filter(r => named.filter(o => o.line === r.line && o.col === r.col).length === 2), ids = back.map(r => definitions[r.to]), use = back[0];
+    expect(ids.map(d => d.name)).toEqual(['back', 'back']);
     other.openFile(g);
-    expect(await other.definition(g, 410, 23)).toEqual([[g, 553, 31, 37], [g, 590, 31, 37]]);
-    expect(await refuses(other, g, 410, 23)).toContain('You cannot rename this element');
-    expect(await refuses(other, g, 553, 32)).toContain('You cannot rename this element');
+    expect(await other.definition(g, use.line, use.col + 1)).toEqual(ids.map(d => [g, d.line, d.col, d.end_col]));
+    expect(await refuses(other, g, use.line, use.col + 1)).toContain('You cannot rename this element');
+    expect(await refuses(other, g, ids[0].line, ids[0].col + 1)).toContain('You cannot rename this element');
   } finally { other.close(); shelf.end(); }
 }, 60_000);
 
@@ -250,3 +252,26 @@ for (const [name, kind, file] of [['realworld', 'state'], ['realworld', 'action'
     expect(r.name).toBe(`${d.name}Renamed`);
     expect(r.uses[1]).toBe(r.uses[0]);
   }, 120_000);
+
+test('an import renamed for meeting a local name is renamed where it is declared and where it is imported, and its alias stays', async () => {
+  if (!ready()) return;
+  const row = 'component Row\n  props\n    label: string\n  view\n    text label\n';
+  const main = `use Row as TheirRow from "./row.contract"\ncomponent App\n  view\n    column\n      TheirRow(label="a")\n      Row(label="b")\n${row}`;
+  const p = project({ 'app.contract': main, 'row.contract': row }), f = p.file('app.contract'), g = p.file('row.contract'), server = await open(tsc, p.dir);
+  try {
+    // The compiler's name for the import is not the one either file writes.
+    expect(symbols(f).definitions.filter(d => d.kind === 'component').map(d => d.name)).toEqual(['App', 'Row', 'Row__row']);
+    server.openFile(f); server.openFile(g);
+    const declared = [g, 1, 11, 14], imported = [f, 1, 5, 8];
+    expect(await server.definition(f, 1, 5)).toEqual([declared]);
+    expect(await server.references(g, 1, 11)).toEqual([imported, declared].sort(order));
+    const answer = await server.request('textDocument/rename', { textDocument: { uri: pathToFileURL(g).href }, position: { line: 0, character: 10 }, newName: 'Line' });
+    const edits = Object.entries(answer?.changes ?? {}).flatMap(([uri, es]) => es.map(e => [fileURLToPath(uri), e.range.start.line + 1, e.range.start.character + 1, e.range.end.character + 1, e.newText]))
+      .concat((answer?.documentChanges ?? []).flatMap(c => c.edits.map(e => [fileURLToPath(c.textDocument.uri), e.range.start.line + 1, e.range.start.character + 1, e.range.end.character + 1, e.newText]))).sort(order);
+    expect(edits).toEqual([[...imported, 'Line'], [...declared, 'Line']].sort(order));
+    for (const [file, line, start, end, to] of edits) { const lines = text(file); lines[line - 1] = lines[line - 1].slice(0, start - 1) + to + lines[line - 1].slice(end - 1); writeFileSync(file, lines.join('\n')); }
+    // The alias and the local `Row` are as they were, and the app still builds.
+    expect(text(f).slice(0, 6)).toEqual(['use Line as TheirRow from "./row.contract"', 'component App', '  view', '    column', '      TheirRow(label="a")', '      Row(label="b")']);
+    expect(errors(f)).toEqual([]);
+  } finally { server.close(); p.end(); }
+}, 60_000);
