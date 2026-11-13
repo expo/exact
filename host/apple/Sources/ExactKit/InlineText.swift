@@ -156,9 +156,11 @@ extension NodeView {
         #endif
         // A fragmented paragraph's point, in its unfragmented box (LLP 1093 D8).
         let box = paragraphBox()
+        let lines = columnRecord?.fragments.first(where: { $0.rect.contains(point) })?.lines
         guard let point = paragraphPoint(point), box.contains(point), let paragraph = paragraphLayout() else { return nil }
         let spec = paragraphSpec()
         guard let line = paragraph.lineIndex(at: CGPoint(x: point.x - box.minX, y: point.y - box.minY), align: spec.align, width: box.width) else { return nil }
+        guard lines?.contains(line) != false else { return nil }
         let x = box.minX + paragraph.origin(line, align: spec.align, width: box.width)
         let width = CGFloat(CTLineGetTypographicBounds(paragraph.lines[line], nil, nil, nil))
         guard point.x >= x, point.x <= x + width else { return nil }

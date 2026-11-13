@@ -70,8 +70,9 @@ pub struct Fragment {
     /// The paragraph's line boxes in this fragment, `start..end`; empty for
     /// a box that is not a paragraph.
     pub lines: (u32, u32),
-    /// What to add to a point of the unfragmented box (its own border-box
-    /// space, as one column laid it out) to place it in this fragment.
+    /// Translation from the unfragmented box into this fragment. For text,
+    /// it includes the anonymous item's placement: add it directly to the
+    /// paragraph's content positions.
     pub dx: f32,
     /// See [`Fragment::dx`].
     pub dy: f32,

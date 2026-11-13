@@ -136,7 +136,11 @@ fn lines(k: &Kernel, id: u32, line_height: f32) -> String {
                 .iter()
                 .find(|g| g.lines.0 <= i && i < g.lines.1)
                 .map_or((0.0, 0.0), |g| (g.dx, g.dy));
-            format!("{},{}", f(fr.x + dx), f(fr.y + dy + i as f32 * line_height))
+            format!(
+                "{},{}",
+                f(fr.x + dx + k.text_item_box(&node).map_or(0.0, |item| item.x)),
+                f(fr.y + dy + i as f32 * line_height)
+            )
         })
         .collect::<Vec<_>>()
         .join(";")

@@ -9,7 +9,7 @@ use Secondary from "./shapes.contract"
 use Canvas from "./shapes.contract"
 use Screen from "./shapes.contract"
 use GlassButton from "./shapes.contract"
-use Avatar from "./shapes.contract"
+use Avatar, ActionIcon from "./shapes.contract"
 use MessageRow from "./bubble.contract"
 use Balloon from "./bubble.contract"
 use Typing from "./bubble.contract"
@@ -265,7 +265,7 @@ component Messages
     every(frame, animate)
 
   view
-    main testId="messages" id="messages-root" navigationKey=`${top(nav).id}` navigationBack="back" navigate=navigate viewport-fit="cover" interactive-widget="resizes-content" width="100%" height="100%" display="flex" flex-direction="column" overflow="hidden" class=Canvas font-family="system-ui" color="light-dark(#000000, #ffffff)"
+    main testId="messages" id="messages-root" navigationKey=`${top(nav).id}` navigationBack="back" navigate=navigate viewport-fit="cover" interactive-widget="resizes-content" width="100%" height="100%" display="flex" flex-direction="column" overflow="hidden" class=Canvas font-family="system-ui" color="-exact-label"
       for entry in stack(nav) key=entry.id
         // Every screen draws its own chrome (the thread's glass header and
         // Back), so it says it has no system bar (LLP 1115.000 D5.2).
@@ -278,9 +278,9 @@ component Messages
                 button press=choose(true) testId="compose" aria-label="New message" class=NativeGlass
                   image "symbol:compose"
               text "Messages" font-size=34 font-weight=700 letter-spacing=-0.7 margin-left=20 margin-bottom=12 margin-top=4
-              row margin-left=16 margin-right=16 margin-bottom=12 border-radius=12 height=36 background-color="light-dark(#efeff0, #1c1c1e)" align-items="center" gap=7 padding-left=10 padding-right=10 flex-shrink=0
-                image "symbol:search" font-size=16 color="#8e8e93"
-                input appearance="none" value=query input=search placeholder="Search" testId="search" aria-label="Search conversations" font-size=17 flex=1 min-width=0 border-width=0 background-color="#00000000" class=Ink
+              row margin-left=16 margin-right=16 margin-bottom=12 border-radius=12 height=36 background-color="-exact-secondary-background" align-items="center" gap=7 padding-left=10 padding-right=10 flex-shrink=0
+                image "symbol:search" font-size=16 color="-exact-secondary-label"
+                input appearance="none" value=query input=search placeholder="Search" testId="search" aria-label="Search conversations" font-size=17 flex=1 min-width=0 border-width=0 background-color="transparent" class=Ink
               scroll flex=1 min-height=0 testId="inbox-list"
                 for t in data.threads key=t.id
                   if inboxEditing
@@ -288,33 +288,33 @@ component Messages
                       Avatar(initials=t.initials, color=t.color, size=44)
                       text t.name font-size=17 font-weight=600 flex=1 min-width=0 line-clamp=1
                       button press=inboxOperation("mute", t.id) testId=`mute-${t.id}` aria-label=(t.muted ? "Show alerts" : "Hide alerts") class=GlassButton backgroundMaterial="glass"
-                        image "symbol:notifications" font-size=18 color="#5856d6"
+                        image "symbol:notifications" font-size=18 color="AccentColor"
                       button press=inboxOperation("delete-thread", t.id) testId=`delete-thread-${t.id}` aria-label=`Delete ${t.name}` class=GlassButton backgroundMaterial="glass"
-                        image "symbol:delete" font-size=18 color="#ff3b30"
+                        image "symbol:delete" font-size=18 color="-exact-system-red"
                   else
                     scroll swipeContent=`conversation-${t.id}` swipeLeading=`unread-${t.id}` swipeTrailing=`delete-thread-${t.id} mute-${t.id}` scroll=inboxScrolled(t.id) testId=`thread-swipe-${t.id}` width="100%" height=86.667 overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" scroll-snap-type="x mandatory" scrollLeft=(inboxEditing ? 200 : (swiped == t.id ? swipeOffset : 70))
                       row width="100%" height=86.667
                         row width=70 height=86.667 flex-shrink=0 scroll-snap-align="start" align-items="center" justify-content="center"
-                          button press=inboxOperation("unread", t.id) id=`unread-${t.id}` testId=`unread-${t.id}` aria-label=(t.unread ? "Mark as read" : "Mark as unread") width=50 height=50 border-radius=25 background-color="#0088ff"
-                            text "●" font-size=24 color="#ffffff"
+                          button press=inboxOperation("unread", t.id) id=`unread-${t.id}` testId=`unread-${t.id}` aria-label=(t.unread ? "Mark as read" : "Mark as unread") width=50 height=50 border-radius=25 background-color="AccentColor"
+                            text "●" font-size=24 color="AccentColorText"
                         button press=openThread(t.id, t.draft) contextmenu=swipe(t.id) id=`conversation-${t.id}` testId=`conversation-${t.id}` aria-label=`${t.name}, ${t.preview}` width="100%" height=86.667 flex-shrink=0 scroll-snap-align="start" display="flex" flex-direction="row" align-items="center" gap=12 padding-left=16 padding-right=16 box-sizing="border-box" class=Canvas text-align="start"
                           Avatar(initials=t.initials, color=t.color, size=54)
-                          column flex=1 min-width=0 align-self="stretch" justify-content="center" border-bottom-width=0.333 border-bottom-style="solid" border-color="light-dark(#d1d1d6, #38383a)" padding-top=12 padding-bottom=12
+                          column flex=1 min-width=0 align-self="stretch" justify-content="center" border-bottom-width=0.333 border-bottom-style="solid" border-color="-exact-separator" padding-top=12 padding-bottom=12
                             row align-items="center" gap=4 margin-bottom=4
                               if t.unread
-                                box width=7 height=7 border-radius=4 background-color="#0088ff"
+                                box width=7 height=7 border-radius=4 background-color="AccentColor"
                               text t.name font-size=17 font-weight=600 flex=1 min-width=0 line-clamp=1 text-align="left"
                               if t.muted
-                                image "symbol:notifications" font-size=12 color="#8e8e93"
+                                image "symbol:notifications" font-size=12 color="-exact-secondary-label"
                               text (t.at > 0 ? formatTime(t.at, wallTime.utcOffset, "short") : "") font-size=14 class=Secondary
                               text "›" font-size=19 class=Secondary
                             text t.preview font-size=15 line-height="20px" class=Secondary line-clamp=2 text-align="left"
                         row width=130 height=86.667 flex-shrink=0 scroll-snap-align="start" padding-left=10 padding-right=10 gap=10 box-sizing="border-box" align-items="center"
                           // The platform's own buttons (LLP 1069.011.000 D6): on iOS the swipe's
                           // actions, drawn from their symbols and accents; elsewhere filled circles.
-                          button appearance="auto" buttonStyle="filled" accent-color="#5856d6" press=inboxOperation("mute", t.id) id=`mute-${t.id}` testId=`mute-${t.id}` aria-label=(t.muted ? "Show alerts" : "Hide alerts") width=50 height=50 flex-shrink=0
+                          button appearance="auto" buttonStyle="filled" accent-color="AccentColor" press=inboxOperation("mute", t.id) id=`mute-${t.id}` testId=`mute-${t.id}` aria-label=(t.muted ? "Show alerts" : "Hide alerts") width=50 height=50 flex-shrink=0
                             image "symbol:notifications"
-                          button appearance="auto" buttonStyle="filled" accent-color="#ff3b30" destructive=true press=inboxOperation("delete-thread", t.id) id=`delete-thread-${t.id}` testId=`delete-thread-${t.id}` aria-label=`Delete ${t.name}` width=50 height=50 flex-shrink=0
+                          button appearance="auto" buttonStyle="filled" accent-color="-exact-system-red" destructive=true press=inboxOperation("delete-thread", t.id) id=`delete-thread-${t.id}` testId=`delete-thread-${t.id}` aria-label=`Delete ${t.name}` width=50 height=50 flex-shrink=0
                             image "symbol:delete"
                 if data.threads.length == 0
                   text "No Results" font-size=20 font-weight=600 text-align="center" margin-top=70
@@ -340,9 +340,9 @@ component Messages
                         Typing(reduced=viewport.prefersReducedMotion)
                       if data.error != ""
                         column margin-top=12 margin-left=24 margin-right=24 gap=8 align-items="center"
-                          text data.error font-size=13 line-height="18px" color="#ff3b30" text-align="center"
+                          text data.error font-size=13 line-height="18px" color="-exact-system-red" text-align="center"
                           button appearance="none" press=operation("retry") testId="retry" padding=8
-                            text "Try Again" font-size=15 color="#0088ff"
+                            text "Try Again" font-size=15 color="AccentColor"
                       if data.count == 0
                         column padding-top=40 padding-left=36 padding-right=36 align-items="center" gap=12
                           Avatar(initials=data.initials, color=data.color, size=64)
@@ -350,44 +350,44 @@ component Messages
                           text "Start a conversation. Your messages are sent to this model through OpenRouter." font-size=15 line-height="21px" class=Secondary text-align="center"
               column id="composer-bar" testId="composer-bar" position="relative" flex-shrink=0 padding-left=16 padding-right=16 padding-top=0 padding-bottom=(editing ? 16 : 12) backgroundMaterial="ultra-thin"
                 if data.notice != ""
-                  text data.notice font-size=11 color="#ff3b30" text-align="center" margin-bottom=8
+                  text data.notice font-size=11 color="-exact-system-red" text-align="center" margin-bottom=8
                 if replyBody != ""
-                  row align-items="center" gap=8 margin-left=52 margin-bottom=8 padding-left=12 border-left-width=2 border-left-style="solid" border-color="#0088ff"
+                  row align-items="center" gap=8 margin-left=52 margin-bottom=8 padding-left=12 border-left-width=2 border-left-style="solid" border-color="AccentColor"
                     column flex=1 min-width=0
-                      text "Replying to" font-size=11 color="#0088ff"
+                      text "Replying to" font-size=11 color="AccentColor"
                       text replyBody font-size=13 class=Secondary line-clamp=2
                     button appearance="none" press=cancelReply testId="cancel-reply" width=28 height=28
                       text "×" font-size=22 class=Secondary
                 row align-items="flex-end" gap=12
                   button press=togglePanel retainFocus=true testId="add" aria-label="Add" class=GlassButton backgroundMaterial="glass"
                     box width=15.333 height=15.333 position="relative" rotate=(panel ? 45 : 0) transition="rotate 180ms ease-out"
-                      box position="absolute" left=6.542 top=0 width=2.25 height=15.333 border-radius=1 background-color="light-dark(#858e99, #b0b5bd)"
-                      box position="absolute" top=6.542 left=0 height=2.25 width=15.333 border-radius=1 background-color="light-dark(#858e99, #b0b5bd)"
+                      box position="absolute" left=6.542 top=0 width=2.25 height=15.333 border-radius=1 background-color="-exact-secondary-label"
+                      box position="absolute" top=6.542 left=0 height=2.25 width=15.333 border-radius=1 background-color="-exact-secondary-label"
                   row id="composer-pill" testId="composer-pill" position="relative" flex=1 min-width=0 min-height=40 border-radius=20 backgroundMaterial="glass" padding-right=6.5 align-items="flex-end" box-sizing="border-box"
-                    textarea appearance="none" id="composer" testId="composer" aria-label="Message" value=textValue input=write focus=focusComposer blur=blurComposer placeholder=(thread == "demo" ? "iMessage" : "Message") font-family="system-ui" font-size=17 line-height="20.2871px" field-sizing="content" min-height=40 max-height=263.158 flex=1 min-width=0 padding-left=16 padding-right=5 padding-top=9.85645 padding-bottom=9.85645 border-width=0 box-sizing="border-box" background-color="#00000000" class=Ink
-                    button press=send retainFocus=true disabled=(textValue == "" and not data.busy) testId="send" aria-label=(data.busy ? "Stop response" : "Send message") width=38 height=28 margin-bottom=6 border-radius=14 background-color=(textValue != "" or data.busy ? "light-dark(#0088ff, #0091ff)" : "#00000000") display="flex" align-items="center" justify-content="center" flex-shrink=0
+                    textarea appearance="none" id="composer" testId="composer" aria-label="Message" value=textValue input=write focus=focusComposer blur=blurComposer placeholder=(thread == "demo" ? "iMessage" : "Message") font-family="system-ui" font-size=17 line-height="20.2871px" field-sizing="content" min-height=40 max-height=263.158 flex=1 min-width=0 padding-left=16 padding-right=5 padding-top=9.85645 padding-bottom=9.85645 border-width=0 box-sizing="border-box" background-color="transparent" class=Ink
+                    button press=send retainFocus=true disabled=(textValue == "" and not data.busy) testId="send" aria-label=(data.busy ? "Stop response" : "Send message") width=38 height=28 margin-bottom=6 border-radius=14 background-color=(textValue != "" or data.busy ? "AccentColor" : "transparent") display="flex" align-items="center" justify-content="center" flex-shrink=0
                       if data.busy
-                        box width=10 height=10 border-radius=2 background-color="#ffffff"
+                        box width=10 height=10 border-radius=2 background-color="AccentColorText"
                       else
                         if textValue != ""
-                          text "↑" font-size=22 font-weight=600 line-height="28px" color="#ffffff"
+                          text "↑" font-size=22 font-weight=600 line-height="28px" color="AccentColorText"
                         else
                           row align-items="center" gap=2 margin-right=5.4
-                            box width=2 height=4 border-radius=1 background-color="#8e8e93"
-                            box width=2 height=8 border-radius=1 background-color="#8e8e93"
-                            box width=2 height=16 border-radius=1 background-color="#8e8e93"
-                            box width=2 height=8 border-radius=1 background-color="#8e8e93"
-                            box width=2 height=4 border-radius=1 background-color="#8e8e93"
+                            box width=2 height=4 border-radius=1 background-color="-exact-secondary-label"
+                            box width=2 height=8 border-radius=1 background-color="-exact-secondary-label"
+                            box width=2 height=16 border-radius=1 background-color="-exact-secondary-label"
+                            box width=2 height=8 border-radius=1 background-color="-exact-secondary-label"
+                            box width=2 height=4 border-radius=1 background-color="-exact-secondary-label"
                 if not editing
                   box height="calc(env(safe-area-inset-bottom) - 18px)" min-height=0 flex-shrink=0
           if entry.name == "reader"
             column testId="reader" flex=1 min-height=0 width="100%" inert=(selected != "" or choosing or panel)
               row height=44 padding-left=16 padding-right=16 align-items="center" gap=16
                 button press=back testId="reader-back" aria-label="Back" class=GlassButton backgroundMaterial="glass"
-                  image "symbol:back" font-size=20 color="light-dark(#000000, #ffffff)"
+                  image "symbol:back" font-size=20 color="-exact-label"
                 text "Message" font-size=17 font-weight=600
               scroll flex=1 min-height=0 padding=20
-                textarea appearance="none" readonly=true value=fullText aria-label="Full message text" testId="reader-text" field-sizing="content" width="100%" min-height=300 padding=0 border-width=0 background-color="#00000000" class=Ink font-size=17 line-height="24px"
+                textarea appearance="none" readonly=true value=fullText aria-label="Full message text" testId="reader-text" field-sizing="content" width="100%" min-height=300 padding=0 border-width=0 background-color="transparent" class=Ink font-size=17 line-height="24px"
           if entry.id == top(nav).id
             if flightPhase >= 2 and flightThread == thread
               box testId="send-flight" position="absolute" left=flightX top=flightY width=flightWidth translate=`0px ${flightDelta}px` scale=flightScale transform-origin="100% 100%" transition=(flightPhase == 2 ? "none" : (flightPhase == 5 ? "translate -exact-spring(141.75909, 23.8125, 1), scale -exact-spring(320, 50.5964, 2)" : "translate -exact-spring(141.75909, 23.8125, 1), scale 177ms cubic-bezier(0.41, 0.2, 0.6, 1)")) pointer-events="none" z-index=20
@@ -397,33 +397,33 @@ component Messages
                 button press=dismiss retainFocus=true testId="dismiss-panel" aria-label="Close Add menu" position="absolute" top=0 left=0 width="100%" height="100%"
                 column testId="add-panel" position="absolute" left=11 bottom=80 width="calc(100% - 22px)" max-width=360 border-radius=30 padding-top=11 padding-bottom=11 backgroundMaterial="glass" box-shadow="0px 8px 40px #00000026" animation=(viewport.prefersReducedMotion ? "none" : "card 260ms cubic-bezier(0.2, 0.05, 0.15, 1)")
                   button press=choose(true) testId="new-ai-chat" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                    Avatar(initials="✦", color="#5856d6", size=38)
+                    ActionIcon(symbol="✦")
                     text "New AI chat" font-size=24
                   button press=choose(false) disabled=(thread == "demo" or data.busy) testId="choose-model" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                    Avatar(initials="⇄", color="#0088ff", size=38)
+                    ActionIcon(symbol="⇄")
                     text "Change model" font-size=24
                   if thread == "demo"
                     button press=operation("receive") testId="receive" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                      Avatar(initials="↓", color="#34c759", size=38)
+                      ActionIcon(symbol="↓")
                       text "Receive message" font-size=24
                     button press=operation("fifty") testId="add-fifty" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                      Avatar(initials="+", color="#ff9500", size=38)
+                      ActionIcon(symbol="+")
                       text "Add 50 messages" font-size=24
                     button press=operation("typing") testId="toggle-typing" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                      Avatar(initials="…", color="#8e8e93", size=38)
+                      ActionIcon(symbol="…")
                       text "Typing indicator" font-size=24
                     button press=operation("reset") testId="reset-demo" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                      Avatar(initials="↺", color="#ff3b30", size=38)
+                      ActionIcon(symbol="↺")
                       text "Reset chat" font-size=24
                   else
                     button press=jump(false) testId="earliest" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                      Avatar(initials="↑", color="#8e8e93", size=38)
+                      ActionIcon(symbol="↑")
                       text "First message" font-size=24
                     button press=jump(true) testId="latest" display="flex" flex-direction="row" align-items="center" gap=27 height=66 padding-left=34
-                      Avatar(initials="↓", color="#34c759", size=38)
+                      ActionIcon(symbol="↓")
                       text "Latest message" font-size=24
             if selected != ""
-              column keycapture=menuKey position="absolute" top=0 left=0 right=0 bottom=0 z-index=30 background-color="#00000030" padding-left=16 padding-right=16
+              column keycapture=menuKey position="absolute" top=0 left=0 right=0 bottom=0 z-index=30 background-color="-exact-fill" padding-left=16 padding-right=16
                 button tabindex=0 press=dismiss testId="dismiss-context" aria-label="Dismiss message menu" position="absolute" top=0 left=0 width="100%" height="100%"
                 column position="absolute" left=(not selectedOutgoing and thread == "demo" ? 47 : 16) right=16 top=max(76, min(selectedY - 68, viewport.height - selectedHeight - 292)) gap=12 align-items=(selectedOutgoing ? "flex-end" : "flex-start")
                   row border-radius=30 backgroundMaterial="glass" padding=8 gap=4 animation=(viewport.prefersReducedMotion ? "none" : "card 180ms ease-out")
@@ -446,25 +446,25 @@ component Messages
                       text "↩" font-size=22
                       text "Reply" font-size=17
                     button tabindex=0 appearance="none" press=copy testId="copy-message" height=44 padding-left=20 display="flex" flex-direction="row" align-items="center" gap=16
-                      image "symbol:copy" font-size=20 color="light-dark(#000000, #ffffff)"
+                      image "symbol:copy" font-size=20 color="-exact-label"
                       text "Copy" font-size=17
                     button tabindex=0 appearance="none" press=read(selectedBody) testId="read-message" height=44 padding-left=20 display="flex" flex-direction="row" align-items="center" gap=16
                       text "Aa" font-size=18
                       text "Select Text" font-size=17
                     button tabindex=0 appearance="none" press=remove disabled=data.busy testId="delete-message" height=44 padding-left=20 display="flex" flex-direction="row" align-items="center" gap=16
-                      image "symbol:delete" font-size=20 color="#ff3b30"
-                      text "Delete" font-size=17 color="#ff3b30"
+                      image "symbol:delete" font-size=20 color="-exact-system-red"
+                      text "Delete" font-size=17 color="-exact-system-red"
             if choosing
-              column position="absolute" top=0 left=0 right=0 bottom=0 z-index=40 background-color="#00000030" justify-content="flex-end"
+              column position="absolute" top=0 left=0 right=0 bottom=0 z-index=40 background-color="-exact-fill" justify-content="flex-end"
                 button press=dismiss testId="dismiss-models" aria-label="Close model picker" position="absolute" top=0 left=0 width="100%" height="100%"
                 column testId="model-picker" height="88%" border-top-left-radius=28 border-top-right-radius=28 class=Canvas padding-top=10 padding-bottom="env(safe-area-inset-bottom)" animation=(viewport.prefersReducedMotion ? "none" : "card 260ms cubic-bezier(0.2, 0.05, 0.15, 1)")
-                  box width=36 height=5 border-radius=3 background-color="light-dark(#d1d1d6, #48484a)" align-self="center" margin-bottom=12
+                  box width=36 height=5 border-radius=3 background-color="-exact-separator" align-self="center" margin-bottom=12
                   row padding-left=20 padding-right=16 height=44 align-items="center" justify-content="space-between"
                     text (newConversation ? "New Message" : "Choose a Model") font-size=24 font-weight=700
                     button press=dismiss testId="close-models" class=GlassButton backgroundMaterial="glass" aria-label="Close"
                       text "×" font-size=26 class=Secondary
                   text "Chat with any model on OpenRouter" font-size=14 class=Secondary margin-left=20 margin-bottom=16
-                  input appearance="none" value=modelQuery input=searchModels placeholder="Search models" aria-label="Search models" testId="model-search" font-size=17 min-height=40 margin-left=16 margin-right=16 margin-bottom=12 padding-left=12 padding-right=12 border-radius=12 border-width=0 background-color="light-dark(#efeff0, #1c1c1e)" class=Ink
+                  input appearance="none" value=modelQuery input=searchModels placeholder="Search models" aria-label="Search models" testId="model-search" font-size=17 min-height=40 margin-left=16 margin-right=16 margin-bottom=12 padding-left=12 padding-right=12 border-radius=12 border-width=0 background-color="-exact-secondary-background" class=Ink
                   scroll flex=1 min-height=0 testId="models-list"
                     for m in models key=m.id
                       button press=model(m.id) testId=`model-${m.id}` disabled=(data.busy and not newConversation) display="flex" flex-direction="row" align-items="center" gap=12 padding-left=20 padding-right=20 padding-top=12 padding-bottom=12 width="100%" box-sizing="border-box"
@@ -473,6 +473,6 @@ component Messages
                           text m.name font-size=17 font-weight=600 line-clamp=1 text-align="left"
                           text m.maker font-size=13 class=Secondary text-align="left"
                         if m.id == data.model and not newConversation
-                          text "✓" font-size=20 color="#0088ff"
+                          text "✓" font-size=20 color="AccentColor"
                     if models.length == 0
                       text "No models found" font-size=17 class=Secondary text-align="center" margin-top=24

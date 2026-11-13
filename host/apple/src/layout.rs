@@ -9,7 +9,13 @@ pub(super) mod closed;
 pub(super) mod separator;
 
 /// The props `emit_layout` derives from a node's layout, not its author's.
-pub(super) const DERIVED_PROPS: [&str; 3] = ["fitScale", "flexGrows", "textOffset"];
+pub(super) const DERIVED_PROPS: [&str; 5] = [
+    "fitScale",
+    "flexGrows",
+    "textOffset",
+    "textLeft",
+    "textWidth",
+];
 
 impl<D: DataSource> Host<D> {
     /// Configure support, admit one batch, or run the frame tasks after admission.
@@ -412,19 +418,25 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
-            // Where a flex text's lines go down its content box (CSS's
-            // anonymous flex item), which its paragraph is laid out from.
+            // The anonymous text item's placement within its content box.
             let offset = kernel.text_line_offset(&node);
-            let offset = (offset > 0.0).then(|| crate::style::num(offset));
-            if m.props.get("textOffset") != offset.as_ref() {
-                match offset {
-                    Some(value) => {
-                        batch.props(id, &[("textOffset", value.clone())], &[]);
-                        m.props.insert("textOffset", value);
-                    }
-                    None => {
-                        batch.props(id, &[], &["textOffset"]);
-                        m.props.remove("textOffset");
+            let item = kernel.text_item_box(&node);
+            for (name, value) in [
+                ("textOffset", (offset != 0.0).then_some(offset)),
+                ("textLeft", item.map(|item| item.x)),
+                ("textWidth", item.map(|item| item.width)),
+            ] {
+                let offset = value.map(crate::style::num);
+                if m.props.get(name) != offset.as_ref() {
+                    match offset {
+                        Some(value) => {
+                            batch.props(id, &[(name, value.clone())], &[]);
+                            m.props.insert(name, value);
+                        }
+                        None => {
+                            batch.props(id, &[], &[name]);
+                            m.props.remove(name);
+                        }
                     }
                 }
             }

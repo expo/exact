@@ -1211,9 +1211,7 @@ impl NodeArena {
             }
             Some(inset) => {
                 self.insets.insert(slot);
-                // Bitwise, so a -0 comes back as it went in.
-                let zero = |v: &[f32; 4]| v.iter().all(|x| x.to_bits() == 0);
-                if zero(&inset.padding) && zero(&inset.border) && zero(&inset.cover) {
+                if inset.is_zero() {
                     self.nonzero_insets.remove(&slot);
                 } else {
                     self.nonzero_insets.insert(slot, inset);
