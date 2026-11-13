@@ -1,4 +1,5 @@
 use Snapshot, NativeGlass, card from "./shapes.contract"
+use TranscriptRow from "./shapes.contract"
 use Change from "./shapes.contract"
 use Model from "./shapes.contract"
 use Viewport from "./shapes.contract"
@@ -28,7 +29,6 @@ component Messages
   state editing = false
   state pull = 0
   state dragging = false
-  state endRequest = 0
   state selected = ""
   state selectedBody = ""
   state selectedOutgoing = false
@@ -73,6 +73,7 @@ component Messages
   resource viewport = exactViewport() as shape Viewport
   resource wallTime = exactTime() as shape Time
   resource data = snapshot(query, thread, revision) as shape Snapshot
+  derive transcript = data.messages.map(m => TranscriptRow(id=`message-${m.id}`, messages=[m])).concat([TranscriptRow(id="status", messages=[])])
   // The date is the view's: a snapshot asked with it would have no
   // first-frame answer, since the bake's date is unknown (LLP 1027.000.000 D2).
   derive now = wallTime.epochAtZero + time
@@ -84,7 +85,6 @@ component Messages
     nav = open(nav, path("thread", id))
     draft = saved
     draftThread = id
-    endRequest = endRequest + 1
     replyBody = ""
     panel = false
     selected = ""
@@ -111,7 +111,9 @@ component Messages
     send changed = command("draft", thread, value, wallTime.epochAtZero + performanceNow())
   action focusComposer
     editing = true
-    endRequest = endRequest + 1
+    toEnd()
+  action toEnd
+    scrollIntoView("transcript", "status", block="end")
   action blurComposer
     editing = false
   action send
@@ -133,7 +135,7 @@ component Messages
         draftThread = thread
         panel = false
         replyBody = ""
-        endRequest = endRequest + 1
+        toEnd()
   action drag(dx: number, dy: number)
     pull = max(0, pull - dx)
     dragging = true
@@ -184,7 +186,11 @@ component Messages
     send changed = command(op, thread, "", wallTime.epochAtZero + performanceNow())
     panel = false
   action jump(end: bool)
-    endRequest = end ? max(1, endRequest + 1) : min(-1, endRequest - 1)
+    if end
+      toEnd()
+    else
+      let firstKey = match transcript.at(0) { case some(r) => r.id, case none => "status" }
+      scrollIntoView("transcript", firstKey, block="start")
     panel = false
   action choose(new: bool)
     choosing = true
@@ -324,22 +330,24 @@ component Messages
                   if thread != "demo"
                     text "⌄" font-size=14 class=Secondary
                 box width=40 height=40
-              scroll id="transcript" testId="transcript" flex=1 min-height=0 overflow-x="hidden" keyboardDismissMode="interactive" scrollFollowEnd=true scrollTop=(endRequest >= 0 ? 1000000 + endRequest : endRequest) pan=drag panrelease=release touch-action="pan-y"
-                column padding-top=15.667 padding-bottom=16
-                  for m in data.messages key=m.id
-                    MessageRow(m=m, now=now, offset=wallTime.utcOffset, receiptId=receiptId, maximum=maximum, group=(thread == "demo"), travel=travel, dragging=dragging, reduced=viewport.prefersReducedMotion, hidden=(selected == m.id or (flightPhase >= 2 and flightId == m.id and flightThread == thread)), select=select, reply=reply, read=read)
-                  if data.typing
-                    Typing(reduced=viewport.prefersReducedMotion)
-                  if data.error != ""
-                    column margin-top=12 margin-left=24 margin-right=24 gap=8 align-items="center"
-                      text data.error font-size=13 line-height="18px" color="#ff3b30" text-align="center"
-                      button appearance="none" press=operation("retry") testId="retry" padding=8
-                        text "Try Again" font-size=15 color="#0088ff"
-                  if data.count == 0
-                    column padding-top=40 padding-left=36 padding-right=36 align-items="center" gap=12
-                      Avatar(initials=data.initials, color=data.color, size=64)
-                      text data.name font-size=20 font-weight=600
-                      text "Start a conversation. Your messages are sent to this model through OpenRouter." font-size=15 line-height="21px" class=Secondary text-align="center"
+              list id="transcript" testId="transcript" appearance="none" virtualized=true estimated-item-height=100 scroll-start="end" flex=1 min-height=0 padding-top=15.667 padding-bottom=16 scroll-padding-top=15.667 scroll-padding-bottom=16 overflow-x="hidden" keyboardDismissMode="interactive" scrollFollowEnd=true pan=drag panrelease=release touch-action="pan-y"
+                for r in transcript key=r.id
+                  column
+                    for m in r.messages key=m.id
+                      MessageRow(m=m, now=now, offset=wallTime.utcOffset, receiptId=receiptId, maximum=maximum, group=(thread == "demo"), travel=travel, dragging=dragging, reduced=viewport.prefersReducedMotion, hidden=(selected == m.id or (flightPhase >= 2 and flightId == m.id and flightThread == thread)), select=select, reply=reply, read=read)
+                    if r.id == "status"
+                      if data.typing
+                        Typing(reduced=viewport.prefersReducedMotion)
+                      if data.error != ""
+                        column margin-top=12 margin-left=24 margin-right=24 gap=8 align-items="center"
+                          text data.error font-size=13 line-height="18px" color="#ff3b30" text-align="center"
+                          button appearance="none" press=operation("retry") testId="retry" padding=8
+                            text "Try Again" font-size=15 color="#0088ff"
+                      if data.count == 0
+                        column padding-top=40 padding-left=36 padding-right=36 align-items="center" gap=12
+                          Avatar(initials=data.initials, color=data.color, size=64)
+                          text data.name font-size=20 font-weight=600
+                          text "Start a conversation. Your messages are sent to this model through OpenRouter." font-size=15 line-height="21px" class=Secondary text-align="center"
               column id="composer-bar" testId="composer-bar" position="relative" flex-shrink=0 padding-left=16 padding-right=16 padding-top=0 padding-bottom=(editing ? 16 : 12) backgroundMaterial="ultra-thin"
                 if data.notice != ""
                   text data.notice font-size=11 color="#ff3b30" text-align="center" margin-bottom=8
