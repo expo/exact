@@ -216,7 +216,19 @@ pub(in super::super) fn dispose(state: &mut State) {
     let Some(cache) = state.cache.as_mut() else {
         return;
     };
-    for abort in cache.prefetch_aborts.drain(..) {
+    for (ticket, abort) in cache.prefetch_drops.drain(..) {
+        let Some(run) = state
+            .running
+            .iter_mut()
+            .find(|r| r.ticket == ticket && !r.terminal)
+        else {
+            continue;
+        };
+        // Losing the hold leaves the caller's exchange; a later forget can cancel it (LLP 1162.000 D5).
+        run.abort = Some(abort.clone());
+        if !run.forgotten {
+            continue;
+        }
         let cancel = Cancel(abort);
         state.discard.push(OwnedWork::Now(Box::new(move || {
             drop(cancel);

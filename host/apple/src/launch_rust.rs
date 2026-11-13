@@ -199,6 +199,7 @@ struct Context<'a> {
     allowed: std::collections::BTreeSet<String>,
     guarded: std::collections::BTreeSet<String>,
     used: BTreeMap<String, u64>,
+    failed_writes: std::collections::BTreeSet<String>,
     running: Arc<Running>,
     names: std::collections::BTreeSet<String>,
     accepted: Vec<String>,
@@ -252,6 +253,7 @@ impl<'a> Context<'a> {
             allowed,
             guarded,
             used: BTreeMap::new(),
+            failed_writes: Default::default(),
             running,
             names: definitions.iter().map(|d| d.name.into()).collect(),
             accepted: Vec::new(),
@@ -266,10 +268,19 @@ impl<'a> Context<'a> {
         if *self.running.done.lock().unwrap() {
             return Err("launch deadline".into());
         }
+        if self.failed_writes.contains(name) {
+            return Err("launch secret write failed".into());
+        }
         let backend = self.backend.clone().ok_or("launch secrets unavailable")?;
         let expected = self.versions.get(name).copied().unwrap_or(0);
         self.launch.with_secret_version(name, expected, |version| {
-            backend.write(name, value)?;
+            if let Err(error) = backend.write(name, value) {
+                // Persistence can fail after changing storage, and the function holds the
+                // value it tried to write: what it hands over next depends on it (LLP 1162.000 D3).
+                self.failed_writes.insert(name.into());
+                self.used.insert(name.into(), expected);
+                return Err(error);
+            }
             self.launch.store_written();
             self.versions.insert(name.into(), version);
             self.used.insert(name.into(), version);
@@ -340,6 +351,12 @@ impl LaunchContext for Context<'_> {
             Some((PreloadEvent::Refused, "invalid launch preload request"))
         } else if exact_runner::grants::admitting_request(self.grants, &request).is_none() {
             Some((PreloadEvent::RefusedGrant, "launch preload grant refused"))
+        } else if self
+            .used
+            .keys()
+            .any(|name| self.failed_writes.contains(name))
+        {
+            Some((PreloadEvent::DroppedBySecret, "launch secret write failed"))
         } else if self
             .used
             .iter()

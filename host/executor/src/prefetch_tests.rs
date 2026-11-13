@@ -565,7 +565,9 @@ fn a_refresh_drops_an_equal_prefetch_ready_or_inflight() {
                 server.seen(1);
                 if !pending {
                     release.send(()).unwrap();
-                    collect(&core, &woke);
+                    let (ticket, outcome, _) = collect(&core, &woke);
+                    assert_eq!(ticket, 1);
+                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"prefetched"));
                 }
                 server.plan("/next", Plan::new(200, &[], b"new"));
                 let mut refresh = job(2, server.request("/next").preload("feed").unwrap());
@@ -576,12 +578,15 @@ fn a_refresh_drops_an_equal_prefetch_ready_or_inflight() {
                 }
                 core.run(refresh, None).unwrap();
                 if pending {
+                    server.seen(2);
                     release.send(()).unwrap();
-                    collect(&core, &woke);
+                    let (ticket, outcome, _) = collect(&core, &woke);
+                    assert_eq!(ticket, 1);
+                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"prefetched"));
                 }
-                assert!(
-                    matches!(collect(&core, &woke).1, Outcome::Response(r) if r.body == b"new")
-                );
+                let (ticket, outcome, _) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
                 server.plan("/next", Plan::new(200, &[], b"sent"));
                 let (reply, cached) = read(&core, &woke, &server, 3, "/next");
                 assert!(!cached);
@@ -724,5 +729,156 @@ fn a_refresh_prevents_an_earlier_queued_prefetch_from_holding_its_reply() {
                 assert_eq!(server.count(), 4);
             }
         }
+    }
+}
+
+#[test]
+fn a_refresh_admitted_after_a_fenced_prefetch_starts_takes_only_its_hold() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let old = held_plan(&server, "/next");
+        let (core, woke) = server.core(asynchronous, true);
+        let mut refused = job(99, server.request("/next").prefetch());
+        refused.class = RequestClass::Ordered;
+        assert!(core.run(refused, None).is_err());
+        core.run(job(1, server.request("/next").prefetch()), None)
+            .unwrap();
+        let mut refresh = job(2, server.request("/next"));
+        refresh.forced = true;
+        core.run(refresh, None).unwrap();
+        let fenced = {
+            let mut state = core.shared.state.lock().unwrap();
+            assert!(state.ordered_barrier);
+            assert_eq!(state.fenced.len(), 2);
+            state.ordered_barrier = false;
+            state.fenced_bytes = 0;
+            std::mem::take(&mut state.fenced)
+        };
+        // resume_ordered releases the lock between admissions (LLP 1162 D1).
+        server.plan("/next", Plan::new(200, &[], b"new"));
+        for place in fenced {
+            let Fenced::Held(request, work, _, forgotten) = place else {
+                panic!("held request")
+            };
+            assert!(core.admit(*request, work, forgotten, false).is_ok());
+            server.seen(1);
+        }
+        old.send(()).unwrap();
+        for (expected, body) in [(1, b"prefetched".as_slice()), (2, b"new".as_slice())] {
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, expected);
+            assert!(!timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+        }
+        server.plan("/next", Plan::new(200, &[], b"sent"));
+        assert!(!read(&core, &woke, &server, 3, "/next").1);
+        assert_eq!(server.count(), 3);
+    }
+}
+
+#[test]
+fn a_prefetch_without_its_hold_or_caller_cancels_and_releases_its_reservations() {
+    for asynchronous in [false, true] {
+        for forget_first in [false, true] {
+            let server = Server::new();
+            let old = held_plan(&server, "/next");
+            let (core, woke) = server.core(asynchronous, true);
+            core.run(job(1, server.request("/next").prefetch()), None)
+                .unwrap();
+            server.seen(1);
+            if forget_first {
+                core.forget(|ticket| ticket != 1);
+            }
+            let fresh = held_plan(&server, "/next");
+            let mut refresh = job(2, server.request("/next"));
+            refresh.forced = true;
+            core.run(refresh, None).unwrap();
+            server.seen(2);
+            let mut barrier = job(3, server.request("/barrier"));
+            barrier.class = RequestClass::Ordered;
+            core.run(
+                barrier,
+                Some(Box::new(|| {
+                    Outcome::Response(Response {
+                        status: 200,
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    })
+                })),
+            )
+            .unwrap();
+            if !forget_first {
+                {
+                    let (running, completed) = {
+                        let state = core.shared.state.lock().unwrap();
+                        (
+                            state.running.iter().any(|r| r.ticket == 1),
+                            state.completed[0].iter().any(|r| r.ticket == 1),
+                        )
+                    };
+                    assert!(running);
+                    assert!(!completed);
+                }
+                core.forget(|ticket| ticket != 1);
+            }
+            let state = core.shared.state.lock().unwrap();
+            let (state, timeout) = core
+                .shared
+                .ready
+                .wait_timeout_while(state, HANG, |state| {
+                    state.running.iter().any(|r| r.ticket == 1)
+                })
+                .unwrap();
+            assert!(!timeout.timed_out(), "unwanted prefetch did not end");
+            assert!(!state.completed[0].iter().any(|r| r.ticket == 1));
+            assert_eq!(state.counts[0], 2);
+            assert_eq!(
+                state.bytes[0],
+                state.running.iter().find(|r| r.ticket == 2).unwrap().charge
+                    + state.jobs[0].iter().map(|j| j.charge).sum::<usize>()
+            );
+            assert_eq!(state.cache.as_ref().unwrap().bytes, 0);
+            drop(state);
+            old.send(()).unwrap();
+            fresh.send(()).unwrap();
+            assert_eq!(collect(&core, &woke).0, 2);
+            assert_eq!(collect(&core, &woke).0, 3);
+            assert!(core.ordered_idle());
+        }
+    }
+}
+
+#[test]
+fn a_refresh_releases_a_prefetch_waiter_to_the_network_in_reply_order() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let old = held_plan(&server, "/next");
+        let (core, woke) = server.core(asynchronous, true);
+        core.run(job(1, server.request("/next").prefetch()), None)
+            .unwrap();
+        server.seen(1);
+        core.run(job(2, server.request("/next")), None).unwrap();
+        assert!(core.shared.state.lock().unwrap().jobs[0]
+            .iter()
+            .any(|j| j.ticket == 2));
+        server.plan("/next", Plan::new(200, &[], b"sent"));
+        server.plan("/next", Plan::new(200, &[], b"sent"));
+        let mut refresh = job(3, server.request("/next"));
+        refresh.forced = true;
+        core.run(refresh, None).unwrap();
+        server.seen(3);
+        old.send(()).unwrap();
+        for expected in 1..=3 {
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, expected);
+            assert!(!timing.cached);
+            let body = if ticket == 1 {
+                b"prefetched".as_slice()
+            } else {
+                b"sent".as_slice()
+            };
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+        }
+        assert_eq!(server.count(), 3);
     }
 }

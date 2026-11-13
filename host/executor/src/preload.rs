@@ -892,10 +892,10 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     let mut deferred = None;
     let bytes = match reply {
         ReplyState::Pending { abort, .. } => {
-            if held.prefetch.is_none() {
+            if let Some(ticket) = held.prefetch {
+                deferred = Some((ticket, abort));
+            } else {
                 abort.abort();
-            } else if !matches!(event, Event::Oversized | Event::Failed) {
-                deferred = Some(abort);
             }
             std::mem::take(&mut held.pending_bytes)
         }
@@ -908,8 +908,8 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     held.key = Equal::default();
     held.answered_at = None;
     cache.release(bytes);
-    if let Some(abort) = deferred {
-        cache.prefetch_aborts.push(abort);
+    if let Some(dropped) = deferred {
+        cache.prefetch_drops.push(dropped);
     }
     if let Some(fact) = fact {
         cache.journal.push(fact);

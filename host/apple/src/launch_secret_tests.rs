@@ -239,3 +239,218 @@ fn launch_secret_writes_compare_the_last_observed_version() {
         }
     }
 }
+
+struct FailOnce {
+    backend: Arc<dyn Backend>,
+    fail: AtomicBool,
+}
+impl Backend for FailOnce {
+    fn read(&self, name: &str) -> Result<Option<String>, String> {
+        self.backend.read(name)
+    }
+    fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        self.backend.write(name, value)?;
+        if self.fail.swap(false, Ordering::AcqRel) {
+            Err("private backend failure".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn a_failed_launch_secret_write_invalidates_its_uses_without_publishing_to_the_host() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for forget in [false, true] {
+            for read_first in [false, true] {
+                let manifest = Server::new(2);
+                let public = Server::new(1);
+                let url = format!("http://{}/public", public.address);
+                let stale_url = format!("http://{}/stale", manifest.address);
+                let (entered, entering) = channel();
+                let (release, released) = channel();
+                let released = Mutex::new(released);
+                let (answer, answered) = channel();
+                let (other, others) = channel();
+                let others = Mutex::new(others);
+                let (written, writing) = channel();
+                let mut source = source(&manifest, move |ctx| {
+                    if read_first {
+                        ctx.preload(LaunchRequest::new("public", Request::get(&url)))
+                            .unwrap();
+                        assert_eq!(ctx.secret("session").as_deref(), Some("A"));
+                    }
+                    entered.send(()).unwrap();
+                    released.lock().unwrap().recv_timeout(HANG).unwrap();
+                    let failed = if forget {
+                        ctx.forget_secret("session")
+                    } else {
+                        ctx.set_secret("session", "refreshed")
+                    };
+                    let set = ctx.set_secret("session", "retry");
+                    let forgotten = ctx.forget_secret("session");
+                    let public = if !read_first {
+                        ctx.preload(LaunchRequest::new("public", Request::get(&url)))
+                    } else {
+                        Ok(())
+                    };
+                    let snapshot = ctx.secret("session");
+                    let stale = ctx.preload(LaunchRequest::new("stale", Request::get(&stale_url)));
+                    answer
+                        .send((failed, set, forgotten, public, snapshot, stale))
+                        .unwrap();
+                    others.lock().unwrap().recv_timeout(HANG).unwrap();
+                    written
+                        .send(ctx.set_secret("other", "independent"))
+                        .unwrap();
+                });
+                source.base.definitions = manifest.source(PreloadWhen::Start, true).definitions;
+                source.base.grants.push_str(&format!(
+                    "\nnet.fetch http://{}\nsecret.keep other",
+                    public.address
+                ));
+                source.manifest = true;
+                source.reads_session = true;
+                let launch = fixture();
+                let bindings = crate::store::endow(&source.base.grants).unwrap();
+                let backend: Arc<dyn Backend> =
+                    Arc::new(crate::store::launch_backend_in(bindings.secrets, None));
+                backend.write("session", Some("A")).unwrap();
+                let manifest_backend = backend.clone();
+                *launch.0.reader.lock().unwrap() = Some(Arc::new(move |_, _, _| {
+                    BTreeMap::from([(
+                        "session".into(),
+                        manifest_backend.read("session").unwrap().unwrap(),
+                    )])
+                }));
+                *launch.0.backend.lock().unwrap() = Some(Arc::new(FailOnce {
+                    backend: backend.clone(),
+                    fail: AtomicBool::new(true),
+                }));
+                begin(&launch, &source, false);
+                entering.recv_timeout(HANG).unwrap();
+                manifest.request();
+                let (mut drive, _) = Drive::boot_endowed(&source, &plan(), endowed);
+                while drive.wakes.try_recv().is_ok() {}
+                let reads = READS.with(|v| v.load(Ordering::Acquire));
+                release.send(()).unwrap();
+                let (failed, set, forgotten, accepted, snapshot, stale) =
+                    answered.recv_timeout(HANG).unwrap();
+                assert_eq!(failed, Err("private backend failure".into()));
+                assert_eq!(set, Err("launch secret write failed".into()));
+                assert_eq!(forgotten, Err("launch secret write failed".into()));
+                assert_eq!(stale, Err("launch secret write failed".into()));
+                // A request handed over after the failed write is refused, whether or not the
+                // function had read the secret: it may carry the value it tried to write.
+                assert_eq!(
+                    accepted,
+                    if read_first {
+                        Ok(())
+                    } else {
+                        Err("launch secret write failed".into())
+                    }
+                );
+                assert_eq!(snapshot.as_deref(), Some("A"));
+                assert_eq!(
+                    backend.read("session").unwrap().as_deref(),
+                    if forget { None } else { Some("refreshed") }
+                );
+                assert!(drive.wakes.try_recv().is_err());
+                let journal = launch.journal();
+                drive.bridge.pump(0.);
+                assert_eq!(READS.with(|v| v.load(Ordering::Acquire)), reads);
+                drive.bridge.data_ready();
+                let head = manifest.request().to_ascii_lowercase();
+                assert!(head.contains("authorization: a"), "{head}");
+                if read_first {
+                    assert!(public.request().contains("/public"));
+                }
+                assert!(journal
+                    .iter()
+                    .any(|f| f.name == "feed" && f.outcome == PreloadEvent::DroppedBySecret));
+                assert!(journal
+                    .iter()
+                    .any(|f| f.name == "stale" && f.outcome == PreloadEvent::DroppedBySecret));
+                assert!(!format!("{journal:?}").contains("private backend failure"));
+                other.send(()).unwrap();
+                assert_eq!(writing.recv_timeout(HANG).unwrap(), Ok(()));
+                launch.0.rust.get().unwrap().wait_returned();
+                definitions(&launch);
+                assert_eq!(
+                    backend.read("other").unwrap().as_deref(),
+                    Some("independent")
+                );
+                assert_eq!(
+                    launch.with_secret_write("session", || backend.write("session", Some("app"))),
+                    Ok(())
+                );
+                assert_eq!(backend.read("session").unwrap().as_deref(), Some("app"));
+                manifest.release(0);
+                manifest.release(1);
+                if read_first {
+                    public.release(0);
+                }
+                drop(drive);
+                assert_eq!(manifest.count.load(Ordering::Acquire), 2);
+                assert_eq!(
+                    public.count.load(Ordering::Acquire),
+                    usize::from(read_first)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn an_apps_failed_secret_write_refuses_the_launch_functions_stale_write_and_handoff() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for forget in [false, true] {
+            let server = Server::new(0);
+            let url = format!("http://{}/stale", server.address);
+            let (entered, entering) = channel();
+            let (release, released) = channel();
+            let released = Mutex::new(released);
+            let (answer, answered) = channel();
+            let source = source(&server, move |ctx| {
+                assert_eq!(ctx.secret("session").as_deref(), Some("A"));
+                entered.send(()).unwrap();
+                released.lock().unwrap().recv_timeout(HANG).unwrap();
+                answer
+                    .send((
+                        ctx.set_secret("session", "retry"),
+                        ctx.forget_secret("session"),
+                        ctx.preload(LaunchRequest::new("stale", Request::get(&url))),
+                    ))
+                    .unwrap();
+            });
+            let launch = fixture();
+            let backend = launch.0.backend.lock().unwrap().clone().unwrap();
+            backend.write("session", Some("A")).unwrap();
+            begin(&launch, &source, false);
+            entering.recv_timeout(HANG).unwrap();
+            let failed = FailOnce {
+                backend: backend.clone(),
+                fail: AtomicBool::new(true),
+            };
+            assert_eq!(
+                launch.with_secret_write("session", || failed
+                    .write("session", if forget { None } else { Some("app") })),
+                Err("private backend failure".into())
+            );
+            release.send(()).unwrap();
+            let (set, forgotten, preload) = answered.recv_timeout(HANG).unwrap();
+            definitions(&launch);
+            assert_eq!(set, Err("launch secret changed".into()));
+            assert_eq!(forgotten, Err("launch secret changed".into()));
+            assert_eq!(preload, Err("launch preload secret changed".into()));
+            assert_eq!(
+                backend.read("session").unwrap().as_deref(),
+                if forget { None } else { Some("app") }
+            );
+            assert_eq!(launch.count(), 0);
+            assert_eq!(server.count.load(Ordering::Acquire), 0);
+        }
+    }
+}

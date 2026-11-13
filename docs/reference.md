@@ -367,7 +367,10 @@ The context offers `secret`, durable `set_secret` and `forget_secret`, and block
 `fetch` under the binary's grants, without the cache. A secret write succeeds only
 if its version still equals the function's last read or own write; for a secret
 it has not read, the version at the function's start applies. A changed version
-returns a refusal reason. The context exposes no app storage.
+returns a refusal reason. If `set_secret` or `forget_secret` fails, the function
+cannot write that secret again during this launch, and each request it hands over
+afterwards is refused: what is stored is then unknown.
+The context exposes no app storage.
 On hosts that start preloads, it runs before the app's module, after the manifest's
 start requests reach the client. Its requests share the eight-entry bound.
 A handoff checks the version last read or written of every secret the function
