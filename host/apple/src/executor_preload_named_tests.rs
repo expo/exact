@@ -262,3 +262,94 @@ fn a_named_refresh_drops_the_hold_it_would_take_unless_an_update_disables_names(
         }
     }
 }
+
+#[test]
+fn a_running_function_holds_only_names_without_definitions() {
+    for asynchronous in [false, true] {
+        for selected in [false, true] {
+            for end in 0..4 {
+                let server = Server::new();
+                let (set, clock) = fresh_clock(&server, Vec::new());
+                let control = set.control();
+                control.launch_pending(Some(Duration::from_secs(5)));
+                if selected {
+                    control.select_update();
+                }
+                let (core, woke) = server.core(asynchronous, true);
+                adopt(&core, set);
+                server.plan("/other", Plan::new(200, &[], b"other"));
+                server.plan("/send", Plan::new(200, &[], b"send"));
+                let feed = held_plan(&server, "/feed", b"feed");
+                core.run(job(1, server.request("/other")), None).unwrap();
+                let mut send = job(2, server.request("/send"));
+                send.class = RequestClass::Ordered;
+                core.run(send, None).unwrap();
+                for expected in 1..=2 {
+                    assert_eq!(collect(&core, &woke).0, expected);
+                }
+                let named = server.request("/feed").preload("feed").unwrap();
+                core.run(job(3, named), None).unwrap();
+                if !selected {
+                    let state = core.shared.state.lock().unwrap();
+                    assert_eq!(state.jobs[0].len(), 1);
+                    assert!(waiting(&state, &state.jobs[0][0]));
+                    assert_eq!(server.count(), 2);
+                }
+                if selected {
+                    server.seen(3);
+                } else {
+                    match end {
+                        0 => control.extend(
+                            vec![definition(&server, "/feed")],
+                            &format!("net.fetch http://{}", server.address),
+                            Arc::new(|_, _| {}),
+                        ),
+                        1 => control.launch_pending(None),
+                        2 => control.defined("feed"),
+                        _ => {
+                            *clock.lock().unwrap() += Duration::from_secs(5);
+                            control.test_tick();
+                        }
+                    }
+                    server.seen(3);
+                }
+                feed.send(()).unwrap();
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 3);
+                assert_eq!(timing.cached, !selected && end == 0);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"feed"));
+                assert_eq!(server.count(), 3);
+            }
+        }
+    }
+}
+
+#[test]
+fn an_existing_name_waits_only_for_a_matching_hold_during_the_function() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let feed = held_plan(&server, "/feed", b"held");
+        let (set, _) = fresh_clock(&server, vec![definition(&server, "/feed")]);
+        let control = set.control();
+        control.launch_pending(Some(Duration::from_secs(5)));
+        server.seen(1);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/other", Plan::new(200, &[], b"sent"));
+        let (reply, cached) = ask(
+            &core,
+            &woke,
+            job(1, server.request("/other").preload("feed").unwrap()),
+        );
+        assert!(!cached);
+        assert_eq!(reply.body, b"sent");
+        core.run(
+            job(2, server.request("/feed").preload("feed").unwrap()),
+            None,
+        )
+        .unwrap();
+        feed.send(()).unwrap();
+        assert!(collect(&core, &woke).2.cached);
+        assert_eq!(server.count(), 2);
+    }
+}

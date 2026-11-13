@@ -364,14 +364,21 @@ to `context.preload(request)`: it returns `Result<(), String>` with a refusal re
 else starts it immediately (`Foreground` waits for Opened). `when` defaults to
 `Start`; the request's `timeout_ms` is its exchange deadline.
 The context offers `secret`, durable `set_secret` and `forget_secret`, and blocking
-`fetch` under the binary's grants, without the cache. It exposes no app storage.
+`fetch` under the binary's grants, without the cache. A secret write succeeds only
+if its version still equals the function's last read or own write; for a secret
+it has not read, the version at the function's start applies. A changed version
+returns a refusal reason. The context exposes no app storage.
 On hosts that start preloads, it runs before the app's module, after the manifest's
 start requests reach the client. Its requests share the eight-entry bound.
 A handoff checks the version last read or written of every secret the function
 has used; an intervening app write refuses it. Each accepted request depends on
 all those secrets: a later write by either writer cancels it and drops its reply.
-After five seconds, boot reads waiting for definitions proceed. Requests handed
-over before that deadline stand; later handoffs are refused.
+While the function runs, a read waits only if it names a preload with no definition
+yet. It proceeds when that name is handed over, the function returns, or five
+seconds pass, then uses the ordinary holding rule. Unnamed reads and reads under
+an update selection wait only for existing holds. The manifest's definitions may
+hold any eligible read for one second. The function's deadline also aborts its
+blocking fetch. Requests handed over before it stand; later handoffs are refused.
 A panic cancels the function's requests where the build unwinds (a development
 build); a release build aborts on a panic there as anywhere in the crate.
 

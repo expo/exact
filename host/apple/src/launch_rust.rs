@@ -7,14 +7,14 @@ use exact_runner::{Request, Response};
 use std::sync::Condvar;
 use std::time::{Duration, Instant};
 
-// Five seconds allows a token refresh while bounding reads held for unknown definitions.
-// It is shorter than the ordinary fetch deadline: speculative code cannot hold boot reads for 60 seconds.
+// Bound token refreshes and reads naming unknown preloads (LLP 1162.000 D2).
 pub(super) const LAUNCH_DEADLINE: Duration = Duration::from_secs(5);
 
 pub(super) struct Running {
     started: Instant,
     done: Mutex<bool>,
     changed: Condvar,
+    fetch_abort: ibex2::stdlib::abort::AbortController,
     name: &'static str,
     launch: std::sync::Weak<Launch>,
     #[cfg(test)]
@@ -63,6 +63,7 @@ impl Running {
         let mut done = self.done.lock().unwrap();
         if !*done && now.saturating_duration_since(self.started) >= LAUNCH_DEADLINE {
             *done = true;
+            self.fetch_abort.abort();
             if let Some(launch) = self.launch.upgrade().map(LaunchPreloads) {
                 self.record(
                     &launch,
@@ -100,6 +101,7 @@ pub(super) fn run(
         started: Instant::now(),
         done: Mutex::new(false),
         changed: Condvar::new(),
+        fetch_abort: ibex2::stdlib::abort::AbortController::new(),
         name: entry.name,
         launch: Arc::downgrade(&launch.0),
         #[cfg(test)]
@@ -265,7 +267,8 @@ impl<'a> Context<'a> {
             return Err("launch deadline".into());
         }
         let backend = self.backend.clone().ok_or("launch secrets unavailable")?;
-        self.launch.with_secret_version(name, |version| {
+        let expected = self.versions.get(name).copied().unwrap_or(0);
+        self.launch.with_secret_version(name, expected, |version| {
             backend.write(name, value)?;
             self.launch.store_written();
             self.versions.insert(name.into(), version);
@@ -313,7 +316,9 @@ impl LaunchContext for Context<'_> {
             && name
                 .bytes()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-');
-        let refusal = if *done
+        let refusal = if !valid_name {
+            Some((PreloadEvent::InvalidName, "invalid launch preload name"))
+        } else if *done
             || self
                 .running
                 .now()
@@ -321,9 +326,7 @@ impl LaunchContext for Context<'_> {
                 >= LAUNCH_DEADLINE
         {
             Some((PreloadEvent::Refused, "launch deadline"))
-        } else if !valid_name
-            || !self.names.insert(name.clone())
-            || self.manifest_count + self.accepted.len() >= 8
+        } else if !self.names.insert(name.clone()) || self.manifest_count + self.accepted.len() >= 8
         {
             Some((PreloadEvent::Refused, "launch preload name or limit"))
         } else if url::Url::parse(&request.url).is_err() {
@@ -350,11 +353,16 @@ impl LaunchContext for Context<'_> {
             None
         };
         if let Some((outcome, reason)) = refusal {
-            self.launch.0.journal.lock().unwrap().push(PreloadFact {
-                name,
-                origin: origin(&request),
-                outcome,
-            });
+            if valid_name {
+                self.launch.0.set.get().unwrap().control.defined(&name);
+                self.launch.0.journal.lock().unwrap().push(PreloadFact {
+                    name,
+                    origin: origin(&request),
+                    outcome,
+                });
+            } else {
+                self.running.record(self.launch, outcome);
+            }
             return Err(reason.into());
         }
         self.launch
@@ -374,6 +382,13 @@ impl LaunchContext for Context<'_> {
         if when == PreloadWhen::Foreground
             && self.launch.0.phase.load(Ordering::Acquire) & OPENED == 0
         {
+            self.launch
+                .0
+                .set
+                .get()
+                .unwrap()
+                .control
+                .defined(&preload.name);
             self.launch.0.foreground.lock().unwrap().push(Prepared {
                 preload,
                 grants: self.grants.into(),
@@ -385,9 +400,20 @@ impl LaunchContext for Context<'_> {
         Ok(())
     }
     fn fetch(&mut self, request: Request) -> Result<Response, String> {
+        self.running.expire(self.running.now());
         if *self.running.done.lock().unwrap() {
             return Err("launch deadline".into());
         }
-        crate::executor::launch_fetch(request, self.grants, ibex2::host::Host::new())
+        let result = crate::executor::launch_fetch(
+            request,
+            self.grants,
+            ibex2::host::Host::new(),
+            &self.running.fetch_abort.signal(),
+        );
+        if *self.running.done.lock().unwrap() {
+            Err("launch deadline".into())
+        } else {
+            result
+        }
     }
 }

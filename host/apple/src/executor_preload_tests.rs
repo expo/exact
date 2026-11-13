@@ -1272,7 +1272,7 @@ fn equal_preloads_keep_every_secrets_invalidation_after_their_holds_expire() {
 }
 
 #[test]
-fn a_read_keeps_its_definition_wait_when_rust_launch_begins() {
+fn an_unnamed_read_ends_its_definition_wait_when_rust_launch_begins() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let (set, clock) = fresh_clock(&server, Vec::new());
@@ -1280,40 +1280,20 @@ fn a_read_keeps_its_definition_wait_when_rust_launch_begins() {
         control.definitions_pending(true);
         let (core, woke) = server.core(asynchronous, true);
         adopt(&core, set);
-        server.plan("/definitions", Plan::new(200, &[], b"one second"));
-        server.plan("/launch", Plan::new(200, &[], b"five seconds"));
+        server.plan("/definitions", Plan::new(200, &[], b"sent"));
         core.run(job(1, server.request("/definitions")), None)
             .unwrap();
-        *clock.lock().unwrap() += Duration::from_millis(500);
-        let launch_wait = Duration::from_secs(5);
-        control.launch_pending(Some(launch_wait));
-        core.run(job(2, server.request("/launch")), None).unwrap();
-        *clock.lock().unwrap() += DEFINITIONS_WAIT - Duration::from_millis(500);
-        if let Some(machine) = &core.machine {
-            machine.timer.expire((0, 0));
-        } else {
-            core.shared.ready.notify_all();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert!(waiting(&state, &state.jobs[0][0]));
         }
+        *clock.lock().unwrap() += Duration::from_millis(500);
+        control.launch_pending(Some(Duration::from_secs(5)));
         let (ticket, outcome, timing) = collect(&core, &woke);
         assert_eq!(ticket, 1);
         assert!(!timing.cached);
-        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"one second"));
-        *clock.lock().unwrap() += launch_wait - Duration::from_millis(501);
-        control.test_tick();
-        {
-            let state = core.shared.state.lock().unwrap();
-            assert_eq!(state.jobs[0].len(), 1);
-            assert_eq!(state.jobs[0][0].ticket, 2);
-            assert!(waiting(&state, &state.jobs[0][0]));
-            assert_eq!(server.count(), 1);
-        }
-        *clock.lock().unwrap() += Duration::from_millis(1);
-        control.test_tick();
-        let (ticket, outcome, timing) = collect(&core, &woke);
-        assert_eq!(ticket, 2);
-        assert!(!timing.cached);
-        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"five seconds"));
-        assert_eq!(server.count(), 2);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
+        assert_eq!(server.count(), 1);
     }
 }
 
@@ -1373,7 +1353,9 @@ fn preloads_are_speculative_on_every_hop_and_a_context_fetch_is_not() {
     );
     set.control().wait_ready(1);
     assert_eq!(
-        launch_fetch(request, grants, host()).unwrap().body,
+        launch_fetch(request, grants, host(), &AbortController::new().signal())
+            .unwrap()
+            .body,
         b"content"
     );
     for speculative in [true, false] {
@@ -1418,7 +1400,13 @@ fn launch_fetches_preloads_and_prefetches_keep_the_sources_scope_at_redirects() 
             .take_journal()
             .iter()
             .any(|fact| fact.outcome == Event::RefusedGrant));
-        assert!(launch_fetch(request.clone(), &grants, ibex2::host::Host::new()).is_err());
+        assert!(launch_fetch(
+            request.clone(),
+            &grants,
+            ibex2::host::Host::new(),
+            &AbortController::new().signal()
+        )
+        .is_err());
         let (core, woke) = first.core_grants(asynchronous, true, &grants);
         adopt(&core, set);
         core.run(job(1, request.prefetch()), None).unwrap();

@@ -177,6 +177,9 @@ impl LaunchPreloads {
                         .map(|d| (d.name.into(), LaunchMark::default())),
                 );
                 drop(marks);
+                for definition in &definitions {
+                    launch.0.set.get().unwrap().control.defined(definition.name);
+                }
                 launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Start);
                 launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Foreground);
                 if let Some(entry) = entry {
@@ -364,10 +367,18 @@ impl LaunchPreloads {
         }
         *version
     }
-    fn with_secret_version<T>(&self, name: &str, write: impl FnOnce(u64) -> T) -> T {
-        // Persistence, invalidation and publication share the writers' order (LLP 1162.000 D3).
+    fn with_secret_version<T>(
+        &self,
+        name: &str,
+        expected: u64,
+        write: impl FnOnce(u64) -> Result<T, String>,
+    ) -> Result<T, String> {
+        // Compare, persist and publish in the app writers' order (LLP 1162.000 D3).
         let mut versions = self.0.invalidated.lock().unwrap();
         let version = versions.entry(name.into()).or_default();
+        if *version != expected {
+            return Err("launch secret changed".into());
+        }
         *version += 1;
         if let Some(set) = self.0.set.get() {
             set.control.drop_secret(name);
@@ -375,7 +386,12 @@ impl LaunchPreloads {
         write(*version)
     }
     fn with_secret_write<T>(&self, name: &str, write: impl FnOnce() -> T) -> T {
-        self.with_secret_version(name, |_| write())
+        let mut versions = self.0.invalidated.lock().unwrap();
+        *versions.entry(name.into()).or_default() += 1;
+        if let Some(set) = self.0.set.get() {
+            set.control.drop_secret(name);
+        }
+        write()
     }
     fn start_foreground(&self) {
         let versions = self.0.invalidated.lock().unwrap();

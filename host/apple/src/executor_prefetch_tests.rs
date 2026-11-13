@@ -517,8 +517,14 @@ fn a_forgotten_prefetch_survives_pending_definitions_but_its_abort_removes_it() 
                 let (core, woke) = server.core(asynchronous, true);
                 assert!(core.adopt_preloads(set).is_ok());
                 let release = held_plan(&server, "/next");
-                core.run(job(1, server.request("/next").prefetch()), None)
-                    .unwrap();
+                core.run(
+                    job(
+                        1,
+                        server.request("/next").preload("feed").unwrap().prefetch(),
+                    ),
+                    None,
+                )
+                .unwrap();
                 core.forget(|_| false);
                 let (queued, running) = {
                     let state = core.shared.state.lock().unwrap();
@@ -647,5 +653,76 @@ fn idle_prefetch_holds_release_their_bytes_when_the_timer_fires() {
             .iter()
             .all(|p| matches!(p.reply, ReplyState::Gone)));
         assert_eq!(server.count(), 8);
+    }
+}
+
+#[test]
+fn a_refresh_prevents_an_earlier_queued_prefetch_from_holding_its_reply() {
+    for asynchronous in [false, true] {
+        for named in [false, true] {
+            for mode in 0..3 {
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous, true);
+                let write = held_plan(&server, "/write");
+                let old = held_plan(&server, "/feed");
+                server.plan("/feed", Plan::new(503, &[], b"new"));
+                let mut send = job(1, server.request("/write"));
+                send.class = RequestClass::Ordered;
+                core.run(send, None).unwrap();
+                server.seen(1);
+                let mut request = server.request("/feed");
+                if named {
+                    request = request.preload("feed").unwrap();
+                }
+                core.run(job(2, request.clone().prefetch()), None).unwrap();
+                // The ordered step fixes which equal request gets the old reply (LLP 1162 D1).
+                let mut barrier = job(3, server.request("/barrier"));
+                barrier.class = RequestClass::Ordered;
+                core.run(
+                    barrier,
+                    Some(Box::new(|| {
+                        Outcome::Response(Response {
+                            status: 200,
+                            headers: Vec::new(),
+                            body: Vec::new(),
+                        })
+                    })),
+                )
+                .unwrap();
+                let mut refresh = job(4, request.clone());
+                if named {
+                    refresh.request = refresh.request.header("X-Trace", "new");
+                }
+                match mode {
+                    0 => refresh.forced = true,
+                    1 => refresh.request.cache = exact_runner::CacheMode::Reload,
+                    _ => refresh.request.cache = exact_runner::CacheMode::NoCache,
+                }
+                core.run(refresh, None).unwrap();
+                assert_eq!(core.shared.state.lock().unwrap().jobs[0].len(), 3);
+                write.send(()).unwrap();
+                assert_eq!(collect(&core, &woke).0, 1);
+                server.seen(2);
+                old.send(()).unwrap();
+                for (expected, body) in [
+                    (2, b"prefetched".as_slice()),
+                    (3, b"".as_slice()),
+                    (4, b"new".as_slice()),
+                ] {
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, expected);
+                    assert!(!timing.cached);
+                    assert!(
+                        matches!(&outcome, Outcome::Response(r) if r.body == body),
+                        "{outcome:?}"
+                    );
+                }
+                server.plan("/feed", Plan::new(200, &[], b"sent"));
+                let (reply, cached) = ask(&core, &woke, job(5, request));
+                assert!(!cached);
+                assert_eq!(reply.body, b"sent");
+                assert_eq!(server.count(), 4);
+            }
+        }
     }
 }

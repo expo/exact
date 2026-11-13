@@ -285,6 +285,7 @@ fn a_manifest_start_leaves_while_rust_fetch_is_blocked_and_boot_does_not_wait() 
             token.address, manifest.address
         ));
         source.manifest = true;
+        source.request = source.request.preload("rust-feed").unwrap();
         let launch = fixture();
         begin(&launch, &source, false);
         token.request();
@@ -312,8 +313,8 @@ fn manifest_foreground_leaves_at_opened_while_the_function_is_blocked_in_fetch()
         let (fetched, fetching) = channel();
         let token_url = format!("http://{}/token", token.address);
         let mut source = source(&manifest, move |ctx| {
-            ctx.fetch(Request::get(&token_url)).unwrap();
-            fetched.send(()).unwrap();
+            let result = ctx.fetch(Request::get(&token_url));
+            fetched.send(result).unwrap();
         });
         source.base.definitions = manifest.source(PreloadWhen::Foreground, false).definitions;
         source
@@ -337,10 +338,17 @@ fn manifest_foreground_leaves_at_opened_while_the_function_is_blocked_in_fetch()
             signal(&launch, &source, true);
         }
         manifest.request();
-        assert!(
-            fetching.try_recv().is_err(),
-            "function's fetch is still held"
-        );
+        if opened == 2 {
+            assert_eq!(
+                fetching.recv_timeout(HANG).unwrap(),
+                Err("launch deadline".into())
+            );
+        } else {
+            assert!(
+                fetching.try_recv().is_err(),
+                "function's fetch is still held"
+            );
+        }
         manifest.release(0);
         token.release(0);
         running.wait_returned();
@@ -389,7 +397,10 @@ fn a_launch_past_its_deadline_releases_reads_and_discards_late_requests() {
         entering.recv_timeout(HANG).unwrap();
         executor
             .io
-            .run(read(1, source.request.clone()), None)
+            .run(
+                read(1, source.request.clone().preload("feed").unwrap()),
+                None,
+            )
             .unwrap();
         *now.lock().unwrap() += Duration::from_secs(1);
         assert!(
@@ -515,7 +526,6 @@ fn rust_requests_obey_grants_validation_unique_names_and_the_total_of_eight() {
         "oversized",
         "header",
         "repeated-header",
-        "BadName",
     ] {
         assert!(
             journal.iter().any(|f| f.name == name
@@ -526,6 +536,10 @@ fn rust_requests_obey_grants_validation_unique_names_and_the_total_of_eight() {
             "{name}: {journal:?}"
         );
     }
+    assert!(journal
+        .iter()
+        .any(|f| f.name == "launch-data" && f.outcome == PreloadEvent::InvalidName));
+    assert!(!journal.iter().any(|f| f.name == "BadName"));
     for (name, outcome) in [
         ("relative", PreloadEvent::InvalidUrl),
         ("header-value", PreloadEvent::InvalidHeader),
@@ -1246,7 +1260,10 @@ fn a_handed_preload_reaches_the_server_during_a_slow_fetch_and_survives_the_laun
                     request.when = PreloadWhen::Foreground;
                 }
                 ctx.preload(request).unwrap();
-                ctx.fetch(Request::get(&token_url)).unwrap();
+                assert_eq!(
+                    ctx.fetch(Request::get(&token_url)),
+                    Err("launch deadline".into())
+                );
                 assert_eq!(
                     ctx.preload(LaunchRequest::new("late", Request::get(&feed_url))),
                     Err("launch deadline".into())
@@ -1336,3 +1353,56 @@ fn a_panic_cancels_the_functions_handed_and_foreground_requests() {
 
 #[path = "launch_secret_tests.rs"]
 mod secrets;
+
+#[test]
+fn an_invalid_handoff_name_is_journaled_only_by_crate_name() {
+    let server = Server::new(0);
+    let url = format!("http://{}/feed", server.address);
+    let source = source(&server, move |ctx| {
+        assert!(ctx
+            .preload(LaunchRequest::new(
+                "https://api.example/private/path?token=secret-value",
+                Request::get(&url)
+            ))
+            .is_err());
+    });
+    let launch = fixture();
+    begin(&launch, &source, false);
+    definitions(&launch);
+    let facts = launch.journal();
+    assert!(facts
+        .iter()
+        .any(|f| f.name == "launch-data" && f.outcome == PreloadEvent::InvalidName));
+    let journal = format!("{facts:?}");
+    for private in ["/private/path", "token=", "secret-value"] {
+        assert!(!journal.contains(private), "{journal}");
+    }
+    assert_eq!(launch.count(), 0);
+    assert_eq!(server.count.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn the_launch_deadline_aborts_its_blocking_fetch() {
+    let server = Server::new(1);
+    let url = format!("http://{}/token", server.address);
+    let (fetched, fetching) = channel();
+    let source = source(&server, move |ctx| {
+        fetched.send(ctx.fetch(Request::get(&url))).unwrap();
+    });
+    let launch = fixture();
+    begin(&launch, &source, false);
+    server.request();
+    let running = launch.0.rust.get().unwrap();
+    running.expire_now();
+    let result = fetching.recv_timeout(HANG);
+    server.release(0);
+    running.wait_returned();
+    assert_eq!(result.unwrap(), Err("launch deadline".into()));
+    let journal = launch.journal();
+    assert!(journal
+        .iter()
+        .any(|f| matches!(f.outcome, PreloadEvent::LaunchDeadline { .. })));
+    assert!(!journal
+        .iter()
+        .any(|f| matches!(f.outcome, PreloadEvent::LaunchPanicked { .. })));
+}

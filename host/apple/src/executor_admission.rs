@@ -238,12 +238,9 @@ impl Core {
             }
             return Ok(());
         }
-        if let Some(cache) = state.cache.as_mut() {
-            preload::refresh(cache, &r);
-        }
-        let preload_due = state.cache.as_ref().and_then(preload::pending_due);
+        preload::refresh(&mut state, &r);
         state.jobs[lane].push_back(Job {
-            preload_due,
+            hold_prefetch: true,
             ticket: r.ticket,
             request: r.request,
             forced: r.forced,

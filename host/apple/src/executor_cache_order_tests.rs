@@ -12,7 +12,7 @@ fn queued(ticket: u64, request: Request, forced: bool) -> Job {
         limit,
         forgotten: false,
         queued_deadline: None,
-        preload_due: None,
+        hold_prefetch: true,
         overlap: true,
         class: RequestClass::Read,
     }

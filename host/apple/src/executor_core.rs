@@ -57,8 +57,7 @@ struct Job {
     /// The runner no longer wants its reply (`Core::forget`).
     forgotten: bool,
     queued_deadline: Option<forget::QueuedDeadline>,
-    // A phase change cannot extend an admitted read's wait (LLP 1162.000 D2).
-    preload_due: Option<std::time::Instant>,
+    hold_prefetch: bool,
     overlap: bool,
     class: RequestClass,
 }
@@ -1045,12 +1044,8 @@ fn worker(
                 }
                 let delay = state.cache.as_ref().and_then(|cache| {
                     let now = (cache.clock)();
-                    state.jobs[lane]
-                        .iter()
-                        .filter_map(|job| job.preload_due)
-                        .chain(preload::timer::wake_due(cache))
+                    preload::timer::wake_due(cache)
                         .filter(|due| *due > now)
-                        .min()
                         .map(|due| due.saturating_duration_since(now))
                 });
                 state = match delay {

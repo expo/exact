@@ -52,6 +52,8 @@ pub enum Event {
     InvalidHeader,
     /// The filled URL does not parse.
     InvalidUrl,
+    /// The function handed over a request whose name fails the grammar.
+    InvalidName,
     /// The first hop or a redirect exceeded the grants.
     RefusedGrant,
     /// The definition was not a bounded plain HTTP request.
@@ -447,6 +449,13 @@ impl Control {
         assert!(!timeout.timed_out(), "launch replies did not finish");
     }
 
+    pub(crate) fn defined(&self, name: &str) {
+        update(&self.destination, |cache| {
+            if !cache.preloads.iter().any(|p| p.name == name) {
+                cache.preload_defined.insert(name.into());
+            }
+        });
+    }
     /// Add launch definitions on their launch thread, including after adoption.
     pub fn extend(&self, definitions: Vec<Definition>, grants: &str, observer: Observer) {
         if let Destination::Staging(cache) = &mut *self.destination.state.lock().unwrap() {
@@ -455,6 +464,7 @@ impl Control {
         let range = update(&self.destination, |cache| {
             let first = cache.preloads.len();
             for definition in definitions.into_iter().take(MAX_PRELOADS - first) {
+                cache.preload_defined.remove(&definition.name);
                 let now = (cache.clock)();
                 cache
                     .preloads
@@ -708,14 +718,23 @@ fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
 }
 pub(super) fn pending_due(cache: &cache::Cache) -> Option<Instant> {
     cache
-        .preload_launch_due
-        .or(cache.preload_definitions_due)
+        .preload_definitions_due
+        .into_iter()
+        .chain(cache.preload_launch_due.filter(|_| cache.preload_names))
         .filter(|due| (cache.clock)() < *due)
+        .min()
 }
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
         && state.cache.as_ref().is_some_and(|c| {
-            (pending_due(c).is_some() && job.preload_due.is_some_and(|due| (c.clock)() < due))
+            let now = (c.clock)();
+            c.preload_definitions_due.is_some_and(|due| now < due)
+                || (c.preload_names
+                    && c.preload_launch_due.is_some_and(|due| now < due)
+                    && job.request.preload.as_ref().is_some_and(|name| {
+                        !c.preloads.iter().any(|p| p.name == name.as_ref())
+                            && !c.preload_defined.contains(name.as_ref())
+                    }))
                 || find(c, &job.request).is_some_and(|i| {
                     c.held(i).prefetch != Some(job.ticket) && can_take(c, &job.request, i)
                 })
@@ -940,7 +959,7 @@ pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
         }
     }
 }
-pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
+pub(super) fn refresh(state: &mut State, r: &RequestOut) {
     if r.class != RequestClass::Read
         || !r.request.is_plain_http()
         || !(r.forced
@@ -951,7 +970,26 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
     {
         return;
     }
+    let Some(cache) = state.cache.as_mut() else {
+        return;
+    };
     let key = Equal::of(&r.request);
+    for job in state
+        .jobs
+        .iter_mut()
+        .flatten()
+        .filter(|job| job.request.prefetch)
+    {
+        let queued = Equal::of(&job.request);
+        let named = cache.preload_names
+            && r.request.preload.is_some()
+            && r.request.preload == job.request.preload
+            && queued.method == key.method
+            && queued.url == key.url;
+        if named || (queued == key && job.request.body == r.request.body) {
+            job.hold_prefetch = false;
+        }
+    }
     for i in 0..cache.held_len() {
         let held = cache.held(i);
         let named = cache.preload_names
@@ -1219,6 +1257,7 @@ pub(crate) fn launch_fetch(
     request: Request,
     grants: &str,
     host: ibex2::host::Host,
+    launch_signal: &ibex2::stdlib::abort::AbortSignal,
 ) -> Result<Response, String> {
     if !valid_request(&request) {
         return Err("invalid launch fetch".into());
@@ -1228,6 +1267,8 @@ pub(crate) fn launch_fetch(
     let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(scope))
         .map_err(|_| "invalid launch grants")?;
     let abort = AbortController::new();
+    let cancel = abort.clone();
+    let _launch = launch_signal.register(move || cancel.abort());
     let deadline = super::outcome::Deadline::arm(
         request
             .timeout_ms

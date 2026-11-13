@@ -8,9 +8,10 @@ use std::sync::Arc;
 pub trait LaunchContext {
     /// A granted, unguarded kept secret, from this launch's snapshot.
     fn secret(&mut self, name: &str) -> Option<String>;
-    /// Persist a granted kept secret before returning.
+    /// Persist a granted secret only if its version has not changed since the
+    /// function last read or wrote it, or since launch if it has not read it.
     fn set_secret(&mut self, name: &str, value: &str) -> Result<(), String>;
-    /// Durably forget a granted kept secret before returning.
+    /// Durably forget a granted secret under the same version check as `set_secret`.
     fn forget_secret(&mut self, name: &str) -> Result<(), String>;
     /// Start a named preload, or return its refusal reason (LLP 1162.000 D1–D3).
     fn preload(&mut self, request: LaunchRequest) -> Result<(), String>;

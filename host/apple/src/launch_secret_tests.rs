@@ -150,3 +150,92 @@ fn a_launch_function_without_secret_writes_neither_refreshes_nor_wakes_its_host(
         assert_eq!(READS.with(|reads| reads.load(Ordering::Acquire)), reads);
     }
 }
+
+#[test]
+fn launch_secret_writes_compare_the_last_observed_version() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for read_first in [false, true] {
+            for app_writes in [false, true] {
+                for forget in [false, true] {
+                    let token = Server::new(1);
+                    let feed = Server::new(3);
+                    let token_url = format!("http://{}/token", token.address);
+                    let (written, writing) = channel();
+                    let mut source = source(&feed, move |ctx| {
+                        if read_first {
+                            assert_eq!(ctx.secret("session").as_deref(), Some("A"));
+                        }
+                        ctx.fetch(Request::get(&token_url)).unwrap();
+                        let result = if forget {
+                            ctx.forget_secret("session")
+                        } else {
+                            ctx.set_secret("session", "refreshed")
+                        };
+                        written.send(result).unwrap();
+                    });
+                    source
+                        .base
+                        .grants
+                        .push_str(&format!("\nnet.fetch http://{}", token.address));
+                    source.reads_session = true;
+                    let launch = fixture();
+                    let bindings = crate::store::endow(&source.base.grants).unwrap();
+                    let backend = Arc::new(crate::store::launch_backend_in(bindings.secrets, None));
+                    *launch.0.backend.lock().unwrap() = Some(backend.clone());
+                    backend.write("session", Some("A")).unwrap();
+                    begin(&launch, &source, false);
+                    token.request();
+                    let bytes = if app_writes {
+                        contract::compile("shape Reply\n  value: string\ncomponent App\n  resource changed = rotate() as shape Reply\n  resource feed = read() as shape Reply\n  view\n    text feed.value\n").unwrap().encode()
+                    } else {
+                        plan()
+                    };
+                    let (mut drive, _) = Drive::boot_endowed(&source, &bytes, endowed);
+                    drive.bridge.data_ready();
+                    assert_eq!(
+                        backend.read("session").unwrap().as_deref(),
+                        Some(if app_writes { "new" } else { "A" })
+                    );
+                    token.release(0);
+                    let result = writing.recv_timeout(HANG).unwrap();
+                    launch.0.rust.get().unwrap().wait_returned();
+                    definitions(&launch);
+                    assert_eq!(
+                        result,
+                        if app_writes {
+                            Err("launch secret changed".into())
+                        } else {
+                            Ok(())
+                        }
+                    );
+                    let expected = if app_writes {
+                        Some("new")
+                    } else if forget {
+                        None
+                    } else {
+                        Some("refreshed")
+                    };
+                    assert_eq!(backend.read("session").unwrap().as_deref(), expected);
+                    drive.bridge.pump(0.);
+                    let mut head = feed.request().to_ascii_lowercase();
+                    if !app_writes && head.contains("authorization: a") {
+                        feed.release(0);
+                        head = feed.request().to_ascii_lowercase();
+                    }
+                    assert_eq!(head.contains("authorization: new"), app_writes, "{head}");
+                    assert_eq!(
+                        head.contains("authorization: refreshed"),
+                        !app_writes && !forget,
+                        "{head}"
+                    );
+                    assert!(!head.contains("authorization: a"), "{head}");
+                    for i in 0..3 {
+                        feed.release(i);
+                    }
+                    drive.complete(&source);
+                }
+            }
+        }
+    }
+}

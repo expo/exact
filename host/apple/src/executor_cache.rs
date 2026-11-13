@@ -89,6 +89,7 @@ pub(super) struct Cache {
     pub(super) preload_names: bool,
     pub(super) preload_definitions_due: Option<Instant>,
     pub(super) preload_launch_due: Option<Instant>,
+    pub(super) preload_defined: std::collections::BTreeSet<String>,
     pub(super) grants: String,
     entries: VecDeque<Arc<Entry>>,
     // In-flight validations still own these bytes (LLP 1162 D4's bound).
@@ -108,6 +109,7 @@ impl Cache {
             preload_names: true,
             preload_definitions_due: None,
             preload_launch_due: None,
+            preload_defined: Default::default(),
             grants,
             entries: VecDeque::new(),
             retired: Vec::new(),
