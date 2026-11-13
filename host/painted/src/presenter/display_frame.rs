@@ -319,6 +319,7 @@ impl<D: DataSource> Presenter<D> {
                 self.publish_ranges();
                 self.display.acknowledged = Some(picture.witness);
                 self.retire_acknowledged_pointer();
+                self.retire_pointer();
                 self.acknowledge_collection_scroll(model_scroll);
                 // Clamp the newest queued intent using B's numeric bounds, not
                 // live C and not B's older scroll intent. If the clamp changes

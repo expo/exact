@@ -67,16 +67,19 @@ macro_rules! host {
         /// Number of definitions in the launch marks.
         #[no_mangle]
         pub extern "C" fn exact_preloads_count() -> u32 {
+            if EXACT_LINKS.io.is_none() { return 0; }
             $crate::launch_preloads::current().map_or(0, |p| p.count() as u32)
         }
         /// One definition's monotonic seconds and first carrying commit.
         #[no_mangle]
         pub extern "C" fn exact_preloads_mark(index: u32) -> $crate::launch_preloads::LaunchMark {
+            if EXACT_LINKS.io.is_none() { return Default::default(); }
             $crate::launch_preloads::current().and_then(|p| p.mark(index as usize)).map_or_else(Default::default, |(_, m)| m)
         }
         /// Copy a definition's name; returns the full UTF-8 byte count.
         #[no_mangle]
         pub extern "C" fn exact_preloads_name(index: u32, out: *mut u8, capacity: usize) -> usize {
+            if EXACT_LINKS.io.is_none() { return 0; }
             $crate::launch_preloads::copy_name(index as usize, out, capacity)
         }
         $crate::pan_velocity_exports!();

@@ -207,6 +207,56 @@ const held = runtime => runtime === 'JS' ? ['running', '--local'] : ['paused'];
 
 for (const runtime of ['JS', 'wasm']) {
   const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
+    await evaluate(`(() => {
+      for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');
+    })()`);
+    for (const [id, mode, expected] of [[null, 'auto', 'auto'], ['raised', 'raised', '2'], ['invalid', 'invalid', 'auto'],
+      ['autoZ', 'auto', 'auto'], ['invalid', 'invalid', 'auto'], ['zero', 'zero', '0'], ['empty', 'empty', 'auto'],
+      ['raised', 'raised', '2'], ['spaces', 'spaces', 'auto'], ['zero', 'zero', '0'], ['autoZ', 'auto', 'auto']]) {
+      if (id) await action(evaluate, id, mode);
+      const values = await evaluate(`(() => Object.fromEntries(['modal', 'pushed', 'literal', 'unsaid'].map(id => {
+        const e = document.querySelector('[data-testid="' + id + '"]');
+        return [id, [getComputedStyle(e).zIndex, e.getAttribute('data-exact-zi'), e.style.zIndex]];
+      })))()`);
+      for (const name of ['modal', 'pushed']) {
+        expect(values[name][0], `${mode}: ${name}`).toBe(expected);
+        if (runtime === 'JS') expect(values[name][1], `${mode}: ${name} paint fact`).toBe(expected === 'auto' ? null : expected);
+        if (mode === 'empty' || mode === 'spaces') expect(values[name][2], `${mode}: ${name} authored clear`).toBe('unset');
+      }
+      expect(values.literal[0]).toBe('auto');
+      expect(values.unsaid[0]).toBe('1');
+    }
+  }, `component App
+  state mode = "auto"
+  state fraction = 2.5
+  action raised
+    mode = "raised"
+  action invalid
+    mode = "invalid"
+  action zero
+    mode = "zero"
+  action autoZ
+    mode = "auto"
+  action empty
+    mode = "empty"
+  action spaces
+    mode = "spaces"
+  view
+    column navigationKey="cover" navigationBack=""
+      column navigationKey="cover" navigationPresentation="modal" z-index=(mode == "raised" ? 2 : mode == "zero" ? 0 : mode == "invalid" ? fraction : mode == "empty" ? "" : mode == "spaces" ? " \\t\\n" : "auto") testId="modal"
+        text mode testId="mode"
+        button "Raised" press=raised testId="raised"
+        button "Invalid" press=invalid testId="invalid"
+        button "Zero" press=zero testId="zero"
+        button "Auto" press=autoZ testId="autoZ"
+        button "Empty" press=empty testId="empty"
+        button "Whitespace" press=spaces testId="spaces"
+        view transition="translate -exact-spring(300, 30, 1)" z-index=(mode == "raised" ? 2 : mode == "zero" ? 0 : mode == "invalid" ? fraction : mode == "empty" ? "" : mode == "spaces" ? " \\t\\n" : "auto") testId="pushed"
+        view z-index="auto" testId="literal"
+        view testId="unsaid"
+`), 120000);
+
   check(`${runtime}: an unset timeline leaves its animations running`, () => fixture(runtime, async evaluate => {
     await action(evaluate, 'timelineOn', 'timeline');
     const active = await evaluate(readMapped);

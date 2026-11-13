@@ -229,6 +229,9 @@ thread_local! { static LOCAL: std::cell::RefCell<Option<LaunchPreloads>> = const
 fn local() -> Option<LaunchPreloads> {
     LOCAL.with(|l| l.borrow().clone())
 }
+fn linked() -> Option<Box<dyn LaunchWork>> {
+    local().map(|launch| Box::new(launch) as Box<dyn LaunchWork>)
+}
 fn fixture() -> LaunchPreloads {
     crate::store::PLATFORM
         .with(|p| *p.borrow_mut() = Some(Arc::new(ibex2::secrets::MemoryStore::new())));
@@ -293,7 +296,7 @@ impl std::ops::DerefMut for Driven {
 fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Driven, String) {
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
-            preloads: local,
+            preloads: linked,
             endow: memory_endow,
             start: start_io,
             ..IoLinks::LINKED
@@ -464,7 +467,7 @@ fn discarding_a_prepared_batch_does_not_mark_an_unrelated_reply_as_preload_conte
     let thread = Box::new(std::thread::current());
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
-            preloads: local,
+            preloads: linked,
             endow: memory_endow,
             start: start_io,
             ..IoLinks::LINKED
@@ -957,7 +960,7 @@ fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
         let bytes = widget_plan();
         let mut entry = Bridge::with_links(Links {
             io: Some(IoLinks {
-                preloads: local,
+                preloads: linked,
                 endow: memory_endow,
                 start: start_io,
                 ..IoLinks::LINKED
@@ -1018,7 +1021,7 @@ fn a_plan_only_selection_disables_named_taking_before_the_first_batch_and_dispat
             ready(&launch);
             let mut bridge = Bridge::with_links(Links {
                 io: Some(IoLinks {
-                    preloads: local,
+                    preloads: linked,
                     endow: memory_endow,
                     start: start_io,
                     ..IoLinks::LINKED
@@ -1116,7 +1119,7 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
                     let launch = fixture();
                     let mut bridge = Bridge::with_links(Links {
                         io: Some(IoLinks {
-                            preloads: local,
+                            preloads: linked,
                             endow: memory_endow,
                             start: start_io,
                             ..IoLinks::LINKED

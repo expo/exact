@@ -1,5 +1,5 @@
-import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
-import { rustGrantSet, tsGrantSet } from './admission-data.js';
+import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration } from './admission.js';
+import { rustGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
 import { rt } from './rt-link.js'; // (rt.js's own, as a lazy chunk takes them)
 import { heldReply } from './held.js';
@@ -395,6 +395,5 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // What a loaded capability needs of the module (canvas2d.js's draws).
   data.logic = { get exports() { return e; }, get session() { return session; }, writer, reader, encode, ABI };
   data.appId ??= meta[0];
-  data.grants = setAppGrantSet(tsGrantSet, rustGrantSet);
   for (const f of data.q.splice(0)) f();
 }

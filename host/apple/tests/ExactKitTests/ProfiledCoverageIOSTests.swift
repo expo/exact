@@ -213,7 +213,10 @@ final class ProfiledCoverageIOSTests: XCTestCase {
             if warmed {
                 TextRenderMetrics.shared.start()
                 defer { TextRenderMetrics.shared.stop() }
-                presenter.apply(wireBatch(operations(0..<1) + [["op": "children", "id": 1, "ids": [2]]]))
+                // Below the port, so a worker paints it: a batch paints the new
+                // words that show in its own frame, on the main thread.
+                let below: [String: Any] = ["op": "frame", "id": 2, "x": 0.0, "y": 900.0, "w": 340.0, "h": 24.0]
+                presenter.apply(wireBatch(operations(0..<1) + [below, ["op": "children", "id": 1, "ids": [2]]]))
                 presenter.textRasters.settleVisible([try XCTUnwrap(presenter.views[2])])
                 TextRenderMetrics.shared.stop()
                 let spans = try XCTUnwrap(TextRenderMetrics.shared.snapshot(origin: 0)["rows"] as? [[Any]])
@@ -221,7 +224,10 @@ final class ProfiledCoverageIOSTests: XCTestCase {
                 XCTAssertEqual(paints.count, 1)
                 XCTAssertEqual(paints.first?[4] as? Bool, false, "the worker carries its painted mask through settlement; publication does not repaint it")
             }
-            presenter.apply(wireBatch(operations((warmed ? 1 : 0)..<20) + [["op": "children", "id": 1, "ids": Array(2..<22)]]))
+            // The warmed paragraph moves into the port, above the rest.
+            let warmedInPlace: [String: Any] = ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 340.0, "h": 24.0]
+            let rest = warmed ? [warmedInPlace] + operations(1..<20) : operations(0..<20)
+            presenter.apply(wireBatch(rest + [["op": "children", "id": 1, "ids": Array(2..<22)]]))
             let nodes = (2..<22).compactMap { presenter.views[UInt32($0)] }
             presenter.textRasters.ensureUrgent(nodes)
             presenter.textRasters.settleVisible(nodes)

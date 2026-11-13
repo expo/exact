@@ -35,7 +35,7 @@ mod modal_tests;
 mod placement_tests;
 #[cfg(test)]
 mod top_layer_tests;
-pub(crate) use intersection::{intersection, Root as IntersectionRoot};
+pub(crate) use intersection::{block_clip, intersection, Root as IntersectionRoot};
 
 use exact_kernel::{
     Display, Frame, Kernel, NodeFlags, NodeKey, Overflow, PointerEvents, PropId, StyleId, ViewId,
@@ -133,6 +133,7 @@ struct TopLayerBox {
 #[derive(Debug, Clone)]
 struct PlacedBlock {
     key: NodeKey,
+    clip_only: bool,
     rect: [f64; 4],
     within: NodeKey,
     offset: Option<[f64; 2]>,
@@ -261,6 +262,10 @@ impl Scrolled {
     /// UIKit's tab container holds a tab's route beside its panel; the
     /// root is then shown in `within` directly, as the host's hierarchy
     /// shows it, and the boxes between neither move nor clip it.
+    /// Without a host block, a placement only clips the subtree to the
+    /// rectangle: it changes neither layout nor `frame()`'s border box. Its
+    /// holder must be the direct parent and its offset absent. The rectangle
+    /// is in that parent's coordinates after scrolling, before transforms.
     /// An offset names a scrollport, even at zero: it moves the root and its
     /// subtree while the allocation's clip stays put. No offset means a pane.
     /// An absent placement forgets the rectangle. The root keeps its place
@@ -281,10 +286,14 @@ impl Scrolled {
         let Some(key) = arena.key_of(view) else {
             return;
         };
+        let clip_only = kernel.host_block(view).is_none();
         let placement = match placement {
             Some((rect, within, offset)) => {
-                let Some(within) = arena.key_of(within).filter(|_| {
-                    valid_rect(&rect) && offset.iter().flatten().all(|v| v.is_finite())
+                let Some(within) = arena.key_of(within).filter(|holder| {
+                    valid_rect(&rect)
+                        && offset.iter().flatten().all(|v| v.is_finite())
+                        && (!clip_only
+                            || (arena.parent(key.index) == Some(holder.index) && offset.is_none()))
                 }) else {
                     return;
                 };
@@ -296,6 +305,7 @@ impl Scrolled {
         if let Some((rect, within, offset)) = placement {
             self.placed.push(PlacedBlock {
                 key,
+                clip_only,
                 rect,
                 within,
                 offset,
@@ -308,7 +318,11 @@ impl Scrolled {
     /// (`place`). `None` for an open top-layer box, a node with no block or
     /// placement, or a placement whose `within` is not above the node.
     fn placement(&self, kernel: &Kernel, slot: u32, frame: Frame) -> Option<(u32, Affine)> {
+        kernel.host_block(kernel.arena().local_id(slot))?;
         let (entry, within) = self.placed_block(kernel, slot)?;
+        if entry.clip_only {
+            return None;
+        }
         let offset = entry.offset.unwrap_or([0.0; 2]);
         Some((
             within,
@@ -328,8 +342,16 @@ impl Scrolled {
             .placed
             .iter()
             .find(|entry| entry.key == arena.key(slot))?;
-        kernel.host_block(arena.local_id(slot))?;
         let within = arena.resolve(entry.within)?;
+        if entry.clip_only {
+            if arena.parent(slot) != Some(within)
+                || kernel.host_block(arena.local_id(slot)).is_some()
+            {
+                return None;
+            }
+        } else {
+            kernel.host_block(arena.local_id(slot))?;
+        }
         std::iter::successors(arena.parent(slot), |&p| arena.parent(p)).find(|&p| p == within)?;
         Some((entry, within))
     }
@@ -344,7 +366,10 @@ impl Scrolled {
     ) -> GeometryAnswer {
         let mut at = kernel.arena().slot_of(view);
         while let Some(slot) = at {
-            if self.placed_block(kernel, slot).is_some() {
+            if self
+                .placed_block(kernel, slot)
+                .is_some_and(|(entry, _)| !entry.clip_only)
+            {
                 return kernel_frame(kernel, self, view);
             }
             at = kernel.arena().parent(slot);
@@ -675,31 +700,6 @@ pub(crate) fn shown_in(kernel: &Kernel, scrolled: &Scrolled, slot: u32, frame: F
 /// Whether a host's rectangle is one: finite, of no negative size.
 fn valid_rect(rect: &[f64; 4]) -> bool {
     rect.iter().all(|v| v.is_finite()) && rect[2] >= 0.0 && rect[3] >= 0.0
-}
-
-/// The native allocation's clip in its block root's border-box coordinates.
-/// Scrolling moves content inside this fixed allocation. None for implied
-/// popover blocks, which supply layout space and allow visible overflow.
-pub(crate) fn block_clip(
-    kernel: &Kernel,
-    scrolled: &Scrolled,
-    slot: u32,
-    frame: Frame,
-) -> Option<[f64; 4]> {
-    let view = kernel.arena().local_id(slot);
-    if kernel.host_block_implied(view) {
-        return None;
-    }
-    let (w, h) = kernel.host_block_size(view)?;
-    let offset = scrolled
-        .placed_block(kernel, slot)
-        .and_then(|(entry, _)| entry.offset)
-        .unwrap_or([0.0; 2]);
-    let (x, y) = (
-        offset[0] - f64::from(frame.x),
-        offset[1] - f64::from(frame.y),
-    );
-    Some([x, y, x + f64::from(w), y + f64::from(h)])
 }
 
 /// A top-layer box replaced whole by its host has no kernel layout. Its

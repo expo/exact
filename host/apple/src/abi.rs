@@ -754,7 +754,7 @@ impl<D: DataSource> Bridge<D> {
         // session takes the granted platform snapshot before its first query,
         // just like boot_fresh; neither path releases effects until commit.
         let launch_store = self.links.io.and_then(|io| (io.preloads)()).map(|launch| {
-            launch.watch_store(|| {
+            launch.watch_store(&|| {
                 carried.is_some() && self.host.as_ref().is_some_and(Host::launch_store_pending)
             })
         });

@@ -202,8 +202,8 @@ impl<D: DataSource> Presenter<D> {
                 .contains(&EventKind::Press)
     }
 
-    /// What a press at (`x`, `y`), released where the painted boxes put
-    /// `hit`, activates under the Material look: Android's minimum touch
+    /// What a contact at (`x`, `y`) chooses at down, apart from the painted
+    /// `hit`, under the Material look: Android's minimum touch
     /// size (LLP 1115.001 D9; LLP 1115.001.001 §5 Q5, Charlie, 2026-10-19).
     /// A press that lands in something that takes a press (a link run
     /// among them) stays there; else it reaches the enabled control whose
@@ -217,6 +217,9 @@ impl<D: DataSource> Presenter<D> {
     /// hover, wheels, gestures, a mouse and an agent's named tap keep the
     /// painted hit.
     pub(crate) fn touch_target(&self, hit: Option<ViewId>, x: f32, y: f32) -> Option<ViewId> {
+        if !self.display.contains(x, y) {
+            return None;
+        }
         if !crate::paint::look::material() || hit.is_some_and(|h| self.lands_in_press(h, x, y)) {
             return hit;
         }
@@ -248,6 +251,66 @@ impl<D: DataSource> Presenter<D> {
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
         nearest.map(|(_, id)| id).or(hit)
+    }
+
+    /// Whether control `key`, chosen at a touch's down, can still take its
+    /// release: enabled, shown, taking the pointer and with an area.
+    pub(super) fn touch_activation_live(&self, key: exact_kernel::NodeKey) -> bool {
+        self.input_live(key)
+            && self.host.kernel().node_by_key(key).is_some_and(|node| {
+                self.focus_refusal(node.id).is_none()
+                    && crate::paint::paints(self.host.kernel(), node.id, None)
+                    && node.computed_row(exact_kernel::StyleId::PointerEvents, |s| s.pointer_events)
+                        != exact_kernel::PointerEvents::None
+                    // While a frame is submitted, `boxes` are the acknowledged
+                    // picture's and lag the commit; the area is checked at ACK.
+                    && (self.display.submitting()
+                        || self.boxes.iter().any(|b| b.id == node.id && b.has_area()))
+            })
+    }
+
+    /// The control a touch whose target is `id` activates: `id` or the
+    /// nearest control round it, unless a node on the way up takes the press
+    /// itself. A contact keeps it from the down ([`Self::touch_target`]).
+    pub(super) fn touch_control(&self, id: ViewId) -> Option<exact_kernel::NodeKey> {
+        let kernel = self.host.kernel();
+        let mut at = kernel.node(id);
+        while let Some(node) = at {
+            if crate::paint::material::answers_touch(&node) {
+                return Some(node.key);
+            }
+            if self.takes_press(node.id) {
+                return None;
+            }
+            at = node.parent.and_then(|id| kernel.node(id));
+        }
+        None
+    }
+
+    /// Whether a release at (`x`, `y`), on the painted `hit`, is on control
+    /// `key` or in its touch box, as the acknowledged picture shows it.
+    /// Never another control: the target was chosen at the down.
+    pub(super) fn touch_activation_contains(
+        &self,
+        key: exact_kernel::NodeKey,
+        hit: Option<exact_kernel::NodeKey>,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let kernel = self.host.kernel();
+        let Some(node) = kernel.node_by_key(key) else {
+            return false;
+        };
+        if !self.display.contains(x, y) || !self.display.allows(kernel, node.id) {
+            return false;
+        }
+        hit == Some(key)
+            || (self.boxes.iter().find(|b| b.id == node.id)).is_some_and(|b| {
+                b.flat()
+                    && b.has_area()
+                    && inside(crate::paint::material::touch_box(b.rect), x, y)
+                    && b.clip.is_none_or(|clip| inside(clip, x, y))
+            })
     }
 
     /// Whether a press at (`x`, `y`) on `id` is taken on its way up: by a

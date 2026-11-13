@@ -14,7 +14,7 @@
 //! lifetime, bounded to 64 locations and 32 MiB. Other routes render fresh.
 
 use crate::encode::{self, Accepts, Variants};
-use crate::files::{asset_shaped, named_build, percent_decode, static_file, AUTH_CALLBACK};
+use crate::files::{asset_shaped, percent_decode};
 use crate::{page, render_with_at, Ids, Projection, Rendered};
 use exact_plan::{Plan, RenderPolicy};
 use exact_runner::DataSource;
@@ -27,6 +27,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+#[path = "serve_files.rs"]
+mod files;
 
 #[path = "deferred.rs"]
 pub(crate) mod deferred;
@@ -59,8 +62,8 @@ pub struct Serve {
     /// A rendered route's shared-cache lifetime (`s-maxage`), until routes
     /// declare their own.
     pub lifetime: Duration,
-    /// Where the builds of `app.wasm` it has served are kept, so a browser
-    /// holding one gets the next as a delta against it (LLP 1047.000 §9).
+    /// Retained builds for versioned URLs and delta dictionaries
+    /// (LLP 1047.000 §9, LLP 1048.000 D10).
     pub generations: Option<PathBuf>,
 }
 
@@ -190,7 +193,6 @@ impl Server {
         // seconds); pay it here, not in the first request.
         drop(crate::Executor::start(grants));
         let variants = Variants::default();
-        variants.warm(encode::files(&serve.dist));
         let generations = match &serve.generations {
             Some(dir) => Some(crate::generations::Generations::open(
                 dir,
@@ -198,6 +200,11 @@ impl Server {
             )?),
             None => None,
         };
+        let mut files = encode::files(&serve.dist);
+        if let Some(generations) = &generations {
+            files.extend(generations.files());
+        }
+        variants.warm(files);
         let lang = (plan.locale.is_none() || plan.locales.len() <= 1).then(|| {
             plan.locales.first().map_or((String::new(), "ltr"), |row| {
                 (
@@ -827,71 +834,8 @@ fn respond<D: DataSource + 'static>(
             format!("public, max-age=0, s-maxage={lifetime}"),
         );
     }
-    if let Some((file, kind)) = static_file(&shared.serve.dist, path) {
-        if std::fs::metadata(&file).is_ok_and(|meta| meta.len() > MAX_PAGE as u64) {
-            return stream_file(&file, kind, request)
-                .unwrap_or_else(|| Response::text(404, "not found\n"));
-        }
-        let compressible = encode::compressible(kind);
-        let Some(served) = shared.variants.serve(&file, request.accepts, compressible) else {
-            return Response::text(404, "not found\n");
-        };
-        let tag = served
-            .etag
-            .trim_matches('"')
-            .split('-')
-            .next()
-            .unwrap_or("");
-        let named = path == "/app.wasm" && named_build(&request.target, tag);
-        let delta = shared
-            .generations
-            .as_ref()
-            .filter(|generations| named && generations.tag == tag)
-            .zip(request.dictionary.as_deref())
-            .filter(|_| !request.cdn && request.accepts.dcb())
-            .and_then(|(generations, hash)| generations.delta(hash));
-        let etag = match delta {
-            Some(_) => format!("\"{tag}-dcb\""),
-            None => served.etag.clone(),
-        };
-        // Other files aren't content-addressed yet (D10): revalidated, by
-        // their ETags.
-        let auth = path.starts_with(AUTH_CALLBACK);
-        let cache = match (named, auth) {
-            (true, _) => "public, max-age=31536000, immutable",
-            (false, true) => "no-store",
-            (false, false) => "no-cache",
-        };
-        let mut headers = vec![
-            ("Content-Type", kind.into()),
-            ("Cache-Control", cache.into()),
-            ("ETag", etag.clone()),
-        ];
-        if auth {
-            headers.push(("Referrer-Policy", "no-referrer".into()));
-        }
-        if named && !request.cdn {
-            // The next build is sent against this one (crate::generations).
-            headers.push(("Use-As-Dictionary", "match=\"/app.wasm\"".into()));
-        }
-        match delta {
-            Some(_) => headers.push(("Vary", "Accept-Encoding, Available-Dictionary".into())),
-            None if compressible => headers.push(("Vary", "Accept-Encoding".into())),
-            None => {}
-        }
-        match (delta, served.encoding) {
-            (Some(_), _) => headers.push(("Content-Encoding", "dcb".into())),
-            (None, Some(encoding)) => headers.push(("Content-Encoding", encoding.name().into())),
-            (None, None) => {}
-        }
-        let fresh = encode::none_match(request.if_none_match.as_deref(), &etag);
-        return Response {
-            status: if fresh { 304 } else { 200 },
-            headers,
-            body: delta.map_or_else(|| served.body.to_vec(), <[u8]>::to_vec),
-            file: None,
-            streamed: false,
-        };
+    if let Some(response) = files::response(request, shared, path) {
+        return response;
     }
     // One URL per page: any other spelling redirects to the canonical one.
     let canonical = canonical_location(&request.target);

@@ -1195,7 +1195,7 @@ mod tests {
                 "none"
             ])
         );
-        crate::style::tests::assert_spring_transitions(&super::pressed_transition_map());
+        crate::style::tests::assert_spring_transitions(&super::pressed_transition_map(), true);
     }
 
     use crate::style::{

@@ -179,7 +179,7 @@ pub(crate) struct Mirror {
 
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
-    pub(crate) preloads: Option<crate::launch_preloads::LaunchPreloads>,
+    pub(crate) preloads: Option<Box<dyn crate::launch_preloads::LaunchWork>>,
     pub(crate) launch_store: Option<std::sync::Arc<crate::launch_preloads::StoreWatch>>,
     boot_requests: Vec<RequestOut>,
     preload_content: Vec<String>,

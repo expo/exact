@@ -5,8 +5,9 @@
 // own `auth-glue.js` opens the popup, inside the press's call stack, and
 // reports; under the agent the request is held (D7) and `tap @t cancel` or
 // `type @t <callback URL>` answers it (agent.js). Bundled only for an app
-// whose grants name `auth.session`.
+// whose grants name `auth.session`, `auth.apple` or `auth.google`.
 import { journal, clock, nextTicket } from "./rt.js";
+import { trimGrant, grantWords } from "./admission.js";
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const CALLBACK = "/.exact/auth/callback";
@@ -57,14 +58,14 @@ function admits(grant, u) {
 /** D2: the authorization URL on a granted `auth.session` origin; the callback
  * a granted `auth.callback`, or on a loopback page that page's own. */
 function checkGrants(s, grants) {
-  const lines = grants.split("\n").map(l => l.trim()).filter(Boolean);
+  const lines = grants.split("\n").map(trimGrant).filter(Boolean);
   const u = parse(s.url);
   if (!u) return "the authorization URL is not absolute";
   if (u.authority?.includes("@")) return "the authorization URL carries userinfo";
-  if (!lines.some(l => l.startsWith("auth.session ") && admits(l.slice(13).trim(), u))) return `outside the app's grants (auth.session ${origin(u) ?? ""})`;
+  if (!lines.some(l => l.startsWith("auth.session ") && admits(trimGrant(l.slice(13)), u))) return `outside the app's grants (auth.session ${origin(u) ?? ""})`;
   // A loopback callback is granted at any port (LLP 1133.005 D9).
   const any = loopbackCallback(s.callback);
-  const granted = lines.some(l => l.startsWith("auth.callback ") && (l.slice(14).trim() === s.callback || any !== null && l.slice(14).trim() === any));
+  const granted = lines.some(l => l.startsWith("auth.callback ") && (trimGrant(l.slice(14)) === s.callback || any !== null && trimGrant(l.slice(14)) === any));
   const page = parse(location.origin);
   if (!granted && !(s.callback === location.origin + CALLBACK && page && loopback(page))) return `outside the app's grants (auth.callback ${s.callback})`;
   return null;
@@ -187,7 +188,7 @@ function checkDerived(s, grants) {
   const line = PROVIDERS[origin(u)];
   if (!line) return `outside the derived set (${origin(u) ?? ""} is no sign-in provider)`;
   const ids = pairs(u.query).filter(([n]) => n === "client_id").map(([, v]) => v);
-  const lines = grants.split("\n").map(l => l.trim().split(/\s+/));
+  const lines = grants.split("\n").map(grantWords);
   if (ids.length !== 1 || !lines.some(w => w.length === 2 && w[0] === line && w[1] === ids[0])) return `outside the derived set (${line} ${ids[0] ?? ""})`;
   if (s.callback !== location.origin + CALLBACK) return "outside the derived set (the callback is not the page's own)";
   return null;

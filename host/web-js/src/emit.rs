@@ -210,6 +210,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     }
     let links = commands::links(plan, &parts);
     let iframes = commands::iframes(&parts);
+    let lists = commands::lists(plan);
+    let button_fills = commands::button_fills(plan, &parts);
     let mut em = Em {
         plan,
         sites: &sites,
@@ -803,6 +805,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),
             (iframes, "import\"./iframes.js\";"),
+            (lists, "import\"./list-items.js\";"),
+            (button_fills, "import\"./button-fill.js\";"),
             (midi, "import{midi as $midi}from\"./midi.js\";"),
             (transport, "import{sequence as $sequence,transport as $transport}from\"./transport.js\";"),
             (!facts.is_empty(), facts.as_str()),
@@ -1186,7 +1190,13 @@ impl Em<'_> {
                     let source = serde_json::to_string(v.as_str().unwrap_or_default()).unwrap();
                     self.markdown(i, &e, &format!("()=>{source}"), plan.code(b.expr));
                 }
-                continue;
+                // Refused SVG literals still run their binding to journal the refusal.
+                if b.kind != BindingKind::Prop
+                    || !exact_runner::bridge::prop_value(b.id, &v)
+                        .is_err_and(|e| crate::svg_lengths::refused(&e))
+                {
+                    continue;
+                }
             }
             let f = self
                 .bound(i, &e, &b, scope)
@@ -1208,6 +1218,10 @@ impl Em<'_> {
                         format!("()=>{{const v=({f})();return v==null?v:!v}}")
                     } else if prop == PropId::GlassGroup {
                         format!("()=>{{const v=({f})();return v===-1?\"auto\":v}}")
+                    } else if let Some(value) =
+                        crate::svg_lengths::binding(&mut self.uses, prop, &f, &e)
+                    {
+                        value
                     } else if matches!(prop, PropId::Wakelock | PropId::Orientationlock) {
                         // The value as computed, which wakelock.js and orientationlock.js journal.
                         let k = ["wake", "orient"][usize::from(prop == PropId::Orientationlock)];

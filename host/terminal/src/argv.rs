@@ -4,6 +4,7 @@
 //! path segment; `--name value` is the query parameter `name=value`.
 
 use crate::color::ColorDepth;
+use crate::ending;
 use crate::host::Mode;
 
 /// What `--color` asked for: `auto` (SGR to a terminal, plain otherwise),
@@ -198,10 +199,15 @@ fn flag(
                         ))
                     }
                 },
-                "timeout" => match value.parse::<f64>() {
-                    Ok(s) if s.is_finite() && s >= 0.0 => line.timeout = Some(s),
-                    _ => return Some(format!("--timeout expects seconds, not {value:?}")),
-                },
+                "timeout" => {
+                    let now = std::time::Instant::now();
+                    match value.parse::<f64>() {
+                        Ok(s) if s >= 0.0 && ending::forced_end(now, s).is_some() => {
+                            line.timeout = Some(s)
+                        }
+                        _ => return Some(format!("--timeout expects seconds, not {value:?}")),
+                    }
+                }
                 _ => match parse_size(&value) {
                     Some(size) => line.size = Some(size),
                     None => return Some(format!("--size expects COLSxROWS, not {value:?}")),
@@ -270,6 +276,12 @@ mod tests {
         assert_eq!(location(&["/a#top", "--q", "1"]), "/a?q=1#top");
         assert!(line(&["--columns", "wide"]).is_err());
         assert!(line(&["--timeout=-1"]).is_err());
+        // Too long to be a Duration, or (on Unix, whose Instant is a
+        // timespec) a Duration past the last Instant.
+        assert!(line(&["--timeout=1e300"]).is_err());
+        #[cfg(unix)]
+        assert!(line(&["--timeout=1e19"]).is_err());
+        assert_eq!(line(&["--timeout=1e9"]).unwrap().timeout, Some(1e9));
         assert!(line(&["-x"]).is_err());
         assert!(line(&["/a", "/b"]).is_err());
         assert!(line(&["--print=yes"]).is_err());

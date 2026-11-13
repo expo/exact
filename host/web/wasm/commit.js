@@ -1,6 +1,6 @@
 import { views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
-import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
+import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
@@ -311,7 +311,7 @@ function apply(batch) {
           if (host.unparsed) {
             console.warn("exact:", host.unparsed);
           }
-          if (host.grants.some((l) => /^\s*auth\.session /.test(l))) {
+          if (host.grants.some((l) => grantWords(l)[0] === "auth.session")) {
             host.authHost ??= afterNativePaint().then(() => loadAfterPaint("./auth-glue.js", "authHost")).then((h) => host.authHost = h);
           }
           break;
@@ -611,9 +611,15 @@ function apply(batch) {
           } else if (op.name === "requestPictureInPicture" || op.name === "exitPictureInPicture") {
             const why = "the wasm target does not float an image; the JS target does", el = op.name === "requestPictureInPicture" ? liveById(String(op.args?.[0] ?? "")) : null;
             log(`${op.name} refused: ${why}`);
-            /* the image hears the refusal after this batch, as its pictureinpictureerror (LLP 1042 §9) */
+            /* the image hears the refusal after this batch, as its pictureinpictureerror (LLP 1042 §9); a reload in
+               between reuses view ids, so only the same element in the same incarnation hears it */
             if (el?.dataset.view) {
-              setTimeout(() => send(host.wasm.exact_dispatch(Number(el.dataset.view), 19, writeIn("pictureinpictureerror\n" + why), now())));
+              const view = Number(el.dataset.view), asked = host.incarnation;
+              setTimeout(() => {
+                if (host.incarnation === asked && views.get(view) === el && !retiredViews.has(el)) {
+                  send(host.wasm.exact_dispatch(view, 19, writeIn("pictureinpictureerror\n" + why), now()));
+                }
+              });
             }
           } else if (op.name === "requestFullscreen") {
             const el = [...views.values()].find((el) => el.id === op.args?.[0] && el.exactMedia);

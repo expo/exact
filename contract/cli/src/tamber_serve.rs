@@ -210,9 +210,16 @@ struct Server {
     /// program loads as it did (`contract::retention_build`).
     kept: Option<(String, contract::Kept)>,
     /// The style rows the last retention build found literal, with each
-    /// source's path, by the Contract sources' key: what a write's rows
-    /// check judges again (`contract_lower::rows`).
-    rows: Option<(String, Vec<contract_lower::rows::Row>, Vec<PathBuf>)>,
+    /// source's path and what the rows leave to the build, by the Contract
+    /// sources' key: what a write's rows check judges again
+    /// (`contract_lower::rows`).
+    #[allow(clippy::type_complexity)]
+    rows: Option<(
+        String,
+        Vec<contract_lower::rows::Row>,
+        Vec<PathBuf>,
+        contract_lower::rows::Left,
+    )>,
     /// The background whole build, which says when a retention build's
     /// build fails after the design (theme2's 12:15 ruling).
     checker: check::Checker,
@@ -467,7 +474,7 @@ impl Server {
             let _ = file.and_then(|mut f| f.write_all(line.as_bytes()));
         }
         self.kept = built.kept.map(|kept| (sources.clone(), kept));
-        self.rows = Some((sources, built.rows, built.paths));
+        self.rows = Some((sources, built.rows, built.paths, built.left));
         // A build that stopped before the design says nothing of them.
         let retention = built.retention?;
         self.synthetic = Some((key.clone(), built.candidates.clone(), Some(retention)));
@@ -1175,7 +1182,7 @@ impl Server {
         // override that varies by an app axis (LLP 1121 D5, the compiler's
         // `tamber-role-axis`). An undo restores what was, and is not judged.
         if !undo {
-            self.write_checks(&texts, &planned, &self.last_key)?;
+            self.write_checks(&texts, &planned, &self.last_key.clone())?;
         }
         let mut out = json!({
             "files": files_json(snap),

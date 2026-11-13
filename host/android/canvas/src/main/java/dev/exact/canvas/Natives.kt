@@ -90,6 +90,7 @@ class Natives(
         var props = ""
         var module: String? = null
         var generation = 0
+        var session = 0L
         var slot = 0
         var disabled = false
         var eventBinding = 0
@@ -343,13 +344,14 @@ class Natives(
         val module = json?.optString("module")
         val generation = json?.optInt("generation") ?: 0
         val slot = json?.optInt("slot") ?: 0
+        val session = json?.optLong("session") ?: 0L
         var e = elements[id]
-        if (e == null || e.kind != kind || (kind == 2 && (e.generation != generation || e.slot != slot || e.module != module))) {
+        if (e == null || e.kind != kind || (kind == 2 && (e.generation != generation || e.slot != slot || e.module != module || e.session != session))) {
             e?.let { release(it) }
             val created = if (lazy && row != 0 && ((kind == 0 && videos != null && lazyVideo) || kind == 1 || (kind == 2 && modules.containsKey(module)))) {
                 Element(id, kind, standIn, RenderNode("exact native")).also {
                     it.parked = true; it.module = module
-                    it.generation = generation; it.slot = slot
+                    it.generation = generation; it.slot = slot; it.session = session
                     waiting++
                 }
             } else create(id, kind, props) ?: return
@@ -553,6 +555,7 @@ class Natives(
         if (kind == 2) {
             e.module = json.optString("module")
             e.generation = json.optInt("generation")
+            e.session = json.optLong("session")
             e.slot = json.optInt("slot")
             bindEvents(e)
         }
@@ -663,15 +666,15 @@ class Natives(
             // Modules may reply asynchronously; retirement or reuse must never retarget that reply.
             post {
                 if (elements[e.id] === e && !e.parked && e.eventBinding == binding) {
-                    Exact.moduleEvent(e.id, e.slot, e.generation, kind, payload)
+                    Exact.moduleEvent(e.id, e.slot, e.generation, e.session, kind, payload)
                 }
             }
         }
     }
 
     /** A module button under an unscrolled tap. Other native input stays with its dedicated host. */
-    fun click(id: Int, slot: Int, generation: Int, x: Float, y: Float): Boolean {
-        val e = elements[id]?.takeIf { it.kind == 2 && !it.parked && it.slot == slot && it.generation == generation } ?: return false
+    fun click(id: Int, slot: Int, generation: Int, session: Long, x: Float, y: Float): Boolean {
+        val e = elements[id]?.takeIf { it.kind == 2 && !it.parked && it.slot == slot && it.generation == generation && it.session == session } ?: return false
         if (e.disabled || !e.view.isEnabled || !e.view.isClickable) return false
         e.view.translationX = x
         e.view.translationY = y

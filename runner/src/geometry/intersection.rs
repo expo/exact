@@ -83,10 +83,21 @@ pub(crate) fn intersection(
             }
             let f = arena.frame(slot);
             let element_root = root == Some(Root::Element(arena.key(slot)));
+            let own = placed_transform(kernel, scrolled, slot, f);
+            let root_clip = scrolled
+                .placed_block(kernel, slot)
+                .filter(|(entry, _)| element_root && entry.clip_only)
+                .and_then(|_| block_clip(kernel, scrolled, slot, f));
             let clips_overflow =
                 s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible;
             if element_root || (!rooted && slot != key.index && clips_overflow) {
                 let mut bounds = padding_box(kernel, slot);
+                // A clipped scroll root's allocation defines its visible bounds,
+                // so rejection there is a leave, even when its CSS box is wider.
+                if let Some(allocation) = root_clip {
+                    bounds = clip(map(own, bounds), allocation)?;
+                    transform = mul(own, transform);
+                }
                 if !element_root {
                     if s.overflow_x == Overflow::Visible {
                         bounds[0] = f64::NEG_INFINITY;
@@ -114,12 +125,13 @@ pub(crate) fn intersection(
                     transform = IDENTITY;
                 }
             }
-            transform = mul(
-                placed_transform(kernel, scrolled, slot, arena.frame(slot)),
-                transform,
-            );
+            if root_clip.is_none() {
+                transform = mul(own, transform);
+            }
             // A route's native scrollport wraps its authored CSS scroll root, so it lies above that root
-            if !rooted || (element_root && !scrolled.is_scrollport(kernel, slot)) {
+            if root_clip.is_none()
+                && (!rooted || (element_root && !scrolled.is_scrollport(kernel, slot)))
+            {
                 if let Some(bounds) = block_clip(kernel, scrolled, slot, f) {
                     let scrollport_root = root == Some(Root::Scrollport(arena.key(slot)));
                     let Some(visible) = clip(
@@ -322,4 +334,38 @@ fn path_bounds(path: &exact_kernel::clip::ClipPath) -> Option<Rect> {
             f64::from(y + h),
         ]
     })
+}
+
+/// The native allocation's clip in its block root's border-box coordinates.
+/// A placement without a block clips the ordinary frame in its parent's space.
+/// Scrolling moves content inside this fixed allocation. None for implied
+/// popover blocks, which supply layout space and allow visible overflow.
+pub(crate) fn block_clip(
+    kernel: &Kernel,
+    scrolled: &Scrolled,
+    slot: u32,
+    frame: Frame,
+) -> Option<[f64; 4]> {
+    let view = kernel.arena().local_id(slot);
+    if kernel.host_block_implied(view) {
+        return None;
+    }
+    let placed = scrolled.placed_block(kernel, slot);
+    if let Some((entry, parent)) = placed.filter(|(entry, _)| entry.clip_only) {
+        let arena = kernel.arena();
+        let up = arena.frame(parent);
+        let (sx, sy) = scrolled.offset(arena.key(parent));
+        let x = entry.rect[0] + f64::from(up.x) + sx - f64::from(frame.x);
+        let y = entry.rect[1] + f64::from(up.y) + sy - f64::from(frame.y);
+        return Some([x, y, x + entry.rect[2], y + entry.rect[3]]);
+    }
+    let (w, h) = kernel.host_block_size(view)?;
+    let offset = placed
+        .and_then(|(entry, _)| entry.offset)
+        .unwrap_or([0.0; 2]);
+    let (x, y) = (
+        offset[0] - f64::from(frame.x),
+        offset[1] - f64::from(frame.y),
+    );
+    Some([x, y, x + f64::from(w), y + f64::from(h)])
 }

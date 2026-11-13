@@ -15,6 +15,7 @@
 //   order, a commit each.
 import { journal, clock, Sounds, Mutations, Resources, R, data, commit, time } from './rt.js';
 import { plain } from './format.js';
+import { grantWords } from './admission.js';
 
 const HOLD = 50, QUEUED = 1024, RECORD = 1024, SHOWN = 64, SENT = 128;
 const say = line => journal.push(`t=${clock.now} ${line}`);
@@ -376,7 +377,7 @@ function apply(commands) {
 export function midi(readers, uses) {
   Readers = readers; Uses = uses; ReadsSent = Object.values(readers).some(([fields]) => fields.includes('sent'));
   // The grants are the data module's, which may load after the first frame: then the readers are asked again.
-  const granted = () => /^\s*device\.midi\s/m.test(data.grants ?? '');
+  const granted = () => (data.grants ?? '').split('\n').some(line => grantWords(line)[0] === 'device.midi');
   Granted = granted();
   Ports = { access: Granted ? 'prompt' : 'denied', inputs: [], outputs: [] };
   // The host reports its ports once (midi-glue.js), which may be before then: that report applies now.

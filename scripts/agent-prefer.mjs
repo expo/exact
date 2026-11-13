@@ -28,10 +28,11 @@ export function preferGroups(facts) {
     // family (`permission.health.steps`), or a fact of one whose answer the platform hides (`shared=false`,
     // `since=2026-10-01`, LLP 1133.026 D19 item 1).
     if (/^permission\.[\w-]+(\.[\w-]+)*$/.test(name) && (['granted', 'denied', 'prompt'].includes(String(value)) || /^(shared=(true|false)|since=\d{4}-\d{2}-\d{2})$/.test(String(value)))) { (extension.permission ??= {})[name.slice(11)] = String(value); continue; }
-    // A native module's source (LLP 1124 D7): `extension geolocation.watchPosition={…}`, `{"error":"CODE"}` or `clear`.
+    // A native module's source (LLP 1124 D7): `extension geolocation.watchPosition={…}`, `{"error":"CODE"}` or `clear`;
+    // an implementation's own source by its import path (`…#@exact/tracking-consent/apple`).
     if (name === 'extension') {
-      const m = /^([\w-]+\.\w+)=(.+)$/s.exec(String(value));
-      if (!m) throw new MalformedOperation(`prefer extension ${value}: expected <extension>.<source>=<JSON>|clear`);
+      const m = /^([\w-]+\.\w+(?:#@?[\w.-]+(?:\/[\w.-]+)*)?)=(.+)$/s.exec(String(value));
+      if (!m) throw new MalformedOperation(`prefer extension ${value}: expected <extension>.<source>[#<import path>]=<JSON>|clear`);
       try { (extension.extension ??= {})[m[1]] = m[2] === 'clear' ? 'clear' : JSON.parse(m[2]); } catch (e) { throw new MalformedOperation(`prefer extension ${m[1]}: ${e.message}`); }
       continue;
     }

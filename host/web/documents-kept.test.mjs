@@ -160,6 +160,37 @@ chromeTest('a kept document reopens after a reload, asks again under a press, an
     // mints stops, and the next block, once reserved, gives more.
     expect(await run(`(() => { let given = 0; for (let i = 0; i < 600; i++) if (exact.documents.mint({ kind: 'file', name: 'x' + i })) given++; return given < 600; })()`)).toBe(true);
     expect(await run(`new Promise((ok) => setTimeout(ok, 100)).then(() => exact.documents.mint({ kind: 'file', name: 'later' }))`)).toMatch(/^doc:\/\d+\/later$/);
+    // D4's rows by an editor (scripts/fixtures/kept-editor saves this way): the
+    // app's own atomic replace, expecting what it read, keeps the document at
+    // its path across a reload. Another writer replacing the file at its name
+    // is seen by a watch, and the editor's save of the stale read is refused.
+    // The identity is the browser's handle, which reads what is at its name.
+    const edited = await run(`(async () => {
+      const root = await navigator.storage.getDirectory(), f = await root.getFileHandle('draft.md', { create: true });
+      const w = await f.createWritable(); await w.write('# Draft'); await w.close();
+      globalThis.showOpenFilePicker = async () => [f];
+      await host.show({ present: true, view: 1 }, 'showOpenFilePicker');
+      return chosen;
+    })()`);
+    const save = (text, read) => `files.atomicWriteFile(${JSON.stringify(edited)}, new TextEncoder().encode(${JSON.stringify(text)}), { expect: ${read} }).then(() => 'saved', (e) => e.code)`;
+    expect(await run(`files.stat(${JSON.stringify(edited)}).then((s) => ${save('# Draft\n\nmine', 's')})`)).toBe('saved');
+    await launch();
+    expect(await run('listed()')).toContain(`${edited} file readwrite`);
+    expect(await run(`read(${JSON.stringify(edited)})`)).toBe('# Draft\n\nmine');
+    expect(await run('typeof FileSystemObserver')).toBe('function');
+    await run(`(async () => {
+      globalThis.read0 = await files.stat(${JSON.stringify(edited)});
+      globalThis.heard = 0;
+      await exact.documents.observe(${JSON.stringify(edited)}, false, grants, () => { heard++; });
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry('draft.md');
+      const w = await (await root.getFileHandle('draft.md', { create: true })).createWritable(); await w.write('# Theirs'); await w.close();
+    })()`);
+    for (let i = 0; i < 100 && await run('heard') === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(await run('heard')).toBeGreaterThan(0);
+    expect(await run(`read(${JSON.stringify(edited)})`)).toBe('# Theirs');
+    expect(await run(save('# Draft\n\nmine again', 'read0'))).toBe('ECHANGED');
+    expect(await run(`read(${JSON.stringify(edited)})`)).toBe('# Theirs');
     // Without `doc.keep`, both calls are refused.
     const plain = JSON.stringify(normalized('fs.read doc:/'));
     expect(await run(`exact.documents.recent(${plain}).then(() => 'listed', (e) => e.message)`)).toMatch(/need the doc\.keep grant/);

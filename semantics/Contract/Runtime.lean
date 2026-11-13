@@ -197,6 +197,10 @@ structure Oracle where
   preferred value) is its own, so a call to one with no answer and no fact
   is outside the semantics, not a refusal. -/
   modules : List String := []
+  /-- The sources a program declares (LLP 1162.001): the runner makes their
+  HTTP request itself and never asks the oracle, so a call to one with no
+  answer and no fact is outside the semantics, not a refusal. -/
+  fetches : List String := []
   /-- The host built every tab panel at boot and builds each as it is made
   (LLP 1075.003 §9.14: a page rendered ahead of its runtime, which the
   runtime adopts whole; `Runner::build_every_tab`). -/
@@ -238,6 +242,8 @@ def Oracle.ask (o : Oracle) (src : String) (args : List Value) (resource : Strin
         .error (.unsupported s!"`{src}`: the runner answers it from its transport or its MIDI ports, which change as they play (LLP 1125)")
       else if o.modules.contains src then
         .error (.unsupported s!"`{src}`: a native module's, which the runner answers from the module's substitute (LLP 1133.002 D13)")
+      else if o.fetches.contains src then
+        .error (.unsupported s!"`{src}`: a declared source's, whose HTTP request the runner makes itself (LLP 1162.001)")
       else .error (.refused s!"the oracle has no answer for {src}")
 
 /-! ## Settlement -/

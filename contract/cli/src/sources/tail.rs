@@ -11,6 +11,8 @@ pub struct GraphBase {
     pub(super) sources: Sources,
     /// The loaded sources, the root first.
     pub(super) base: Vec<Source>,
+    /// Literal bundled SVG images, present or not.
+    pub(super) images: Vec<PathBuf>,
     /// The Contract components' params, before scoping.
     pub(super) params: Vec<contract_lower::params::ParamToken>,
     /// The components' identities before scoping (the compile load's), and after.
@@ -81,6 +83,12 @@ impl GraphBase {
     pub fn tail(&self) -> SourceGraph {
         let root_key = &self.root_key;
         let mut sources = self.base.clone();
+        let (images, missing_images): (Vec<_>, Vec<_>) =
+            self.images.iter().cloned().partition(|p| p.is_file());
+        sources.extend(images.into_iter().map(|path| Source {
+            path,
+            origin: Origin::App,
+        }));
         // A package design's components' too (stage 12 B1 round 3): an icon
         // param's SVG is read by the build as the app's own are.
         let package_designs: Vec<_> = packages::read(&self.sources, false)
@@ -221,6 +229,7 @@ impl GraphBase {
             .iter()
             .cloned()
             .chain(missing)
+            .chain(missing_images)
             .chain(library)
             .collect();
         for m in manifests {

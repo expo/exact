@@ -189,6 +189,7 @@ public final class ExactApp {
     var mode = "wasm"
     var rustPolicy: (mode: String, target: String) { (mode, "test-target") }
     var plain = 0
+    var generationPending = false
     var generations: [ExactGeneration] = []
     func apply(_ bytes: Data, label: String) -> Bool { plain += 1; return true }
     func applyGeneration(_ g: ExactGeneration, label: String, commit: () -> Bool) -> Bool {

@@ -821,30 +821,22 @@ impl<D: DataSource> Presenter<D> {
     /// Pointer activation returns HUD button focus to its input canvas after press.
     pub fn press_at(&mut self, x: f32, y: f32, now_ms: f64) -> Option<ViewId> {
         self.touched();
-        self.press_at_after_down(x, y, now_ms, None, false)
+        self.press_at_after_down(x, y, now_ms, None)
     }
 
-    /// A press released at (`x`, `y`); `finger`, a finger's, which under the
-    /// Material look reaches the nearest control whose 48 dp touch box it is
-    /// in when it reached nothing that takes it ([`Presenter::touch_target`]).
+    /// A geometric press after down; Material contacts keep their down target.
     pub(crate) fn press_at_after_down(
         &mut self,
         x: f32,
         y: f32,
         now_ms: f64,
         focus_before_down: Option<Option<ViewId>>,
-        finger: bool,
     ) -> Option<ViewId> {
         // An open select menu takes the press: a row, or light dismiss.
         if let Some(select) = self.menu_press(x, y) {
             return Some(select);
         }
-        let hit = self.hit(x, y);
-        let hit = if finger {
-            self.touch_target(hit, x, y)
-        } else {
-            hit
-        }?;
+        let hit = self.hit(x, y)?;
         self.press_hit_after_down(hit, (x, y), now_ms, focus_before_down, false)
     }
 

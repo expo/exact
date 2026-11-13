@@ -10,6 +10,18 @@ fn css(rows: &[(StyleId, StyleValue)], fonts: &[&str]) -> String {
     css_text(&style, &fonts).0
 }
 
+#[test]
+fn explicit_transition_none_covers_no_property_in_the_browser() {
+    assert_eq!(css(&[], &[]), "");
+    assert_eq!(
+        css(
+            &[(StyleId::Transition, StyleValue::Text("none".into()))],
+            &[]
+        ),
+        "transition:none;"
+    );
+}
+
 /// LLP 1001 §6's balance; LLP 1104 D3's `::placeholder` colour.
 #[test]
 fn balance_and_the_placeholder_colour_are_written_for_the_browser() {

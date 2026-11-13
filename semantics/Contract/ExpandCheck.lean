@@ -186,6 +186,27 @@ private def changeThenTimer : CProgram :=
     | _ => false
   | _ => false
 
+-- Two timers due at once, the `wait=idle` one declared first: the other
+-- fires first (`Timer.precedes`), as in `advance`, so the idle one's write
+-- is the last. 50: 0x4049000000000000; 1 and 2: 0x3FF…, 0x4000….
+private def idleTie : CProgram :=
+  { root := {
+      name := "App",
+      states := [{ name := "last", ty := .number, init := .num 0 }],
+      actions := [
+        { name := "idle", params := [], body := [.assign "last" (.num 0x3FF0000000000000)] },
+        { name := "busy", params := [], body := [.assign "last" (.num 0x4000000000000000)] }],
+      tasks := [
+        { name := "idle", kind := .after, waitKind := 4, ms := .num 0x4049000000000000, action := "idle" },
+        { name := "busy", kind := .after, ms := .num 0x4049000000000000, action := "busy" }] } }
+
+#guard
+  let p := idleTie
+  let (c, _) := CompSem.cboot p {}
+  match CompSem.cadvance p {} c 100 with
+  | (c, .ok) => (lookup "last" c.slots).any (Value.same (.num 1))
+  | _ => false
+
 /-- Both checks for one case, as lines: `#expand-error`, `#struct`, `#types`
 (each with what differs, or `ok`), then the flat observation after
 `#flat` and the component-level one after `#comp`. -/

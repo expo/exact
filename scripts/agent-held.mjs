@@ -27,10 +27,14 @@ export async function heldClock(s, words) {
   // Looks back off from 25 ms to 200 ms, each wait, and each look itself, cut to what is left of the bound, so the
   // bound stays exact: a look that answers past it counts nothing.
   let left = targets, seen = first;
-  const until = (end) => new Promise((ok) => setTimeout(() => ok(null), Math.max(0, end - performance.now())));
+  const lookBy = (end) => {
+    let timer;
+    const late = new Promise((ok) => { timer = setTimeout(() => ok(null), Math.max(0, end - performance.now())); });
+    return Promise.race([look(), late]).finally(() => clearTimeout(timer));
+  };
   for (let end = performance.now() + bound, gap = 25; left.length && performance.now() < end; gap = Math.min(gap * 2, 200)) {
     await new Promise((ok) => setTimeout(ok, Math.max(0, Math.min(gap, end - performance.now()))));
-    const got = await Promise.race([look(), until(end)]);
+    const got = await lookBy(end);
     if (!got) break;
     seen = got;
     const now = seen.heldReplies ?? {};
