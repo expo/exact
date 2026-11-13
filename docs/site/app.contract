@@ -138,6 +138,7 @@ routes nav
   referenceDeveloperInspectAndFormatContract "/reference/developer/inspect-and-format-contract" render=build activate=idle
   referenceDeveloperRunATerminalApp "/reference/developer/run-a-terminal-app" render=build activate=idle
   referenceDeveloperRunAnAppFromATerminalOnMacos "/reference/developer/run-an-app-from-a-terminal-on-macos" render=build activate=idle
+  referenceDeveloperApplePrivacyManifests "/reference/developer/apple-privacy-manifests" render=build activate=idle
   referenceDeveloperOpenTheSameDevelopmentUrlOnAppleHosts "/reference/developer/open-the-same-development-url-on-apple-hosts" render=build activate=idle
   referenceDeveloperGenerateTypescriptDataSourceTypes "/reference/developer/generate-typescript-data-source-types" render=build activate=idle
   referenceDeveloperAccessHatches "/reference/developer/access-hatches" render=build activate=idle
