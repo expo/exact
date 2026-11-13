@@ -1,6 +1,6 @@
 import { writePrivacyManifest } from './privacy.mjs';
 // @ref LLP 1126 D2/D8 — one runtime framework, one generated widget bundle.
-import { basename, dirname, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, existsSync, writeFileSync, readFileSync, copyFileSync, cpSync, rmSync, renameSync, statSync, lstatSync, utimesSync } from 'node:fs';
 import { createHash, X509Certificate } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -185,7 +185,8 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
   // SwiftPM compiles the whole scratch again when any argument in its plan changes, link arguments included, and the
   // archive and plan sat under the app's own directory: every switch between two widget apps recompiled about 32 s
   // of Swift (expo/exact-build#177). They are linked from fixed paths here instead, copied in when their bytes change.
-  const inputs = resolve(base, 'link-inputs'), stableArchive = resolve(inputs, basename(archive)), stablePlan = linkedPlan && resolve(inputs, 'plan');
+  // The archive's name is fixed too (Package.swift force-loads lib<EXACT_LIB>.a), since apps' crates differ.
+  const inputs = resolve(base, 'link-inputs'), stableArchive = resolve(inputs, 'libexact_widget_app.a'), stablePlan = linkedPlan && resolve(inputs, 'plan');
   const placed = resolve(inputs, 'digest');
   if (!existsSync(placed) || readFileSync(placed, 'utf8') !== digest || !existsSync(stableArchive)) {
     rmSync(inputs, { recursive: true, force: true });
@@ -198,6 +199,7 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
     writeFileSync(placed, digest);
   }
   coreEnv.EXACT_LIB_DIR = inputs;
+  coreEnv.EXACT_LIB = 'exact_widget_app';
   // A package's framework (LLP 1154 D3), which the archive's shim calls, found beside this one in Frameworks.
   const linkLibrary = appleLinkArgs(library, platform !== 'macos', platform === 'macos' ? '@loader_path/../../..' : '@loader_path/..');
   const stamp = resolve(base, 'archive');
