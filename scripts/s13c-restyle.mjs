@@ -577,7 +577,8 @@ export function apart(base, want, kind, row = '') {
 
 /** One drive of `plan` on `host` that reads `ids` (the runner's tree first):
  * { tree, nodes: Map(id, node) }. The terminal is driven itself, as
- * scale-check drives it. */
+ * scale-check drives it, and takes only a terminal compile (`plan` as
+ * stage12-drive.mjs's `drivePlan` hands it on, LLP 1101.003 D9). */
 export function inspectDrive(host, plan, ids, app = null) {
   const steps = ids.map(id => (host === 'terminal' ? ['node', String(id)] : [`layout ${id}`])).flat();
   const launch = host === 'android' ? ['--reader', '--app', app, '--plan', plan] : ['--plan', plan];

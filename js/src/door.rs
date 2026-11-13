@@ -3,6 +3,20 @@
 use super::{crypto, pure, wire, HostState};
 use std::ffi::{c_char, c_void};
 
+pub(crate) fn fetch(
+    state: &mut HostState,
+    ticket: &str,
+    wire: &str,
+    body: Option<&[u8]>,
+) -> Result<Option<String>, String> {
+    let ticket = ticket
+        .parse::<u64>()
+        .map_err(|_| "fetch: a ticket that is not a number")?;
+    let request = wire::request_from_json(wire, body).map_err(|e| format!("fetch: {e}"))?;
+    state.requests.push((ticket, request));
+    Ok(None)
+}
+
 /// The one door from the module into Rust (`__exact_host` in the prelude).
 ///
 /// # Safety
@@ -26,16 +40,7 @@ pub(crate) unsafe extern "C" fn host_door(
     let b = String::from_utf8_lossy(std::slice::from_raw_parts(b as *const u8, b_len));
     let reply: Result<Option<String>, String> = match op {
         op if state.refused_ops.contains(&op) => Err(format!("__exact_host: no op {op}")),
-        1 => match a.parse::<u64>() {
-            Ok(ticket) => match wire::request_from_json(&b) {
-                Ok(request) => {
-                    state.requests.push((ticket, request));
-                    Ok(None)
-                }
-                Err(e) => Err(format!("fetch: {e}")),
-            },
-            Err(_) => Err("fetch: a ticket that is not a number".into()),
-        },
+        1 => fetch(state, &a, &b, None),
         // A locked presence name throws `InvalidAccessError` (LLP 1133.010 D5).
         2 => match state.store {
             Some(s) => (*s)

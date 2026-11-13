@@ -20,8 +20,8 @@ macro_rules! canvas_jni_keys {
             with(|h| h.key(ch, backspace == JNI_TRUE));
         }
 
-        /// A remote's key, down or up, by the web's `code` and `key`
-        /// (LLP 1115.001.003 D3): the D-pad's arrows and Select.
+        /// A key, down or up, by the web's `code` and `key`: Tab, or a
+        /// remote's D-pad arrow or Select (LLP 1115.001.003 D3).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_namedKey(
             env: *mut JNIEnv,
@@ -30,9 +30,11 @@ macro_rules! canvas_jni_keys {
             key: jstring,
             down: jboolean,
             repeat: jboolean,
+            shift: jboolean,
         ) {
             let (code, key) = (string(env, code), string(env, key));
-            with(|h| h.named_key(&code, &key, down == JNI_TRUE, repeat == JNI_TRUE));
+            let (down, repeat, shift) = (down == JNI_TRUE, repeat == JNI_TRUE, shift == JNI_TRUE);
+            with(|h| h.named_key(&code, &key, down, repeat, shift));
         }
 
         /// System Back: whether the app took it.

@@ -210,8 +210,9 @@ object Native {
      * its 4 axes; [connected] false when it went away. [at] is the event's `eventTime`
      * (`SystemClock.uptimeMillis()`), 0 for a send no event caused: the host stamps it on arrival then. */
     @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long)
-    /** A remote's key, down or up, by the web's `code` and `key` (LLP 1115.001.003 D3): a D-pad arrow, or Select. */
-    @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean)
+    /** A key, down or up, by the web's `code` and `key` ([Keys.named]): Tab, or a remote's D-pad arrow or Select.
+     * [shift]: Shift is held with it, which Android tells with the key rather than as a key of its own. */
+    @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean, shift: Boolean)
     /** System Back (LLP 1115.001 D6): whether the app took it. From its navigation root's selected route it goes to
      * the Back control the root names, else to the root's `navigate` handler, else it is the runner's own `back`;
      * false when there is nowhere to go back to, and the activity finishes. The reader takes Back only while the

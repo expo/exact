@@ -9,6 +9,7 @@ android {
     // A package's unit tests compile its Kotlin into this module's tests; the reader links none of it.
     sourceSets {
         getByName("test").kotlin.directories.addAll(listOf(
+            "../../../packages/age-range/android", "../../../packages/age-range/test",
             "../../../packages/barcode-detection/android", "../../../packages/barcode-detection/test",
             "../../../packages/alarms/android", "../../../packages/alarms/test",
             "../../../packages/background/android", "../../../packages/background/test",
@@ -22,6 +23,7 @@ android {
 }
 
 dependencies {
+    testImplementation("com.google.android.play:age-signals:0.0.4")
     testImplementation("com.google.mlkit:text-recognition:16.0.1")
     testImplementation("com.google.mlkit:barcode-scanning:17.3.0")
     testImplementation("junit:junit:4.13.2")

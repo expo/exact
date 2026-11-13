@@ -230,7 +230,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         a = exact.makeSession(delegate: delegate, label: "a")
         b = exact.makeSession(delegate: delegate, label: "b")
         #if !os(tvOS)
-        exact.installNotificationClicks()
+        exact.installNotificationClicks(boot: { $0.bootForWake() }, activate: nil)
         #endif
         if ExactEnv.agentFreezes { a.clock = 0; b.clock = 0 }
         sessions = [("a", a), ("b", b)]

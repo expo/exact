@@ -746,7 +746,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { presenter?.session?.frameHealth.endScroll(scrollView); if scrollView === self.scrollView, !followEndIfOwed() { scrollMayHaveEnded(scrollView) } }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
-        followingEndAnimated = false
+        followingEndAnimated = false; authoredScrollAnimating = false
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
@@ -760,7 +760,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         followsEndAfterInteraction = false
         let maximum = max(-sv.adjustedContentInset.top, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
         anchoredScrollTop = maximum
-        guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5 else { return false }
+        guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5, !authorOwnsScroll(sv) else { return false }
         sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: maximum), in: sv), animated: true)
         return true
     }
@@ -769,7 +769,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
         presenter?.elementScrolls.userScrolled(scrollView) // its own scroller, or a grouped list's collection
         guard scrollView === self.scrollView else { return }
-        followingEndAnimated = false; pageIfPager(scrollView)
+        followingEndAnimated = false; authoredScrollAnimating = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
         retainedScrollTop = nil

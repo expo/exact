@@ -1,7 +1,7 @@
-//! `crypto.subtle` on the Hermes executor (LLP 1069.005): the byte work
-//! behind the prelude's `SubtleCrypto`, through `__exact_bytes`. The prelude
-//! owns the WebCrypto shapes (algorithm names, errors, promises); this owns
-//! the arithmetic.
+//! The Hermes executor's bytes door (`__exact_bytes`): WebCrypto
+//! (LLP 1069.005) and byte transfers that bypass the string door. The
+//! prelude owns the WebCrypto shapes (algorithm names, errors, promises);
+//! this owns the arithmetic.
 //!
 //! @ref LLP 1069.005 D1 — digests are pure: no read, no mark, any time.
 
@@ -142,7 +142,9 @@ fn ec(state: &mut HostState, op: u32, a: &str, data: &[u8]) -> Result<String, St
 /// and drops them; 9 the
 /// binary message being mapped, written into the buffer, which the prelude
 /// made its size; 10 releases an unreachable key or codec after the shim's
-/// weak-owner sweep; 12–15 the Compression standard's codecs
+/// weak-owner sweep; 11 admits a fetch with its body copied from the buffer
+/// (`a` is its ticket, a space, then the request metadata as JSON);
+/// 12–15 the Compression standard's codecs
 /// (`compression.rs` [`crate::compression::door`]; 15 copies what the last
 /// write or end yielded into the buffer, which the prelude made its size).
 ///
@@ -197,6 +199,12 @@ pub(crate) unsafe extern "C" fn bytes_door(
             }
             Ok(String::new())
         }
+        11 => match a.split_once(' ') {
+            Some((ticket, wire)) => {
+                crate::door::fetch(state, ticket, wire, Some(data)).map(|_| String::new())
+            }
+            None => Err("fetch: no ticket or request metadata".into()),
+        },
         12..=14 => crate::compression::door(
             &mut state.codecs,
             &mut state.next_key,

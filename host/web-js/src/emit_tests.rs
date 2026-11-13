@@ -57,6 +57,26 @@ fn a_row_lists_estimate_and_gap_are_list_options_read_again() {
     assert!(js.contains("gap:()=>s_1()"), "{js}");
 }
 
+/// An ordinary scroller's `scrollFollowEnd`, constant or bound, is follow.js's
+/// (LLP 1070.000 §15); a virtualized list's is list.js's alone.
+#[test]
+fn an_ordinary_scrollers_end_follow_imports_follow_js() {
+    let emit = |source: &str| {
+        crate::emit::emit(&contract::compile(source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    let js = emit(
+        "component App\n  view\n    scroll height=200 scrollFollowEnd=true\n      text \"x\"\n",
+    );
+    assert!(js.contains("import\"./follow.js\";"), "{js}");
+    assert!(js.contains(",\"scrollFollowEnd\",()=>\"true\");"), "{js}");
+    let js = emit("component App\n  state on = false\n  view\n    scroll height=200 scrollFollowEnd=on\n      text \"x\"\n");
+    assert!(js.contains("import\"./follow.js\";"), "{js}");
+    let js = emit("component App\n  view\n    list virtualized=true height=200 scrollFollowEnd=true\n      for x in [1, 2] key=x\n        text `${x}`\n");
+    assert!(!js.contains("follow.js"), "{js}");
+}
+
 #[test]
 fn list_measurements_read_parent_body_inputs_and_outer_frames() {
     let source = "component App\n  state ids = [1, 2]\n  state h = 32\n  view\n    list virtualized=true height=200\n      for x in ids key=x\n        text `${x}` height=(h + ids.length)\n";

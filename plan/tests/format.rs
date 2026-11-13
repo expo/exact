@@ -749,8 +749,8 @@ fn a_huge_announced_count_reserves_little_before_it_is_refused() {
     // (count > remaining), and never reserved 16M entries first.
     let plan = sample();
     let mut bytes = plan.encode();
-    // The strings count sits right after the 56-byte header.
-    bytes[56..60].copy_from_slice(&(1u32 << 24).to_le_bytes());
+    // The strings count sits right after the 60-byte header.
+    bytes[60..64].copy_from_slice(&(1u32 << 24).to_le_bytes());
     assert!(matches!(Plan::decode(&bytes), Err(PlanError::BadCount(_))));
 }
 
@@ -1032,14 +1032,17 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 }
 
 /// Version 6 adds the header's `surface` (LLP 1101.003 D9), which every host
-/// checks before it boots a plan. Every plan-reading host needs a new binary,
-/// including Apple, web, Linux, Windows, Android and terminal (LLP 1030 D3a).
-/// The digest covers
-/// all of `tables/format.json`, including comments.
+/// checks before it boots a plan; declared sources add the `fetches` and
+/// `fetch_parts` tables (LLP 1162.001); the format slot, each strings table's
+/// format data and the format locale a localized roster entry takes last come
+/// with formatting by locale (LLP 1054.000.003 D6). Every plan-reading host
+/// needs a new binary, including Apple, web, Linux, Windows, Android and
+/// terminal (LLP 1030 D3a). The digest covers all of `tables/format.json`,
+/// including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xb4c6_802d_bd0e_a6a5,
+        FORMAT_DIGEST, 0x8b14_235d_0dcd_36d3,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

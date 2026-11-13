@@ -67,14 +67,11 @@ fn has_route(nodes: &[Node], place: &NavPlace, first_root: bool) -> bool {
             };
             place.is_route(attrs) || has_route(children, &next, false)
         }
-        Node::When {
-            then, otherwise, ..
-        } => has_route(then, place, false) || has_route(otherwise, place, false),
-        Node::Match { some, none, .. } => {
-            has_route(&some.1, place, false) || has_route(none, place, false)
-        }
-        Node::Each { body, .. } => has_route(body, place, false),
         Node::Use { .. } | Node::Children { .. } => false,
+        node => node
+            .child_lists()
+            .into_iter()
+            .any(|list| has_route(list, place, false)),
     })
 }
 

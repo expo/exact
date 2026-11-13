@@ -227,19 +227,11 @@ pub(crate) fn module_tags_in(nodes: &[Node]) -> Vec<(String, Span)> {
                     }
                     walk(children, out);
                 }
-                Node::Use { children, .. } => walk(children, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, out);
-                    walk(otherwise, out);
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, out);
+                    }
                 }
-                Node::Each { body, .. } => walk(body, out),
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, out);
-                    walk(none, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { GLOBAL, Graph, Repo, auditProfile, cargoTests, commands, jsSources, rustLiterals, rustSource, select, suites } from './affected.mjs';
-import { classesReached } from '../host/apple/xctest.mjs';
+import { classesReached, hostedTests } from '../host/apple/xctest.mjs';
 
 /** A repository of `files` (path → text) and Cargo packages (`{ name, dir, deps }`), with its metadata given; a package
  * with a `build.rs` among the files has a build script. */
@@ -271,6 +271,24 @@ test("a change to Swift test files alone reaches their classes and those of the 
     for (const changed of ['Waits.swift', 'Table.swift', 'Presenter.swift', 'Gone.swift']) expect(reached('iOS', 'A.swift', changed)).toBe(null);
     // A file that compiles something yet reaches no class runs every class, whose build shows its error
     expect(reached('iOS', 'Hidden.swift')).toBe(null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('hosted touch tests run on the simulator whose XCTest runner injects their input', () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'hosted-touch-')));
+  writeFileSync(resolve(dir, 'History.swift'), `final class HistoryTests: XCTestCase {
+    func testStack() {
+      throw missing("scene", "a native stack")
+    }
+    func testMenu() {
+      throw missing("scene", "a native stack")
+      throw missing("touch", "XCTest opens its menu")
+    }
+  }`);
+  try {
+    const hosted = hostedTests(dir), touch = hostedTests(dir, 'touch');
+    expect(touch).toEqual(['ExactKitTests/HistoryTests/testMenu']);
+    expect(hosted.filter(t => !touch.includes(t))).toEqual(['ExactKitTests/HistoryTests/testStack']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

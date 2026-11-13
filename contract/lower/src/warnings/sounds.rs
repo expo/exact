@@ -15,7 +15,7 @@
 //! doubt. An `audio` or `video` source is a media file, not a sound, so it is
 //! left alone, as is the binding or `fn` the source names.
 
-use crate::theme::scan::{exprs, stmts};
+use crate::theme::scan::stmts;
 use crate::LowerError;
 use contract_syntax::{BinOp, Expr, Node, Stmt, TemplatePart};
 use contract_types::Checked;
@@ -104,7 +104,7 @@ pub(super) fn undeclared(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
     // again as a shorter path.
     let mut joined = BTreeSet::new();
     let mut check = |e: &Expr| {
-        exprs(e, &mut |e| {
+        e.walk().for_each(|e| {
             if let Some(warning) = path(e, &declared, &mut joined) {
                 let at = warning.span;
                 if seen.insert((at.source_id, at.line, at.col, at.end_col)) {

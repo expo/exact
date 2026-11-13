@@ -509,7 +509,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         val sx = v[0]; val sy = v[4]
         if (v[1] != 0f || v[3] != 0f || v[6] != 0f || v[7] != 0f || v[8] != 1f || sx <= 0f || sy <= 0f) return false
         path.computeBounds(iconBounds, true)
-        val grow = if (paint.style == Paint.Style.STROKE) paint.strokeWidth * (if (paint.strokeJoin == Paint.Join.MITER) 2f else 0.5f) else 0f
+        val grow = if (paint.style == Paint.Style.STROKE) paint.strokeWidth * (if (paint.strokeJoin == Paint.Join.MITER) maxOf(2f, paint.strokeMiter / 2f) else 0.5f) else 0f
         val l = Math.floor(((iconBounds.left - grow) * sx + v[2]).toDouble()).toFloat() - 1f
         val t = Math.floor(((iconBounds.top - grow) * sy + v[5]).toDouble()).toFloat() - 1f
         val w = Math.ceil(((iconBounds.right + grow) * sx + v[2]).toDouble()).toInt() + 1 - l.toInt()
@@ -520,7 +520,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         for (k in from until to) mix(b.get(k))
         mix(paint.color); mix(sx.toRawBits()); mix(sy.toRawBits()); mix(path.fillType.ordinal)
         if (paint.style == Paint.Style.STROKE) {
-            mix(paint.strokeWidth.toRawBits()); mix(paint.strokeCap.ordinal); mix(paint.strokeJoin.ordinal); mix(7)
+            mix(paint.strokeWidth.toRawBits()); mix(paint.strokeCap.ordinal); mix(paint.strokeJoin.ordinal); mix(paint.strokeMiter.toRawBits()); mix(7)
         }
         // The fraction of a pixel it sits at is part of the picture.
         mix(((v[2] - Math.floor(v[2].toDouble()).toFloat()) * 8f).toInt()); mix(((v[5] - Math.floor(v[5].toDouble()).toFloat()) * 8f).toInt())
@@ -867,7 +867,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     stroke.strokeWidth = f(b, i + 2)
                     stroke.strokeCap = when (b.get(i + 3)) { 1 -> Paint.Cap.ROUND; 2 -> Paint.Cap.SQUARE; else -> Paint.Cap.BUTT }
                     stroke.strokeJoin = when (b.get(i + 4)) { 1 -> Paint.Join.ROUND; 2 -> Paint.Join.BEVEL; else -> Paint.Join.MITER }
-                    val pathAt = i + 5
+                    stroke.strokeMiter = f(b, i + 5)
+                    val pathAt = i + 6
                     i = readPath(b, pathAt, false)
                     // A circle as an oval or (dashed) arcs, Skia's analytic ops; another dashed stroke as its
                     // path's on-segments ([strokeDashed]); neither is rasterized again at every frame HWUI draws.

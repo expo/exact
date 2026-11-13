@@ -29,6 +29,7 @@ mod properties;
 mod routes;
 mod sequence;
 mod sounds;
+mod source_decl;
 mod states;
 mod steps;
 mod theme;
@@ -559,6 +560,13 @@ impl Parser {
                 TokenKind::Ident(w) if w == "color-profile" => self.color_profile(file)?,
                 TokenKind::Ident(w) if w == "theme" => self.theme(file)?,
                 TokenKind::Ident(w) if w == "fn" => file.fns.push(self.fn_decl()?),
+                TokenKind::Ident(w) if w == "source" => {
+                    let decl = self.source_decl()?;
+                    if let Some(first) = file.sources.iter().find(|s| s.name == decl.name) {
+                        return duplicate("source", &decl.name, decl.span, first.span);
+                    }
+                    file.sources.push(decl);
+                }
                 TokenKind::Ident(w) if w == "test" => file.tests.push(self.test_decl()?),
                 TokenKind::Ident(w) if matches!(w.as_str(), "always" | "after" | "never") => {
                     file.properties.push(self.property_decl()?);
@@ -604,7 +612,7 @@ impl Parser {
                     return self.err(
                         "syntax-expected-declaration",
                         format!(
-                        "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, `keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `use`, `component`, or `members`, found {}",
+                        "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, `keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `source`, `use`, `component`, or `members`, found {}",
                         describe(other)
                     ),
                     );

@@ -166,10 +166,12 @@ export function storeBase(appId, host, env = process.env, home = homedir()) {
   if (host === 'linux') return resolve(env.XDG_CACHE_HOME?.startsWith('/') ? env.XDG_CACHE_HOME : resolve(home, '.cache'), 'exact', appId, 'agent');
   return null;
 }
-/** The origins a web build's data module may fetch: its `net.fetch` grants, as host/web-js/build.mjs writes them
- * into the page's admission data (none for a wasm build). */
+/** The origins a web build's sources may fetch: its data module's `net.fetch` grants, as host/web-js/build.mjs
+ * writes them into the page's admission data, and its declared sources' (LLP 1162.001 D3), which the module carries
+ * (none for a wasm build). */
 export function fetchOrigins(dist) {
-  let text = ''; try { text = readFileSync(resolve(dist, '.gen/admission-data.js'), 'utf8'); } catch { return []; }
+  const read = f => { try { return readFileSync(resolve(dist, '.gen', f), 'utf8'); } catch { return ''; } };
+  const text = read('admission-data.js') + read('app.js');
   return [...new Set([...text.matchAll(/"net\.fetch (https?:\/\/[^/"\s]+)[/"]/g)].map((m) => m[1]))];
 }
 /** The loopback ones: a backend on this machine the tests talk to. */
@@ -1109,14 +1111,17 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
  * build selected (LLP 1142 D13), else app.ts's literal `const origin`, else the origins its `net.fetch` grants name as the
  * build evaluates them, a setting's value (`import.meta.env.API_BASE_URL`, LLP 1153 D4) in place of its read. */
 export function nativeFetchOrigins(dir, env = process.env) {
-  let code; try { code = readFileSync(resolve(dir, 'app.ts'), 'utf8'); } catch { return []; }
+  // A source declared in app.contract names its origin in its `url` line (LLP 1162.001 D3).
+  let contract = ''; try { contract = readFileSync(resolve(dir, 'app.contract'), 'utf8'); } catch { /* none */ }
+  const declared = [...contract.matchAll(/^\s+url\s+"(https?:\/\/[^/?#{"\s]+)/gm)].map(m => m[1]);
+  let code; try { code = readFileSync(resolve(dir, 'app.ts'), 'utf8'); } catch { return [...new Set(declared)]; }
   const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
   const origin = backendOrigin(dir, env) ?? literalBackendOrigin(code, parse);
   if (origin) return [origin];
   let grants = '';
   try { grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse).grants ?? ''; }
   catch { return []; } // the bake refuses it, and says why when it builds
-  return [...new Set(grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean))];
+  return [...new Set([...declared, ...grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean)])];
 }
 /** Resolve the built grant alias and diagnose a fault that cannot meet a granted URL. */
 export function resolveFaultPrefix(prefix, origins, say=console.warn) {

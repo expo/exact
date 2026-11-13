@@ -87,3 +87,54 @@ fn a_bordered_video_is_clipped_on_its_content_edge() {
     assert_eq!(shown[0].rect, (6.0, 6.0, 48.0, 48.0));
     assert_eq!(shown[0].radii, [(2.0, 2.0); 4]);
 }
+
+/// A radius that reads the safe area where the box is (LLP 1123 D9) is its
+/// route's, not the document's 0.
+#[test]
+fn a_radius_reads_its_routes_inset() {
+    let source = concat!(
+        "component App\n  view\n    column navigationKey=\"home\" testId=\"route\"\n",
+        "      video \"assets/t.mp4\" width=60 height=60 ",
+        "border-radius=\"var(--exact-safe-area-inset-top)\"\n",
+    );
+    let plan = contract::compile(source).unwrap();
+    let (mut p, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (100.0, 100.0),
+        1.0,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let kernel = p.host.runner_mut().kernel_mut();
+    let route = kernel.find_by_test_id("route")[0];
+    let route = kernel.node_by_key(route).unwrap().id;
+    let local = Some([12.0, 0.0, 0.0, 0.0]);
+    kernel.set_local_insets(route, local).unwrap();
+    let kernel = p.host().kernel();
+    let scene = Scene {
+        kernel,
+        roots: &kernel.roots(),
+        hidden: &|_| false,
+        presented: &|_| Presented::IDENTITY,
+        paths: &|_| None,
+        scroll: &BTreeMap::new(),
+        page: (0.0, 0.0),
+        images: &BTreeMap::new(),
+        focus: None,
+        selection: None,
+        caret_upstream: false,
+        pointer: None,
+        controls: &BTreeMap::new(),
+        chosen: &BTreeMap::new(),
+        menu: None,
+    };
+    let shown = Rc::new(RefCell::new(Vec::new()));
+    let mut painter = Painter::new(p.text().clone(), 1.0, Box::new(Natives(shown.clone())));
+    painter.paint(&scene, (100.0, 100.0)).unwrap();
+    let shown = shown.borrow();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(shown[0].radii, [(12.0, 12.0); 4]);
+}

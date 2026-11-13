@@ -935,7 +935,7 @@ extension NavigationHost {
         // A route that turns transparent, or back, keeps its scroller: only
         // whether UIKit insets it follows.
         if let sv = physical, c.collapseScroll === target, c.collapseScrollView === sv {
-            let adjustment: UIScrollView.ContentInsetAdjustmentBehavior = Self.transparentBar(c.node) ? .never : .automatic
+            let adjustment: UIScrollView.ContentInsetAdjustmentBehavior = Self.insetsNoTop(c.node) ? .never : .automatic
             if sv.contentInsetAdjustmentBehavior != adjustment { sv.contentInsetAdjustmentBehavior = adjustment }
         }
         guard c.collapseScroll !== target || c.collapseScrollView !== physical else {
@@ -960,7 +960,7 @@ extension NavigationHost {
         // Under a transparent bar the content starts at the top edge, under
         // the bar, as on the web under a fixed transparent header: a hero
         // photo bleeds to the top, and the bar's material comes as it scrolls.
-        shown?.contentInsetAdjustmentBehavior = Self.transparentBar(c.node) ? .never : .automatic
+        shown?.contentInsetAdjustmentBehavior = Self.insetsNoTop(c.node) ? .never : .automatic
         // …and is there before UIKit is handed it: a bar handed a
         // scroller that far from its top closes an open large title.
         if atStart, let sv = shown, sv.contentOffset.y != -sv.adjustedContentInset.top { sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv) }
@@ -1035,7 +1035,8 @@ extension NavigationHost {
         let peers = arrangementScrollers(in: c, top: false)
         let peer = contentScroller(of: c).flatMap { node in peers.contains(where: { $0 === node }) ? node : nil } ?? peers.first
         let found = presented || presenter.viewportFit != "cover" ? (Self.bottomScroller(in: c.node, cover: c.bottomClearance) ?? peer) : nil
-        let target = found === c.collapseScroll && Self.transparentBar(c.node) ? nil : found
+        // Nor one the route opts out of the bottom clearance of (LLP 1123 D4).
+        let target = found === c.collapseScroll && Self.insetsNoTop(c.node) || Self.clearanceOff(c.node) & 4 != 0 ? nil : found
         let projects = !c.nativeContentScrollEdges.contains(.bottom)
         guard c.edgeScroll !== target || (projects && c.contentScrollView(for: .bottom) !== c.automaticBottomScroll) else { return }
         if let old = c.edgeScroll, old !== target, let sv = old.scrollView, old !== c.collapseScroll, !arrangementInsets(sv, in: c) { sv.contentInsetAdjustmentBehavior = .never }

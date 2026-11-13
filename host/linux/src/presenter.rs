@@ -96,6 +96,7 @@ mod content_region_wide_tests;
 pub(crate) mod contrast;
 #[cfg(any(target_os = "android", test))]
 mod feed;
+mod glide;
 mod height;
 mod height_drag;
 #[cfg(test)]
@@ -361,6 +362,8 @@ pub struct Presenter<D: DataSource> {
     fragment_seen: u64,
     fragment_anchor: Option<(ViewId, u64)>,
     person_scrolls: u64,
+    /// Smooth element reveals under way (`glide.rs`).
+    glides: glide::Glides,
     /// HTML's sequential focus navigation starting point: where Tab starts
     /// from while nothing has the focus (a fragment's target).
     focus_start: Option<ViewId>,
@@ -629,6 +632,7 @@ impl<D: DataSource> Presenter<D> {
             fragment_seen: 0,
             fragment_anchor: None,
             person_scrolls: 0,
+            glides: Default::default(),
             focus_start: None,
             field_select_tasks: Vec::new(),
             field_change_tasks: Default::default(),
@@ -1306,6 +1310,7 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         self.tick_arrange(self.host.now());
+        self.step_glides(now_ms);
         if let Some(error) = self.deliver_scroll_ends() {
             self.host.log(error);
         }

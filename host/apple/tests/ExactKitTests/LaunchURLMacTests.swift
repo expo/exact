@@ -41,7 +41,7 @@ final class LaunchURLMacTests: XCTestCase {
         guard Bundle.main.bundleURL.pathExtension != "app" else { return }
         let presenter = NotificationPresenter.shared
         defer { presenter.app = nil; presenter.activate = nil }
-        presenter.install(on: ExactApp.shared, activate: nil)
+        presenter.install(on: ExactApp.shared, activate: nil, boot: nil)
         XCTAssertTrue(presenter.app === ExactApp.shared)
     }
 

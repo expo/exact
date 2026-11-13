@@ -1,15 +1,20 @@
 package dev.exact.canvas
 
+import android.app.Activity
 import android.widget.EditText
 import android.widget.FrameLayout
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import java.lang.ref.WeakReference
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE)
@@ -69,6 +74,39 @@ class FieldsTest {
                 assertEquals(normal, width("1111", ""))
             }
         } finally {
+            Fields.context = before
+        }
+    }
+
+    /** The measurer lives as long as exact2's thread, which outlives every activity (LLP 1115.001 D15.1): an activity
+     * it measured for, once destroyed, is collected. */
+    @Test fun theMeasurerKeepsNoActivity() {
+        val before = Fields.context
+        var opened: org.robolectric.android.controller.ActivityController<Activity>? =
+            Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = WeakReference(opened!!.get())
+        Fields.context = activity.get()
+        val (measured, done) = CountDownLatch(1) to CountDownLatch(1)
+        val thread = Thread {
+            Fields.measure(16f, 400, 0, 0f, 0f, family, "", "", "x", -1f)
+            measured.countDown()
+            done.await()
+        }
+        try {
+            thread.start()
+            assertTrue(measured.await(10, TimeUnit.SECONDS))
+            Fields.context = null
+            opened.pause().stop().destroy()
+            opened = null
+            for (k in 0 until 20) {
+                if (activity.get() == null) break
+                System.gc()
+                Thread.sleep(50)
+            }
+            assertNull("the destroyed activity is unreachable", activity.get())
+        } finally {
+            done.countDown()
+            thread.join()
             Fields.context = before
         }
     }

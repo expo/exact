@@ -88,11 +88,13 @@ fn plan_info(plan: &Plan) -> String {
     for (i, s) in plan.slots.iter().enumerate() {
         let id = exact_plan::SlotsId(i as u32);
         // Owned slots initialize in their arm's frames; a late slot after
-        // boot settlement; the router and locale are outside the semantics.
+        // boot settlement; the router, locale and format slots are outside
+        // the semantics.
         if s.owner.is_some()
             || s.late
             || plan.router == Some(id)
             || plan.locale == Some(id)
+            || plan.format == Some(id)
             || plan.mutations.iter().any(|m| m.slot == id)
         {
             continue;

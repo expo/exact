@@ -1,7 +1,7 @@
 //! Root property reads closed over derive and function bodies (LLP 1151 D1).
 
 use super::AnalyzeError;
-use contract_syntax::{Component, Expr, FnDecl, PropertyDecl, PropertyForm, TemplatePart};
+use contract_syntax::{Component, Expr, FnDecl, PropertyDecl, PropertyForm};
 use std::collections::BTreeSet;
 
 /// Refuse unknown names and derives whose values depend on the oracle, clock or geometry.
@@ -111,50 +111,14 @@ impl Cone<'_> {
                 }
                 args.iter().find_map(|a| self.expr(a, bound))
             }
-            Expr::Some(a, _)
-            | Expr::Member(a, _, _)
-            | Expr::NamedArg(_, a, _)
-            | Expr::Unary(_, a, _)
-            | Expr::Typed(a, _, _) => self.expr(a, bound),
-            Expr::Binary(_, a, b, _) => self.expr(a, bound).or_else(|| self.expr(b, bound)),
-            Expr::Ternary(a, b, c, _) => self
-                .expr(a, bound)
-                .or_else(|| self.expr(b, bound))
-                .or_else(|| self.expr(c, bound)),
-            Expr::Let {
-                name, value, body, ..
-            } => self.expr(value, bound).or_else(|| {
+            _ => e.scoped_operands().find_map(|(x, binds)| {
+                if binds.is_empty() {
+                    return self.expr(x, bound);
+                }
                 let mut locals = bound.clone();
-                locals.insert(name.clone());
-                self.expr(body, &locals)
+                locals.extend(binds.iter().map(String::from));
+                self.expr(x, &locals)
             }),
-            Expr::Arrow { params, body, .. } => {
-                let mut locals = bound.clone();
-                locals.extend(params.iter().cloned());
-                self.expr(body, &locals)
-            }
-            Expr::Match {
-                subject,
-                var,
-                some,
-                none,
-                ..
-            } => self
-                .expr(subject, bound)
-                .or_else(|| {
-                    let mut locals = bound.clone();
-                    locals.insert(var.clone());
-                    self.expr(some, &locals)
-                })
-                .or_else(|| self.expr(none, bound)),
-            Expr::Template(parts, _) => parts.iter().find_map(|p| match p {
-                TemplatePart::Expr(e) => self.expr(e, bound),
-                TemplatePart::Text(_) => None,
-            }),
-            Expr::List(items, _) => items.iter().find_map(|e| self.expr(e, bound)),
-            Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {
-                None
-            }
         }
     }
 }

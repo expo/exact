@@ -1371,9 +1371,8 @@ dependencies = [
  "elliptic-curve",
  "exact-color",
  "exact-data",
- "exact-grants",
+ "exact-executor",
  "exact-kernel",
- "exact-listen",
  "exact-logic",
  "exact-markdown",
  "exact-markdown-editor",
@@ -1513,6 +1512,21 @@ dependencies = [
  "ibex2",
  "ibex2-sqlite",
  "serde_json",
+]
+
+[[package]]
+name = "exact-executor"
+version = "0.1.0"
+dependencies = [
+ "exact-data",
+ "exact-grants",
+ "exact-kernel",
+ "exact-listen",
+ "exact-plan",
+ "exact-runner",
+ "ibex2",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -1696,6 +1710,7 @@ dependencies = [
  "exact-canvas",
  "exact-color",
  "exact-data",
+ "exact-executor",
  "exact-grants",
  "exact-ink",
  "exact-js",
@@ -1899,9 +1914,8 @@ dependencies = [
  "brotli",
  "contract",
  "exact-data",
- "exact-grants",
+ "exact-executor",
  "exact-kernel",
- "exact-listen",
  "exact-plan",
  "exact-render",
  "exact-runner",
@@ -1932,6 +1946,7 @@ name = "exact-runner"
 version = "0.1.0"
 dependencies = [
  "contract",
+ "contract-lower",
  "exact-canvas",
  "exact-grants",
  "exact-js-value",
@@ -6691,6 +6706,18 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "weather-now-apple"
+version = "0.1.0"
+dependencies = [
+ "contract",
+ "exact-apple",
+ "exact-bake",
+ "exact-logic",
+ "hello-data",
+ "ibex2-sqlite",
 ]
 
 [[package]]

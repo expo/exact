@@ -10,6 +10,7 @@
 
 use crate::ast::{BinOp, Expr, TemplatePart};
 use crate::spans::VisitSpans;
+use crate::walk::Binds;
 
 /// `body` with its repeated calls to functions `is_fn` names bound once.
 pub fn share_calls(body: &Expr, is_fn: &dyn Fn(&str) -> bool) -> Expr {
@@ -120,51 +121,12 @@ fn canonical(e: &Expr) -> String {
 }
 
 fn free(e: &Expr) -> Vec<String> {
-    let mut out = Vec::new();
-    names(e, &mut out);
-    out
-}
-
-fn names(e: &Expr, out: &mut Vec<String>) {
-    match e {
-        Expr::Ident(n, _) => out.push(n.clone()),
-        Expr::Call(_, args, _) | Expr::List(args, _) => args.iter().for_each(|a| names(a, out)),
-        Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Some(x, _)
-        | Expr::Unary(_, x, _) => names(x, out),
-        Expr::Binary(_, a, b, _) => {
-            names(a, out);
-            names(b, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            names(a, out);
-            names(b, out);
-            names(c, out);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            names(subject, out);
-            names(some, out);
-            names(none, out);
-        }
-        Expr::Let { value, body, .. } => {
-            names(value, out);
-            names(body, out);
-        }
-        Expr::Arrow { body, .. } => names(body, out),
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                names(x, out);
-            }
-        }),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
-    }
+    e.walk()
+        .filter_map(|e| match e {
+            Expr::Ident(n, _) => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// How many times `key` occurs in `e` where none of `free` is rebound.
@@ -179,176 +141,42 @@ fn count(e: &Expr, key: &str, free: &[String]) -> usize {
 
 /// `e` with every occurrence of `key` not under a rebinding of `free`
 /// replaced by the name `with`.
-fn replace(e: Expr, key: &str, free: &[String], with: &str) -> Expr {
+fn replace(mut e: Expr, key: &str, free: &[String], with: &str) -> Expr {
     if matches!(e, Expr::Call(..)) && canonical(&e) == key {
         return Expr::Ident(with.to_owned(), e.span());
     }
-    match e {
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            span,
-        } => Expr::Match {
-            subject: Box::new(replace(*subject, key, free, with)),
-            some: if free.contains(&var) {
-                some
-            } else {
-                Box::new(replace(*some, key, free, with))
-            },
-            none: Box::new(replace(*none, key, free, with)),
-            var,
-            span,
-        },
-        Expr::Let {
-            name,
-            value,
-            body,
-            span,
-        } => Expr::Let {
-            value: Box::new(replace(*value, key, free, with)),
-            body: if free.contains(&name) {
-                body
-            } else {
-                Box::new(replace(*body, key, free, with))
-            },
-            name,
-            span,
-        },
-        Expr::Arrow { params, body, span } => Expr::Arrow {
-            body: if params.iter().any(|p| free.contains(p)) {
-                body
-            } else {
-                Box::new(replace(*body, key, free, with))
-            },
-            params,
-            span,
-        },
-        e => map_children(e, &mut |child| replace(child, key, free, with)),
+    for (child, binds) in e.scoped_operands_mut() {
+        if !rebinds(binds, free) {
+            *child = replace(take(child), key, free, with);
+        }
     }
+    e
 }
 
 /// Visit the children of `e`, skipping a binder's scope when it rebinds one
 /// of `free`.
 fn each_child(e: &Expr, free: &[String], f: &mut dyn FnMut(&Expr)) {
-    match e {
-        Expr::Call(_, args, _) | Expr::List(args, _) => args.iter().for_each(f),
-        Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Some(x, _)
-        | Expr::Unary(_, x, _) => f(x),
-        Expr::Binary(_, a, b, _) => {
-            f(a);
-            f(b);
+    for (child, binds) in e.scoped_operands() {
+        if !rebinds(binds, free) {
+            f(child);
         }
-        Expr::Ternary(a, b, c, _) => {
-            f(a);
-            f(b);
-            f(c);
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            f(subject);
-            if !free.contains(var) {
-                f(some);
-            }
-            f(none);
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            f(value);
-            if !free.contains(name) {
-                f(body);
-            }
-        }
-        Expr::Arrow { params, body, .. } => {
-            if !params.iter().any(|p| free.contains(p)) {
-                f(body);
-            }
-        }
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                f(x);
-            }
-        }),
-        Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
     }
 }
 
+fn rebinds(binds: Binds<'_>, free: &[String]) -> bool {
+    free.iter().any(|name| binds.contains(name))
+}
+
 /// `e` with `f` applied to each child.
-fn map_children(e: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
-    let mut b = |x: Box<Expr>| Box::new(f(*x));
-    match e {
-        Expr::Call(n, args, s) => Expr::Call(n, args.into_iter().map(&mut *f).collect(), s),
-        Expr::List(items, s) => Expr::List(items.into_iter().map(&mut *f).collect(), s),
-        Expr::Member(x, field, s) => Expr::Member(b(x), field, s),
-        Expr::NamedArg(n, x, s) => Expr::NamedArg(n, b(x), s),
-        Expr::Typed(x, t, s) => Expr::Typed(b(x), t, s),
-        Expr::Some(x, s) => Expr::Some(b(x), s),
-        Expr::Unary(op, x, s) => Expr::Unary(op, b(x), s),
-        Expr::Binary(op, x, y, s) => {
-            let x = b(x);
-            Expr::Binary(op, x, b(y), s)
-        }
-        Expr::Ternary(x, y, z, s) => {
-            let (x, y) = (b(x), b(y));
-            Expr::Ternary(x, y, b(z), s)
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            span,
-        } => {
-            let (subject, some) = (b(subject), b(some));
-            Expr::Match {
-                subject,
-                var,
-                some,
-                none: b(none),
-                span,
-            }
-        }
-        Expr::Let {
-            name,
-            value,
-            body,
-            span,
-        } => {
-            let value = b(value);
-            Expr::Let {
-                name,
-                value,
-                body: b(body),
-                span,
-            }
-        }
-        Expr::Arrow { params, body, span } => Expr::Arrow {
-            params,
-            body: b(body),
-            span,
-        },
-        Expr::Template(parts, s) => Expr::Template(
-            parts
-                .into_iter()
-                .map(|p| match p {
-                    TemplatePart::Expr(x) => TemplatePart::Expr(f(x)),
-                    text => text,
-                })
-                .collect(),
-            s,
-        ),
-        leaf => leaf,
+fn map_children(mut e: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
+    for child in e.operands_mut() {
+        *child = f(take(child));
     }
+    e
+}
+
+fn take(e: &mut Expr) -> Expr {
+    std::mem::replace(e, Expr::None(Default::default()))
 }
 
 #[cfg(test)]

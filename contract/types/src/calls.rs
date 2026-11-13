@@ -4,7 +4,7 @@
 
 use super::{checks, err, infer, routes, ComponentTypes, Ref, Scope, Shapes, Ty, TypeError, Types};
 use contract_syntax::inline::calls::{shown, MARK};
-use contract_syntax::{one_spelling_edit, Component, Expr, Span, Stmt, TemplatePart, UnOp};
+use contract_syntax::{one_spelling_edit, Component, Expr, Span, Stmt, UnOp};
 
 /// The prefix of a lifted action's capture parameters.
 pub(crate) const CAPTURE: &str = "@capture:";
@@ -28,57 +28,7 @@ fn action_head<'e>(e: &'e Expr, scope: &Scope, shapes: &Shapes) -> Option<(&'e s
 
 /// The first call of an action inside `e`, at any depth.
 fn inside<'e>(e: &'e Expr, scope: &Scope, shapes: &Shapes) -> Option<(&'e str, Span)> {
-    if let Some(found) = action_head(e, scope, shapes) {
-        return Some(found);
-    }
-    let mut found = None;
-    let mut look = |x: &'e Expr| {
-        if found.is_none() {
-            found = inside(x, scope, shapes);
-        }
-    };
-    match e {
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {}
-        Expr::List(items, _) => items.iter().for_each(&mut look),
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    look(x);
-                }
-            }
-        }
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => look(x),
-        Expr::Call(_, args, _) => args.iter().for_each(look),
-        Expr::Binary(_, a, b, _) => {
-            look(a);
-            look(b);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            look(a);
-            look(b);
-            look(c);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            look(subject);
-            look(some);
-            look(none);
-        }
-        Expr::Let { value, body, .. } => {
-            look(value);
-            look(body);
-        }
-        Expr::Arrow { body, .. } => look(body),
-    }
-    found
+    e.walk().find_map(|x| action_head(x, scope, shapes))
 }
 
 /// An action called for its value in one of `stmt`'s expressions: `let x =

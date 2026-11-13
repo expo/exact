@@ -881,9 +881,11 @@ impl<D: DataSource> Runner<D> {
         }
         // @ref LLP 1060 D4 — the locale slot is the last one lowered, and an
         // initializer may call `t`: it is filled first.
+        // The format slot reads it, and is filled next (LLP 1054.000.003 D6).
         let locale = self.plan.locale.map(|s| s.0 as usize);
-        let rest = (0..self.plan.slots.len()).filter(|i| Some(*i) != locale);
-        for i in locale.into_iter().chain(rest) {
+        let format = self.plan.format.map(|s| s.0 as usize);
+        let rest = (0..self.plan.slots.len()).filter(|i| Some(*i) != locale && Some(*i) != format);
+        for i in locale.into_iter().chain(format).chain(rest) {
             let row = &self.plan.slots[i];
             if row.owner.is_some() || row.late || self.plan.router == Some(SlotsId(i as u32)) {
                 continue;
@@ -900,6 +902,9 @@ impl<D: DataSource> Runner<D> {
                         self.slots[i] = Value::str(resolved);
                     }
                 }
+            }
+            if let (Some(i), Some(locale)) = (format.filter(|f| *f == i), locale) {
+                self.slots[i] = Value::str(&self.format_locale_of(locale));
             }
         }
         Ok(())

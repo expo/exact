@@ -618,6 +618,17 @@ change can break.
   a bug in the presenter. A terminal entry (LLP 1101) is a separate application root on
   a separate medium, not a platform override; GUI surfaces still have one source.
 
+**Expanded (expo/exact#359, 2026-11-12; LLP 1162.001):** a `source` declared in
+`app.contract` answers a resource or a send with one HTTP request, its JSON read
+into the shape, so a source that is one request needs no data module, and an
+app whose sources are all declared links no JavaScript engine on native hosts.
+The declaration names its origin, which is its grant. Consumer: Weather Now
+(`apps/weather-now`), Open-Meteo's forecast and city search with no `app.ts`.
+Take: none offered; waived by Charlie's ask (2026-11-12: work the open issues
+through to the ideal end state). Still out, and the data module's: token
+refresh, pagination across requests, offline queues and retries, an overlay,
+streams, uploads, form bodies, and an origin from `app.json`'s `env`.
+
 ## Features carried over as "no"
 
 **Admitted (Charlie, 2026-10-12, textrows ruling):** bounded
@@ -853,7 +864,18 @@ names no take; `:focus-within` remains out.
   (Declarative Web Push or a host worker). Still refused: push-to-start; a
   data-only push as a wake's trigger (`content-available`, the
   `remote-notification` background mode); a notification service extension; an
-  event raised by a push.
+  event raised by a push, but for a declared action the person chose (below).
+  **Expanded (Charlie, 2026-11-12, "build the ideal end state now", after a
+  design panel; expo/exact#127; LLP 1133.004 stage 2):** a notification's
+  actions on macOS and iOS: a post declares them as a literal list, which the
+  host registers as a category, and a push names one by `aps.category`; a
+  chosen action, and a typed reply, reach `notificationclick`. One that leaves
+  the app in the background runs its handler with no view, as the person's act
+  for that one action, held until its work has ended or the system's time has
+  run out. Consumer: expo/exact#127's app, whose pushes carry Approve. Unblocks
+  a notification's Snooze, Reply and Approve without app Swift. Take: none
+  named; the ruling stands as its own waiver. Not built: actions on Android,
+  Windows and the web; the dismissal; `requireInteraction`.
 
 **Components** — roughly 15 built-in tags, not 40; roughly 12 Facet components, not 47.
 

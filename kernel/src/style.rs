@@ -157,10 +157,14 @@ impl Dimension {
             Dimension::Segment(var, x, y, plus) => env::resolve(var, x, y, plus, env),
             Dimension::Compare(c) if c.undefined(env) => Dimension::Auto,
             Dimension::Compare(c) => match c.substituted(env) {
-                // A tree needs a basis only where it reads a percentage
-                Some(Dimension::Compare(t)) if t == c => c
-                    .value(env, None)
-                    .map_or(Dimension::Compare(c), Dimension::Points),
+                // A tree needs a basis only where it reads a percentage,
+                // and goes to layout with its local insets in it
+                Some(Dimension::Compare(t)) if t == c => match c.value(env, None) {
+                    Some(v) => Dimension::Points(v),
+                    None => c
+                        .localized(env)
+                        .map_or(Dimension::Compare(c), |d| d.resolve(env)),
+                },
                 // A text substituted is the row's value it reads as
                 Some(d) => d.resolve(env),
                 None => Dimension::Auto,
@@ -1315,9 +1319,9 @@ impl StyleProps {
 /// the arena's environment.
 pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     let lowering = handles::Lowering::new();
-    let mut s = arena
-        .effective_style(slot)
-        .to_taffy(arena.node_type(slot), arena.env());
+    let style = arena.effective_style(slot);
+    let env = crate::kernel::owner::env_for(arena, slot, &style);
+    let mut s = style.to_taffy(arena.node_type(slot), &env);
     arena.alert_layout(slot, &mut s);
     arena.bar_symbol_layout(slot, &mut s);
     // HTML's button layout, which Exact's reset of a `<button>` keeps: its

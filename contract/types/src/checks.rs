@@ -4,7 +4,7 @@ use super::{
     arms, disagree, err, infer, ComponentTypes, Ref, Scope, Shapes, Sink, Ty, TypeError, Types,
 };
 use contract_syntax::{
-    Attr, Component, Expr, File, Node, Owner, Span, TemplatePart, TypeExpr, UnOp, HOST_COMMANDS,
+    Attr, Component, Expr, File, Node, Owner, Span, TypeExpr, UnOp, HOST_COMMANDS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -106,54 +106,10 @@ pub(super) fn check_function_cycles(file: &File) -> Result<(), TypeError> {
 
 /// Function calls in expression order, excluding calls outside the authored graph.
 fn calls_in(e: &Expr, indices: &BTreeMap<&str, usize>, out: &mut Vec<usize>) {
-    match e {
-        Expr::Call(n, args, _) => {
-            if let Some(&index) = indices.get(n.as_str()) {
-                out.push(index);
-            }
-            for a in args {
-                calls_in(a, indices, out);
-            }
-        }
-        Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _) => calls_in(x, indices, out),
-        Expr::Binary(_, a, b, _) => {
-            calls_in(a, indices, out);
-            calls_in(b, indices, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            calls_in(a, indices, out);
-            calls_in(b, indices, out);
-            calls_in(c, indices, out);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            calls_in(subject, indices, out);
-            calls_in(some, indices, out);
-            calls_in(none, indices, out);
-        }
-        Expr::Let { value, body, .. } => {
-            calls_in(value, indices, out);
-            calls_in(body, indices, out);
-        }
-        Expr::Arrow { body, .. } => calls_in(body, indices, out),
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    calls_in(x, indices, out);
-                }
-            }
-        }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {}
-        Expr::List(items, _) => items.iter().for_each(|x| calls_in(x, indices, out)),
-    }
+    out.extend(e.walk().filter_map(|e| match e {
+        Expr::Call(n, _, _) => indices.get(n.as_str()).copied(),
+        _ => None,
+    }));
 }
 
 pub(super) use super::enums::accepts_expr;

@@ -56,6 +56,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             look: Default::default(),
             rung: None,
             resting: false,
+            still: false,
             idle_tick: None,
             samples: None,
             timing: Default::default(),

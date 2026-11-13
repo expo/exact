@@ -77,16 +77,18 @@ def Ty.lePrefix : List Ty → List Ty → Bool
 arguments (the formats and `t`), and those the semantics refuses as
 unsupported (geometry), at the types the roster spells. `t` is typed as
 `contract lean` writes it: the locale slot, the key, then each
-placeholder's name and its value as `toString` prints it. -/
+placeholder's name and its value as `toString` prints it. A localized
+format takes the format locale last, as `contract lean` writes it (LLP
+1054.000.003 D6). -/
 def unsupportedTy (name : String) (ts : List Ty) : Option Ty :=
   if name = "formatTime" ∨ name = "formatDate" then
-    match ts with | [.number, .number, .string] => .some .string | _ => .none
+    match ts with | [.number, .number, .string, .string] => .some .string | _ => .none
   else if name = "formatNumber" then
-    match ts with | [.number, .string, .string] => .some .string | _ => .none
+    match ts with | [.number, .string, .string, .string] => .some .string | _ => .none
   else if name = "toFixed" ∨ name = "formatDecimal" then
     match ts with | [.number, .number] => .some .string | _ => .none
   else if name = "formatDay" then
-    match ts with | [.number, .number, .number, .string] => .some .string | _ => .none
+    match ts with | [.number, .number, .number, .string, .string] => .some .string | _ => .none
   else if name = "t" then
     match ts with
     | .string :: .string :: rest => if rest.all (· == .string) then .some .string else .none

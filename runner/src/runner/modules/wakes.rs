@@ -41,6 +41,15 @@
 //!   handler hears the event. When the platform's time runs out first (a
 //!   `BGTask`'s expiration handler), the implementation says so ([`EXPIRED`]):
 //!   that wake expires now, or, not yet begun, ends `expired` unrun.
+//! - **A background action** (LLP 1133.004 stage 2, as amended 2026-11-12):
+//!   the person chose a notification's declared action that leaves the app
+//!   in the background. The host raises it ([`Runner::raise_action`]) with
+//!   an id of its own; it runs as a wake does, owning its work, its page
+//!   hidden and its timers stopped, but with origin [`CallOrigin::Action`]:
+//!   the person's act, for that one action. What opens UI is refused, since
+//!   nothing is shown. Its end is read by the host (`actions`, the agent
+//!   op), which then lets the platform suspend the app; when the platform's
+//!   time runs out first the host expires it ([`Runner::expire_action`]).
 
 use super::super::{CommitReceipt, DataSource, Runner, RunnerError};
 use super::{CallOrigin, Json, Route};
@@ -70,6 +79,11 @@ const REFUSED: &[&str] = &[
 /// The prefix of a `changed` topic that is a wake a bound implementation
 /// raises, `{"extension", "event", "args", "id"}` after it (module doc).
 pub(in crate::runner) const TOLD: &str = "exact-wake:";
+
+/// A background action's time, iOS's for a notification action's
+/// background launch (about 30 s, which the platform may cut): the most a
+/// background action's invocation may run before it expires.
+const ACTION_BUDGET: f64 = 30_000.0;
 
 /// The prefix of a `changed` topic by which a bound implementation says the
 /// platform expired a wake it raised, `{"extension", "id"}` after it.
@@ -128,6 +142,11 @@ struct Invocation {
     pub(super) entry: Option<u64>,
 }
 
+struct Action {
+    id: String,
+    host_delivery: bool,
+}
+
 struct Wake {
     how: WakeHow,
     /// The first delivery, on the session's clock.
@@ -139,6 +158,34 @@ struct Wake {
     hid: bool,
     /// The implementation that raised it and its id for it, told the end.
     told: Option<(String, String)>,
+    /// `Wake`, or `Action` for a background action (module doc).
+    origin: CallOrigin,
+    /// A background action and whether the host holds its completion.
+    action: Option<Action>,
+}
+
+impl Wake {
+    fn new(how: WakeHow, origin: CallOrigin, action: Option<Action>) -> Self {
+        Wake {
+            how,
+            started: None,
+            budget: 0.0,
+            invocations: Vec::new(),
+            expired: false,
+            hid: false,
+            told: None,
+            origin,
+            action,
+        }
+    }
+
+    /// The journal's word for it.
+    fn word(&self) -> &'static str {
+        match self.origin {
+            CallOrigin::Action => "action",
+            _ => "wake",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -151,6 +198,10 @@ pub(in crate::runner) struct Wakes {
     last: Option<Json>,
     /// Whether the page showed before the running wake hid it.
     shown: bool,
+    /// Action endings awaiting the host's drain, never evicted.
+    actions: Vec<(String, &'static str)>,
+    /// The last 32 endings for diagnostics, independent of host delivery.
+    recent_actions: VecDeque<(String, &'static str)>,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -186,6 +237,145 @@ impl<D: DataSource> Runner<D> {
         Ok(())
     }
 
+    /// The host raises activation event `name` of `extension` for a
+    /// background action the person chose (module doc), `id` the host's own
+    /// for it, which [`Self::take_ended_actions`] names when it ends. `Err` for
+    /// an event the plan does not declare as an activation, or arguments
+    /// that are not an array.
+    pub fn raise_action(
+        &mut self,
+        extension: &str,
+        name: &str,
+        args: &str,
+        how: WakeHow,
+        id: &str,
+    ) -> Result<(), String> {
+        self.queue_action(extension, name, args, how, id, true)
+    }
+
+    pub(super) fn queue_action(
+        &mut self,
+        extension: &str,
+        name: &str,
+        args: &str,
+        how: WakeHow,
+        id: &str,
+        host_delivery: bool,
+    ) -> Result<(), String> {
+        let action = Action {
+            id: id.to_owned(),
+            host_delivery,
+        };
+        let key = format!("{extension}.{name}");
+        let args: Vec<Json> = match serde_json::from_str(args) {
+            Ok(Json::Array(args)) => args,
+            _ => {
+                self.action_ended(action, "refused");
+                return Err(format!("{key}: the arguments are a JSON array"));
+            }
+        };
+        let row = (self.plan.module_events.iter()).position(|e| {
+            self.plan.str(e.extension) == extension
+                && self.plan.str(e.declared) == name
+                && self.plan.str(e.raised) == "activation"
+        });
+        let Some(row) = row else {
+            self.action_ended(action, "unheard");
+            return Err(format!("{key}: no event a person's action raises"));
+        };
+        // One wake per action: the host's id, hashed as a told wake's is,
+        // the top two bits set.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in id.bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let how = WakeHow {
+            id: hash | 3 << 62,
+            ..how
+        };
+        let w = &mut self.extensions.wakes;
+        w.waiting
+            .push_back(Wake::new(how, CallOrigin::Action, Some(action)));
+        self.wake_invocation(Some(row), args, how, None);
+        Ok(())
+    }
+
+    /// The platform's time for background action `id` ran out: it expires
+    /// now, or, not yet begun, ends `expired` unrun. One already ended, or
+    /// unknown, is left.
+    pub fn expire_action(&mut self, id: &str) -> (Vec<CommitReceipt>, Option<RunnerError>) {
+        let w = &mut self.extensions.wakes;
+        let mine = |wake: &Wake| wake.action.as_ref().is_some_and(|a| a.id == id);
+        if w.current.as_ref().is_some_and(mine) {
+            self.log(format!("action {id}: the platform's time ran out"));
+            return self.expire_wake();
+        }
+        if let Some(at) = w.waiting.iter().position(mine) {
+            let action = w
+                .waiting
+                .remove(at)
+                .and_then(|w| w.action)
+                .expect("an action");
+            self.log(format!(
+                "action {id}: the platform's time ran out before it ran"
+            ));
+            self.action_ended(action, "expired");
+        }
+        (Vec::new(), None)
+    }
+
+    fn action_ended(&mut self, action: Action, outcome: &'static str) {
+        if action.host_delivery {
+            self.extensions
+                .wakes
+                .actions
+                .push((action.id.clone(), outcome));
+        }
+        let ended = &mut self.extensions.wakes.recent_actions;
+        ended.push_back((action.id, outcome));
+        if ended.len() > 32 {
+            ended.pop_front();
+        }
+    }
+
+    /// What the app's literals declare, by `<extension>.<name>`: each row's
+    /// `declared` (LLP 1133.004 stage 2), `{option: [value, …]}`.
+    pub fn declared_values(&self) -> Json {
+        let mut out = serde_json::Map::new();
+        for row in &self.plan.modules {
+            let declared = &self.substitute(row)["declared"];
+            if declared.is_object() {
+                let key = format!(
+                    "{}.{}",
+                    self.plan.str(row.extension),
+                    self.plan.str(row.declared)
+                );
+                out.insert(key, declared.clone());
+            }
+        }
+        Json::Object(out)
+    }
+
+    /// The background actions that ended, the latest 32, as JSON: `[{"id",
+    /// "outcome"}]`, the outcome `completed`, `expired`, `superseded`,
+    /// `refused`, or `unheard`. This diagnostic read consumes no endings.
+    pub fn ended_actions(&self) -> Json {
+        let ended = (self.extensions.wakes.recent_actions.iter())
+            .map(|(id, outcome)| json!({ "id": id, "outcome": outcome }));
+        Json::Array(ended.collect())
+    }
+
+    /// Consume every host-held action ending since the host's last drain.
+    /// The host releases its completions even when the final batch is empty.
+    pub fn take_ended_actions(&mut self) -> Json {
+        Json::Array(
+            std::mem::take(&mut self.extensions.wakes.actions)
+                .into_iter()
+                .map(|(id, outcome)| json!({ "id": id, "outcome": outcome }))
+                .collect(),
+        )
+    }
+
     /// Queue an invocation of event `row` (none: unheard) in the wake for
     /// `how.id`, for the registration `entry` where the substitute keeps one.
     pub(super) fn wake_invocation(
@@ -202,15 +392,7 @@ impl<D: DataSource> Runner<D> {
             None => match w.waiting.iter().position(|q| q.how.id == how.id) {
                 Some(i) => &mut w.waiting[i],
                 None => {
-                    w.waiting.push_back(Wake {
-                        how,
-                        started: None,
-                        budget: 0.0,
-                        invocations: Vec::new(),
-                        expired: false,
-                        hid: false,
-                        told: None,
-                    });
+                    w.waiting.push_back(Wake::new(how, CallOrigin::Wake, None));
                     w.waiting.back_mut().expect("pushed")
                 }
             },
@@ -220,10 +402,14 @@ impl<D: DataSource> Runner<D> {
             return;
         };
         let event = &self.plan.module_events[row];
-        let (budget, hold) = (event.budget as f64, event.hold.max(1) as usize);
+        let (budget, hold) = match wake.origin {
+            CallOrigin::Action => (ACTION_BUDGET, usize::MAX),
+            _ => (event.budget as f64, event.hold.max(1) as usize),
+        };
         let name = self.plan.str(event.declared).to_owned();
         let tag = args.first().and_then(Json::as_str).unwrap_or_default();
-        let line = format!("wake {name} {tag}: raised");
+        let word = wake.word();
+        let line = format!("{word} {name} {tag}: raised");
         wake.budget = wake.budget.max(budget);
         wake.invocations.push(Invocation {
             id,
@@ -251,7 +437,7 @@ impl<D: DataSource> Runner<D> {
         }
         self.log(line);
         for tag in dropped {
-            self.log(format!("wake {name} {tag}: dropped"));
+            self.log(format!("{word} {name} {tag}: dropped"));
         }
         self.native_slot().changed("");
     }
@@ -335,6 +521,7 @@ impl<D: DataSource> Runner<D> {
         let now = self.now_ms;
         let wake = self.extensions.wakes.current.as_mut().expect("a wake");
         wake.started.get_or_insert(now);
+        let (origin, word) = (wake.origin, wake.word());
         let inv = &mut wake.invocations[i];
         inv.state = State::Running;
         inv.delivered = true;
@@ -362,10 +549,8 @@ impl<D: DataSource> Runner<D> {
         self.wake_entry_delivered(i);
         let name = self.plan.str(action.name).to_owned();
         let (event_name, tag) = self.invocation_words(i);
-        self.log(format!("wake {event_name} {tag}: heard by {name}"));
-        let result = self.as_invocation(CallOrigin::Wake, id, |r| {
-            r.run_action(event.action, args, &[])
-        });
+        self.log(format!("{word} {event_name} {tag}: heard by {name}"));
+        let result = self.as_invocation(origin, id, |r| r.run_action(event.action, args, &[]));
         match result {
             Ok(receipt) => Ok(Some(receipt)),
             Err(e) => {
@@ -389,7 +574,8 @@ impl<D: DataSource> Runner<D> {
         let inv = &mut wake.invocations[i];
         inv.state = state;
         let (entry, delivered) = (inv.entry, inv.delivered);
-        self.log(format!("wake {event} {tag}: {}", state.word()));
+        let word = wake.word();
+        self.log(format!("{word} {event} {tag}: {}", state.word()));
         if let Some(entry) = entry {
             self.wake_entry_ended(entry, state.word(), delivered);
         }
@@ -427,26 +613,29 @@ impl<D: DataSource> Runner<D> {
             "completed"
         };
         let described = self.describe_wake(&wake, Some(outcome));
-        self.log(format!("wake: {outcome}"));
+        self.log(format!("{}: {outcome}", wake.word()));
         let w = &mut self.extensions.wakes;
-        if wake.told.is_none() {
+        if wake.told.is_none() && wake.action.is_none() {
             w.ended.push(described.clone());
         }
         w.last = Some(described);
+        let state = |s: State| wake.invocations.iter().any(|i| i.state == s);
+        let told = if wake.invocations.is_empty() {
+            "unheard"
+        } else if wake.expired || state(State::Expired) {
+            "expired"
+        } else if state(State::Superseded) {
+            "superseded"
+        } else if state(State::Refused) {
+            "refused"
+        } else {
+            "completed"
+        };
         if let Some((extension, id)) = &wake.told {
-            let state = |s: State| wake.invocations.iter().any(|i| i.state == s);
-            let told = if wake.invocations.is_empty() {
-                "unheard"
-            } else if wake.expired || state(State::Expired) {
-                "expired"
-            } else if state(State::Superseded) {
-                "superseded"
-            } else if state(State::Refused) {
-                "refused"
-            } else {
-                "completed"
-            };
             self.tell_woke(extension, id, told);
+        }
+        if let Some(action) = wake.action {
+            self.action_ended(action, told);
         }
         self.native_slot().changed("");
         if wake.hid {
@@ -473,6 +662,7 @@ impl<D: DataSource> Runner<D> {
         json!({
             "id": wake.how.id,
             "kind": kind,
+            "origin": wake.origin.word(),
             "cold": wake.how.cold,
             "started": wake.started.map(|s| epoch + s),
             "deadline": wake.started.map(|s| epoch + s + wake.budget),
@@ -484,9 +674,7 @@ impl<D: DataSource> Runner<D> {
     /// The wake's deadline on the session's clock, while one runs unexpired.
     pub(in crate::runner) fn wake_deadline(&self) -> Option<f64> {
         let wake = self.extensions.wakes.current.as_ref()?;
-        (!wake.expired)
-            .then_some(wake.started? + wake.budget)
-            .filter(|_| wake.invocations.iter().any(|i| !i.state.ended()))
+        (!wake.expired).then_some(wake.started? + wake.budget)
     }
 
     /// When the host should next advance for the wakes: now while one can
@@ -527,6 +715,12 @@ impl<D: DataSource> Runner<D> {
             _ => return (receipts, None),
         }
         let id = self.running_wake().unwrap_or(0);
+        self.extensions
+            .declared
+            .statements
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         for ticket in self.invocation_tickets(id) {
             let failed = Outcome::Failed {
                 kind: FailureKind::Network,
@@ -586,11 +780,14 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Take off this commit's host commands from `first` that a wake may
-    /// not run, when the commit is the wake's.
+    /// not run, when the commit is the wake's or a background action's
+    /// (origin `action`: the person's act, but nothing is shown).
     pub(in crate::runner) fn refuse_in_wake(&mut self, first: usize) {
-        if self.call_origin() != CallOrigin::Wake {
-            return;
-        }
+        let during = match self.call_origin() {
+            CallOrigin::Wake => "during a wake",
+            CallOrigin::Action => "during a background action",
+            _ => return,
+        };
         let mut i = first;
         while i < self.commands.len() {
             // Bare `focus()` brings the window forward, which a wake never
@@ -599,7 +796,7 @@ impl<D: DataSource> Runner<D> {
             let window = command.name == "focus" && command.args.is_empty();
             if REFUSED.contains(&command.name.as_str()) || window {
                 let name = self.commands.remove(i).name;
-                self.log(format!("{name}: refused: during a wake"));
+                self.log(format!("{name}: refused: {during}"));
             } else {
                 i += 1;
             }

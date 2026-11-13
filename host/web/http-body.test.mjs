@@ -83,7 +83,7 @@ test('the event-stream parser reads lines, fields and cursors as HTML does (LLP 
   // A multi-byte character split across reads is one character.
   const split = eventStream(64), bytes = enc('data: é\n\n');
   assert.deepEqual([...split(bytes.slice(0, 7)), ...split(bytes.slice(7))], [{ event: '', id: '', data: 'é' }]);
-  // The ceiling counts UTF-8 bytes, as the native parser does (host/apple/src/executor_stream.rs `EventStream`):
+  // The ceiling counts UTF-8 bytes, as the native parser does (host/executor/src/stream.rs `EventStream`):
   // an event's data and its line feeds, and any line up to the ceiling and 64 bytes more.
   const accepts = (s) => { try { eventStream(16)(enc(s)); return true; } catch (e) { assert.match(e.message, /ceiling/); return false; } };
   assert.deepEqual([
@@ -443,7 +443,7 @@ test('a long poll waits out Retry-After, shows retrying, and a drop ends the wai
 });
 
 test('a long poll sets its cursor where it is, or appends it, and keeps every other parameter as written', async () => {
-  // As the native hosts' `with_query_value` does (host/apple/src/executor_longpoll.rs): the value is
+  // As the native hosts' `with_query_value` does (host/executor/src/longpoll.rs): the value is
   // %XX outside the unreserved set, and no other pair is re-serialised as a form.
   const cases = [
     ['?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag', 'a b', '?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag&since=a%20b'],

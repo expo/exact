@@ -147,17 +147,228 @@ export const answer = (name: string, [value]: number[]): any => {
   } finally { peer.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 30000);
 
+// The status cases' view. An app has one navigation root, its view's root, and a root that holds
+// tabs keeps its routes in its panels, so each row builds an app of its own cases' branches only:
+// `root` names the root a branch needs and `key` what it selects.
+const STATUS_BRANCHES = [
+  { names: ['plain', 'discardedPlain'], body: `
+head title="Plain"` },
+  { names: ['storeStatus', 'discardedStatus', 'discardedHeldStatus', 'discardedLooseStatus', 'discardedDetachedStatus', 'discardedClient', 'discardedTimerStatus', 'discardedLateTimerStatus', 'backgroundSync', 'backgroundHeldSync', 'backgroundAnswer', 'backgroundHeldAnswer', 'backgroundClient'], body: `
+if stored
+  head title="Missing" status=404
+else
+  head title="Checking"
+if top(nav).name == "discardedClient" or top(nav).name == "backgroundClient"
+  button press=flip testId="recovery-press"
+    text "Change"` },
+  // The tabs inside the first route are no panels of the root.
+  { names: ['conditionalInactive'], root: 'stack', key: '"first"', body: `
+view navigationKey="first"
+  head title="First"
+  row role="tablist"
+    button role="tab" aria-controls="unrelated-panel"
+      text "Unrelated"
+  view role="tabpanel" id="unrelated-panel"
+    text "Unrelated page"
+if page.ready
+  view navigationKey="second"
+    head title="Missing" status=404` },
+  { names: ['inactiveData'], root: 'stack', key: 'selected', body: `
+view navigationKey="first"
+  head title="First"
+view navigationKey="second" id=(page.ready ? "changed" : "initial")
+  if page.ready
+    view role="group"
+      head title="Missing" status=404` },
+  { names: ['conditionalInactiveTab'], root: 'tabs', key: '"first"', body: `
+if false
+  row role="tablist"
+    button role="tab" aria-controls="fixed-second-panel"
+      text "Unreachable"
+if true
+  row role="tablist"
+    if true
+      button role="tab" aria-controls="fixed-first-panel"
+        text "First"
+      button role="tab" aria-controls="fixed-second-panel"
+        text "Second"
+view role="tabpanel" id="fixed-first-panel"
+  view navigationKey="first"
+    head title="First"
+if page.ready
+  view role="tabpanel" id="fixed-second-panel"
+    view navigationKey="second"
+      head title="Missing" status=404` },
+  { names: ['idShadow', 'idConditional', 'idRows'], root: 'tabs', key: '"first"', body: `
+row role="tablist"
+  button role="tab" aria-controls="id-status-panel"
+    text "Status"
+  button role="tab" aria-controls="id-plain-panel"
+    text "Plain"
+if top(nav).name == "idShadow"
+  view id=(page.ready ? "id-status-panel" : "unused")
+if top(nav).name == "idRows"
+  view
+    for code in page.rows key=code
+      view id="id-status-panel"
+view role="tabpanel" id="id-status-panel"
+  view navigationKey="second"
+    head title="Missing" status=404
+    if top(nav).name == "idConditional" and page.ready
+      view id="id-plain-panel"
+view role="tabpanel" id="id-plain-panel"
+  view navigationKey="first"
+    head title="First"` },
+  { names: ['repeatedPanel'], root: 'tabs', key: '"first"', body: `
+row role="tablist"
+  button role="tab" aria-controls="repeated-first-panel"
+    text "First"
+  button role="tab" aria-controls="repeated-second-panel"
+    text "Second"
+view role="tabpanel" id="repeated-first-panel"
+  view navigationKey="first"
+    head title="First"
+for code in page.rows key=code
+  view role="tabpanel" id="repeated-second-panel"
+    view navigationKey="second"
+      head title="Missing" status=404` },
+  { names: ['client'], body: `
+if pressed
+  head title="Client missing" status=404
+else
+  head title="Client"
+button press=flip testId="flip"
+  text "Change head"` },
+  { names: ['inactive', 'selection'], root: 'stack', key: '(top(nav).name == "selection" ? page.key : "first")', body: `
+view navigationKey="first"
+  head title="First"
+  text "First"
+view navigationKey="second"
+  head title="Missing" status=404
+  text "Missing"` },
+  { names: ['gone'], body: `
+if page.ready
+  head title="Gone" status=410` },
+  { names: ['unavailable', 'cachedUnavailable'], body: `
+if page.ready
+  head title="Unavailable" status=503` },
+  { names: ['static'], body: `
+head title="Static" status=410` },
+  { names: ['childSelection'], root: 'stack', key: '"second"', body: `
+view navigationKey=page.key
+  head title="Missing" status=404
+view navigationKey=(page.ready ? "first" : "second")
+  head title="First"` },
+  { names: ['tabSelection', 'panelRole', 'panelId', 'tabControls'], root: 'tabs', key: '(top(nav).name == "tabSelection" ? "second" : "first")', body: `
+row role="tablist"
+  button role="tab" aria-controls=(top(nav).name == "tabControls" and page.ready ? "unused" : "status-panel")
+    text "Status"
+  button role="tab" aria-controls="plain-panel"
+    text "Plain"
+view role=(top(nav).name == "panelRole" and page.ready ? "group" : "tabpanel") id=(top(nav).name == "panelId" and page.ready ? "unused" : "status-panel")
+  view navigationKey=(top(nav).name == "tabSelection" ? page.key : "second")
+    head title="Missing" status=404
+view role="tabpanel" id="plain-panel"
+  view navigationKey=(top(nav).name == "tabSelection" and not page.ready ? "second" : "first")
+    head title="First"` },
+  { names: ['siblingSelection', 'siblingRemoval'], root: 'stack', key: '"first"', body: `
+if top(nav).name == "siblingSelection"
+  view navigationKey=(page.ready ? "third" : "first")
+    text "Plain"
+else if not page.ready
+  view navigationKey="first"
+    text "Plain"
+view navigationKey="second"
+  head title="Missing" status=404` },
+  { names: ['conditionalTab', 'conditionalMatch', 'conditionalRows', 'conditionalNaming'], root: 'tabs', key: '"first"', body: `
+view role="tabpanel" id="future-panel"
+  if top(nav).name == "conditionalNaming"
+    if page.ready
+      row role="tablist"
+        button role="tab" aria-controls="future-panel"
+          text "Future"
+    view navigationKey="second"
+      head title="Missing" status=404
+  else if top(nav).name == "conditionalTab"
+    if page.ready
+      view navigationKey="first"
+        head title="Missing" status=404
+  else if top(nav).name == "conditionalMatch"
+    match (page.ready ? some(page.label) : none)
+      case some(label)
+        view navigationKey="first"
+          head title=label status=404
+      case none
+        text "Waiting"
+  else
+    for code in page.rows key=code
+      view navigationKey="first"
+        head title="Missing" status=404
+view role="tabpanel" id="current-panel"
+  view navigationKey="first"
+    head title="First"
+row role="tablist"
+  button role="tab" aria-controls="future-panel"
+    text "Future"
+  button role="tab" aria-controls="current-panel"
+    text "Current"` },
+  { names: ['matched'], body: `
+match (page.ready ? some(page.label) : none)
+  case some(label)
+    head title=label status=404
+  case none
+    text "Waiting"` },
+  { names: ['rows'], body: `
+for code in page.rows key=code
+  view
+    head title="Row" status=410
+    text "Row"` },
+  { names: ['virtual'], body: `
+list virtualized=true height=200
+  for code in page.rows key=code
+    view height=24
+      head title="Virtual row" status=410
+      text "Virtual row"` },
+];
+
+/** The view of an app serving `names`: under a root that is the navigation root when a branch has routes, the one
+ * branch every name takes, or else an `if` arm per branch and the default. A root's selection is fixed at compile time
+ * only by a literal key and routes no arm hides, so a lone branch keeps both. */
+function statusView(names) {
+  const branches = STATUS_BRANCHES.filter(b => b.names.some(n => names.includes(n)));
+  const rooted = branches.filter(b => b.root);
+  if (new Set(rooted.map(b => b.root)).size > 1) throw new Error(`one root cannot hold both a stack and tabs: ${names.join(', ')}`);
+  const named = b => b.names.map(n => `top(nav).name == "${n}"`).join(' or ');
+  const key = rooted.length === 1 ? rooted[0].key : rooted.reduceRight((rest, b) => `(${named(b)} ? ${b.key} : ${rest})`, '"none"');
+  const indent = (text, by) => text.split('\n').filter(Boolean).map(line => ' '.repeat(by) + line).join('\n');
+  const lone = branches.length === 1 && names.every(n => branches[0].names.includes(n));
+  const body = lone ? indent(branches[0].body, 6) : [
+    ...branches.map((b, i) => `      ${i ? 'else if' : 'if'} ${named(b)}\n${indent(b.body, 8)}`),
+    `      ${branches.length ? 'else' : 'if true'}\n        if page.ready\n          head title="Result" status=404`,
+  ].join('\n');
+  return `    main${rooted.length ? ` navigationBack="" navigationKey=${key}` : ''}
+${body}
+      text page.label testId="loaded"
+`;
+}
+
 test.each([
   ['navigation waits for a page that can declare its status', [
-    ['plain', '/', 200, false], ['inactive', '/inactive', 200, false],
+    ['plain', '/', 200, false],
     ['missing', '/missing', 404, true], ['gone', '/gone', 410, true], ['unavailable', '/unavailable', 503, true],
     ['static', '/static', 410, true], ['matched', '/matched', 404, true], ['rows', '/rows', 410, true],
-    ['virtual', '/virtual', 410, true], ['selection', '/selection', 404, true],
-    ['childSelection', '/child-selection', 404, true], ['tabSelection', '/tab-selection', 404, true],
-    ['panelRole', '/panel-role', 404, true], ['panelId', '/panel-id', 404, true], ['tabControls', '/tab-controls', 404, true],
-    ['siblingSelection', '/sibling-selection', 404, true], ['siblingRemoval', '/sibling-removal', 404, true],
+    ['virtual', '/virtual', 410, true],
     ['cachedUnavailable', '/cached-unavailable', 503, true], ['cachedUnavailable', '/cached-unavailable', 503, true],
     ['cachedOk', '/cached-ok', 200, true], ['client', '/client', 200, false],
+  ]],
+  ['navigation waits for a route that can declare its status', [
+    ['inactive', '/inactive', 200, false], ['selection', '/selection', 404, true],
+    ['childSelection', '/child-selection', 404, true],
+    ['siblingSelection', '/sibling-selection', 404, true], ['siblingRemoval', '/sibling-removal', 404, true],
+  ]],
+  ['navigation waits for a tab that can declare its status', [
+    ['tabSelection', '/tab-selection', 404, true],
+    ['panelRole', '/panel-role', 404, true], ['panelId', '/panel-id', 404, true], ['tabControls', '/tab-controls', 404, true],
   ]],
   ['navigation waits for store-driven status revalidation', [['storeStatus', '/store-status', 404, true]]],
   ['navigation waits for a discarded request that can change status', [['discardedStatus', '/discarded-status', 404, true]]],
@@ -192,7 +403,6 @@ test.each([
   ['navigation tracks id candidates across ownership boundaries', [
     ['idShadow', '/id-shadow', 404, true], ['idConditional', '/id-conditional', 404, true], ['idRows', '/id-rows', 404, true],
   ]],
-  ['navigation tracks an id shadow inside an inactive nested route', [['idInactiveRows', '/id-inactive-rows', 404, true]]],
   ['navigation waits for a route mounted in an inactive tab', [
     ['conditionalTab', '/conditional-tab', 404, true],
     ['conditionalMatch', '/conditional-match', 404, true],
@@ -201,9 +411,7 @@ test.each([
   ]],
   ['navigation sends its head before an unselectable conditional status', [['conditionalInactive', '/conditional-inactive', 200, false]]],
   ['navigation sends its head before an unselectable conditional tab', [['conditionalInactiveTab', '/conditional-inactive-tab', 200, false]]],
-  ['navigation ignores data confined to an inactive route', [
-    ['inactiveData', '/inactive-data', 200, false], ['inactiveSelector', '/inactive-selector', 200, false],
-  ]],
+  ['navigation ignores data confined to an inactive route', [['inactiveData', '/inactive-data', 200, false]]],
   ['navigation waits for an unnamed copy of a repeated panel', [['repeatedPanel', '/repeated-panel', 404, true]]],
 ])('%s', async (_name, cases) => {
   if (webCompiler().cmd === 'cargo') { throw new Error('build the compiler first: cargo build -p exact-web-js'); }
@@ -259,7 +467,6 @@ routes nav
   idShadow "/id-shadow" render=request activate=never
   idConditional "/id-conditional" render=request activate=never
   idRows "/id-rows" render=request activate=never
-  idInactiveRows "/id-inactive-rows" render=request activate=never
   conditionalInactiveTab "/conditional-inactive-tab" render=request activate=never
   repeatedPanel "/repeated-panel" render=request activate=never
   selection "/selection" render=request activate=never
@@ -272,7 +479,6 @@ routes nav
   conditionalRows "/conditional-rows" render=request activate=never
   conditionalNaming "/conditional-naming" render=request activate=never
   inactiveData "/inactive-data" render=request activate=never
-  inactiveSelector "/inactive-selector" render=request activate=never
   panelRole "/panel-role" render=request activate=never
   panelId "/panel-id" render=request activate=never
   tabControls "/tab-controls" render=request activate=never
@@ -291,226 +497,7 @@ component App
   action flip
     pressed = not pressed
   view
-    main
-      if top(nav).name == "plain" or top(nav).name == "discardedPlain"
-        head title="Plain"
-      else if top(nav).name == "storeStatus" or top(nav).name == "discardedStatus" or top(nav).name == "discardedHeldStatus" or top(nav).name == "discardedLooseStatus" or top(nav).name == "discardedDetachedStatus" or top(nav).name == "discardedClient" or top(nav).name == "discardedTimerStatus" or top(nav).name == "discardedLateTimerStatus" or top(nav).name == "backgroundSync" or top(nav).name == "backgroundHeldSync" or top(nav).name == "backgroundAnswer" or top(nav).name == "backgroundHeldAnswer" or top(nav).name == "backgroundClient"
-        if stored
-          head title="Missing" status=404
-        else
-          head title="Checking"
-        if top(nav).name == "discardedClient" or top(nav).name == "backgroundClient"
-          button press=flip testId="recovery-press"
-            text "Change"
-      else if top(nav).name == "conditionalInactive"
-        view navigationBack="" navigationKey="first"
-          view navigationKey="first"
-            head title="First"
-            view navigationBack="" navigationKey="nested"
-              row role="tablist"
-                button role="tab" aria-controls="unrelated-nested-panel"
-                  text "Nested"
-              view role="tabpanel" id="unrelated-nested-panel"
-                view navigationKey="nested"
-                  text "Nested page"
-          if page.ready
-            view navigationKey="second"
-              head title="Missing" status=404
-      else if top(nav).name == "inactiveSelector"
-        view navigationBack="" navigationKey=selected
-          view navigationKey="first"
-            head title="First"
-          view navigationKey="second"
-            view navigationBack="" navigationKey=page.key
-              view navigationKey="first"
-                head title="Nested first"
-              view navigationKey="second"
-                head title="Missing" status=404
-      else if top(nav).name == "inactiveData"
-        view navigationBack="" navigationKey=selected
-          view navigationKey="first"
-            head title="First"
-          view navigationKey="second" id=(page.ready ? "changed" : "initial")
-            if page.ready
-              view role="group"
-                view navigationBack="" navigationKey="nested"
-                  view navigationKey="nested"
-                    head title="Missing" status=404
-      else if top(nav).name == "conditionalInactiveTab"
-        view navigationBack="" navigationKey="sibling"
-          view id="fixed-first-panel"
-        view navigationBack="" navigationKey="first"
-          view navigationBack="" navigationKey="unrelated"
-            row role="tablist"
-              button role="tab" aria-controls="fixed-second-panel"
-                text "Unrelated tabs"
-          if false
-            row role="tablist"
-              button role="tab" aria-controls="fixed-second-panel"
-                text "Unreachable"
-          if true
-            row role="tablist"
-              if true
-                button role="tab" aria-controls="fixed-first-panel"
-                  text "First"
-                button role="tab" aria-controls="fixed-second-panel"
-                  text "Second"
-          view role="tabpanel" id="fixed-first-panel"
-            view navigationKey="first"
-              head title="First"
-          if page.ready
-            view role="tabpanel" id="fixed-second-panel"
-              view navigationKey="second"
-                head title="Missing" status=404
-      else if top(nav).name == "idShadow" or top(nav).name == "idConditional" or top(nav).name == "idRows" or top(nav).name == "idInactiveRows"
-        view navigationBack="" navigationKey="first"
-          row role="tablist"
-            button role="tab" aria-controls="id-status-panel"
-              text "Status"
-            button role="tab" aria-controls="id-plain-panel"
-              text "Plain"
-          if top(nav).name == "idShadow"
-            view id=(page.ready ? "id-status-panel" : "unused")
-          if top(nav).name == "idRows"
-            view navigationBack="" navigationKey="nested"
-              for code in page.rows key=code
-                view id="id-status-panel"
-          if top(nav).name == "idInactiveRows"
-            view navigationBack="" navigationKey="nested"
-              view navigationKey="nested"
-                text "Selected"
-              view navigationKey="covered"
-                for code in page.rows key=code
-                  view id="id-status-panel"
-          view role="tabpanel" id="id-status-panel"
-            view navigationKey="second"
-              head title="Missing" status=404
-              if top(nav).name == "idConditional" and page.ready
-                view id="id-plain-panel"
-          view role="tabpanel" id="id-plain-panel"
-            view navigationKey="first"
-              head title="First"
-      else if top(nav).name == "repeatedPanel"
-        view navigationBack="" navigationKey="first"
-          row role="tablist"
-            button role="tab" aria-controls="repeated-first-panel"
-              text "First"
-            button role="tab" aria-controls="repeated-second-panel"
-              text "Second"
-          view role="tabpanel" id="repeated-first-panel"
-            view navigationKey="first"
-              head title="First"
-          for code in page.rows key=code
-            view role="tabpanel" id="repeated-second-panel"
-              view navigationKey="second"
-                head title="Missing" status=404
-      else if top(nav).name == "client"
-        if pressed
-          head title="Client missing" status=404
-        else
-          head title="Client"
-        button press=flip testId="flip"
-          text "Change head"
-      else if top(nav).name == "inactive" or top(nav).name == "selection"
-        view navigationBack="" navigationKey=(top(nav).name == "selection" ? page.key : "first")
-          view navigationKey="first"
-            head title="First"
-            text "First"
-          view navigationKey="second"
-            head title="Missing" status=404
-            text "Missing"
-      else if top(nav).name == "gone"
-        if page.ready
-          head title="Gone" status=410
-      else if top(nav).name == "unavailable" or top(nav).name == "cachedUnavailable"
-        if page.ready
-          head title="Unavailable" status=503
-      else if top(nav).name == "static"
-        head title="Static" status=410
-      else if top(nav).name == "childSelection"
-        view navigationBack="" navigationKey="second"
-          view navigationKey=page.key
-            head title="Missing" status=404
-          view navigationKey=(page.ready ? "first" : "second")
-            head title="First"
-      else if top(nav).name == "tabSelection" or top(nav).name == "panelRole" or top(nav).name == "panelId" or top(nav).name == "tabControls"
-        view navigationBack="" navigationKey=(top(nav).name == "tabSelection" ? "second" : "first")
-          row role="tablist"
-            button role="tab" aria-controls=(top(nav).name == "tabControls" and page.ready ? "unused" : "status-panel")
-              text "Status"
-            button role="tab" aria-controls="plain-panel"
-              text "Plain"
-          view role=(top(nav).name == "panelRole" and page.ready ? "group" : "tabpanel") id=(top(nav).name == "panelId" and page.ready ? "unused" : "status-panel")
-            view navigationKey=(top(nav).name == "tabSelection" ? page.key : "second")
-              head title="Missing" status=404
-          view role="tabpanel" id="plain-panel"
-            view navigationKey=(top(nav).name == "tabSelection" and not page.ready ? "second" : "first")
-              head title="First"
-      else if top(nav).name == "siblingSelection" or top(nav).name == "siblingRemoval"
-        view navigationBack="" navigationKey="first"
-          if top(nav).name == "siblingSelection"
-            view navigationKey=(page.ready ? "third" : "first")
-              text "Plain"
-          else if not page.ready
-            view navigationKey="first"
-              text "Plain"
-          view navigationKey="second"
-            head title="Missing" status=404
-      else if top(nav).name == "conditionalTab" or top(nav).name == "conditionalMatch" or top(nav).name == "conditionalRows" or top(nav).name == "conditionalNaming"
-        view navigationBack="" navigationKey="first"
-          view role="tabpanel" id="future-panel"
-            if top(nav).name == "conditionalNaming"
-              if page.ready
-                row role="tablist"
-                  button role="tab" aria-controls="future-panel"
-                    text "Future"
-              view navigationKey="second"
-                head title="Missing" status=404
-            else if top(nav).name == "conditionalTab"
-              if page.ready
-                view navigationKey="first"
-                  head title="Missing" status=404
-            else if top(nav).name == "conditionalMatch"
-              match (page.ready ? some(page.label) : none)
-                case some(label)
-                  view navigationKey="first"
-                    head title=label status=404
-                case none
-                  text "Waiting"
-            else
-              for code in page.rows key=code
-                view navigationKey="first"
-                  head title="Missing" status=404
-          view role="tabpanel" id="current-panel"
-            view navigationKey="first"
-              head title="First"
-          row role="tablist"
-            button role="tab" aria-controls="future-panel"
-              text "Future"
-            button role="tab" aria-controls="current-panel"
-              text "Current"
-      else if top(nav).name == "matched"
-        match (page.ready ? some(page.label) : none)
-          case some(label)
-            head title=label status=404
-          case none
-            text "Waiting"
-      else if top(nav).name == "rows"
-        for code in page.rows key=code
-          view
-            head title="Row" status=410
-            text "Row"
-      else if top(nav).name == "virtual"
-        list virtualized=true height=200
-          for code in page.rows key=code
-            view height=24
-              head title="Virtual row" status=410
-              text "Virtual row"
-      else
-        if page.ready
-          head title="Result" status=404
-      text page.label testId="loaded"
-`);
+${statusView(cases.map(([name]) => name))}`);
     writeFileSync(resolve(dir, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
 export const appId = 'test.status-document';
 export const grants = ${JSON.stringify('net.fetch ' + api.url.origin + '\nsecret.keep status\nsecret.keep mode')};
@@ -625,61 +612,6 @@ export const answer: Answer = (source, args, store) => {
     rmSync(dir, { recursive: true, force: true });
   }
 }, 120_000);
-
-test('a second navigation root keeps its split list live while its detail supplies the head', async () => {
-  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/head-agent-test-'));
-  let browser, server;
-  try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Head Agent Test', app: { id: 'test.heads', name: 'Head Agent Test' }, host: { web: {} } }));
-    // The earlier covered copy must lose testId lookup to the visible split list's control.
-    const source = readFileSync(new URL('./conformance/heads-split.contract', import.meta.url), 'utf8').replace('      main navigationKey=', `      main navigationKey="1002" navigationBack="unused" height=24
-        column navigationKey="1001"
-          button press=toggle testId="list-commit"
-            text "Covered control"
-        column navigationKey="1002"
-          text "Another navigation root"
-      main navigationKey=`);
-    writeFileSync(resolve(dir, 'app.contract'), source);
-    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'head-agent-test', '--out', resolve(dir, 'dist'), '--render', 'none'], {
-      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
-    });
-    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
-    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
-      const path = new URL(req.url).pathname;
-      const file = Bun.file(resolve(dir, 'dist', path === '/' ? 'index.html' : path.slice(1)));
-      // (the agent asks a page's /exact.json, a dev envelope this build doesn't write)
-      return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
-    } });
-    browser = await open({ host: 'web', url: server.url.href, size: [1000, 900] });
-    expect(await browser.carrier.evaluate('document.querySelectorAll("[navigationBack]").length')).toBe(2);
-    await browser.tap('open-detail');
-    await browser.tap('commit');
-    let commits = 1;
-    for (const width of [1000, 420, 1000]) {
-      await browser.resize(width, 900);
-      await browser.clock('settle');
-      const wide = width >= 900, copies = (await browser.tree()).nodes.filter(n => n.props.testId === 'list-commit');
-      expect(copies).toHaveLength(2);
-      // A covered route is hidden too (LLP 1153 D8), and so is the split's list where the detail covers it.
-      const [covered, list] = copies, observed = await browser.op({ op: 'check' });
-      expect({ covered: [!!covered.inactive, !!covered.hidden], list: [!!list.inactive, !!list.hidden], checked: observed.items.some(item => item.id === list.id && item.control === 'button') })
-        .toEqual({ covered: [true, true], list: [!wide, !wide], checked: wide });
-      if (wide) {
-        expect((await browser.tree('list-commit', { shallow: true })).nodes[0].id).toBe(list.id);
-        await browser.tap('list-commit');
-        commits++;
-      }
-      const state = await browser.state();
-      expect(state.slots).toMatchObject({ commits, named: true });
-      expect(state.head).toMatchObject({ title: 'Ada', description: 'Directory description', canonical: '/directory' });
-      expect(await browser.carrier.evaluate('document.title')).toBe('Ada');
-    }
-  } finally {
-    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
-  }
-}, 30000);
 
 test('a JavaScript-rendered direct detail selects its retained href at boot', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');

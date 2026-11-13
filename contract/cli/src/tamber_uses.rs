@@ -635,29 +635,6 @@ fn relative(v: &mut Value, dir: &std::path::Path) {
     }
 }
 
-/// Each element of `nodes` (recursively), with `f`.
-fn walk<'a>(nodes: &'a [contract_syntax::Node], f: &mut dyn FnMut(&'a contract_syntax::Node)) {
-    use contract_syntax::Node;
-    for n in nodes {
-        f(n);
-        match n {
-            Node::Element { children, .. } | Node::Use { children, .. } => walk(children, f),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, f);
-                walk(otherwise, f);
-            }
-            Node::Each { body, .. } => walk(body, f),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, f);
-                walk(none, f);
-            }
-            Node::Children { .. } => {}
-        }
-    }
-}
-
 /// The strings an expression may take as an image's source: a literal, a
 /// template with no `${}`, either arm of a condition or a `match`, a list's
 /// items; never its condition or subject.
@@ -691,52 +668,11 @@ fn strings(e: &contract_syntax::Expr, out: &mut Vec<String>) {
 /// The places of every string literal inside an expression (a motion
 /// literal may sit in a condition's arm, a `+`'s right side, a `match`'s).
 fn literal_spans(e: &contract_syntax::Expr, out: &mut Vec<contract_syntax::Span>) {
-    use contract_syntax::{Expr, TemplatePart};
-    match e {
-        Expr::Str(_, s) | Expr::Template(_, s) => {
-            out.push(*s);
-            if let Expr::Template(parts, _) = e {
-                for p in parts {
-                    if let TemplatePart::Expr(x) = p {
-                        literal_spans(x, out);
-                    }
-                }
-            }
-        }
-        Expr::List(items, _) | Expr::Call(_, items, _) => {
-            items.iter().for_each(|i| literal_spans(i, out))
-        }
-        Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Member(x, _, _)
-        | Expr::Typed(x, _, _) => literal_spans(x, out),
-        Expr::Binary(_, a, b, _) => {
-            literal_spans(a, out);
-            literal_spans(b, out);
-        }
-        Expr::Ternary(c, a, b, _) => {
-            literal_spans(c, out);
-            literal_spans(a, out);
-            literal_spans(b, out);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            literal_spans(subject, out);
-            literal_spans(some, out);
-            literal_spans(none, out);
-        }
-        Expr::Arrow { body, .. } => literal_spans(body, out),
-        Expr::Let { value, body, .. } => {
-            literal_spans(value, out);
-            literal_spans(body, out);
-        }
-        _ => {}
-    }
+    use contract_syntax::Expr;
+    out.extend(e.walk().filter_map(|x| match x {
+        Expr::Str(_, s) | Expr::Template(_, s) => Some(*s),
+        _ => None,
+    }));
 }
 
 /// The map's nodes by where they are declared (`file`, `line`, `col`):
@@ -790,7 +726,7 @@ pub fn icon_sites(
     let mut out = Vec::new();
     for c in &file.components {
         let identity = c.params.identity.clone().unwrap_or_else(|| c.name.clone());
-        walk(&c.view, &mut |n| {
+        contract_syntax::Node::walk(&c.view).for_each(|n| {
             let contract_syntax::Node::Element {
                 tag,
                 positional,
@@ -866,7 +802,7 @@ pub fn motion_instances(
         Vec<(contract_syntax::Span, contract_syntax::Span)>,
     > = Default::default();
     for c in &file.components {
-        walk(&c.view, &mut |n| {
+        contract_syntax::Node::walk(&c.view).for_each(|n| {
             if let contract_syntax::Node::Element { attrs, span, .. } = n {
                 for a in attrs {
                     let mut spans = Vec::new();

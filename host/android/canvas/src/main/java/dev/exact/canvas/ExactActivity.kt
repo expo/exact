@@ -84,7 +84,8 @@ open class ExactActivity : Activity() {
         // The starting window goes the moment the first frame is drawn, not after its exit fade (splashfade=1: the
         // platform's fade, to compare): the first frame is what shows.
         if (Build.VERSION.SDK_INT >= 31 && intent.getStringExtra("splashfade") != "1") Splash.quick(this)
-        if (!again) environment()
+        val arrived = Shares.arrived(intent, state != null)
+        if (!again) environment(arrived)
         edgeToEdge()
         // exact2's thread, made before the assets are checked: it loads exact2's library meanwhile.
         owner()
@@ -107,10 +108,10 @@ open class ExactActivity : Activity() {
         }
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
-        // A launch with a URL (a shortcut, a link) into a process whose host runs goes where the URL says; one the
-        // system restores (a saved state) keeps where it was. The first launch's is the host's launch location
-        // ([environment]).
-        if (again && state == null) received(intent)
+        // A launch with a URL (a shortcut, a link) or a share into a process whose host runs goes where it says; an
+        // intent the system starts again ([Shares.arrived]) keeps where the app was. The first launch's is the host's
+        // launch location ([environment]).
+        if (again && arrived) received(intent)
     }
 
     /** A URL or a share given to the running activity: its location, as a link's (LLP 1133.023 D15 item 3), or the
@@ -602,17 +603,20 @@ open class ExactActivity : Activity() {
         Exact.turned = {}
     }
 
-    /** The launch extras that reach exact2 as its environment, written before its library loads. */
-    private fun environment() {
+    /** The launch extras that reach exact2 as its environment, written before its library loads; the launching
+     * intent's URL or share only when it [arrived] now. */
+    private fun environment(arrived: Boolean) {
         android.system.Os.setenv("XDG_CACHE_HOME", cacheDir.absolutePath, true)
         // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
         // drive with no scratch store keeps its `app:/` files under it (`exact_linux::picker`).
         android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, false)
         // The launching intent's URL is the launch location (LLP 1133.023 D15 item 3): the activity is exported, so
         // any app may start it with one, which reaches only what the navigation root routes, as a link does.
-        intent.data?.takeUnless { Shares.isShare(intent) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
-        // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
-        Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
+        if (arrived) {
+            intent.data?.takeUnless { Shares.isShare(intent) }?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it.toString(), true) }
+            // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
+            Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
+        }
         // GPU modules (LLP 1009) come from this APK. Exported intents never select executable content.
         android.system.Os.setenv("EXACT_NATIVE_LIBS", applicationInfo.nativeLibraryDir, true)
         android.system.Os.setenv("EXACT_MOVE_TRACKS", "1", true)

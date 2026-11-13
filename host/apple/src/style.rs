@@ -497,6 +497,16 @@ pub(crate) fn style_json_rows(
             out.push(',');
         }
         let _ = write!(out, "\"written\":[{written}]");
+        first = false;
+    }
+    // @ref LLP 1123 D3 — the edges whose padding clears its own inset: what
+    // a route's scroller credits where UIKit's inset is its clearance.
+    let credit = env.map_or(0, |e| exact_kernel::credited_edges(style, e));
+    if credit != 0 {
+        if !first {
+            out.push(',');
+        }
+        let _ = write!(out, "\"inset_credit\":{credit}");
     }
     out.push('}');
     (out, skipped)

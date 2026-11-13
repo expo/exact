@@ -13,9 +13,61 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+/// Where a running scroll shows (LLP 1012 `layout`, ruled 2026-11-12). UIKit
+/// draws a scroller at its presentation layer's offset; its model offset,
+/// which `box` and `contentOffset` read, is where an animated scroll is
+/// headed. One per `layout` read, each scroller's shift found once.
+final class PresentedScrolls {
+    private let viewport: UIScrollView
+    private var shifts: [ObjectIdentifier: CGPoint] = [:]
+    init(_ viewport: UIScrollView) { self.viewport = viewport }
+
+    /// How far `v`'s box shows from its model box, in the viewport's space:
+    /// each enclosing scroller's model offset less its presented one, carried
+    /// through the scroller's transform.
+    func shift(of v: UIView) -> CGPoint {
+        var total = CGPoint.zero, above = v.superview
+        while let s = above {
+            if let sv = s as? UIScrollView {
+                let d = shift(sv)
+                total.x += d.x; total.y += d.y
+            }
+            if s === viewport { break }
+            above = s.superview
+        }
+        return total
+    }
+
+    private func shift(_ sv: UIScrollView) -> CGPoint {
+        if let known = shifts[ObjectIdentifier(sv)] { return known }
+        let model = sv.bounds.origin, presented = Agent.presentedOffset(sv)
+        var d = CGPoint.zero
+        if presented != model {
+            let a = sv.convert(model, to: viewport), b = sv.convert(presented, to: viewport)
+            d = CGPoint(x: a.x - b.x, y: a.y - b.y)
+        }
+        shifts[ObjectIdentifier(sv)] = d
+        return d
+    }
+}
+
+extension Agent {
+    /// The offset UIKit draws `sv` at: its presentation layer's, else its model's.
+    static func presentedOffset(_ sv: UIScrollView) -> CGPoint { sv.layer.presentation()?.bounds.origin ?? sv.bounds.origin }
+
+    /// A scroller's `sx`/`sy` (LLP 1012 `layout`): the presented offset, and
+    /// while a running scroll is headed elsewhere, that `target` too. `top`
+    /// is added on y (CSS scrollTop under a list's top inset).
+    static func offset(of sv: UIScrollView, top: CGFloat = 0) -> [String: Any] {
+        let shown = presentedOffset(sv), model = sv.bounds.origin
+        let sx = r2(shown.x), sy = r2(shown.y + top), tx = r2(model.x), ty = r2(model.y + top)
+        return sx == tx && sy == ty ? ["sx": sx, "sy": sy] : ["sx": sx, "sy": sy, "target": ["sx": tx, "sy": ty]]
+    }
+}
+
 extension Agent {
     func layout() -> [String: Any] {
-        let vp = presenter.viewport
+        let vp = presenter.viewport, shown = PresentedScrolls(vp)
         var nodes: [[String: Any]] = []
         for (id, v) in presenter.views.sorted(by: { $0.key < $1.key }) where v.window != nil {
             if presenter.menus.ownsConfirmationNode(v) {
@@ -28,7 +80,8 @@ extension Agent {
             let scope = (v as? NodeView).flatMap { presenter.navigation.barSegment($0) }.map { s in
                 s.control.convert(s.segment, to: vp).offsetBy(dx: -vp.pageOrigin.x, dy: -vp.pageOrigin.y)
             }
-            let r = nativeAction ? actionView.map { box($0) } ?? .zero : scope ?? box(v)
+            let shift = nativeAction || scope != nil ? .zero : shown.shift(of: v)
+            let r = (nativeAction ? actionView.map { box($0) } ?? .zero : scope ?? box(v)).offsetBy(dx: shift.x, dy: shift.y)
             var n: [String: Any] = ["id": Int(id), "x": Agent.r2(r.origin.x), "y": Agent.r2(r.origin.y), "w": Agent.r2(r.width), "h": Agent.r2(r.height)]
             if !nativeAction, scope == nil {
                 n["radii"] = v.effectiveCornerSizes(in: v.bounds).map { [Double($0.width), Double($0.height)] }
@@ -37,10 +90,10 @@ extension Agent {
             // A waiting scroll (a closed swipe row's) is at its start, with no range until it scrolls.
             if v.scrollDormant { n["sx"] = 0.0; n["sy"] = 0.0; n["rx"] = 0.0; n["ry"] = 0.0 }
             if let sv = v.scrollView {
-                n["sx"] = Agent.r2(sv.contentOffset.x)
-                n["sy"] = Agent.r2(sv.contentOffset.y + v.scrollTopInset(sv))
+                n.merge(Agent.offset(of: sv, top: v.scrollTopInset(sv))) { _, new in new }
                 n.merge(Agent.range(of: sv)) { _, new in new }
-                n["port"] = port(of: v, sv)
+                let p = port(of: v, sv)
+                n["port"] = [p[0] + Double(shift.x), p[1] + Double(shift.y), p[2], p[3]].map { Agent.r2(CGFloat($0)) }
                 // How far past its own ends it sits: a stretched bounce is a
                 // state a driver cannot read from the offset alone.
                 let past = { (value: CGFloat, start: CGFloat, end: CGFloat) -> CGFloat in

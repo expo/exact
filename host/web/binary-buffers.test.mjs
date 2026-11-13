@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 
 const binary = readFileSync(new URL('../../js/src/binary.js', import.meta.url), 'utf8');
+const prelude = readFileSync(new URL('../../js/src/prelude.js', import.meta.url), 'utf8');
 
 function realm() {
   const context = createContext({ Headers, URL, URLSearchParams, TextEncoder, TextDecoder });
@@ -12,6 +13,28 @@ function realm() {
   runInContext('globalThis.said = f => { try { return f(); } catch (e) { return `${e.name}: ${e.message}`; } };', context);
   return context;
 }
+
+test('web fetches keep byte bodies on the string door as base64 copies', () => {
+  const context = realm(), requests = [];
+  context.crypto = crypto;
+  context.__exact_host = (op, ticket, wire) => {
+    if (op === 1) requests.push({ ticket, ...JSON.parse(wire) });
+  };
+  runInContext(prelude, context);
+  runInContext(`
+    globalThis.exact = { answer() {
+      const bytes = new Uint8Array([9, 0, 255, 128, 9]);
+      const bodies = [new ArrayBuffer(0), bytes.subarray(1, 1), bytes.subarray(1, 2), bytes.subarray(1, 3), new DataView(bytes.buffer, 1, 3), bytes.buffer, 'text'];
+      const requests = bodies.map(body => fetch('https://upload.test', { method: 'POST', body }));
+      bytes.fill(7);
+      return Promise.all(requests);
+    } };
+    __exact_call('upload', '[]', 'resource');
+  `, context);
+  expect(requests.map(r => r.ticket)).toEqual(['1', '2', '3', '4', '5', '6', '7']);
+  expect(requests.map(r => r.body_base64)).toEqual(['', '', 'AA==', 'AP8=', 'AP+A', 'CQD/gAk=', undefined]);
+  expect(requests.map(r => r.body)).toEqual(['', '', '', '', '', '', 'text']);
+});
 
 test('a body on a detached buffer is no bytes, its view\'s range unread, and the init is still converted', async () => {
   const [order, status, text] = await runInContext(`(async () => {

@@ -64,16 +64,15 @@ pub(super) fn standard(children: &[Node]) -> bool {
     lines(&texts(children)) || text_stack(children)
 }
 
-/// How many texts `nodes` show, fewest and most, an `if` showing one of
-/// them included; `None` when anything else is among them.
+/// How many texts `nodes` show, fewest and most, an `if` or a `match`
+/// showing one of them included; `None` when anything else is among them.
 pub(super) fn text_lines(nodes: &[Node]) -> Option<(usize, usize)> {
     nodes.iter().try_fold((0, 0), |(low, high), c| match c {
         Node::Element { tag, .. } if tag == "text" && hidden(c) => Some((low, high)),
         Node::Element { tag, .. } if tag == "text" => Some((low + 1, high + 1)),
-        Node::When {
-            then, otherwise, ..
-        } => {
-            let (a, b) = (text_lines(then)?, text_lines(otherwise)?);
+        Node::When { .. } | Node::Match { .. } => {
+            let [first, second] = c.child_lists();
+            let (a, b) = (text_lines(first)?, text_lines(second)?);
             Some((low + a.0.min(b.0), high + a.1.max(b.1)))
         }
         _ => None,

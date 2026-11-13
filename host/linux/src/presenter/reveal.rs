@@ -187,9 +187,9 @@ impl<D: DataSource> Presenter<D> {
             .then_some((cover, constraint.scroller))
     }
 
-    /// An app's `scrollIntoView("element-id", block=, inline=)`: the node
-    /// with that HTML `id`, aligned in each scroll container above it, then
-    /// the page. `behavior="smooth"` lands at once here (no animation).
+    /// An app's `scrollIntoView("element-id", block=, inline=, behavior=)`:
+    /// the node with that HTML `id`, aligned in each scroll container above
+    /// it, then the page, gliding there unless it lands at once (`glide.rs`).
     pub(super) fn scroll_element_into_view(&mut self, args: &[exact_plan::Value]) {
         // The author's scroll wins over a fragment's, held or still armed.
         self.fragment_anchor = None;
@@ -209,7 +209,8 @@ impl<D: DataSource> Presenter<D> {
             return;
         };
         let (block, inline) = (text(1).unwrap_or("start"), text(2).unwrap_or("nearest"));
-        self.scroll_into(id, true, true, |t, p| {
+        let glide = self.reveal_glides(text(3));
+        self.scroll_into_with(id, true, true, glide, |t, p| {
             (
                 aligned(inline, t.0, t.0 + t.2, p.0, p.2) - p.0,
                 aligned(block, t.1, t.1 + t.3, p.1, p.3) - p.1,
@@ -419,7 +420,22 @@ impl<D: DataSource> Presenter<D> {
         completion: bool,
         by: impl Fn(Rect4, Rect4) -> (f32, f32),
     ) -> bool {
+        self.scroll_into_with(id, spacing, completion, false, by)
+    }
+
+    /// [`Self::scroll_into`], each move a glide when `glide` says so: the
+    /// destinations are found as for a jump, then each port is put back
+    /// where it was and glides there from it.
+    fn scroll_into_with(
+        &mut self,
+        id: ViewId,
+        spacing: bool,
+        completion: bool,
+        glide: bool,
+        by: impl Fn(Rect4, Rect4) -> (f32, f32),
+    ) -> bool {
         self.restore_scroll_anchors();
+        let mut glides = Vec::new();
         if self.box_of(id).is_none() {
             return false;
         }
@@ -516,6 +532,16 @@ impl<D: DataSource> Presenter<D> {
                     off.1
                 },
             );
+            // A new request, or a jump, replaces a glide under way.
+            self.stop_glide(a);
+            if glide {
+                if next != off {
+                    scrolled = true;
+                    self.scroll.insert(a, next);
+                    glides.push((a, off, next));
+                }
+                continue;
+            }
             let moved = self.anchor_input(a, off, if sy { dy } else { 0. }, next);
             if next != off || moved.is_some_and(|dy| dy != 0.) {
                 scrolled = true;
@@ -527,10 +553,12 @@ impl<D: DataSource> Presenter<D> {
                 self.collection_scroll_input(a, off);
             }
         }
-        if self.alert_inert() {
-            return scrolled;
-        }
-        if let Some(target) = self.reveal_rect(id) {
+        // The page under an open box does not move; the scrollers above
+        // still glide (below).
+        let page = (!self.alert_inert())
+            .then(|| self.reveal_rect(id))
+            .flatten();
+        if let Some(target) = page {
             let doc = self.document();
             let max = ((doc.0 - vw).max(0.0), (doc.1 - vh).max(0.0));
             let target = if spacing {
@@ -543,12 +571,27 @@ impl<D: DataSource> Presenter<D> {
                 (self.page.0 + dx).clamp(0.0, max.0),
                 (self.page.1 + dy).clamp(0.0, max.1),
             );
-            let moved = self.anchor_input(PAGE, self.page, dy, next);
-            if next != self.page || moved.is_some_and(|dy| dy != 0.) {
-                scrolled = true;
-                self.page = next;
-                self.dirty = true;
+            self.stop_glide(PAGE);
+            if glide {
+                if next != self.page {
+                    scrolled = true;
+                    glides.push((PAGE, self.page, next));
+                }
+            } else {
+                let moved = self.anchor_input(PAGE, self.page, dy, next);
+                if next != self.page || moved.is_some_and(|dy| dy != 0.) {
+                    scrolled = true;
+                    self.page = next;
+                    self.dirty = true;
+                }
             }
+        }
+        // Each container's port back where it was, to glide from there.
+        for (a, from, to) in glides {
+            if a != PAGE {
+                self.scroll.insert(a, from);
+            }
+            self.begin_glide(a, from, to);
         }
         if let Some(error) = self.refresh_transform_geometry() {
             self.host.log(error);

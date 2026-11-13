@@ -607,6 +607,11 @@ from `setup` means only that the declared assets loaded, not that a frame drew
 (`if !hud.presented` in the view). It changes only at those moments, never per
 frame.
 
+A performance HUD reads the canvas's renderer, memory and audio facts through a
+separate resource, `exactCanvasPerformance("world")`, updated about once a
+second and only while a plan reads it; every field is an option and is `none`
+where the host cannot measure it ([the field list](../docs/contract-for-agents.md)).
+
 `w.emit("won")` separately queues a string for the canvas's `message=` handler.
 Undelivered events save in order but stay outside the simulation hash.
 

@@ -1260,18 +1260,13 @@ pub(crate) fn host_transform_recipients(
                     });
                     collect(lower, children, Some(index), false, boxes);
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    collect(lower, then, parent, repeated, boxes);
-                    collect(lower, otherwise, parent, repeated, boxes);
+                Node::Use { .. } | Node::Children { .. } => {}
+                node => {
+                    let repeated = repeated || matches!(node, Node::Each { .. });
+                    for list in node.child_lists() {
+                        collect(lower, list, parent, repeated, boxes);
+                    }
                 }
-                Node::Each { body, .. } => collect(lower, body, parent, true, boxes),
-                Node::Match { some, none, .. } => {
-                    collect(lower, &some.1, parent, repeated, boxes);
-                    collect(lower, none, parent, repeated, boxes);
-                }
-                _ => {}
             }
         }
     }
@@ -1435,12 +1430,8 @@ impl crate::Lowerer<'_> {
         fn words(node: &Node) -> bool {
             match node {
                 Node::Element { tag, .. } => tag == "text" || tag == "image",
-                Node::When {
-                    then, otherwise, ..
-                } => then.iter().chain(otherwise).all(words),
-                Node::Each { body, .. } => body.iter().all(words),
-                Node::Match { some, none, .. } => some.1.iter().chain(none).all(words),
                 Node::Use { .. } | Node::Children { .. } => false,
+                node => node.children().all(words),
             }
         }
         let has = |name: &str| attrs.iter().any(|a| a.name == name);

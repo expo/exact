@@ -439,6 +439,14 @@ component Cart
   `option<number>`, counted as an age is (a Feb 29 birthday has its year on Mar 1).
   `formatDay(then, now, offset, "day")` names a day from `now` (`Today`, `Yesterday`, else
   the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's).
+- `formatTime`, `formatDate`, `formatDay` and `formatNumber` follow the strings table
+  the app shows: with `strings/de.json` shown they print `26.09.2026`, `13:02`,
+  `1.234,5` and `Heute`, and `setLocale` moves them with the text; the examples above
+  are en-US, which an app with no tables or only English ones prints. Do not write a
+  formatter of your own per language, and do not key one on `resolvedLocale`. A
+  table's region is its formats' (`en-GB.json`, which may be `{}`, prints `26 Sep
+  2026`); dates are Gregorian everywhere
+  ([formatting by locale](contract-grammar.md#formatting-by-locale)).
 - There is no general list append: add an item to
   resource-backed data in its source and answer the updated list (a mutation that
   `refreshes` the list's resource, or its own answer).
@@ -909,6 +917,7 @@ Choose the mechanism from its lifetime:
 | Requirement | Mechanism |
 | --- | --- |
 | Value follows query arguments | `resource result = source(args) as shape T` |
+| One HTTP request read into a shape (a `GET`, a GraphQL query), with no data module | a `source` declared in `app.contract` ([Declared sources](#declared-sources)) |
 | Source needs changing context while the same kept answer is suitable at boot | `resource result = source(identity) with context as shape T` |
 | Ask nothing until a condition holds (nothing selected, a query too short, a page not open) | `resource result = source(args) when cond as shape T`: idle while `cond` is false, asked again, forced, when it turns true |
 | Explicit command with a reply | `mutation reply as shape T`, then `send reply = source(args)` |
@@ -1125,6 +1134,57 @@ for (let i = 0; i < nodes.length; i++) {
 
 The function that yields is `async`, and so is every caller that awaits it.
 On the web the page has no such budget, and a yield lets it paint mid-parse.
+
+### Declared sources
+
+A source that is one HTTP request read into a shape is declared in the root
+file, `app.contract`, and needs no data module (LLP 1162.001). Its lines are
+`fetch()`'s ([the recipe](recipes/declared-source.md) has whole examples):
+
+```contract
+shape Current
+  temperature_2m: number
+
+source weather(latitude: number, longitude: number) as shape Current
+  url "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
+  pointer "/current"
+
+component App
+  resource now = weather(52.52, 13.41) as shape Current
+  view
+    text `${now.temperature_2m}°`
+```
+
+| Line | Meaning |
+| --- | --- |
+| `url "…"` | Required. `{param}` is the argument as text (a `string`, `number` or `bool`), percent-encoded as RFC 6570 encodes it. The origin is written out before any `{…}`. |
+| `method "…"` | `GET` (the default), `POST`, `PUT`, `PATCH` or `DELETE`. |
+| `header "Name" "value"` | One header. The value may name a parameter, `{param}`, and a secret the data module keeps, `{secret:name}`; a header the browser sets itself (`Cookie`, `Origin`, …) is refused. |
+| `body json` | The parameters as one JSON object by name, `Content-Type: application/json`. |
+| `graphql "…"` | A `POST` of `{"query": document, "variables": {param: value, …}}`; no `method` or `body` beside it. |
+| `pointer "…"` | Where the answer is in the reply: an RFC 6901 JSON Pointer, `"/data/items"`; the whole reply when it is left out. |
+
+- **The grant is the origin.** A declared source reaches its URL's origin and nothing
+  else, on every host, with no `grants` line; an update that declares a new origin is a
+  new binary, as a new grant is. A `{secret:name}` needs `secret.keep name` in the data
+  module's grants; while the secret is absent nothing is sent and the resource fails
+  with `refused`.
+- **The answer is read field by field.** A field the shape doesn't declare is left out
+  (unlike a data module's answer, which is held to its shape exactly), an absent or
+  `null` `option` field is `none`, and anything else missing fails it with `shape`.
+  Rename or compute in a `derive`.
+- **A failure** is a TypeScript `fetch`'s that is let through: `offline`, `timeout` or
+  `refused`, or `error` for a status outside 200–299, a reply that is not JSON, or a
+  GraphQL `errors` (its first error's `extensions.code` is `failure(x).reason`).
+- **Reads and writes.** A resource's request is a read: it overlaps others and a `GET`
+  keeps the GET cache; `refresh` asks past it. A `send` to a declared source with
+  another method, or a GraphQL mutation, is a write. Nothing is asked at build: a
+  declared resource shows its `else`, or its shape's zero, until the launch's answer.
+- **What stays in a data module:** token refresh, pagination across requests, offline
+  queues and retries, an optimistic `overlay`, streams and sockets, uploads, form bodies,
+  and an origin from `app.json`'s `env`. An app with both keeps `app.ts`, and with it
+  the JavaScript engine on native hosts; an app whose sources are all declared has
+  neither.
 
 ### Optimistic writes: the overlay
 
@@ -1574,15 +1634,21 @@ out (LLP 1157).
   cx.setAuth(provider.idToken(store) ?? undefined); return r; }`. When
   `live.authError` says the token expired, a source that awaits
   `provider.refresh(store)` and calls `setAuth` the same way renews it. The token stays in data code.
-- **One mutation, one socket send, no `fetch` in the same turn.** `setAuth`
-  sends on the socket, and the runner refuses a mutation that both sends and
-  fetches (`a mutation cannot both send on a socket and fetch`): nothing is
-  sent and its `then` does not run. Fetch first in an `async` source, await
+- **A source's synchronous part may not both send and `fetch`.** `setAuth`
+  sends on the socket, and the runner refuses a mutation whose source does
+  both before its first `await` (`a mutation cannot both send on a socket and
+  fetch`): nothing is sent and its `then` does not run. Fetch first in an `async` source, await
   it, then call `setAuth`: `async () => { await fetch(signOutUrl, …);
   cx.setAuth(undefined); return … }`. If a call's frame never left anyway,
   the module still gives no answer for the wrong person and sends each
   mutation behind the token again, so Convex runs none as the person before;
   calling `setAuth` again sends it again.
+- **An upload to a URL Convex signed** is one `async` source, since a
+  mutation whose source sent may fetch after an `await`: `const url = await
+  cx.mutation(api.files.uploadUrl, {}); await fetch(url, { method: 'PUT',
+  exactBodyFrom: path }); return cx.mutation(api.files.saved, { … })` (a
+  component's signed URL, such as R2's; Convex's own file storage takes a
+  `POST`).
 - **After a token change** no answer computed for another token is given,
   across a reconnect too, until Convex delivers it for the new one. The screen
   keeps what it showed until the new answers land: gate a signed-in screen on
@@ -1844,7 +1910,19 @@ near their edges; do not build card drags by hand. Lists nest one level deep; an
 windowing mechanism. Rows inserted, removed or resized above what the reader
 sees keep the reader's place, as CSS scroll anchoring does; a list at its start
 stays there, so rows inserted on top show, and one following its end
-(`scrollFollowEnd`) follows it. A row root may move where it paints
+(`scrollFollowEnd`) follows it. A scroll the app asks for (`scrollIntoView`,
+either form, or an ordinary scroller's `scrollTop` write) owns its scroller
+until it settles: while a smooth one runs, `scrollFollowEnd` moves nothing, even
+when the same action turns it on, and once it rests the end is followed only if
+it rests there, as after the reader's own scroll. Its `scroll` events report the
+port as it moves, the first maybe still where it was, and its `scrollend` comes
+once, where it rests, after a last `scroll` whose `scrollHeight - scrollTop -
+clientHeight` is under a pixel at the end. A jump-to-latest control needs
+nothing more than `scrollIntoView("transcript", lastId, block="end",
+behavior="smooth")` with `scrollFollowEnd=true` left on. `block="end"` aligns
+the row, not the list's end: a list with `padding-bottom` (room under a composer
+or a status line) takes the same `scroll-padding-bottom`, and the last row's
+`block="end"` is then the end. A row root may move where it paints
 (`translate`, `rotate`, `scale`, a relative `top`/`left`, `z-index`: a lifted
 row being dragged) and keeps its place in the list.
 
@@ -2048,11 +2126,13 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back |
 | a route with `navigationPresentation="modal"` | a sheet |
 
-On macOS, date, time, datetime-local and select controls are default Tab stops,
-independent of the system's Keyboard navigation setting. Their native control
-owns focus and editing keys; `focus`/`blur` and cancellable `key` handlers still
-address the Contract node. Disabled, inert and hidden controls stay out of the
-loop; `tabindex=-1` allows explicit focus while excluding sequential focus.
+On macOS, date, time and datetime-local controls are default Tab stops whatever
+the system's Keyboard navigation setting, as `NSDatePicker` is; a select is one
+only with the setting on, as `NSPopUpButton` is. `tabindex=0` makes any of them a
+stop in both modes. Their native control owns focus and editing keys;
+`focus`/`blur` and cancellable `key` handlers still address the Contract node.
+Disabled, inert and hidden controls stay out of the loop; `tabindex=-1` allows
+explicit focus while excluding sequential focus.
 
 `contract vocab <name>` lists each one's props. A route does not scroll by
 itself: its content goes in a `scroll`, `list` or `overflow-y="auto"` box, which is
@@ -4089,10 +4169,31 @@ and a window driven by the agent's virtual clock leave FPS unavailable.
 `processMemoryBytes`, `gameHeapBytes`, `textureMemoryBytes` and
 `geometryMemoryBytes` are optional byte counts. `audioState`, `thermalState`
 and `quality` are optional strings; `idle` is an optional boolean. Hosts and
-surfaces report only measurements they actually support. The initial game
-renderer reports render dimensions, scale, samples, draw counts, frame pacing,
-and CPU tick/feed/encode durations; GPU, memory and audio measurements remain
-unavailable. The 16 KiB snapshot limit is separate from the public surface
+surfaces report only measurements they actually support. The game renderer
+reports render dimensions, scale, samples, draw counts, frame pacing, CPU
+tick/feed/encode durations, and on every host: `quality`, the resolved rung
+(`low`, `mid`, `high`) once a binding resolved it; `maxFps`, the frame cap in
+force, `none` when the canvas draws at the display's rate; and `idle`, true
+while the canvas asks for no frames until something changes (a world at rest
+or paused; `none` under the agent's virtual clock). `thermalState` is
+`nominal`, `fair`, `serious` or `critical` as of the canvas's last drawn frame
+where the host reads the device's (Apple); `none` elsewhere and for a window
+in which no frame was drawn. Memory, in bytes:
+`processMemoryBytes` is the process's footprint (`phys_footprint` on Apple, the
+resident set on Linux and Android), `none` on the web and Windows;
+`gameHeapBytes` is the GPU module's linear memory on the web, the simulation's
+and renderer's heap, and `none` natively, where that heap is the process's;
+`textureMemoryBytes` counts the delivered textures the renderer holds on the
+device, retired ones awaiting compaction included (render targets are not
+counted) and `geometryMemoryBytes` the renderer's
+vertex and index buffers, on every host once the renderer exists.
+`audioState` is a game's audio output where its host gives it one (the web,
+Apple, Windows): `running`, `suspended` (hidden, or waiting for a gesture),
+`interrupted` (suspended by the host's interruption: a call or alarm on iOS,
+the window losing focus on Windows) or `closed` (no device: under the
+agent's virtual clock, or not yet opened); `none` on the Linux family and for
+a game without audio. `gpuMs`, `gpuMaxMs`, `cpuSubmitMs` and
+`cpuSubmitMaxMs` are not measured on any host yet and stay `none`. The 16 KiB snapshot limit is separate from the public surface
 record's limit.
 
 A GPU HUD can show its last successful publication while its world loads:
@@ -5178,12 +5279,55 @@ device's under `viewport-fit="cover"` and 0 under `auto`, even on iOS when a roo
 `tablist` or navigation stack takes the whole screen; there a box at the root that
 pads with them stays under the status bar
 ([pitfall](agent-pitfalls.md#native-presentation-and-navigation-ios)).
+`var(--exact-safe-area-inset-top|right|bottom|left)` is the safe area where the box
+is, a term in the same places as `env()` (LLP 1123 D9). Inside a route, a tab or a
+sheet it is that container's own, as UIKit's `safeAreaInsets` has it: the status
+bar, the navigation bar and a large title, the tab bar, the home indicator, a
+sheet's edges. Outside every route it is what the page itself reaches under: on
+iOS the status bar and the home indicator whenever a root stack or `tablist` takes
+the whole screen, even where `env()` is 0. On the web and a host that draws no bars
+it is `env()`'s, and a web sheet's top is 0. It takes no fallback, and it follows
+the bars as the host lays them out (a rotation, a bar shown or hidden). Any box may
+set it for its subtree, spelled as it is read:
+`--exact-safe-area-inset-bottom="0px"` (a length, no percentage; one that reads
+itself is ignored, as a CSS cycle is).
+
+The host clears a route's content of the chrome it did not write (LLP 1123 D3), on
+every host with bars: on each edge it pads the route by that inset, or the route's
+scroller takes it as its content inset where the scroller starts at the route's top
+or ends at its bottom. The clearance adds to the route's own padding
+(`padding-top=16` under a 106-point bar puts the content at 122), except where that
+padding reads the inset itself (`env(safe-area-inset-top)` or
+`var(--exact-safe-area-inset-top)`, alone or in `calc()`, `min()`, `max()`,
+`clamp()`): then the edge is the larger of the two, so
+`padding-bottom="max(16px, var(--exact-safe-area-inset-bottom))"` is "at least 16, or
+the home indicator". Padding on a box inside the route always adds. A header the
+bar replaces neither clears nor counts. `-exact-safe-area` on the route (or a
+`tabpanel`) turns the clearance off: `none`, or the edges to turn off
+(`-exact-safe-area="top"`), the rest staying cleared; anywhere else it is refused.
+The route's `background-color` already fills under the bars. For a background or
+picture under the bar:
+
+- Where the route is padded, pull a box at its top up and pad it back:
+  `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
+  padding-top="var(--exact-safe-area-inset-top)"`. Its content starts below the bar
+  and the boxes beside it stay where they were.
+- Where the route's scroller starts at its top (a list under a large title), opt the
+  top out and pad the scroller's first box: `-exact-safe-area="top"` on the route,
+  `padding-top="var(--exact-safe-area-inset-top)"` on the hero. The scroller then
+  starts under the bar, at its start the hero's background reaches the screen's top
+  and its text rests below the bar. `navigationBar="transparent"` does the same and
+  also hides the bar's background until the content scrolls under it.
+
+A box outside every route clears the status bar with
+`top="var(--exact-safe-area-inset-top)"`.
+
 Sizes, padding and radii clamp negative results to zero; margins and insets keep
 them. `env(titlebar-area-x|y|width|height)` is the title bar beside a Mac window's
 traffic lights under `viewport-fit="cover"` (in the tall title row an app without routes
 gets from `"display_override": ["window-controls-overlay"]` in `app.json`) and is undefined
 elsewhere, so give it a fallback (`contract vocab titlebar-area`). Unsupported: `em`, a unitless number where a length goes
-(write `0px`, not `0`), `var()`, more than 32 values or 32 levels (LLP 1001 §2,
+(write `0px`, not `0`), a `var()` naming neither a design token nor one of those four, more than 32 values or 32 levels (LLP 1001 §2,
 "Comparisons").
 
 `translate` takes one or two lengths, each in px or a percentage of the box's own

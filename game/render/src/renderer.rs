@@ -113,6 +113,10 @@ pub struct RendererWithAssets<const ASSETS: bool> {
     // This frame's visible environment map is resident.
     pub(crate) sky_ready: bool,
     pub(crate) targets: Targets,
+    // Particle looks retain their own colour/depth when the live frame's are transient.
+    look_hdr: Option<Targets>,
+    // While encoding a look, `targets` holds its attachments and these hold the live ones.
+    live_hdr: Option<Targets>,
     // A direct frame's attachments (`encode_hooked`), made at its target's size;
     // a look frame that counts particles keeps its own, retained between passes.
     pub(crate) direct_targets: Option<crate::buffers::DirectTargets>,
@@ -429,6 +433,8 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             sky_ready: false,
             targets,
             direct_targets: None,
+            look_hdr: None,
+            live_hdr: None,
             look_direct: None,
             direct_retained: false,
             allow_direct: samples == 1 || cfg!(any(target_os = "android", target_os = "ios")),

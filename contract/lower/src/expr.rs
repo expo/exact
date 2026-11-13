@@ -441,6 +441,9 @@ pub(crate) fn compile(
                     }
                 }
             }
+            if f.localized() {
+                l.push_format_locale(asm)?;
+            }
             asm.call(f);
             match (f, given.first(), given.get(1)) {
                 // `first(T[])` is `option<T>` (LLP 1054.000 C4).

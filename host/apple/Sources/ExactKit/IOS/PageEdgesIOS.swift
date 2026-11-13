@@ -198,7 +198,7 @@ extension NodeView {
         // scrollTop would only move the offset, which reads as the reader leaving
         // the end.
         let follows = props["scrollFollowEnd"] == "true" || presenter?.collections.entries[id] != nil
-        let atEnd = follows && sv.contentOffset.y >= end() - 1
+        let atEnd = follows && sv.contentOffset.y >= end() - 1 && !authorOwnsScroll(sv)
         let oldOwn = bandInset, top = sv.contentOffset.y + scrollTopInset(sv)
         more.pageBand = band; more.bandInset = own
         sv.frame = scrollFrame

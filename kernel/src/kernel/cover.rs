@@ -17,10 +17,14 @@
 //! inset moves it) and its published scroll extent leaves them out (the
 //! platform adds them back). Scrolling content still passes under both.
 //!
-//! A replaced header that cleared the status bar itself (the web's
-//! `padding-top: env(safe-area-inset-top)` under `viewport-fit=cover`)
-//! hands that inset to its route's top cover, so the route's content starts
-//! at the bar's bottom whichever of the two padded it (LLP 1075.003 §9.10).
+//! A covered route is a content owner (@ref LLP 1123 D3, D4): its cover is
+//! its chrome's clearance, the owner's local inset on each edge its padding
+//! executes. Clearance adds to the authored padding, as SwiftUI's safe area
+//! adds to `padding()`, except where that padding already clears the inset
+//! (it reads `env(safe-area-inset-<edge>)` or `var(--exact-safe-area-inset-
+//! <edge>)`): the edge is then the larger of the two. `-exact-safe-area`
+//! turns an edge's clearance off; the author pads it themselves. A header
+//! the bar replaces neither clears nor is credited.
 //!
 //! The margins a platform's own list gives a grouped list's cards and cells
 //! are a claim of the same kind (`grouped::GroupedMargins`), set here.
@@ -86,10 +90,9 @@ impl Kernel {
         if let Some(r) = &mut self.region {
             r.intrinsic(slot);
         }
-        // A box replaced or given back changes what its parent's top cover
-        // takes from it (`header_inset`), and a scroller the platform
-        // insets at the bottom edge, or stops insetting, what the covered
-        // box it ends pads there (`scroller_insets_bottom`), however deep.
+        // A scroller the platform insets at the bottom edge, or stops
+        // insetting, changes what the covered box it ends pads there
+        // (`scroller_insets_bottom`), however deep.
         let whole = |c: Option<HostCover>| c == Some(HostCover::Whole);
         let bottom = |c: Option<HostCover>| matches!(c, Some(HostCover::Inset([_, b])) if b > 0.0);
         // A box replaced or given back also leaves the chain or joins it.
@@ -105,9 +108,6 @@ impl Kernel {
                 || edges(before) != edges(cover)))
         .then(|| covering(&self.arena, slot))
         .flatten();
-        let parent = (whole(before) != whole(cover))
-            .then(|| self.arena.parent(slot))
-            .flatten();
         // And a block under it is hidden or shown with it (`block::apply`).
         let blocks: Vec<u32> = if whole(before) != whole(cover) {
             let arena = &self.arena;
@@ -119,18 +119,12 @@ impl Kernel {
         };
         // And an absolutely positioned child is placed past the edges the
         // cover names (`apply`), so its engine style is derived again.
-        // A replaced first child's inset is part of its parent's top cover
-        // (`header_inset`), which the parent's absolute children start past.
-        let mut positioned = if edges(before) || edges(cover) {
+        let positioned = if edges(before) || edges(cover) {
             positioned_children(&self.arena, slot)
         } else {
             Vec::new()
         };
-        if let Some(p) = parent {
-            positioned.extend(positioned_children(&self.arena, p));
-        }
         for slot in std::iter::once(slot)
-            .chain(parent)
             .chain(chain)
             .chain(blocks)
             .chain(positioned)
@@ -222,19 +216,28 @@ impl Kernel {
 pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     // A popover is the host's to lift, out of flow, open or closed (`style::top_layer`).
     crate::style::top_layer::apply(arena, slot, s);
-    let (style, env) = (arena.effective_style(slot), arena.env());
+    let style = arena.effective_style(slot);
     match arena.cover(slot) {
         Some(HostCover::Whole) => s.display = taffy::style::Display::None,
         Some(HostCover::Edges(_)) => {
-            let [top, right, bottom, left] = applied_padding(arena, slot);
+            let cleared = applied_padding(arena, slot);
             // The authored padding as layout reads it (whole cells under a
-            // terminal's space rule), plus the host's own inset.
+            // terminal's space rule), with the clearance (LLP 1123 D3).
+            let env = crate::kernel::owner::env_for(arena, slot, &style);
             let (down, across) = (crate::style::cells::ROW, crate::style::cells::COLUMN);
+            let pad = |authored: &Dimension, cell: f32, edge: Edge| {
+                let clearance = cleared[edge as usize];
+                let spaced = authored.spaced(&env, cell);
+                match clearance > 0.0 && credited(authored, edge, &env) {
+                    true => spaced.floor_lp_at_least(&env, clearance),
+                    false => spaced.floor_lp(&env, clearance),
+                }
+            };
             s.padding = taffy::geometry::Rect {
-                top: style.padding_top.spaced(env, down).floor_lp(env, top),
-                right: style.padding_right.spaced(env, across).floor_lp(env, right),
-                bottom: style.padding_bottom.spaced(env, down).floor_lp(env, bottom),
-                left: style.padding_left.spaced(env, across).floor_lp(env, left),
+                top: pad(&style.padding_top, down, Edge::Top),
+                right: pad(&style.padding_right, across, Edge::Right),
+                bottom: pad(&style.padding_bottom, down, Edge::Bottom),
+                left: pad(&style.padding_left, across, Edge::Left),
             };
         }
         Some(HostCover::Inset([top, bottom])) => {
@@ -344,9 +347,9 @@ fn covering(arena: &NodeArena, slot: u32) -> Option<u32> {
     None
 }
 
-/// `slot`'s style changed (`txn::style_changed`, a layout row): a replaced
-/// header's padding is part of its route's top cover, and its `display`,
-/// `position` or `overflow-y` its place on the bottom edge's chain.
+/// `slot`'s style changed (`txn::style_changed`, a layout row): its
+/// `display`, `position` or `overflow-y` is its place on the bottom edge's
+/// chain, and an owner's `-exact-safe-area` where its absolute children go.
 pub(crate) fn style_changed(
     arena: &NodeArena,
     layout: &mut dyn LayoutMirror,
@@ -365,14 +368,13 @@ pub(crate) fn style_changed(
     {
         chain_changed(arena, layout, slot);
     }
-    if arena.cover(slot) == Some(HostCover::Whole) {
-        if let Some(p) = arena.parent(slot) {
-            // And its absolute children, placed past that cover.
-            for s in std::iter::once(p).chain(positioned_children(arena, p)) {
-                if let Some(node) = arena.taffy(s) {
-                    layout.restyle(arena, s, node);
-                    layout.mark_dirty(node);
-                }
+    // An owner's opt-out (LLP 1123 D4) moves where its absolute children
+    // are placed past its cover (`apply`).
+    if mask.has(StyleId::SafeArea) && matches!(arena.cover(slot), Some(HostCover::Edges(_))) {
+        for s in positioned_children(arena, slot) {
+            if let Some(node) = arena.taffy(s) {
+                layout.restyle(arena, s, node);
+                layout.mark_dirty(node);
             }
         }
     }
@@ -420,14 +422,70 @@ pub(crate) fn applied_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
     [top, right, bottom, left]
 }
 
+/// What the clearance adds to the box's padding beyond its authored padding,
+/// as layout pads it (`apply`): `applied_padding`, less what a credited
+/// padding already clears (LLP 1123 D3), so the padding a host reads back is
+/// the authored one. A percentage is of the parent's width as last laid out.
+pub(crate) fn contributed_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
+    let applied = applied_padding(arena, slot);
+    if applied == [0.0; 4] {
+        return applied;
+    }
+    let style = arena.effective_style(slot);
+    let env = crate::kernel::owner::env_for(arena, slot, &style);
+    let basis = arena.parent(slot).map_or(0.0, |p| arena.frame(p).width);
+    let pads = [
+        &style.padding_top,
+        &style.padding_right,
+        &style.padding_bottom,
+        &style.padding_left,
+    ];
+    std::array::from_fn(|i| {
+        let clearance = applied[i];
+        match clearance > 0.0 && credited(pads[i], Edge::ALL[i], &env) {
+            true => (clearance - pads[i].at_basis(&env, basis).max(0.0)).max(0.0),
+            false => clearance,
+        }
+    })
+}
+
 /// The points a cover adds to the box's padding for layout (`apply`), top,
 /// right, bottom and left: the host's sizing, not the box's CSS padding.
 pub(crate) fn added_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
     match arena.cover(slot) {
-        Some(HostCover::Edges([top, right, bottom, left])) => {
-            [top + header_inset(arena, slot, top), right, bottom, left]
+        Some(HostCover::Edges(edges)) => {
+            let off = arena.style(slot).rare.safe_area;
+            std::array::from_fn(|i| if off & (1 << i) != 0 { 0.0 } else { edges[i] })
         }
         _ => [0.0; 4],
+    }
+}
+
+/// The edges, as bits top 1, right 2, bottom 4 and left 8, whose padding in
+/// `style` clears its own inset ([`credited`]): what a host that executes an
+/// owner's clearance itself (a scroller's content inset) credits.
+pub fn credited_edges(style: &crate::StyleProps, env: &crate::style::Env) -> u8 {
+    let pads = [
+        &style.padding_top,
+        &style.padding_right,
+        &style.padding_bottom,
+        &style.padding_left,
+    ];
+    (0..4).fold(0, |bits, i| match credited(pads[i], Edge::ALL[i], env) {
+        true => bits | 1 << i,
+        false => bits,
+    })
+}
+
+/// Whether an owner root's authored padding on `edge` clears that edge's
+/// inset itself (LLP 1123 D3, "How credit is defined"): it references
+/// `env(safe-area-inset-<edge>)`, the corner-adapted safe area's, which is
+/// never less (D10), or `var(--exact-safe-area-inset-<edge>)`, anywhere in it.
+pub(crate) fn credited(padding: &Dimension, edge: Edge, env: &crate::style::Env) -> bool {
+    match padding {
+        Dimension::Env(e, _) | Dimension::Region(Region::SafeAreaCorners, e, _) => *e == edge,
+        Dimension::Compare(c) => c.reads(edge, env),
+        _ => false,
     }
 }
 
@@ -457,8 +515,9 @@ fn lay_gutter(s: &mut taffy::style::Style, [right, bottom]: [f32; 2]) {
     }
 }
 
-/// A box's children changed: a covered box's top cover may hold its first
-/// child's inset (`header_inset`), so its engine style is derived again.
+/// A box's children changed: a covered box's bottom padding follows the
+/// scroller at its bottom edge (`scroller_insets_bottom`), so its engine
+/// style is derived again.
 pub(crate) fn children_changed(
     arena: &NodeArena,
     layout: &mut dyn LayoutMirror,
@@ -489,35 +548,4 @@ pub(crate) fn children_changed(
         }
     }
     crate::rows::children_changed(arena, layout, slot, touched);
-}
-
-/// The top inset a box's replaced first child cleared for itself: that
-/// child is covered whole and pads its top by `env(safe-area-inset-top)`
-/// or the corner-adapted safe area's, which never lies above it (LLP 1123
-/// D10), or a `calc()` or comparison that reads one (LLP 1001 §2).
-/// It counts only while a bar covers the box's top (`top > 0`); a scroller
-/// that goes under the bar is inset by the platform instead.
-pub(crate) fn header_inset(arena: &NodeArena, slot: u32, top: f32) -> f32 {
-    let Some(&first) = arena.children(slot).first() else {
-        return 0.0;
-    };
-    match (
-        top > 0.0,
-        arena.cover(first),
-        arena.style(first).padding_top.clone(),
-    ) {
-        (true, Some(HostCover::Whole), Dimension::Env(Edge::Top, _))
-        | (
-            true,
-            Some(HostCover::Whole),
-            Dimension::Region(Region::SafeAreaCorners, Edge::Top, _),
-        ) => arena.env().inset(Edge::Top),
-        // `max(env(safe-area-inset-top), 12px)` clears the inset too.
-        (true, Some(HostCover::Whole), Dimension::Compare(c))
-            if c.reads(Edge::Top, arena.env()) =>
-        {
-            arena.env().inset(Edge::Top)
-        }
-        _ => 0.0,
-    }
 }

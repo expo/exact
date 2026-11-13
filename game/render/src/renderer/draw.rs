@@ -97,6 +97,9 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         time: crate::HookTime,
         poses: &crate::hooks::Poses,
     ) -> Result<Stats, RenderError> {
+        if self.probe.is_none() {
+            self.end_look();
+        }
         self.timed.set(0);
         if H::ENABLED && self.hook_metrics.is_none() {
             self.hook_metrics = Some(Box::default());
@@ -151,9 +154,10 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         // follows the soft particles actually drawn.
         if self.probe.is_none() {
             // No look frame's state outlives it, even one whose encode failed,
-            // nor its retained direct attachments (a phone's are tens of MB).
+            // nor its retained attachments (a phone's are tens of MB).
             self.quads.disarm();
             self.look_direct = None;
+            self.look_hdr = None;
         }
         self.quads.observed = self.probe.is_some().then(Vec::new);
         if let Some(probe) = &mut self.probe {
@@ -185,11 +189,23 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             self.prepare_direct(target.texture().size(), counting);
             false
         } else {
-            self.prepare_targets(
+            let scene_copy = self.prepare_targets(
                 size,
                 needs,
-                frame.ambient_occlusion.is_some() || self.effects_retained || counting,
-            )
+                frame.ambient_occlusion.is_some() || self.effects_retained,
+            );
+            if counting && !self.targets.retained {
+                let look = self
+                    .look_hdr
+                    .take()
+                    .filter(|t| t.resolved == self.targets.resolved)
+                    .unwrap_or_else(|| {
+                        self.texture_creations += if self.pipelines.samples == 1 { 1 } else { 2 };
+                        self.targets.for_counting(&self.device)
+                    });
+                self.live_hdr = Some(std::mem::replace(&mut self.targets, look));
+            }
+            scene_copy
         };
         self.water.prepare(
             &self.device,
@@ -850,6 +866,156 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
 mod tests {
     use exact_game::*;
     use exact_gpu::{fixture, wgpu};
+
+    #[derive(Default)]
+    struct FailedLook;
+    impl crate::Hooks for FailedLook {
+        fn compute(
+            &mut self,
+            _: &mut wgpu::CommandEncoder,
+            _: &crate::FrameView<'_>,
+        ) -> Result<(), crate::RenderError> {
+            Err(crate::RenderError::scene("look failed".into()))
+        }
+    }
+
+    #[test]
+    fn hdr_particle_looks_preserve_live_targets_and_effects() {
+        let Some(gpu) = crate::test_device::device_or_skip(fixture::device()) else {
+            return;
+        };
+        eprintln!("HDR look lifecycle adapter: {:?}", gpu.adapter.get_info());
+        for occlusion in [false, true] {
+            let mut world = World::new(60, 1);
+            world.insert_resource(Environment {
+                background: Some([0.; 3].into()),
+                fog: None,
+                ..Default::default()
+            });
+            if occlusion {
+                world.insert_resource(AmbientOcclusion::default());
+            }
+            world.spawn((Transform::at(0., 0., 5.), Camera::orthographic(4.)));
+            world.spawn((
+                Transform::default(),
+                Mesh::cube(2.),
+                Material::glow([3.; 3]),
+            ));
+            world.spawn((
+                Transform::at(0., 0., 2.),
+                Emitter {
+                    rate: 0.,
+                    lifetime: 30.,
+                    speed: 0.,
+                    gravity: Vec3::ZERO,
+                    size: [1.; 2],
+                    color: [[0., 0., 0., 0.5]; 2],
+                    additive: false,
+                    ..Default::default()
+                }
+                .burst(1),
+            ));
+            emitter::step(&world);
+            let mut renderer = crate::Renderer::with_samples(
+                &gpu.device,
+                &gpu.queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                SceneSamples::Four,
+            );
+            renderer.set_direct(false);
+            let mut feed = crate::Feed::default();
+            feed.feed(&world, &mut renderer).unwrap();
+            let frame = feed.frame(&world, 1., 1.);
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("HDR look lifecycle"),
+                size: wgpu::Extent3d {
+                    width: 128,
+                    height: 128,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            renderer.draw(&view, (128, 128), &frame);
+            assert_eq!(renderer.targets.retained, occlusion);
+            assert_eq!(renderer.ssao.is_some(), occlusion);
+            assert!(renderer.quads.particles_drawn());
+            let live = fixture::read(&gpu, &texture).unwrap();
+            let targets = [
+                &renderer.targets.color,
+                &renderer.targets.depth,
+                &renderer.targets.resolved,
+            ]
+            .map(Clone::clone);
+            let tone = renderer.targets.tone_bind.clone();
+            let bloom = renderer.bloom.as_ref().unwrap().binds.clone();
+            let creations = renderer.texture_creations;
+            let mut look_depth = None;
+            for _ in 0..2 {
+                renderer.arm_probe(true);
+                renderer.draw(&view, (128, 128), &frame);
+                assert_eq!(renderer.targets.samples, 4);
+                assert!(renderer.targets.retained);
+                assert_eq!(renderer.live_hdr.is_some(), !occlusion);
+                assert_eq!(renderer.targets.resolved, targets[2]);
+                assert!(renderer.probe.as_ref().unwrap().counted.is_some());
+                assert_eq!(fixture::read(&gpu, &texture).unwrap(), live);
+                renderer.end_look();
+                assert_eq!(renderer.look_hdr.is_some(), !occlusion);
+                if let Some(look) = &renderer.look_hdr {
+                    assert_ne!(look.color, targets[0]);
+                    assert_ne!(look.depth, targets[1]);
+                    if let Some(depth) = &look_depth {
+                        assert_eq!(&look.depth, depth);
+                    }
+                    look_depth = Some(look.depth.clone());
+                }
+                assert_eq!(
+                    renderer.texture_creations,
+                    creations + if occlusion { 0 } else { 2 }
+                );
+                assert_eq!(renderer.targets.retained, occlusion);
+                assert_eq!(renderer.targets.color, targets[0]);
+                assert_eq!(renderer.targets.depth, targets[1]);
+                assert_eq!(renderer.targets.resolved, targets[2]);
+                assert_eq!(renderer.targets.tone_bind, tone);
+                assert_eq!(renderer.bloom.as_ref().unwrap().binds, bloom);
+                assert_eq!(renderer.ssao.is_some(), occlusion);
+            }
+            renderer.arm_probe(true);
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            let failed = renderer.encode_hooked(
+                &mut encoder,
+                &view,
+                (128, 128),
+                &frame,
+                &mut FailedLook,
+                Some(&world),
+                crate::HookTime::default(),
+                &Default::default(),
+            );
+            assert!(failed.unwrap_err().to_string().contains("look failed"));
+            drop(encoder);
+            renderer.disarm_probe();
+            assert!(renderer.live_hdr.is_none());
+            assert_eq!(renderer.targets.color, targets[0]);
+            assert_eq!(renderer.targets.depth, targets[1]);
+            let creations = renderer.texture_creations;
+            renderer.draw(&view, (128, 128), &frame);
+            assert!(renderer.look_hdr.is_none() && renderer.live_hdr.is_none());
+            assert_eq!(renderer.texture_creations, creations);
+            assert_eq!(renderer.targets.color, targets[0]);
+            assert_eq!(renderer.targets.depth, targets[1]);
+            assert_eq!(renderer.targets.resolved, targets[2]);
+            assert_eq!(renderer.bloom.as_ref().unwrap().binds, bloom);
+            assert_eq!(fixture::read(&gpu, &texture).unwrap(), live);
+        }
+    }
 
     #[test]
     fn single_sample_town_settings_draw_direct_or_keep_one_hdr_attachment() {

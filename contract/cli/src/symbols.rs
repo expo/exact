@@ -539,19 +539,11 @@ impl<'a> Resolver<'a> {
                     }
                     self.ids(children, component);
                 }
-                Node::Use { children, .. } => self.ids(children, component),
-                Node::Each { body, .. } => self.ids(body, component),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    self.ids(then, component);
-                    self.ids(otherwise, component);
+                node => {
+                    for list in node.child_lists() {
+                        self.ids(list, component);
+                    }
                 }
-                Node::Match { some, none, .. } => {
-                    self.ids(&some.1, component);
-                    self.ids(none, component);
-                }
-                Node::Children { .. } => {}
             }
         }
     }
@@ -946,23 +938,6 @@ impl<'a> Resolver<'a> {
     }
     fn expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
-            Expr::List(items, _) => {
-                for item in items {
-                    self.expr(item);
-                }
-            }
-            Expr::Template(parts, _) => {
-                for part in parts {
-                    if let TemplatePart::Expr(e) = part {
-                        self.expr(e);
-                    }
-                }
-            }
-            Expr::NamedArg(_, inner, _)
-            | Expr::Typed(inner, _, _)
-            | Expr::Some(inner, _)
-            | Expr::Unary(_, inner, _) => self.expr(inner),
             Expr::Ident(name, span) => self.name(name, *span),
             Expr::Member(base, field, span) => {
                 self.expr(base);
@@ -1010,15 +985,6 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
-            Expr::Binary(_, lhs, rhs, _) => {
-                self.expr(lhs);
-                self.expr(rhs);
-            }
-            Expr::Ternary(cond, then, otherwise, _) => {
-                self.expr(cond);
-                self.expr(then);
-                self.expr(otherwise);
-            }
             Expr::Match {
                 subject,
                 var,
@@ -1036,13 +1002,14 @@ impl<'a> Resolver<'a> {
                 self.pop_local();
                 self.expr(none);
             }
-            // Only expansion writes a `let`; an authored tree holds none.
-            Expr::Let { value, body, .. } => {
-                self.expr(value);
-                self.expr(body);
+            // Only expansion writes a `let`, and an arrow outside
+            // `map`/`filter` is the type pass's refusal: neither binds a
+            // name in an authored tree.
+            _ => {
+                for operand in expr.operands() {
+                    self.expr(operand);
+                }
             }
-            // Outside `map`/`filter`, which the type pass refuses.
-            Expr::Arrow { body, .. } => self.expr(body),
         }
     }
 }
@@ -1220,34 +1187,12 @@ pub(crate) fn authored_action_hint(file: &File, mut error: CompileError) -> Comp
             _ => None,
         }
     }
-    fn walk<'a>(nodes: &'a [Node], visit: &mut impl FnMut(&'a Node)) {
-        for node in nodes {
-            visit(node);
-            match node {
-                Node::Element { children, .. } | Node::Use { children, .. } => {
-                    walk(children, visit)
-                }
-                Node::Each { body, .. } => walk(body, visit),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, visit);
-                    walk(otherwise, visit);
-                }
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, visit);
-                    walk(none, visit);
-                }
-                Node::Children { .. } => {}
-            }
-        }
-    }
     fn authored_expr(c: &Component, span: Span) -> Option<&Expr> {
         if let Some(b) = c.provides.iter().find(|b| b.expr.span() == span) {
             return Some(&b.expr);
         }
         let mut found = None;
-        walk(&c.view, &mut |node| {
+        Node::walk(&c.view).for_each(|node| {
             if let Node::Element { attrs, .. } | Node::Use { args: attrs, .. } = node {
                 if let Some(a) = attrs.iter().find(|a| a.value.span() == span) {
                     found = Some(&a.value);
@@ -1266,7 +1211,7 @@ pub(crate) fn authored_action_hint(file: &File, mut error: CompileError) -> Comp
         inject: bool,
     ) -> Option<&'a Expr> {
         let mut args = None;
-        walk(&c.view, &mut |node| {
+        Node::walk(&c.view).for_each(|node| {
             if let Node::Use {
                 args: given, span, ..
             } = node
@@ -1353,7 +1298,7 @@ pub(crate) fn authored_action_hint(file: &File, mut error: CompileError) -> Comp
     if error.id != "analyze-unknown-action" {
         if let Ok(expanded) = contract_syntax::expand_mapped(file) {
             let mut sites = Vec::new();
-            walk(&expanded.root.view, &mut |node| {
+            Node::walk(&expanded.root.view).for_each(|node| {
                 if let Node::Element {
                     attrs, instance, ..
                 } = node

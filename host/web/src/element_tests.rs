@@ -632,6 +632,48 @@ fn a_layout_region_is_the_browsers_safe_area() {
     }
 }
 
+/// A content owner's local inset (LLP 1123 D9) reaches the browser as the
+/// registered custom property it reads, alone or in a calculation.
+#[test]
+fn a_local_inset_is_the_browsers_custom_property() {
+    use exact_kernel::{StyleId, StyleValue};
+    for (text, css) in [
+        (
+            "var(--exact-safe-area-inset-top)",
+            "padding-left:var(--exact-safe-area-inset-top)",
+        ),
+        (
+            "max(16px, var(--exact-safe-area-inset-bottom))",
+            "padding-left:max(16px, var(--exact-safe-area-inset-bottom))",
+        ),
+        (
+            "calc(env(-exact-layout-margins-inset-left) + var(--exact-safe-area-inset-left))",
+            "padding-left:calc(env(safe-area-inset-left) + var(--exact-safe-area-inset-left))",
+        ),
+    ] {
+        let mut style = StyleProps::default();
+        style
+            .set_dynamic(StyleId::PaddingLeft, &StyleValue::Text(text.into()))
+            .unwrap();
+        let (out, _) = crate::css::css_text(&style, &[]);
+        assert!(out.contains(css), "{text}: {out}");
+    }
+    // An author's own value is the custom property on the element, which
+    // its subtree inherits (D9); the opt-out of a clearance the browser
+    // never makes writes nothing, and is no row skipped (D4).
+    let mut style = StyleProps::default();
+    let own = StyleValue::Text("calc(var(--exact-safe-area-inset-top) + 8px)".into());
+    style.set_dynamic(StyleId::LocalInsetBottom, &own).unwrap();
+    let off = StyleValue::Text("top bottom".into());
+    style.set_dynamic(StyleId::SafeArea, &off).unwrap();
+    let (out, skipped) = crate::css::css_text(&style, &[]);
+    assert_eq!(
+        out,
+        "--exact-safe-area-inset-bottom:calc(8px + var(--exact-safe-area-inset-top));"
+    );
+    assert!(skipped.is_empty(), "{skipped:?}");
+}
+
 /// LLP 1116.018 D3: a live region's `aria-atomic` reaches the page.
 #[test]
 fn a_live_region_says_whether_it_is_announced_whole() {

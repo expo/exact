@@ -222,6 +222,9 @@ pub struct Projection {
     pub stacks: Vec<Vec<ViewId>>,
     /// What the bars cover of the tree, as the kernel was last told.
     pub(crate) covers: BTreeMap<ViewId, exact_kernel::HostCover>,
+    /// Each barred or sheeted route's local insets (LLP 1123 D9), top right
+    /// bottom left, as the kernel was last told.
+    pub(crate) locals: BTreeMap<ViewId, [f32; 4]>,
 }
 
 impl Navigation {

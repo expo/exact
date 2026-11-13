@@ -1471,7 +1471,7 @@ async function test(args) {
     try {
       const destination = `platform=iOS Simulator,id=${dev.udid}`, derived = resolve(paths.namespace, 'ios-tests'), xcodeEnv = { ...env, IPHONEOS_DEPLOYMENT_TARGET: '17.0' };
       runApple('xcodebuild', ['build-for-testing', '-scheme', 'Exact-Package', '-destination', destination, '-derivedDataPath', derived], { cwd: pkg, stdio: 'inherit', env: xcodeEnv });
-      iosTestRuns({ pkg, products: resolve(derived, 'Build/Products'), destination, udid: dev.udid, env: xcodeEnv, canvasGpu, hostSource: resolve(root, 'host/apple/testhost/TestHost.swift'), triple: iosTriple, runApple, run, only });
+      await iosTestRuns({ pkg, products: resolve(derived, 'Build/Products'), destination, udid: dev.udid, env: xcodeEnv, canvasGpu, hostSource: resolve(root, 'host/apple/testhost/TestHost.swift'), triple: iosTriple, runApple, run, only });
     } finally { if (bootedHere) read('xcrun', ['simctl', 'shutdown', dev.udid]); }
   } finally { cargoRelease?.(); release(); }
 }

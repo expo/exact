@@ -1488,7 +1488,9 @@ cargo run -q -p contract -- types path/to/app.contract -o path/to/app.contract.d
 
 In `app.ts`, use `import type { Sources, Answer } from './app.contract.d.ts'`.
 Annotate the provider map as `Sources`; each function takes `(args, store, storage)` and
-returns its declared result or a Promise of it. An `Answer` dispatcher can call
+returns its declared result or a Promise of it. A `source` declared in `app.contract`
+is the runner's to answer, so `Sources` leaves it out ([Declared
+sources](contract-for-agents.md#declared-sources)). An `Answer` dispatcher can call
 `sources[source](args, store, storage)` without casts. `bun install --frozen-lockfile` installs the pinned `tsc`.
 An answer is held to its shape exactly, on every executor: each declared field
 present (an `undefined` one is missing, as `JSON.stringify` leaves it out), none
@@ -2303,27 +2305,45 @@ if (source === "request") {
 What each turn of an answer sends goes out in the order it sent it once
 the commit that ran the turn stands, as its fetches do; a refused commit
 takes it back and says so, and nothing the answer does afterwards (a
-value, a failure) takes it back. Natively its turns are its source's call
-and each delivery of its own `fetch` or storage step. Code that resumes
-from an `await` runs in the next turn that drains microtasks (its own
-delivery, or the answer's that settled what it awaited) and sends as that
-turn's answer; a mapper's call drains none, so code a mapper resumes runs
-in the next answer asked, or in none (and its send refuses) when that is
-the waiting answer's own re-ask. Send before the first `await`, or settle
-waiters from an answer. An answer asked again sends again, so key a
-request that must not repeat. On the web build an `async` function's
-steps after an `await` and the answer's own timers are its later turns
-too, and each sends when it ends; a plain `.then` callback outside an
-`async` function runs under no answer there, and its send throws. An
-answer that has given its value has no later turn: a send from code it
-left running throws `InvalidStateError`. What a turn sent while its
-answer's commit had not yet stood waits for it, and is refused, in `logs`,
-if the answer is let go first. An answer
-the runner lets go (new arguments, `refresh`, a newer send, leaving the
-view) sends nothing more as its own; what it sent stays sent. It may also
-`fetch`, though a mutation's synchronous source still may not do both. A
-refused commit's batches are taken back without telling the code, so a
-protocol that awaits a reply times out. Its bounds are a mutation's, over all its turns (`socket answer
+value, a failure) takes it back. Earlier turns' batches precede later
+ones, and frames are never coalesced.
+
+On native hosts and the web JS target, the bundle's async helper restores
+the answer an `async` function began in after every `await` (LLP 1133.002
+D14), whichever answer settled the promise. That answer owns the send's
+permission and bounds. Once it has given its value, failed or been let go,
+its async steps cannot send, even if another answer's turn resumes them.
+
+Natively, microtasks drain in a source's call and each delivery of its own
+`fetch` or storage step. A synchronous mapper's call drains none: a waiter
+it settles resumes when an answer is next asked, including the waiter's
+own re-ask. The async helper restores the waiting answer's context in
+either case. Native socket batches, however, name the answer whose turn
+staged them: if answer B's turn resumes answer A's async step, its send
+uses A's permission and bounds but the batch names B in `logs`. A plain `.then`
+callback has no captured answer: it uses whichever answer's turn drains
+it, including a waiter's own re-ask. With no answer current, its send
+throws. Such a callback left behind by a let-go answer can therefore send
+as another answer whose turn drains it; an async step still belongs to
+the let-go answer and refuses.
+
+On the web JS target, an `async` function's steps after an `await` and the
+answer's own timers are its later turns, and each sends when it ends,
+behind what its source sent. A plain `.then` callback runs under no
+answer there, and its send throws. An answer that has given its value,
+failed or been let go has no later turn: a send from code it left running
+throws `InvalidStateError`. What a turn sent while its answer's commit
+had not yet stood waits for it, and is refused, in `logs`, if the answer
+is let go first.
+
+An answer the runner lets go (new arguments, `refresh`, a newer send,
+leaving the view) sends nothing more as its own; what it sent stays sent.
+An answer asked anew runs its source again, so key a request that must not
+repeat. An answer in flight may also `fetch`, though a mutation's
+synchronous source still may not do both: a mutation whose source sent
+fetches in a later turn (after an `await`). A refused commit's batches are
+taken back without telling the code, so a protocol that awaits a reply
+times out. Its bounds are a mutation's, over all its turns (`socket answer
 exceeds 256 operations`, `… 1 MiB`); overload throws without failing the
 answer. A handle that is not open, or whose socket a mutation's stream
 owns, throws `InvalidStateError`, and so does an operation after the
@@ -2399,9 +2419,60 @@ grant beside this one: see [Push](#push).
   it starts the app. `navigate=` is reduced by the router's `location_of`
   (`app://thread/42` becomes `/thread/42`).
 - A click without `navigate=` is `notificationclick` on the root component's
-  outermost node: the tag and the notification's `{tag, data, title, body}`,
-  delivered once, in order, after first pixel; one that starts the app (macOS,
-  iOS) is held until then. A click always brings the app forward.
+  outermost node: the tag and the notification's `{tag, data, title, body,
+  action, reply}`, delivered once, in order, after first pixel; one that
+  starts the app (macOS, iOS) is held until then. A click always brings the
+  app forward. `action` and `reply` are none for a click.
+- `actions=[NotificationAction(action=, title=, foreground=, destructive=,
+  authenticationRequired=, placeholder=)]` (macOS, iOS) gives a post the
+  buttons the system shows when the notification is pressed and held, on the
+  Lock Screen too. The list is written out, a literal (`contract-module-literal`):
+  the build reads each list the app writes, and the host registers each as a
+  category at launch, named by its actions' names joined by commas
+  (`approve,note`). An action name means one thing in the app: one written
+  twice differently is refused (`contract-module-declared`). Names must be
+  nonempty, contain neither `,` nor `=`, and occur once per list. A list has
+  at most four actions; Apple's banners show only the first two
+  ([Apple's category guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/SupportingNotificationsinYourApp.html)).
+  Exact registers the union of live sessions' declared categories, preserving
+  an embedder's own categories. Replacing or ending one session does not remove
+  another's categories. Conflicting definitions of one category are neither
+  registered nor authorized until the conflict ends. An embedder's existing
+  category wins a name collision; Exact refuses its own conflicting category.
+  Removing Exact's last declaration releases its ownership of the name.
+  The host registers categories before data code starts. Responses wait for the
+  destination's current declarations, registration and data activation after a
+  cold launch or plan replacement. The system's action identifier includes its definition's
+  revision: an old button cannot satisfy a changed unlock requirement, even
+  when the category name stays the same. `e.action` remains the authored name.
+  Data code's
+  post may name only a list the app's Contract writes (`TypeError`
+  otherwise). `placeholder=some("Note")` makes the action a text field;
+  `destructive` and `authenticationRequired` are the platform's flags (the
+  device must be unlocked first). Choosing one is `notificationclick` with
+  `action` its name and `reply` what the person typed; it never opens the
+  post's `navigate=`.
+- An action with `foreground=true` brings the app forward, as a click does.
+  With `foreground=false`, a running app is not brought forward. On iOS a
+  terminated app starts with no view; macOS has no notification-specific
+  cold-launch path and may show its ordinary startup window. Before the first
+  unlock after a device restart, iOS refuses the response before booting or
+  activating data. Locking again after that first unlock does not refuse it.
+  The handler runs as a background action (LLP 1133.004 stage 2), and the app
+  is kept running until the work the handler started has ended (its requests
+  and native statements answered, its storage written) or the system's time
+  for it, about 30 seconds, runs out. It is the person's
+  act: it may make the request the action exists for, with the app's kept
+  credentials. It shows nothing: a permission prompt is refused
+  `person-required`, a name only the foreground may call is refused, and so
+  are the host commands a wake may not run (`copyText`, `share`,
+  `playSound`, …). A session that needs a sign-in it does not have cannot
+  sign in there; post a notification that asks the person to open the app.
+  An expired action is discarded even if the session has not booted yet;
+  opening the app later does not run it. An action with no handler settles
+  immediately as unheard. Replacing its runner releases an action's held
+  completion as superseded; a response still awaiting declarations waits for
+  the replacement.
 - A remote notification's click opens its payload's `navigate` and nothing
   else ([Push](#push)).
 - `setAppBadge(contents=)` sets the app icon's badge, best effort: a number, no
@@ -2431,7 +2502,9 @@ posted (`{title, body, tag, silent, data, showTrigger, navigate, delivered,
 ref}`, a tag replacing its older one, `closeNotification` removing it, an
 entry for later `delivered: false` until `clock` passes it); `state.badge` is
 the badge (a number, `"flag"` or `null`). `tap @ref` on a delivered entry is
-its click; `--notification '<entry>'` relaunches the app with one, as the
+its click; `tap @ref <action>` chooses one of its `actions`, `tap @ref
+'<action>=<text>'` with a typed reply, a background action running hidden
+as `state.wake` shows it (`origin` `action`); `--notification '<entry>'` relaunches the app with one, as the
 system hands a closed app its click. Scheduling is one time per call: a daily
 reminder posts the next one when the app runs.
 
@@ -2505,8 +2578,19 @@ or origin, never through the app's `protocol_handlers`. Nothing else of the
 payload is read and no event is raised; without `navigate` the app only comes
 forward. A server writes that string, so a route must not act on being opened.
 No app code runs when a push arrives: `content-available` does nothing (the
-`remote-notification` background mode is refused), `mutable-content` changes
-nothing (no service extension is built), and a `category` shows no actions.
+`remote-notification` background mode is refused), and `mutable-content`
+changes nothing (no service extension is built).
+
+`aps.category` names one of the categories the app declares with
+`@exact/notifications`' `actions=` (above), by its actions' names joined by
+commas (`"category": "approve,note"`); a name the app did not declare shows
+no actions. A chosen action is `notificationclick` with the tag the
+notification's identifier (`apns-collapse-id` when the server set one), the
+action's name and the typed reply; `data`, `title` and `body` are empty, and
+nothing else of the payload reaches the app, so the app looks up what the
+action is about by that identifier. An explicitly selected session receives the
+push action if it declares it; otherwise the first matching live session does.
+A background action runs as a local post's does.
 
 The system answers a registration on the app delegate. When the package
 loads, the app delegate is given the two methods that carry the answer where
@@ -2639,7 +2723,7 @@ login:<NAME>` name is a shell variable's (`[A-Za-z_][A-Za-z0-9_]*`).
 Under the agent nothing runs unless the drive names it: `--process
 <target>=<executable>` runs that file in the target's place,
 `--process <target>=script:<file.json>` answers from a script with no process
-(the format is `host/apple/src/executor_process_script.rs`'s), and
+(the format is `host/executor/src/process_script.rs`'s), and
 `--process <target>=real` runs the granted program itself. A script's events,
 restart delays and readiness move with `clock`; a real child's run on the
 wall, which `clock +<ms> real` waits for. `--login-env NAME=value`

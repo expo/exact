@@ -1,0 +1,32 @@
+// LLP 1123 D9 (LocalInsetsIOSTests): a route's content reads its own safe area,
+// the bars included, as `var(--exact-safe-area-inset-*)`. Inside the route a
+// sidebar's background reaches up under the navigation bar and its content
+// starts below it, without a hard-coded bar height (expo/exact#36); the list
+// beside it already clears the bar and stays. A box outside every route reads
+// the session root's insets, the status bar's, which `env()` leaves at 0.
+routes nav
+  home "/"
+  sheet "/sheet"
+
+component BarInsets
+  action open
+    nav = push(nav, "/sheet")
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+            header
+              text "Inbox" role="heading" aria-level=1
+            row flex=1 min-height=0
+              column width=290 margin-top="calc(-1 * var(--exact-safe-area-inset-top))" padding-top="var(--exact-safe-area-inset-top)" background-color="-exact-system-orange" testId="sidebar"
+                text "Sidebar" testId="sidebar-first"
+                button press=open testId="open"
+                  text "Open"
+              scroll id="list" flex=1 min-height=0 testId="list"
+                for i in range(30) key=i
+                  text `Row ${i}` padding=12
+        if e.name == "sheet"
+          column navigationKey=`${e.id}` navigationPresentation="modal" testId="sheet" display="flex" flex-direction="column"
+            column height="var(--exact-safe-area-inset-bottom)" testId="sheet-probe"
+      column position="absolute" top=0 right=0 width=4 height="var(--exact-safe-area-inset-top)" testId="root-probe"

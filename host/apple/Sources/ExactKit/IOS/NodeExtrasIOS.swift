@@ -164,6 +164,9 @@ final class NodeExtras {
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)?
     var followsEndAfterInteraction = false
     var followingEndAnimated = false
+    /// Until when a `scrollTop` write UIKit animates (`scroll-behavior: smooth`) counts as running: UIKit does not always
+    /// report the end of an animation another write stops, so, as a reveal, for `ElementScrolls.revealBound` at most.
+    var authoredScrollUntil: CFTimeInterval = 0
     var anchoredScrollTop: CGFloat?
     var retainedScrollTop: CGFloat?
     var materialKind: String?
@@ -426,6 +429,11 @@ extension NodeView {
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)? { get { extras?.followedScroll } set { if newValue != nil || extras != nil { more.followedScroll = newValue } } }
     var followingEndAnimated: Bool { get { extras?.followingEndAnimated ?? false } set { if newValue || extras != nil { more.followingEndAnimated = newValue } } }
     var followsEndAfterInteraction: Bool { get { extras?.followsEndAfterInteraction ?? false } set { if newValue || extras != nil { more.followsEndAfterInteraction = newValue } } }
+    /// A smooth `scrollTop` write is running: the app's scroll, which the end-follow leaves alone (LLP 1070.000 §15).
+    var authoredScrollAnimating: Bool {
+        get { (extras?.authoredScrollUntil ?? 0) > CACurrentMediaTime() }
+        set { if newValue || extras != nil { more.authoredScrollUntil = newValue ? CACurrentMediaTime() + ElementScrolls.revealBound : 0 } }
+    }
     var anchoredScrollTop: CGFloat? { get { extras?.anchoredScrollTop } set { if newValue != nil || extras != nil { more.anchoredScrollTop = newValue } } }
     var retainedScrollTop: CGFloat? { get { extras?.retainedScrollTop } set { if newValue != nil || extras != nil { more.retainedScrollTop = newValue } } }
     var materialKind: String? { get { extras?.materialKind } set { if newValue != nil || extras != nil { more.materialKind = newValue } } }

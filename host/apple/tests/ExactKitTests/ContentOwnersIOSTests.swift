@@ -998,28 +998,25 @@ final class ContentOwnersIOSTests: XCTestCase {
         until("the root hears the field leave with its sheet") { heard.last?.hasPrefix("focusout:sheet-a") == true }
     }
 
-    /// Under `viewport-fit="cover"` the document's insets are its own, not a
-    /// sheet's: a sheet's route is covered for the sheet's whole safe area
-    /// (its inline bar, the home indicator of an edge-attached sheet), not
-    /// for what is left of it after the document's insets, which would leave
-    /// the route under its bar. A route in the document is still covered
-    /// only past the insets the page pads with itself.
+    /// A route is cleared for its own safe area (LLP 1123 D3), a sheet's
+    /// route for the sheet's (its inline bar, the home indicator of an
+    /// edge-attached sheet), and a route in a page under
+    /// `viewport-fit="cover"` for the whole of its own too: the kernel
+    /// credits padding that reads `env()` on the route, so the document's
+    /// insets are no longer taken off here.
     func testASheetsRouteIsCoveredForItsOwnSafeArea() {
-        let cover = UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0)
         let edges = { (safe: UIEdgeInsets, presented: Bool, whole: Bool, reached: CGFloat) in
-            NavigationHost.routeEdges(safe: safe, document: cover, presented: presented, whole: whole, covered: !presented && !whole,
-                                      collapses: false, reached: reached)
+            NavigationHost.routeEdges(safe: safe, whole: whole, covered: !presented && !whole, collapses: false, reached: reached)
         }
         XCTAssertEqual(edges(UIEdgeInsets(top: 44, left: 0, bottom: 0, right: 0), true, true, 0),
                        .init(top: 44, right: 0, bottom: 0, left: 0), "a floating sheet's inline bar")
         XCTAssertEqual(edges(UIEdgeInsets(top: 56, left: 0, bottom: 34, right: 0), true, true, 34),
                        .init(top: 56, right: 0, bottom: 34, left: 0), "an edge-attached sheet's bar and home indicator")
         XCTAssertEqual(edges(UIEdgeInsets(top: 106, left: 0, bottom: 34, right: 0), false, false, 34),
-                       .init(top: 44, right: 0, bottom: 0, left: 0), "a route in the document: its bar past the status bar the page pads for")
-        // A tab's route under `viewport-fit="cover"`: the tab bar past the home indicator env() has, the bar's 49.
+                       .init(top: 106, right: 0, bottom: 34, left: 0), "a route in a covered page: its whole safe area, credited by the kernel")
         XCTAssertEqual(edges(UIEdgeInsets(top: 106, left: 0, bottom: 83, right: 0), false, false, 83),
-                       .init(top: 44, right: 0, bottom: 49, left: 0), "a covered page's route still clears the tab bar, which its env() does not hold")
-        XCTAssertEqual(NavigationHost.routeEdges(safe: UIEdgeInsets(top: 106, left: 0, bottom: 83, right: 0), document: .zero, presented: false, whole: true,
+                       .init(top: 106, right: 0, bottom: 83, left: 0), "a covered page's tab route clears the tab bar and the home indicator")
+        XCTAssertEqual(NavigationHost.routeEdges(safe: UIEdgeInsets(top: 106, left: 0, bottom: 83, right: 0), whole: true,
                                                  collapses: false, reached: 83),
                        .init(top: 106, right: 0, bottom: 83, left: 0), "the whole view's route: the bar and the status bar")
     }

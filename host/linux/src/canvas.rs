@@ -33,7 +33,8 @@
 //!   fontique synthesized (a face with neither axis)
 //! - `11 IMAGE_DEF id w h` — fetch its pixels with [`CanvasHost::image`]
 //! - `12 IMAGE_FREE id`
-//! - `13 STROKE color width cap join n (tag coords…)×n` — caps/joins as SVG (0 butt/miter, 1 round, 2 square/bevel)
+//! - `13 STROKE color width cap join miter n (tag coords…)×n` — caps/joins as SVG (0 butt/miter, 1 round,
+//!   2 square/bevel), `miter` the miter limit (`stroke-miterlimit`)
 //! - `14 IMAGE_RRECT id dst(x y w h) region(x y w h) radii×8` — the picture mapped to `dst`, drawn
 //!   only over `region` with those corner radii (a clip-free rounded image; `clip.rs`)
 //! - `26 ANIMATED id len utf8-path(padded to 4)` — after `IMAGE_DEF`: the picture is a GIF's or
@@ -235,6 +236,8 @@ use undrawn::{path_bounds, undrawn};
 #[cfg(target_os = "android")]
 #[path = "canvas/surface.rs"]
 mod surface;
+#[path = "canvas/svg.rs"]
+mod svg;
 #[cfg(target_os = "android")]
 #[path = "canvas/tamber.rs"]
 mod tamber;
@@ -690,44 +693,7 @@ impl Backend for Recorder {
     }
 
     fn svg_path(&mut self, s: &crate::paint::SvgPaint<'_>, ts: Transform) {
-        let ops: Vec<PathOp> = s
-            .path
-            .0
-            .iter()
-            .map(|seg| match *seg {
-                exact_kernel::svg::Seg::Move(x, y) => PathOp::Move(x, y),
-                exact_kernel::svg::Seg::Line(x, y) => PathOp::Line(x, y),
-                exact_kernel::svg::Seg::Cubic(a, b, c, d, x, y) => PathOp::Cubic(a, b, c, d, x, y),
-                exact_kernel::svg::Seg::Close => PathOp::Close,
-            })
-            .collect();
-        let grow = if s.stroke.is_some() { s.width } else { 0.0 };
-        self.need(path_bounds(&ops).and_then(|(x, y, w, h)| {
-            self.on_page((x - grow, y - grow, w + 2.0 * grow, h + 2.0 * grow), ts)
-        }));
-        self.transform(ts);
-        if let Some(c) = s.fill.as_ref().and_then(|ink| self.ink(ink)) {
-            self.ops.extend([PATH, c, u32::from(s.even_odd)]);
-            self.path(&ops);
-        }
-        // A gradient's SHADER goes before the DASH, which the reader keeps
-        // as it does a shader until the STROKE.
-        if let Some(c) = s.stroke.as_ref().and_then(|ink| self.ink(ink)) {
-            if !s.dash.is_empty() {
-                self.ops.push(DASH);
-                // A layer playing the dash offset finds its phase here.
-                self.layers.note_dash(self.ops.len());
-                self.f(s.phase);
-                self.ops.push(s.dash.len() as u32);
-                for d in &s.dash {
-                    self.f(*d);
-                }
-            }
-            self.ops.extend([STROKE, c]);
-            self.f(s.width);
-            self.ops.extend([u32::from(s.cap), u32::from(s.join)]);
-            self.path(&ops);
-        }
+        self.svg_shape(s, ts);
     }
 
     fn push_clip(&mut self, s: &Shape, ts: Transform) {

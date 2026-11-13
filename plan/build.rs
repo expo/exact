@@ -57,6 +57,10 @@ struct StdlibEntry {
     /// no call can write (LLP 1116 D8: `formatNumber`'s currency code).
     #[serde(default)]
     optional: Vec<String>,
+    /// Whether a call carries the format locale after its parameters, a
+    /// string the compiler fills and no call writes (LLP 1054.000.003 D6).
+    #[serde(default)]
+    locale: bool,
     returns: String,
 }
 
@@ -591,11 +595,31 @@ fn main() {
         let _ = writeln!(w, "    /// From the declared name.");
         let _ = writeln!(w, "    pub fn from_name(s: &str) -> Option<Self> {{ Self::ALL.into_iter().find(|v| v.name() == s) }}");
         if name == "Stdlib" {
-            let _ = writeln!(w, "    /// Declared argument count.");
             let _ = writeln!(
                 w,
-                "    pub fn arity(self) -> usize {{ self.params().len() }}"
+                "    /// The plan's argument count: the declared parameters, then the\n    /// format locale of a [`Stdlib::localized`] entry."
             );
+            let _ = writeln!(
+                w,
+                "    pub fn arity(self) -> usize {{ self.params().len() + usize::from(self.localized()) }}"
+            );
+            let _ = writeln!(
+                w,
+                "    /// Whether a call carries the format locale as its last argument, which\n    /// the compiler fills and no call writes (LLP 1054.000.003 D6)."
+            );
+            let _ = writeln!(w, "    pub fn localized(self) -> bool {{ {} }}", {
+                let names: Vec<String> = schema
+                    .stdlib
+                    .iter()
+                    .filter(|f| f.locale)
+                    .map(|f| format!("Stdlib::{}", pascal(&f.name)))
+                    .collect();
+                if names.is_empty() {
+                    "false".to_string()
+                } else {
+                    format!("matches!(self, {})", names.join(" | "))
+                }
+            });
             let _ = writeln!(
                 w,
                 "    /// Declared parameter types, as the table spells them."
@@ -620,7 +644,7 @@ fn main() {
             );
             let _ = writeln!(
                 w,
-                "    pub fn min_arity(self) -> usize {{ self.arity() - self.defaults().len() }}"
+                "    pub fn min_arity(self) -> usize {{ self.params().len() - self.defaults().len() }}"
             );
             let _ = writeln!(
                 w,
@@ -654,7 +678,7 @@ fn main() {
             );
             let _ = writeln!(
                 w,
-                "    pub fn omitted(self, given: usize) -> &'static [StdlibDefault] {{ let d = self.defaults(); &d[(given + d.len()).saturating_sub(self.arity()).min(d.len())..] }}"
+                "    pub fn omitted(self, given: usize) -> &'static [StdlibDefault] {{ let d = self.defaults(); &d[(given + d.len()).saturating_sub(self.params().len()).min(d.len())..] }}"
             );
             let _ = writeln!(w, "    /// Declared return type, as the table spells it.");
             let _ = writeln!(

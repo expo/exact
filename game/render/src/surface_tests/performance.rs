@@ -17,6 +17,16 @@ fn contract_performance_is_opt_in_and_does_not_change_simulation() {
     assert_eq!(report["pixelWidth"], 64);
     assert_eq!(report["pixelHeight"], 64);
     assert!(report["draws"].as_u64().unwrap() > 0);
+    assert!(report["geometryMemoryBytes"].as_u64().unwrap() > 0);
+    assert!(report.get("textureMemoryBytes").is_some());
+    assert!(
+        report.get("thermalState").is_none(),
+        "the fixture's host says none"
+    );
+    assert!(
+        report.get("audioState").is_none(),
+        "the fixture links no audio"
+    );
     assert!(report.get("gpuMs").is_none());
     assert!(report.get("fps").is_none());
     assert!(report.get("windowMs").is_none());

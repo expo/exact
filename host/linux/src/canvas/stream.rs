@@ -83,7 +83,7 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
             len + 1 + words(*b.get(len)? as usize)
         }
         IMAGE_DEF => i + 4,
-        STROKE => path(i + 5)?,
+        STROKE => path(i + 6)?,
         IMAGE_RRECT => i + 18,
         DASH => i + 3 + at(2)?,
         clip::CLIP_UNION => i + 2 + at(1)?,

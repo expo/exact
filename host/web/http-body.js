@@ -195,7 +195,7 @@ function upload(url, method, headers, body, limit, message, signal, admits) {
   });
 }
 
-// A long poll (LLP 1016.000 D8), as the native executor's executor_longpoll.rs:
+// A long poll (LLP 1016.000 D8), as the native executor's longpoll.rs:
 // ask, deliver each 2xx JSON reply as one message whose `id` is the cursor at
 // `from`, and ask again with it in the `cursor` query parameter, one request
 // at a time. A 204, a 304, an empty body or (unless `sameCursorEvent`) the
@@ -235,7 +235,7 @@ export function longPollRefusal(op, method, body) {
 }
 // `url` with query parameter `name` set to `value`, where it is or else appended, every other
 // pair kept byte for byte, as the native hosts' `with_query_value` does
-// (host/apple/src/executor_longpoll.rs). `URLSearchParams.set` would re-serialise the whole
+// (host/executor/src/longpoll.rs). `URLSearchParams.set` would re-serialise the whole
 // query as a form: `/` as `%2F`, `%20` as `+`, a bare `flag` as `flag=`.
 const unreserved = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 // A pair's name decoded as a form's is (`+` a space, a leading U+FEFF kept); a serialised URL's query is ASCII.

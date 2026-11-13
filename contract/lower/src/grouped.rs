@@ -162,72 +162,22 @@ fn attr(name: &str, value: Expr, span: Span) -> Attr {
 
 /// Remove the grouped-row sheet from a native button's face (LLP 1069.011 D5).
 pub(crate) fn unsheet(children: &[Node]) -> Option<Vec<Node>> {
-    fn strip(node: &Node) -> Node {
-        match node {
-            Node::Element {
-                tag,
-                positional,
-                attrs,
-                children,
-                span,
-                instance,
-            } => Node::Element {
-                tag: tag.clone(),
-                positional: positional.clone(),
-                attrs: attrs
-                    .iter()
-                    .filter(|a| !a.name.starts_with(MARK))
-                    .cloned()
-                    .collect(),
-                children: children.iter().map(strip).collect(),
-                span: *span,
-                instance: *instance,
-            },
-            Node::When {
-                tag,
-                cond,
-                then,
-                otherwise,
-                span,
-            } => Node::When {
-                tag: *tag,
-                cond: cond.clone(),
-                then: then.iter().map(strip).collect(),
-                otherwise: otherwise.iter().map(strip).collect(),
-                span: *span,
-            },
-            Node::Match {
-                tag,
-                subject,
-                some,
-                none,
-                span,
-            } => Node::Match {
-                tag: *tag,
-                subject: subject.clone(),
-                some: (some.0.clone(), some.1.iter().map(strip).collect()),
-                none: none.iter().map(strip).collect(),
-                span: *span,
-            },
-            other => other.clone(),
+    fn strip(node: &mut Node) {
+        if let Node::Element { attrs, .. } = node {
+            attrs.retain(|a| !a.name.starts_with(MARK));
+        }
+        for list in node.child_lists_mut() {
+            list.iter_mut().for_each(strip);
         }
     }
-    fn marked(node: &Node) -> bool {
-        match node {
-            Node::Element {
-                attrs, children, ..
-            } => attrs.iter().any(|a| a.name.starts_with(MARK)) || children.iter().any(marked),
-            Node::When {
-                then, otherwise, ..
-            } => then.iter().chain(otherwise).any(marked),
-            Node::Match { some, none, .. } => some.1.iter().chain(none).any(marked),
-            _ => false,
-        }
-    }
-    children
-        .iter()
-        .any(marked)
-        .then(|| children.iter().map(strip).collect())
+    let marked = Node::walk(children).any(|node| {
+        matches!(node, Node::Element { attrs, .. } if attrs.iter().any(|a| a.name.starts_with(MARK)))
+    });
+    marked.then(|| {
+        let mut children = children.to_vec();
+        children.iter_mut().for_each(strip);
+        children
+    })
 }
 
 /// An element's sheet rows, unmarked, and its other attributes when it has

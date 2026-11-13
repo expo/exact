@@ -46,4 +46,35 @@ impl Dimension {
             _ => length(added),
         }
     }
+
+    /// [`Self::floor_lp`] for a padding that clears an inset itself (LLP
+    /// 1123 D3's credit): at least `least` points, the padding where it is
+    /// more, so `max(<padding>, <least>px)` as layout resolves it.
+    pub(crate) fn floor_lp_at_least(
+        &self,
+        env: &Env,
+        least: f32,
+    ) -> taffy::style::LengthPercentage {
+        let text = match self.resolve(env) {
+            Dimension::Points(v) => return length(v.max(0.0).max(least)),
+            Dimension::Percent(p) => format!("{}%", exact_num::Shortest(f64::from(p))),
+            Dimension::Calc(p, v) => format!(
+                "calc({}% + {}px)",
+                exact_num::Shortest(f64::from(p)),
+                exact_num::Shortest(f64::from(v))
+            ),
+            Dimension::Compare(c) => {
+                let mut text = String::new();
+                c.css(&mut text);
+                text
+            }
+            _ => return length(least),
+        };
+        let least = exact_num::Shortest(f64::from(least));
+        match Dimension::parse_calc(&format!("max({text}, {least}px)")) {
+            Some(Dimension::Points(v)) => length(v.max(0.0)),
+            Some(d) => d.floor_lp(env, 0.0),
+            None => self.floor_lp(env, 0.0),
+        }
+    }
 }

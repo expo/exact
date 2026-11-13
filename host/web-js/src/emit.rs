@@ -132,6 +132,8 @@ struct Em<'a> {
     flow: bool,
     /// Whether a virtualized list is in the plan (`list.js` is imported).
     list: bool,
+    /// Whether an ordinary scroller takes `scrollFollowEnd` (`follow.js` is imported).
+    follow: bool,
     /// Whether a `video` or `audio` is in the plan (`media.js` is installed).
     media: bool,
     /// Whether an image draws a symbol (`symbols.js`), and whether a
@@ -239,6 +241,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         editor: false,
         flow: false,
         list: false,
+        follow: false,
         media: false,
         symbols: (false, false),
         heights: Default::default(),
@@ -343,6 +346,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             slot.0
         );
         commands::locale_slot(plan, &mut body, slot.0);
+        commands::format_slot(plan, &mut body, slot.0);
     }
     // Slots, in order: an initializer reads only earlier slots.
     for (i, r) in plan.slots.iter().enumerate() {
@@ -350,8 +354,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             || r.late
             || plan.router == Some(exact_plan::SlotsId(i as u32))
             || plan.locale == Some(exact_plan::SlotsId(i as u32))
+            || plan.format == Some(exact_plan::SlotsId(i as u32))
         {
-            continue; // an owned slot lives on its instance; a late one, the router and locale elsewhere
+            continue; // an owned slot lives on its instance; a late one, the router, locale and format elsewhere
         }
         root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
     }
@@ -785,6 +790,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (!commands.is_empty(), commands_import.as_str()),
             (paint, "import{paintUse as $paint}from\"./paint.js\";"),
             (em.list, "import{vl as $vl}from\"./list.js\";"),
+            (em.follow, "import\"./follow.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),
             (midi, "import{midi as $midi}from\"./midi.js\";"),
@@ -794,6 +800,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (modes.is_some(), "import{modes as $modes,Sx}from\"./modes.js\";"),
             (plan.slots.iter().any(|s| s.persist), "import{stored as $stored,keep as $keep}from\"./persist.js\";"),
             (exact_runner::uses::chooses_locale(plan), "import{localeSlot as $localeSlot,setLocale as $setLocale}from\"./chosen.js\";"),
+            (plan.format.is_some(), "import{formats as $formats,formatSlot as $formatSlot}from\"./format-locale.js\";"),
         ]
         .iter()
         .filter(|(on, _)| *on)
@@ -1107,6 +1114,9 @@ impl Em<'_> {
             let _ = write!(self.out, "{register}({e});");
         }
         self.element_extras(&parts.tag, &e, &attrs, &parts.props);
+        if !virtualized {
+            self.end_follow(i, &e, parts.props.get("scrollFollowEnd"));
+        }
         // Its surface's inputs, named or positional (LLP 1009 D2).
         if let Some(sf) = row.surface {
             let sf = &plan.surfaces[sf.0 as usize];

@@ -267,6 +267,8 @@ class AlarmService : Service() {
     }
 
     private val ringing = LinkedHashMap<String, Int>()
+    /** Each ringing tag's pending stop at [LIMIT]. */
+    private val limits = HashMap<String, Runnable>()
     private var player: MediaPlayer? = null
     private var foregroundCode = 0
     private val main = Handler(Looper.getMainLooper())
@@ -303,7 +305,11 @@ class AlarmService : Service() {
         waking?.let { if (it.isHeld) it.release() }
         waking = null
         play()
-        main.postDelayed({ if (tag in ringing) AlarmRing.stop(this, tag).also { AlarmsModule.changed() } }, LIMIT)
+        // The ring's own limit, which goes when the ring ends ([end]): a tag rung again after a snooze or a repeat
+        // gets a limit of its own while another ring keeps the service alive.
+        val limit = Runnable { AlarmRing.stop(this, r.tag).also { AlarmsModule.changed() } }
+        limits[r.tag] = limit
+        main.postDelayed(limit, LIMIT)
         return START_NOT_STICKY
     }
 
@@ -343,6 +349,7 @@ class AlarmService : Service() {
     /** One tag's ring ends; the service ends with the last. */
     fun end(tag: String) {
         val code = ringing.remove(tag) ?: return
+        limits.remove(tag)?.let(main::removeCallbacks)
         getSystemService(NotificationManager::class.java).cancel(code)
         if (ringing.isEmpty()) {
             stopForeground(STOP_FOREGROUND_REMOVE)

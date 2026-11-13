@@ -99,8 +99,9 @@ internal class Bounds {
                 11 -> i += 4
                 12 -> i += 2
                 13 -> {
-                    val w = f(b, i + 2) * 2f + 1f
-                    val e = path(b, i + 5, local); if (local.left <= local.right) add(out, local.left - w, local.top - w, local.right + w, local.bottom + w); i = e
+                    // A miter's tip reaches half the miter limit times the width from its corner.
+                    val w = f(b, i + 2) * maxOf(2f, f(b, i + 5) / 2f) + 1f
+                    val e = path(b, i + 6, local); if (local.left <= local.right) add(out, local.left - w, local.top - w, local.right + w, local.bottom + w); i = e
                 }
                 14 -> { add(out, f(b, i + 6), f(b, i + 7), f(b, i + 6) + f(b, i + 8), f(b, i + 7) + f(b, i + 9)); i += 18 }
                 15 -> i += 6 + b.get(i + 5)

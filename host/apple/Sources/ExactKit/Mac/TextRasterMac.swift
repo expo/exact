@@ -40,6 +40,67 @@ final class TextRasterizer {
     /// A freed slot resumes admission even when its pixels were discarded.
     var slotFreed: (() -> Void)?
 
+    /// Completed surfaces are immutable and may back several layers. Keep only
+    /// small paragraphs, charging their IOSurface allocations and key text.
+    /// Ordinary rasters start at 64 KiB of pixels; 256 KiB leaves room for labels
+    /// and allocation alignment without retaining whole document paragraphs.
+    private struct Kept {
+        let image: TextRasterImage
+        let bytes: Int
+        var used: UInt64
+    }
+    private var kept: [TextRasterKey: Kept] = [:]
+    private var keptBytes = 0
+    private var keptClock: UInt64 = 0
+    private weak var keptEngine: TextEngine?
+    private var keptNamespace = -1
+    private static let keptLimit = 4 * 1024 * 1024
+    private static let keptEntryLimit = 256 * 1024
+
+    private func keptImage(_ key: TextRasterKey, engine: TextEngine) -> TextRasterImage? {
+        if keptEngine !== engine || keptNamespace != engine.namespace {
+            kept.removeAll(); keptBytes = 0
+            keptEngine = engine; keptNamespace = engine.namespace
+        }
+        guard var hit = kept[key] else { return nil }
+        keptClock += 1
+        hit.used = keptClock; kept[key] = hit
+        return hit.image
+    }
+
+    private func keep(_ image: TextRasterImage?, for key: TextRasterKey, engine: TextEngine, namespace: Int) -> TextRasterImage? {
+        // A late worker cannot repopulate an obsolete font catalog or line scale.
+        guard let image, keptEngine === engine, namespace == keptNamespace, namespace == engine.namespace else { return image }
+        if let shared = keptImage(key, engine: engine) { return shared }
+        let text = key.spec.runs.reduce(0) { $0 + $1.text.utf8.count }
+        let bytes = image.surface.allocationSize + (image.cast?.allocationSize ?? 0) + text
+        guard bytes <= Self.keptEntryLimit else { return image }
+        keptClock += 1
+        kept[key] = Kept(image: image, bytes: bytes, used: keptClock)
+        keptBytes += bytes
+        if keptBytes > Self.keptLimit {
+            for (key, entry) in kept.sorted(by: { $0.value.used < $1.value.used }) {
+                kept.removeValue(forKey: key); keptBytes -= entry.bytes
+                if keptBytes <= Self.keptLimit * 3 / 4 { break }
+            }
+        }
+        return image
+    }
+
+    private func begin(_ node: NodeView, key: TextRasterKey) {
+        node.textRasterKey = key
+        node.textRasterReady = false
+        node.textRasterFailed = false
+        node.textRasterPending = false
+    }
+
+    private func reuse(_ node: NodeView, key: TextRasterKey, deferOffscreen: Bool = false) -> Bool {
+        guard let engine = node.text, let image = keptImage(key, engine: engine) else { return false }
+        begin(node, key: key)
+        node.showTextRaster(image.surface, for: key, frame: image.frame, cast: image.cast, deferOffscreen: deferOffscreen)
+        return true
+    }
+
     private func key(_ node: NodeView) -> TextRasterKey {
         TextRasterKey(spec: node.paragraphSpec(), size: node.bounds.size,
                       box: node.paragraphBox(), scale: node.pixelScale ?? 2)
@@ -50,10 +111,7 @@ final class TextRasterizer {
         let measured = engine.measuredBreaks(key.spec, width: key.box.width)
         let paragraph = measured == nil ? node.paragraphLayout() : nil
         guard let geometry = measured ?? paragraph.map(LineGeometry.init) else { return nil }
-        node.textRasterKey = key
-        node.textRasterReady = false
-        node.textRasterFailed = false
-        node.textRasterPending = false
+        begin(node, key: key)
         let source = paragraph?.shape?.attributed ?? engine.attributed(key.spec)
         return TextRasterJob(source: source.copy() as! NSAttributedString,
                    ranges: geometry.ranges, baselines: geometry.baselines,
@@ -75,12 +133,15 @@ final class TextRasterizer {
             if node.textRasterReady && node.textRasterPending { node.presentTextRaster() }
             return true
         }
+        if reuse(node, key: key, deferOffscreen: !urgent) { return true }
+        guard let engine = node.text else { node.dropTextRaster(); return true }
+        let namespace = engine.namespace
         let firstPixels = urgent && node.textRaster == nil && !node.textRasterUsesStrips
         guard firstPixels || active < Self.maxConcurrent else { return false }
         guard let job = prepare(node, key: key) else { node.dropTextRaster(); return true }
         if firstPixels {
             let lines = job.measuredGlyphs == nil ? node.text?.rasterLines(key.spec, ranges: job.ranges, width: key.box.width).1 : nil
-            let image = Self.render(job, firstPixels: true, lines: lines)
+            let image = keep(Self.render(job, firstPixels: true, lines: lines), for: key, engine: engine, namespace: namespace)
             node.showTextRaster(image?.surface, for: key, frame: image?.frame, cast: image?.cast)
             return true
         }
@@ -88,9 +149,16 @@ final class TextRasterizer {
         active += 1
         RegionTextExecutor.queue.addOperation { [weak self, weak node] in
             let image = Self.render(job)
-            DispatchQueue.main.async { [weak self, weak node] in
+            DispatchQueue.main.async { [weak self, weak node, weak engine] in
                 self?.active -= 1
-                node?.showTextRaster(image?.surface, for: key, frame: image?.frame, cast: image?.cast, deferOffscreen: true)
+                if let self, let engine, engine.namespace == namespace {
+                    let image = self.keep(image, for: key, engine: engine, namespace: namespace)
+                    if node?.text === engine {
+                        node?.showTextRaster(image?.surface, for: key, frame: image?.frame, cast: image?.cast, deferOffscreen: true)
+                    }
+                } else if let node, node.textRasterKey == key, !node.textRasterReady {
+                    node.invalidateText()
+                }
                 self?.slotFreed?()
             }
         }
@@ -111,13 +179,21 @@ final class TextRasterizer {
     }
     private var replacing = false
 
+    private struct Paint {
+        let node: NodeView
+        let key: TextRasterKey
+        let job: TextRasterJob
+        let engine: TextEngine
+        let namespace: Int
+    }
+
     /// New geometry and its pixels become visible in one transaction. Spend
     /// at most a quarter frame waiting; on timeout AppKit draws the new-width
     /// visible strips in this display pass. No stale line breaks cross a frame.
     /// A live resize skips full rasters when at least half their pixels are hidden.
     @discardableResult
     func replaceVisible(_ nodes: [NodeView], wait: TimeInterval) -> Bool {
-        var jobs: [(NodeView, TextRasterKey, TextRasterJob)] = []
+        var jobs: [Paint] = []
         var deferred = false
         for node in nodes where node.needsTextRaster && node.canRasterText && (node.textRaster != nil || node.textRasterUsesStrips) {
             let key = key(node)
@@ -127,6 +203,7 @@ final class TextRasterizer {
             }
             let visible = node.presenter?.textIsVisible(node) == true
             guard visible else { continue }
+            if reuse(node, key: key) { continue }
             let port = node.presenter?.textScrollportRect(node) ?? node.visibleRect
             if replacing || active > 0 || (node.inLiveResize && port.height < node.bounds.height * 0.5) {
                 node.useTextStrips()
@@ -135,7 +212,9 @@ final class TextRasterizer {
                 deferred = deferred || active == 0
                 continue
             }
-            if let job = prepare(node, key: key) { jobs.append((node, key, job)) }
+            if let engine = node.text, let job = prepare(node, key: key) {
+                jobs.append(Paint(node: node, key: key, job: job, engine: engine, namespace: engine.namespace))
+            }
         }
         guard !jobs.isEmpty else { return deferred }
         replacing = true
@@ -148,7 +227,7 @@ final class TextRasterizer {
             result.group.enter()
             RegionTextExecutor.queue.addOperation {
                 for index in stride(from: lane, to: work.count, by: workers) {
-                    result.put(Self.render(work[index].2), at: index)
+                    result.put(Self.render(work[index].job), at: index)
                 }
                 result.group.leave()
             }
@@ -161,8 +240,12 @@ final class TextRasterizer {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for (index, entry) in jobs.enumerated() {
-                let image = result.images[index]
-                entry.0.showTextRaster(image?.surface, for: entry.1, frame: image?.frame, cast: image?.cast)
+                guard entry.node.text === entry.engine, entry.engine.namespace == entry.namespace else {
+                    if entry.node.textRasterKey == entry.key, !entry.node.textRasterReady { entry.node.invalidateText() }
+                    continue
+                }
+                let image = self?.keep(result.images[index], for: entry.key, engine: entry.engine, namespace: entry.namespace)
+                entry.node.showTextRaster(image?.surface, for: entry.key, frame: image?.frame, cast: image?.cast)
             }
             CATransaction.commit()
             self?.slotFreed?()
@@ -170,7 +253,7 @@ final class TextRasterizer {
         if result.group.wait(timeout: .now() + max(0, wait)) == .success {
             publish()
         } else {
-            for (node, _, _) in jobs { node.useTextStrips() }
+            for entry in jobs { entry.node.useTextStrips() }
             result.group.notify(queue: .main, execute: publish)
         }
         return deferred

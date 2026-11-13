@@ -986,9 +986,15 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         // `scroll-behavior: smooth` (CSS) animates a prop write, never a
         // reader's own scroll. Under the agent's frozen clock it lands at once,
         // so `layout` reads the target.
+        // It holds the scroller's `scrollend`, and owns its offset, until it lands, as a reveal does.
         if style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes {
-            NSAnimationContext.runAnimationGroup({ _ in sv.contentView.animator().setBoundsOrigin(target) },
-                                                 completionHandler: { sv.reflectScrolledClipView(sv.contentView) })
+            let token = UUID(), end = scrollEnd ?? ScrollEnd()
+            scrollEnd = end; end.elementAnimation = token; end.hold()
+            NSAnimationContext.runAnimationGroup({ _ in sv.contentView.animator().setBoundsOrigin(target) }, completionHandler: { [weak self] in
+                sv.reflectScrolledClipView(sv.contentView)
+                guard end.elementAnimation == token else { return }
+                end.elementAnimation = nil; self?.endScroll()
+            })
         } else {
             sv.contentView.scroll(to: target)
             sv.reflectScrolledClipView(sv.contentView)

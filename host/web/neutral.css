@@ -537,6 +537,10 @@
   :where(#exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])) { color: var(--exact-label); }
   /* Every browser uses the same sheet ground; an authored ground still wins. */
   #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { background-color: var(--exact-background); position: fixed !important; inset: calc(env(safe-area-inset-top, 0px) + 12px) 0 0 !important; margin: 0 !important; box-sizing: border-box !important; width: auto !important; height: auto !important; max-height: none !important; z-index: 1; border-radius: calc(12px * var(--exact-curve-reach)) calc(12px * var(--exact-curve-reach)) 0 0; corner-shape: var(--exact-curve); overflow: clip; box-shadow: 0 0 0 100vmax var(--exact-scrim); transition: translate .4s cubic-bezier(.32, .72, 0, 1), box-shadow .4s cubic-bezier(.32, .72, 0, 1); }
+  /* Its content reads the sheet's own insets (LLP 1123 D9): none at its top, below the status bar; a wide
+     window's card, clear of every edge, has none at all. */
+  #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { --exact-safe-area-inset-top: 0px; }
+  @media (min-width: 900px) { #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { --exact-safe-area-inset-right: 0px; --exact-safe-area-inset-bottom: 0px; --exact-safe-area-inset-left: 0px; } }
   @starting-style { #exact-root [navigationPresentation="modal"] { translate: 0 100vh; box-shadow: 0 0 0 100vmax transparent; } }
   @media (prefers-reduced-motion: reduce) { #exact-root [navigationPresentation="modal"] { transition: none; } }
   /* A route pushed inside a sheet (`data-exact-in-sheet`, navigation.js `sheetAt`) takes the sheet's frame, as a

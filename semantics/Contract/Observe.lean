@@ -224,7 +224,8 @@ def lines (p : Program) (label : String) (c : Config) (out : Outcome) (commandsB
   | _ =>
     if c.poisoned then head else
     head ++
-    ((c.slots.filter fun (x, _) => p.locale != .some x).map fun (x, v) => "slot " ++ x ++ " " ++ value v) ++
+    ((c.slots.filter fun (x, _) => p.locale != .some x && x != Format.formatSlot).map fun (x, v) =>
+      "slot " ++ x ++ " " ++ value v) ++
     ((p.states.filter (·.persist)).filterMap fun st => (lookup st.name c.slots).map fun v =>
       "store " ++ st.name ++ " " ++ value v) ++
     (p.derives.filterMap fun d => (lookup d.name c.settled.derives).map fun v =>

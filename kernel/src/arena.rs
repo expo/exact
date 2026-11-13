@@ -1379,7 +1379,8 @@ mod tests {
             (StyleId::FontSmoothing, text("antialiased")),
         ];
         let mut covered = StyleMask::EMPTY;
-        for (id, value) in samples {
+        let insets = crate::kernel::owner::OVERRIDES.map(|id| (id, number(8.0)));
+        for (id, value) in samples.into_iter().chain(insets) {
             covered.set(id);
             let mut arena = NodeArena::new();
             let root = arena.alloc(1, NodeType::View).unwrap();

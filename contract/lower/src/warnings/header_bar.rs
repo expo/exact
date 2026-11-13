@@ -207,20 +207,19 @@ pub(super) const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\
 /// as written: `lower-header-no-bar`'s (LLP 1116.003 D2.2). With none, the
 /// bar has no title and takes the header only when it places all of it
 /// (`exact_kernel::bars`, issue #364).
-/// An `if` first among the route's children is read branch by branch: a branch's first node
-/// is the route's first child while it is taken, and `after` the route's nodes past that `if`.
+/// An `if` or a `match` first among the route's children is read branch by branch: a
+/// branch's first node is the route's first child while it is taken, and `after` the
+/// route's nodes past that choice.
 pub(super) fn route_header<'a>(
     children: &'a [Node],
     after: &[&'a Node],
     out: &mut Vec<LowerError>,
 ) {
-    if let Some(Node::When {
-        then, otherwise, ..
-    }) = children.first()
-    {
+    if let Some(choice @ (Node::When { .. } | Node::Match { .. })) = children.first() {
         let rest: Vec<&Node> = children[1..].iter().chain(after.iter().copied()).collect();
-        route_header(then, &rest, out);
-        route_header(otherwise, &rest, out);
+        for branch in choice.child_lists() {
+            route_header(branch, &rest, out);
+        }
         return;
     }
     let Some(header @ Node::Element { tag, attrs, .. }) = children.first() else {

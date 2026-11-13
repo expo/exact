@@ -2,21 +2,22 @@
 //! (grant-checked transport, ordered and independent lanes, continuations on
 //! its workers), with a wake the rendering thread waits on instead of a UI
 //! loop. Dropping it aborts whatever is still in flight.
+pub use exact_executor::pump;
+use exact_executor::{Core, StreamHost, WorkerBudget};
 use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
-#[path = "../../apple/src/executor_core.rs"]
-#[allow(dead_code)] // `run` is the core's own tests' entry
-mod core;
-#[path = "../../apple/src/executor_pump.rs"]
-pub mod pump;
 /// Each test thread shares a worker budget among its servers and renders. The
 /// dev-dependency enables this for integration tests; production shares one process bound.
-const ISOLATE_WORKER_BUDGET: bool = cfg!(any(test, feature = "test-budget"));
+const BUDGET: WorkerBudget = if cfg!(any(test, feature = "test-budget")) {
+    WorkerBudget::Thread
+} else {
+    WorkerBudget::Process
+};
 
 /// The native core with a condition variable for its wake.
 pub struct Executor {
-    core: core::Core,
+    core: Core,
     wake: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -30,7 +31,7 @@ impl Executor {
         // `EXACT_RENDER_TRANSPORT=platform` keeps the platform's (a check
         // against the platform, or a way back).
         let platform = std::env::var("EXACT_RENDER_TRANSPORT").as_deref() == Ok("platform");
-        let transport: core::StreamHost = if platform {
+        let transport: StreamHost = if platform {
             Arc::new(ibex2::host::Host::new)
         } else {
             Arc::new(|| {
@@ -54,7 +55,7 @@ impl Executor {
             .map(|g| host.endow(g));
         let wake = Arc::new((Mutex::new(false), Condvar::new()));
         let signal = wake.clone();
-        let core = core::Core::start_on(
+        let core = Core::start_on(
             bindings,
             grants,
             Box::new(move || {
@@ -64,6 +65,7 @@ impl Executor {
                 ready.notify_all();
             }),
             transport,
+            BUDGET,
         );
         Self { core, wake }
     }

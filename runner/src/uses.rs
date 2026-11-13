@@ -288,8 +288,9 @@ pub fn uses(plan: &Plan) -> Uses {
     if plan.router.is_some() {
         uses = uses.with(Capability::Router);
     }
-    // Kept answers and surface records both need the host's store.
-    if plan.resources.iter().any(|r| r.reader || r.keep) {
+    // Kept answers and surface records both need the host's store, and a
+    // declared source its network (LLP 1162.001 D3).
+    if plan.resources.iter().any(|r| r.reader || r.keep) || !plan.fetches.is_empty() {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -562,6 +563,9 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
                         | Stdlib::FormatDecimal
                         | Stdlib::FormatDay,
                     ) => format = true,
+                    // The core formats `en-US`; another locale's time is
+                    // the capability's (LLP 1054.000.003 D6).
+                    Some(Stdlib::FormatTime) if plan.format.is_some() => format = true,
                     Some(
                         Stdlib::Frame
                         | Stdlib::RangeFrame

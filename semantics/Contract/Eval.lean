@@ -94,24 +94,51 @@ def indexOfOf : Value → Value → Result Value
   | .list xs, x => .ok (.num (positionOf (xs.findIdx? (Value.strictEq · x))))
   | _, _ => .error (.type "`indexOf` of arguments it does not take")
 
-/-- A format entry on evaluated arguments. A style the compiler would have
-refused is refused as unsupported. -/
-def formatting (f : String) (args : List Value) : Result Value :=
+/-- A localized entry's string in the format locale `loc`, from the record
+of the table it names among `tables` (`Format.recordOf`); refused as
+unsupported when no table has one, or `k` refuses its arguments. -/
+def inLocale (tables : Format.Tables) (loc : String)
+    (k : Format.Record → Option String → Option String) : Result Value :=
+  match (Format.recordOf tables loc).bind fun (r, c) => k r c with
+  | .some s => .ok (.str s)
+  | .none => .error (.unsupported s!"a format in `{loc}`, which no table's format data names")
+
+/-- A format entry on evaluated arguments, a localized entry's format
+locale last (LLP 1054.000.003 D6): `""` is `en-US`, another a table's data.
+A style the compiler would have refused is refused as unsupported. -/
+def formatting (tables : Format.Tables) (f : String) (args : List Value) : Result Value :=
   match f, args with
-  | "formatTime", [.num e, .num o, .str "short"] => .ok (.str (Format.formatTime e o))
-  | "formatDate", [.num e, .num o, .str "medium"] => .ok (.str (Format.formatDate e o false))
-  | "formatDate", [.num e, .num o, .str "month-year"] => .ok (.str (Format.formatDate e o true))
-  | "formatDate", [.num e, .num o, .str "iso"] => .ok (.str (Format.formatIsoDate e o))
+  | "formatTime", [.num e, .num o, .str "short", .str ""] => .ok (.str (Format.formatTime e o))
+  | "formatDate", [.num e, .num o, .str "medium", .str ""] => .ok (.str (Format.formatDate e o false))
+  | "formatDate", [.num e, .num o, .str "month-year", .str ""] => .ok (.str (Format.formatDate e o true))
+  | "formatDate", [.num e, .num o, .str "iso", .str ""] => .ok (.str (Format.formatIsoDate e o))
   -- LLP 1116.020 D8: a day's label, relative to the `now` the app passes.
-  | "formatDay", [.num t, .num n, .num o, .str "day"] => .ok (.str (Format.formatDay t n o "day"))
-  | "formatDay", [.num t, .num n, .num o, .str "day-time"] => .ok (.str (Format.formatDay t n o "day-time"))
-  | "formatDay", [.num t, .num n, .num o, .str "list"] => .ok (.str (Format.formatDay t n o "list"))
-  | "formatNumber", [.num n, .str "compact", _] => .ok (.str (Format.compact n))
+  | "formatDay", [.num t, .num n, .num o, .str "day", .str ""] => .ok (.str (Format.formatDay t n o "day"))
+  | "formatDay", [.num t, .num n, .num o, .str "day-time", .str ""] => .ok (.str (Format.formatDay t n o "day-time"))
+  | "formatDay", [.num t, .num n, .num o, .str "list", .str ""] => .ok (.str (Format.formatDay t n o "list"))
+  | "formatNumber", [.num n, .str "compact", _, .str ""] => .ok (.str (Format.compact n))
   -- LLP 1116 D8: `decimal`, `percent`, and `currency` with its code.
-  | "formatNumber", [.num n, .str style, .str code] =>
+  | "formatNumber", [.num n, .str style, .str code, .str ""] =>
     match Format.styled n style code with
     | .some s => .ok (.str s)
     | .none => .error (.unsupported "`formatNumber` of a style or code it does not take")
+  -- LLP 1054.000.003 D6: in a table's locale.
+  | "formatTime", [.num e, .num o, .str "short", .str loc] =>
+    inLocale tables loc fun r c => .some ((Format.wallMs e o).elim "" (Format.timeIn r · c))
+  | "formatDate", [.num e, .num o, .str "medium", .str loc] =>
+    inLocale tables loc fun r _ => .some ((Format.wallMs e o).elim "" (Format.dateIn r · 10 11))
+  | "formatDate", [.num e, .num o, .str "month-year", .str loc] =>
+    inLocale tables loc fun r _ => .some ((Format.wallMs e o).elim "" (Format.dateIn r · 12 13))
+  | "formatDate", [.num e, .num o, .str "iso", .str loc] =>
+    inLocale tables loc fun _ _ => .some (Format.formatIsoDate e o)
+  | "formatDay", [.num t, .num n, .num o, .str mode, .str loc] =>
+    if mode = "day" ∨ mode = "day-time" ∨ mode = "list" then
+      inLocale tables loc fun r c => .some (Format.dayIn r c t n o mode)
+    else .error (.unsupported "`formatDay` of a mode it does not take")
+  | "formatNumber", [.num n, .str "compact", _, .str loc] =>
+    inLocale tables loc fun r _ => .some (Format.compactIn r n)
+  | "formatNumber", [.num n, .str style, .str code, .str loc] =>
+    inLocale tables loc fun r _ => Format.styledIn r n style code
   -- LLP 1102 §3.2: `digits` a whole-number literal the compiler admitted.
   | "toFixed", [.num x, .num d] =>
     match Format.digitsOf d 100 with
@@ -143,16 +170,27 @@ def text (tables : Format.Tables) (args : List Value) : Result Value :=
     | .none => .error (.refused s!"no table has the text `{key}`")
   | _ => .error (.unsupported "`t` of arguments it does not take")
 
-theorem formatting_str {f args v} (h : formatting f args = .ok v) : ∃ s, v = .str s := by
-  unfold formatting at h; split at h <;> (try split at h) <;> simp at h <;> exact ⟨_, h.symm⟩
+theorem inLocale_str {tables loc k v} (h : inLocale tables loc k = .ok v) : ∃ s, v = .str s := by
+  unfold inLocale at h; split at h <;> simp at h; exact ⟨_, h.symm⟩
+
+theorem inLocale_err {tables loc k e} (h : inLocale tables loc k = .error e) : ∃ w, e = .unsupported w := by
+  unfold inLocale at h; split at h <;> simp at h; exact ⟨_, h.symm⟩
+
+theorem formatting_str {tables f args v} (h : formatting tables f args = .ok v) : ∃ s, v = .str s := by
+  unfold formatting at h
+  split at h <;> (try split at h) <;> (try simp at h) <;>
+    first | exact ⟨_, h.symm⟩ | exact inLocale_str h
 
 theorem text_str {tables args v} (h : text tables args = .ok v) : ∃ s, v = .str s := by
   unfold text at h; split at h
   · split at h <;> simp at h; exact ⟨_, h.symm⟩
   · simp at h
 
-theorem formatting_err {f args e} (h : formatting f args = .error e) : ∃ w, e = .unsupported w := by
-  unfold formatting at h; split at h <;> (try split at h) <;> simp at h <;> exact ⟨_, h.symm⟩
+theorem formatting_err {tables f args e} (h : formatting tables f args = .error e) :
+    ∃ w, e = .unsupported w := by
+  unfold formatting at h
+  split at h <;> (try split at h) <;> (try simp at h) <;>
+    first | exact ⟨_, h.symm⟩ | exact inLocale_err h
 
 theorem text_err {tables args e} (h : text tables args = .error e) :
     (∃ w, e = .refused w) ∨ ∃ w, e = .unsupported w := by
@@ -231,10 +269,10 @@ def stdlib (env : Env) (f : String) (args : List Value) : Result Value :=
   | "indexOf", [a, b] => indexOfOf a b
   | "split", [.str s, .str sep] => .ok (.list ((Str.split s sep).map .str))
   -- Formatting and localized text (`Contract.Format`).
-  | "formatTime", vs => formatting "formatTime" vs
-  | "formatDate", vs => formatting "formatDate" vs
-  | "formatDay", vs => formatting "formatDay" vs
-  | "formatNumber", vs => formatting "formatNumber" vs
+  | "formatTime", vs => formatting env.prog.strings "formatTime" vs
+  | "formatDate", vs => formatting env.prog.strings "formatDate" vs
+  | "formatDay", vs => formatting env.prog.strings "formatDay" vs
+  | "formatNumber", vs => formatting env.prog.strings "formatNumber" vs
   | "t", vs => text env.prog.strings vs
   -- LLP 1102 §3.2: `round` is JavaScript's `Math.round`, a half up.
   | "ceil", [.num x] => .ok (.num x.ceil)
@@ -247,8 +285,8 @@ def stdlib (env : Env) (f : String) (args : List Value) : Result Value :=
         | .some n => .some (.num (if n < 0 then -(F64.ofNat n.natAbs) else F64.ofNat n.natAbs))
         | .none => .none)
     else .error (.unsupported "`calendarDiff` of a unit it does not take")
-  | "toFixed", vs => formatting "toFixed" vs
-  | "formatDecimal", vs => formatting "formatDecimal" vs
+  | "toFixed", vs => formatting env.prog.strings "toFixed" vs
+  | "formatDecimal", vs => formatting env.prog.strings "formatDecimal" vs
   | "sin", [.num x] => .ok (.num x.sin)
   | "cos", [.num x] => .ok (.num x.cos)
   | "sum", [.list xs] =>

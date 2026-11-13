@@ -11,8 +11,8 @@
 //! may name any element, so with one there is no warning; a computed argument
 //! (a prop the caller fills included) is not checked.
 
-use super::{literal, miswiring::arms};
-use crate::theme::scan::{exprs, stmts};
+use super::literal;
+use crate::theme::scan::stmts;
 use crate::LowerError;
 use contract_syntax::{Expr, Node, Span};
 use contract_types::Checked;
@@ -33,7 +33,7 @@ pub(super) fn unnamed(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
     let mut seen = BTreeSet::new();
     for action in &root.actions {
         stmts(&action.body, &mut |e| {
-            exprs(e, &mut |e| {
+            e.walk().for_each(|e| {
                 if let Expr::Call(name, args, _) = e {
                     if let (Some(read), Some(Expr::Str(id, at))) =
                         (READS.iter().find(|r| *r == name), args.first())
@@ -103,7 +103,7 @@ impl Ids {
                 Node::Use { .. } => return None,
                 _ => {}
             }
-            stack.extend(arms(node).into_iter().flatten());
+            stack.extend(node.children());
         }
         Some(found)
     }

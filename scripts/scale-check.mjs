@@ -20,7 +20,8 @@
 //                   column, or the plan's own design's token (`contract tamber ir`), which wins. `"then": [{"steps":
 //                   ["tap flip"], "boxes": […]}]` checks boxes again after steps, each from a fresh launch.
 //   --host: web, linux, macos, ios, android (as scripts/agent.mjs names them), or terminal (the terminal
-//   host headless, its own `layout` and `plan` verbs: corners read from its reply); default linux. The Android
+//   host headless, its own `layout` and `plan` verbs: corners read from its reply; it runs the plan's source
+//   compiled for the terminal, `contract build --surface terminal`); default linux. The Android
 //   reader runs an app's APK with the plan pushed to it: `--app` names one whose data the plan does not ask
 //   (unsaid), built with `bun scripts/agent-android.mjs build <app> --apk`.
 //   Each drive starts from a fresh scratch store (`--storage scale-check --reset-storage`).
@@ -366,6 +367,17 @@ export function drive(host, plan, png, steps = [], app = null) {
   return Object.assign(JSON.parse(line), { earlier: layouts.slice(0, -1).map(l => JSON.parse(l)) });
 }
 
+/** `source` compiled for the terminal into `out`: the terminal host runs
+ * only a plan whose header says `terminal` (LLP 1101.003 D9), so a GUI
+ * source is measured there by its terminal lowering (`--surface terminal`,
+ * which reports what a terminal entry refuses as warnings). Throws with the
+ * compiler's output when it fails. */
+export function terminalPlan(source, out) {
+  const r = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'build', source, '-o', out, '--surface', 'terminal', '--errors-only'], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 });
+  if (r.error || r.status !== 0) throw new Error(`${source} did not compile for the terminal${r.error ? ` (${r.error.message})` : ''}\n${r.stdout ?? ''}${r.stderr ?? ''}`);
+  return out;
+}
+
 /** An agent step as the terminal's verbs take it: a verb's text tail (`type
  * <id> <text…>`, `paste <text…>`, `until <text…>`) one argument, spaces and
  * all; the rest a word each. */
@@ -426,10 +438,15 @@ if (import.meta.main) {
   const phases = [{ steps: [], boxes: expect.boxes }, ...(expect.then ?? [])];
   const rows = [];
   for (const host of opts.hosts) {
+    let hostPlan = plan;
+    if (host === 'terminal') {
+      try { hostPlan = terminalPlan(opts.source, join(opts.out, 'scale-terminal.plan')); }
+      catch (e) { rows.push({ host, testId: '*', ok: false, why: e.message }); continue; }
+    }
     for (const [k, phase] of phases.entries()) {
       const png = join(opts.out, `${host}${k ? `-${k}` : ''}.png`);
       try {
-        const layout = drive(host, plan, png, phase.steps ?? [], opts.app);
+        const layout = drive(host, hostPlan, png, phase.steps ?? [], opts.app);
         const image = host === 'terminal' ? null : decodePng(readFileSync(png));
         rows.push(...check(host, layout, image, { ...expect, boxes: phase.boxes, calibrate: expect.boxes }, base).map(r => (k ? { ...r, testId: `${r.testId} (after ${phase.steps.join(', ')})` } : r)));
       }

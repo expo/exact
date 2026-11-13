@@ -413,21 +413,11 @@ impl Lowerer<'_> {
                     }
                     self.check_nested(children, inner)?;
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    self.check_nested(then, inner)?;
-                    self.check_nested(otherwise, inner)?;
+                node => {
+                    for list in node.child_lists() {
+                        self.check_nested(list, inner)?;
+                    }
                 }
-                Node::Match { some, none, .. } => {
-                    self.check_nested(&some.1, inner)?;
-                    self.check_nested(none, inner)?;
-                }
-                Node::Each { body, .. } => {
-                    self.check_nested(body, inner)?;
-                }
-                Node::Use { children, .. } => self.check_nested(children, inner)?,
-                Node::Children { .. } => {}
             }
         }
         Ok(())

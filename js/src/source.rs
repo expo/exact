@@ -368,7 +368,9 @@ impl DataSource for Module {
     fn bind(&mut self, plan: &Plan) {
         self.reached = plan.sources.iter().any(|row| {
             let name = plan.str(row.name);
-            !exact_plan::runner_owned_source(name) && plan.module_named(name).is_none()
+            !exact_plan::runner_owned_source(name)
+                && plan.module_named(name).is_none()
+                && plan.fetch_named(name).is_none()
         }) || plan.surfaces.iter().any(|row| {
             self.canvas_surfaces
                 .iter()

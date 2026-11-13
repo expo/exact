@@ -317,7 +317,7 @@ The standalone locks above remain local. Application policy stays in Exact:
 request scheduling and byte budgets, whole-exchange deadlines, source grants,
 document session identity, JSON result vocabulary, native image codec, and
 storage continuation ownership. Optional HTTP metric-file logging moved from
-the vendor tree into `host/apple/src/executor_metrics.rs`; its asynchronous
+the vendor tree into `host/executor/src/metrics.rs`; its asynchronous
 callback records remain consumer-owned, and blocking/native comparisons use
 upstream's explicit diagnostic. Portable workers reserve an additional upload
 copy in the lane's byte budget; native Apple upload buffers are charged once.
@@ -813,7 +813,7 @@ browser rule that an offer requires a selection. Protocol names are case-sensiti
 including duplicate detection in the JavaScript constructor. Gated opens, receive-only
 opens and event watches share the selection check; a refused watch reports error
 then close 1006, without open. `stdlib/websocket.rs` tests those entry points.
-`host/apple/src/executor_protocol_tests.rs` exercises
+`host/executor/src/protocol_tests.rs` exercises
 URLSession and the portable transport against a local handshake server.
 
 ## Local patch 33, an asynchronous fetch's reply body destination

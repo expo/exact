@@ -158,6 +158,21 @@ fn a_header_with_no_heading_or_two_is_named_as_no_bar() {
         [(NO_BAR.to_string(), 12), (UNPLACED.to_string(), 17)],
         "{branched}"
     );
+    // A route that opens with `match` is read as one that opens with `if`.
+    let matched = route("  text \"List\" role=\"heading\" aria-level=1")
+        .replace(
+            "  state q = \"\"\n",
+            "  state q = \"\"\n  state picked: option<string> = none\n",
+        )
+        .replace(
+            "          header display=\"flex\"\n            text \"List\" role=\"heading\" aria-level=1\n",
+            "          match picked\n            case some(p)\n              header\n                text \"Sheet\"\n            case none\n              header\n                text \"List\" role=\"heading\" aria-level=1\n                image \"symbol:heart\"\n",
+        );
+    assert_eq!(
+        warned(&matched),
+        [(NO_BAR.to_string(), 14), (UNPLACED.to_string(), 19)],
+        "{matched}"
+    );
 }
 
 /// A stack whose root names its Back control `back` (or `root` says

@@ -14,7 +14,7 @@
 
 use crate::LowerError;
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{Expr, Node, Span, TemplatePart};
+use contract_syntax::{Expr, Node, Span};
 use contract_types::{infer, Checked, Ref, Scope, Shapes, Ty};
 use std::collections::BTreeSet;
 
@@ -98,50 +98,8 @@ impl Rows<'_> {
                 }
             }
         }
-        match e {
-            Expr::Template(parts, _) => {
-                for p in parts {
-                    if let TemplatePart::Expr(x) = p {
-                        self.expr(x, scope, outer);
-                    }
-                }
-            }
-            Expr::Ternary(a, b, c, _) => {
-                for x in [a, b, c] {
-                    self.expr(x, scope, outer);
-                }
-            }
-            Expr::Binary(_, a, b, _) => {
-                self.expr(a, scope, outer);
-                self.expr(b, scope, outer);
-            }
-            Expr::Unary(_, inner, _)
-            | Expr::Some(inner, _)
-            | Expr::NamedArg(_, inner, _)
-            | Expr::Typed(inner, _, _)
-            | Expr::Member(inner, _, _) => self.expr(inner, scope, outer),
-            Expr::Call(_, items, _) | Expr::List(items, _) => {
-                for x in items {
-                    self.expr(x, scope, outer);
-                }
-            }
-            Expr::Match {
-                subject,
-                some,
-                none,
-                ..
-            } => {
-                self.expr(subject, scope, outer);
-                self.expr(some, scope, outer);
-                self.expr(none, scope, outer);
-            }
-            Expr::Let { value, body, .. } => {
-                self.expr(value, scope, outer);
-                self.expr(body, scope, outer);
-            }
-            Expr::Arrow { body, .. } => self.expr(body, scope, outer),
-            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {
-            }
+        for x in e.operands() {
+            self.expr(x, scope, outer);
         }
     }
 
@@ -264,32 +222,9 @@ pub(super) fn row_lookup(checked: &Checked<'_>) -> Vec<LowerError> {
 fn reads(e: &Expr, name: &str) -> bool {
     match e {
         Expr::Ident(n, _) => n == name,
-        Expr::Template(parts, _) => parts
-            .iter()
-            .any(|p| matches!(p, TemplatePart::Expr(x) if reads(x, name))),
-        Expr::Ternary(a, b, c, _) => [a, b, c].iter().any(|x| reads(x, name)),
-        Expr::Binary(_, a, b, _) => reads(a, name) || reads(b, name),
-        Expr::Unary(_, inner, _)
-        | Expr::Some(inner, _)
-        | Expr::NamedArg(_, inner, _)
-        | Expr::Typed(inner, _, _)
-        | Expr::Member(inner, _, _) => reads(inner, name),
-        Expr::Call(_, items, _) | Expr::List(items, _) => items.iter().any(|x| reads(x, name)),
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => reads(subject, name) || (var != name && reads(some, name)) || reads(none, name),
-        Expr::Let {
-            name: bound,
-            value,
-            body,
-            ..
-        } => reads(value, name) || (bound != name && reads(body, name)),
-        Expr::Arrow { params, body, .. } => !params.iter().any(|p| p == name) && reads(body, name),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => false,
+        _ => e
+            .scoped_operands()
+            .any(|(x, binds)| !binds.contains(name) && reads(x, name)),
     }
 }
 
@@ -425,16 +360,10 @@ impl<'c> Held<'c> {
                     })
                     || self.holds(children)
             }
-            Node::When {
-                tag,
-                then,
-                otherwise,
-                ..
-            } => self.owning.contains(tag) || self.holds(then) || self.holds(otherwise),
-            Node::Each { tag, body, .. } => self.owning.contains(tag) || self.holds(body),
-            Node::Match {
-                tag, some, none, ..
-            } => self.owning.contains(tag) || self.holds(&some.1) || self.holds(none),
+            Node::When { tag, .. } | Node::Each { tag, .. } | Node::Match { tag, .. } => {
+                self.owning.contains(tag)
+                    || node.child_lists().into_iter().any(|list| self.holds(list))
+            }
             Node::Use { .. } | Node::Children { .. } => true,
         })
     }
@@ -453,12 +382,6 @@ impl<'c> Held<'c> {
             match node {
                 Node::Element { children, .. } | Node::Use { children, .. } => {
                     self.walk(children, out)
-                }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    self.walk(then, out);
-                    self.walk(otherwise, out);
                 }
                 Node::Each {
                     tag,
@@ -481,11 +404,11 @@ impl<'c> Held<'c> {
                     }
                     self.walk(body, out);
                 }
-                Node::Match { some, none, .. } => {
-                    self.walk(&some.1, out);
-                    self.walk(none, out);
+                node => {
+                    for list in node.child_lists() {
+                        self.walk(list, out);
+                    }
                 }
-                Node::Children { .. } => {}
             }
         }
     }

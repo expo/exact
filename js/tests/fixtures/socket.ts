@@ -104,12 +104,21 @@ function say(id: string, what: string): unknown {
   }
 }
 
-// A resource's answer (the amendment of 2026-10-18): it sends a request and
-// awaits the reply; what its code sends after an await is the turn's that
-// settled it.
+// An async step keeps its answer's context; a plain callback uses the
+// draining turn's. Both use the same send to expose that difference.
 const waiters = new Map<string, (data: string) => void>();
 const queue: Array<() => void> = [];
 const waitFor = (n: string) => new Promise<string>(resolve => waiters.set(n, resolve));
+
+function thank(socket: Socket, n: string, got: string): string {
+  try {
+    socket.send("thanks " + n);
+    return "chained " + got;
+  } catch (x) {
+    refused(x);
+    return "refused";
+  }
+}
 
 async function ask(id: string, q: string): Promise<string> {
   if (!q) return "";
@@ -117,7 +126,14 @@ async function ask(id: string, q: string): Promise<string> {
   try {
     switch (what) {
       case "sync": socket.send("request " + n); return "got " + await waitFor(n);
-      case "chain": { socket.send("request " + n); const got = await waitFor(n); socket.send("thanks " + n); return "chained " + got; }
+      case "chain": {
+        socket.send("request " + n);
+        const got = await waitFor(n);
+        return thank(socket, n, got);
+      }
+      case "then":
+        socket.send("request " + n);
+        return waitFor(n).then(got => thank(socket, n, got));
       case "fetch": socket.send("request " + n); await fetch("https://echo.test/x"); socket.send("after fetch " + n); return "fetched";
       case "abandon":
         socket.send("request " + n);
@@ -143,8 +159,8 @@ async function ask(id: string, q: string): Promise<string> {
   }
 }
 
-// Runs the replies the mapper queued, in this answer's turn: the code that
-// awaited them resumes here, as the T3 Code clone's transport does.
+// Settles queued replies in another answer's turn, so native batches name
+// `deliver` even when the async helper restores the waiting answer.
 function deliver(side: string): string {
   for (const work of queue.splice(0)) work();
   return side;

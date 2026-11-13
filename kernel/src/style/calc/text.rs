@@ -116,8 +116,15 @@ fn tree(n: &Node, out: &mut String) {
     }
 }
 
-/// `env()` without a fallback, as CSS writes it.
+/// `env()` without a fallback, as CSS writes it, or a local inset's `var()`.
 pub(super) fn env(term: EnvTerm, out: &mut String) {
+    if let EnvTerm::Local(edge) = term {
+        out.push_str("var(");
+        out.push_str(super::super::env::LOCAL_PREFIX);
+        out.push_str(edge.name());
+        out.push(')');
+        return;
+    }
     out.push_str("env(");
     match term {
         EnvTerm::Inset(edge) => {
@@ -136,6 +143,7 @@ pub(super) fn env(term: EnvTerm, out: &mut String) {
             out.push_str(super::super::env::TitleBarVar::PREFIX);
             out.push_str(var.name());
         }
+        EnvTerm::Local(_) => unreachable!("written as var() above"),
     }
     out.push(')');
 }

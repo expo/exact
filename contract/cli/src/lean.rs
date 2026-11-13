@@ -114,6 +114,8 @@ fn emit_file(
             out: String::new(),
             checked: &checked,
             root: checked.expanded.root.clone(),
+            format_used: Default::default(),
+            records: Default::default(),
         };
         e.program(name)?;
         Ok(e.out)
@@ -133,6 +135,8 @@ pub fn emit_checked(checked: &Checked, name: &str) -> Result<String, CompileErro
         out: String::new(),
         checked,
         root: typed.root,
+        format_used: Default::default(),
+        records: Default::default(),
     };
     e.program(name)?;
     Ok(e.out)
@@ -144,10 +148,17 @@ struct Emitter<'a> {
     /// The expanded root with its uses' arguments ascribed
     /// (`contract_syntax::expand_typed`).
     root: Component,
+    /// Whether a localized formatter's call read the format slot.
+    format_used: std::cell::Cell<bool>,
+    /// [`Emitter::format_records`], once asked.
+    records: std::cell::OnceCell<Option<Vec<(String, String)>>>,
 }
 
 /// The name of the resolved locale's slot, as the plan names it.
 const LOCALE: &str = "#locale";
+
+/// The name of the format locale's slot (LLP 1054.000.003 D6).
+const FORMAT: &str = "#format";
 
 fn refuse(message: impl Into<String>, span: Span) -> CompileError {
     CompileError {
@@ -288,6 +299,20 @@ impl Emitter<'_> {
         let _ = writeln!(o, "  router := {},", self.router());
         let _ = writeln!(o, "  strings := {},", self.strings_list());
         let _ = writeln!(o, "  locale := {},", self.locale());
+        // The format slot follows the locale slot, as the compiler makes it
+        // for a program that formats with a table's data.
+        if let Some(locale) = self
+            .format_used
+            .get()
+            .then(|| self.locale_state())
+            .flatten()
+        {
+            o = o.replacen(
+                &locale,
+                &format!("{locale},\n    {}", self.format_state()),
+                1,
+            );
+        }
         let _ = writeln!(o, "  sources := {}", self.sources_list(ct));
         o.push_str("}\n");
         let _ = writeln!(self.out, "def {name} : Contract.Program := {{");
@@ -304,6 +329,48 @@ impl Emitter<'_> {
             string(LOCALE),
             string(&st.base)
         ))
+    }
+
+    /// The format locale's slot, initialized to the base table's name, as
+    /// the runner leaves it until a host tells a place.
+    fn format_state(&self) -> String {
+        let base = self
+            .checked
+            .types
+            .shapes
+            .strings
+            .as_deref()
+            .map_or("", |st| &st.base);
+        format!(
+            "{{ name := {}, ty := .string, init := (.str {}), owner := .none, late := false }}",
+            string(FORMAT),
+            string(base)
+        )
+    }
+
+    /// Each table's format data, base first, when one formats otherwise
+    /// than `en-US` (`contract_lower::formats::records`).
+    fn format_records(&self) -> Option<&[(String, String)]> {
+        self.records
+            .get_or_init(|| {
+                let st = self.checked.types.shapes.strings.as_deref()?;
+                let others = st.tables.keys().filter(|l| **l != st.base);
+                let names: Vec<&str> = std::iter::once(&st.base)
+                    .chain(others)
+                    .map(String::as_str)
+                    .collect();
+                let records = contract_lower::formats::records(names.iter().copied())?;
+                Some(names.iter().map(|n| n.to_string()).zip(records).collect())
+            })
+            .as_deref()
+    }
+
+    /// `CProgram.format`: the format slot, when a formatter reads it.
+    fn format(&self) -> String {
+        match self.format_used.get() {
+            true => format!(".some {}", string(FORMAT)),
+            false => ".none".into(),
+        }
     }
 
     /// `Program.locale`: the resolved locale's slot, when there are tables.
@@ -329,10 +396,21 @@ impl Emitter<'_> {
                 base.into_iter()
                     .chain(others)
                     .map(|(locale, table)| {
-                        let texts: Vec<String> = table
+                        let mut texts: Vec<String> = table
                             .iter()
                             .map(|(k, t)| format!("({}, {})", string(k), string(t)))
                             .collect();
+                        // A table's format data, under the key no table has
+                        // (`Format.formatKey`), when a formatter reads it.
+                        if let Some(record) = self
+                            .format_used
+                            .get()
+                            .then(|| self.format_records())
+                            .flatten()
+                            .and_then(|r| r.iter().find(|(n, _)| n == locale))
+                        {
+                            texts.push(format!("(\"\\u001Eformat\", {})", string(&record.1)));
+                        }
                         format!("({}, [{}])", string(locale), texts.join(", "))
                     })
                     .collect()
@@ -720,6 +798,15 @@ impl Emitter<'_> {
                             }
                             exact_plan::StdlibDefault::Str(s) => format!("(.str {})", string(s)),
                         });
+                    }
+                    // The format locale, last, as lowering passes it.
+                    if f.localized() {
+                        if self.format_records().is_some() {
+                            self.format_used.set(true);
+                            parts.push(format!("(.var {})", string(FORMAT)));
+                        } else {
+                            parts.push("(.str \"\")".into());
+                        }
                     }
                 }
                 format!("(.call {} [{}])", string(name), parts.join(", "))

@@ -1266,9 +1266,13 @@ package final class Presenter {
         session?.canvases.cancelMovedControls()
         PaintOrder.flush()
         session?.canvases.captureIfNeeded()
+        // What the batch's `scrollIntoView`s will move, and the scrollers it writes `scrollTop` to (LLP 1070.000 §15).
+        let names = Set(session?.pendingElementScrolls ?? [])
+        let authored = (names.isEmpty ? [] : views.values.filter { $0.props["id"].map(names.contains) == true })
+            + scrollers.union(pendingScrolls).compactMap { views[$0] }.filter { $0.pendingScrollTop != nil || $0.pendingScrollLeft != nil }
         for id in scrollers.union(pendingScrolls) {
             guard let node = views[id] else { continue }
-            if !collections.owns(node.id) { node.restoreScrollPosition() }
+            if !collections.owns(node.id) { node.restoreScrollPosition(authored: authored.contains { $0.isDescendant(of: node) }) }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
             node.applyPendingScroll()
             node.resnap()

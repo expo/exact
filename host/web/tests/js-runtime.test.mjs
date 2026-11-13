@@ -720,7 +720,7 @@ test('parseNumber, round, ceil and calendarDiff are the runner\'s', async () => 
 });
 
 // LLP 1102 §3.2 (decided (c)): format.js's `toFixed` is JavaScript's but "" for a non-finite number (D7), and its
-// `formatDecimal` is runner/src/format.rs's exact count (runner/tests/it/format.rs has the same rows).
+// `formatDecimal` is runner/src/format/mod.rs's exact count (runner/tests/it/format.rs has the same rows).
 test('toFixed and formatDecimal are the runner\'s', async () => {
   const { x_toFixed, x_formatDecimal } = await import(webJs('format.js'));
   expect([[1.005, 2], [-0.001, 2], [-0, 2], [2.5, 0], [-2.5, 0], [1e21, 2], [NaN, 2], [Infinity, 0], [-Infinity, 100]].map(([x, d]) => x_toFixed(x, d)))

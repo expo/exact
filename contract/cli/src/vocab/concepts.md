@@ -616,10 +616,10 @@ component App
 More: docs/recipes/after-a-write.md
 
 ## resource: a read from the data module
-names: source, sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
+names: sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
 
-`resource name = source(args) as shape T else empty()` asks the source in `app.ts` and shows its
-answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
+`resource name = source(args) as shape T else empty()` asks the source in `app.ts`
+(or a declared `source`) and shows its answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
 `else empty()`, the shape's zero. `pending(name)`: a request out; `failed(name)`: no answer;
 `current(name)`: it shows its arguments' answer. `when cond` asks nothing while `cond` is
 false. Only the root declares one.
@@ -636,11 +636,44 @@ component App
       text `${hits.length} found` testId="n"
 ```
 
-- The source answers exactly the shape (an extra field fails it), and a failed fetch is data, not
-  an exception. A child takes what it shows as props; `refresh name` in an action asks again.
-- `transient` after the shape: the answer is never kept on the device for the next launch.
+- `app.ts` answers exactly the shape (an extra field fails it); a failed fetch is data, not
+  an exception; `refresh name` in an action asks again. A child takes what it shows as props.
+- `transient` after the shape: the answer is never kept for the next launch.
 
 More: docs/recipes/fetch-loading-error.md
+
+## source: one HTTP request declared in Contract (a GET, a GraphQL query), with no data module
+names: declared, http, get, rest, endpoint, url, api, graphql, json, pointer
+
+`source name(param: type) as shape T`, at the top of `app.contract`, then `fetch()`'s lines:
+`url` (required; `{param}` puts the argument in, encoded), `method` (`GET` unless named),
+`header "Name" "value"` (`{param}`, or `{secret:name}` for a secret the data module keeps),
+`body json` (the parameters as one JSON object) or `graphql "…"` (a `POST` of the operation and
+its variables), and `pointer "/data/items"` (a JSON Pointer to the answer). The runner makes the
+request, so an app whose sources are all declared needs no `app.ts` and its native build links no
+JavaScript engine. The URL's origin is its grant. The answer reads the shape's fields by name
+and ignores the rest; an absent `option` field is `none`.
+
+```contract
+shape Current
+  temperature_2m: number
+
+source weather(latitude: number, longitude: number) as shape Current
+  url "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
+  pointer "/current"
+
+component App
+  resource now = weather(52.52, 13.41) as shape Current
+  view
+    text `${now.temperature_2m}°` testId="temp"
+```
+
+- `failure(now)`: `offline`, `timeout` or `refused` as the network failed, `error` for a status
+  outside 200–299 or a GraphQL `errors` (its `extensions.code` is `reason`), `shape` for an answer
+  outside the shape. Token refresh, pagination, offline queues and overlays stay in `app.ts`.
+- A `send` may use one with `method "POST"` and `body json`; rename a field in a `derive`.
+
+More: docs/recipes/declared-source.md
 
 ## match: take an option apart (some, none)
 names: case, option, optional, null, undefined, nullable
@@ -1498,7 +1531,7 @@ component App
 More: apps/svg-gallery/app.contract (each element and attribute, drawn alike on every host but `foreignObject`)
 
 ## safe-area: the notch, the status bar and the home indicator
-names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator
+names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
 
 Inside a route, leave it unsaid: the host keeps the route's content clear of the status bar
 and its bars (UIKit's inset on the route's scroller, else the route's padding), and a
@@ -1508,6 +1541,18 @@ under the default `viewport-fit="auto"` it is 0, so `env()` padding inside a rou
 nothing; under the root's `viewport-fit="cover"` it is the device's insets, and a route's
 content goes under the bar unless its column pads `env(safe-area-inset-top)`. On the web it is
 the browser's. `env(-exact-layout-margins-inset-left)` is UIKit's layout margin.
+
+`var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`, `-left`) is the safe area where
+the box is (LLP 1123 D9): inside a route, a tab or a sheet its own, the status bar, the bars
+and a large title included, as UIKit's `safeAreaInsets` and React Navigation's
+`useHeaderHeight` give it; outside every route the screen's, even where `env()` is 0. A
+background under the navigation bar is `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
+padding-top="var(--exact-safe-area-inset-top)"` on a box at the route's top. A route's
+clearance adds to its own padding unless that padding reads the inset (then the larger
+counts), and `-exact-safe-area="top"` (or `none`, or other edges) on the route turns it off,
+as SwiftUI's `ignoresSafeArea`: a scroller at the route's top then starts under the bar, and
+its first box pads `var(--exact-safe-area-inset-top)` itself. A box may set
+`--exact-safe-area-inset-bottom="0px"` for its subtree.
 
 - A scroller's last row sits its `padding-bottom` above UIKit's inset: subtract the inset
   from the original's gap rather than adding `env(safe-area-inset-bottom)`.

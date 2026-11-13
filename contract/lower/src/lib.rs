@@ -37,9 +37,11 @@ mod disabled_look;
 mod edits;
 mod error;
 pub mod expr;
+mod fetches;
 mod fields;
 mod font_axes;
 mod fonts;
+pub mod formats;
 mod frames;
 mod grouped;
 mod handlers;
@@ -264,6 +266,10 @@ pub(crate) struct Lowerer<'a> {
     errors: Vec<LowerError>,
     /// The locale slot, once a `t` call made it (LLP 1060 D4).
     locale: Option<exact_plan::SlotsId>,
+    /// The format locale's slot, once the first localized formatter's call
+    /// decided it: `Some(None)` when no table formats otherwise than `en`
+    /// (LLP 1054.000.003 D6).
+    format: Option<Option<exact_plan::SlotsId>>,
     /// Every key a `t` call names, the only ones baked.
     texts_used: std::collections::BTreeSet<String>,
     /// The surface the plan is for: a terminal entry's block link is not tinted.
@@ -458,6 +464,7 @@ fn lower_with_sites(
         fixed: BTreeMap::new(),
         errors: Vec::new(),
         locale: None,
+        format: None,
         texts_used: Default::default(),
         profile,
         control_parts: Vec::new(),

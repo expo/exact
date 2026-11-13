@@ -138,6 +138,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |an entry or settings form|`grouped-form`|
 |a sheet that edits the row tapped, filled with its values|`edit-sheet`|
 |rows added and removed in a form|`editable-rows`|
+|JSON from an HTTP endpoint (a `GET`, a GraphQL query) with no data module, so no JavaScript engine|`declared-source`|
 |a write that may be refused|`after-a-write`|
 |a failure the person must acknowledge (an alert with OK)|`error-alert`|
 |tabular digits: numeric columns or values changing in place|`numeric-readout`|

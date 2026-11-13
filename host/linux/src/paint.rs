@@ -158,7 +158,8 @@ impl BoxPaint {
         let widths = s.border_widths();
         let current = node.computed_row(StyleId::TextColor, |s| s.text_color);
         let colors = s.border_colors(current);
-        let env = kernel.env();
+        // A length may read the safe area where the box is (LLP 1123 D9)
+        let env = kernel.env_of(node.id);
         // The padding layout resolved, which input reads too: a percentage
         // is of the containing block's width
         let (left, top, right, bottom) = kernel.resolved_padding(node.key).unwrap_or_default();

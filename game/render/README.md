@@ -713,8 +713,15 @@ reports zero. The first snapshot, virtual-clock snapshots and the first after a
 clock-mode change leave these fields unavailable. A clock-mode change discards the
 open measurement window. Delayed snapshots use their actual elapsed time.
 The cadence comparison honors the canvas frame cap and excludes virtual time and
-the first frame after rest. CPU encoding is distinct from queue submission and GPU
-execution; unsupported timing, memory and audio
+the first frame after rest. `quality`, `maxFps` and `idle` are
+read when the snapshot is taken, not over the window (`thermalState` is the last
+drawn frame's, absent from a window with no drawn frame), as are `textureMemoryBytes`
+(the delivered textures the renderer holds, retired ones included, render
+targets excluded) and
+`geometryMemoryBytes` (the shared vertex and index buffers' allocated bytes);
+the GPU module adds the process's footprint and, on the web, its own heap. `audioState` is the game audio output's (`running`, `suspended`,
+`interrupted`, `closed`) where the target has a player. CPU encoding is distinct
+from queue submission and GPU execution; unsupported timing, memory and audio
 fields stay unavailable. No simulation state, save or hash contains these readings.
 
 ### Texture families
@@ -1030,9 +1037,10 @@ until it has, and the driver asks again.
   so a look frame with particles draws its translucency in a pass of its own, as
   soft particles do, over the attachments the live frame draws into: the HDR
   image, or a direct frame's target, with the direct frame's format, blending and
-  resolve (its colour and depth kept between the two passes in attachments of the
-  look frame's own, released at the next live frame, so the live frame's stay
-  transient). build.rs assembles every quad module, validates it with naga, and
+  resolve. Particle counting keeps any transient colour or depth in retained
+  attachments of the look frame's own, released at the next live frame. HDR
+  looks share the live resolve image and tone binding, preserving effect
+  bindings. build.rs assembles every quad module, validates it with naga, and
   reflects the probe variants' counter group, from which the renderer takes its
   layout, binding numbers and entry points. Limits, each a gap or a stated
   meaning, not an approximation: GL has no fragment storage writes, and a scene

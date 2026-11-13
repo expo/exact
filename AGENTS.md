@@ -181,9 +181,10 @@ section binds (`rules/RULES.md`, "Agents").
   takes about 10 s warm, and is advice, not a check (`semantics/README.md`, "Using it day to
   day"; `contract verify <app>` is the app author's version).
 - The gate tests only `default-members`. Of the hosts it holds the web host
-  (`exact-web`) and the Apple host's Rust (`exact-apple`; its tests that drive a real
+  (`exact-web`), the Apple host's Rust (`exact-apple`; its tests that drive a real
   socket through URLSession, wait on the wall clock or launch Bun, Swift or a nested
-  cargo build are `async lane:`, and its Swift is the XCTests). The
+  cargo build are `async lane:`, and its Swift is the XCTests) and the native
+  request executor the Apple, Linux and render hosts share (`exact-executor`). The
   others (`exact-web-js`, `exact-web-capabilities`, `exact-linux`, `exact-windows`,
   `exact-render`, …), `js/`, `gpu/` and most apps are
   not tested by it (the sixth check compiles them, their tests too, and runs none),

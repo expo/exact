@@ -19,6 +19,7 @@ mod request_set_tests;
 pub use errors::RunnerError;
 mod event;
 pub mod faults;
+mod fetches;
 mod field;
 mod fonts;
 pub mod foresee;
@@ -1178,6 +1179,12 @@ impl<D: DataSource> Runner<D> {
     /// Inspect data-source identity and readiness without executing app logic.
     pub fn data_ref(&self) -> &D {
         &self.data
+    }
+
+    /// The app's grants: the data module's, and the origins its declared
+    /// sources carry (LLP 1162.001 D3). What a host endows its executor with.
+    pub fn grants(&self) -> String {
+        crate::grants::with_declared(self.data.grants(), &self.plan)
     }
 
     /// Current value of a slot by name.

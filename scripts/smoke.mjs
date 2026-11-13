@@ -793,8 +793,7 @@ try {
 // 8. The nested case (LLP 1010, the scroll fixture): a scroll node that
 // overflows on a page that overflows. A wheel over the node scrolls it; at
 // its edge the wheel chains to the page.
-// A paired module client cannot boot unrelated bare plans. --app-only keeps
-// the complete app drive and its Contract tests, excluding host-only fixtures.
+// --app-only skips unrelated plans a paired module client cannot boot, keeping the app drive and Contract tests.
 if (!argv.includes('--app-only')) {
 if (apple && !device) await httpFrameSmoke({ host, open, check });
 // Launch facts reach a real runner on every carrier, including Linux's t() table.
@@ -830,9 +829,10 @@ if (apple && !device) await httpFrameSmoke({ host, open, check });
         const attrs = await f.carrier.evaluate('({lang:document.documentElement.lang,dir:document.documentElement.dir})');
         check(attrs.lang === lang && attrs.dir === dir, 'the document element carries lang and dir');
         if (jsTargetBuild(selectedWebDist)) { // a JS page (the plan compiled ahead) reloads, its launch facts in its URL
+          const before = await f.carrier.evaluate('performance.timeOrigin');
           await f.carrier.evaluate('location.reload()').catch(() => {});
-          await rebooted(f.carrier);
-          await f.carrier.evaluate('exact.ready'); } else await f.carrier.evaluate('fetch("/__plan").then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b)))');
+          await rebooted(f.carrier, before);
+        } else await f.carrier.evaluate('fetch("/__plan").then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b)))');
         check(byTestId(await f.tree(), 'place')?.props.text === expected, 'web reload retains launch facts');
         const attrsAfter = await f.carrier.evaluate('({lang:document.documentElement.lang,dir:document.documentElement.dir})');
         check(attrsAfter.lang === lang && attrsAfter.dir === dir, 'web reload retains lang and dir');

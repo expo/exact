@@ -1,0 +1,35 @@
+# The native request executor (LLP 1016 D2; LLP 1041, 1120, 1162): grant-
+# checked transport, the ordered and independent lanes, streams, sockets,
+# uploads and child processes. The Apple, Linux and render hosts each wrap it
+# in an `Executor` of their own, with their own wake, transports and ibex2
+# features.
+[package]
+name = "exact-executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The native request executor the Apple, Linux and render hosts share"
+publish = false
+
+[dependencies]
+# `exact_data::storage`, which a scoped grant is read through.
+exact-data = { path = "../../data" }
+exact-grants = { path = "../../grants" }
+exact-runner = { path = "../../runner" }
+# ibex2's standard library for a Rust consumer (ibex LLP 0068): no engine, no
+# loader. `websocket`: the transport for an app's WebSockets (exactStream
+# sockets); the vendored v4 crate gates it behind a default feature
+# (27275f3d4), which default-features = false had turned off.
+ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false, features = ["websocket"] }
+serde_json = "1.0"
+# The hop check reads a hop's host (LLP 1133.036 D6).
+url = "2.5"
+
+[dev-dependencies]
+# The listener the tests install in place of the library (LLP 1133.005).
+exact-listen = { path = "../listen" }
+exact-kernel = { path = "../../kernel" }
+exact-plan = { path = "../../plan" }
+# `portable-http`: rustls and the portable sockets on a Mac too, for the tests
+# of the transport the Linux host takes.
+ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false, features = ["websocket", "portable-http"] }

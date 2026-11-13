@@ -148,39 +148,21 @@ fn check_attrs(tag: &str, attrs: &[contract_syntax::Attr], errors: &mut Vec<Comp
 }
 
 fn walk(nodes: &[Node], errors: &mut Vec<CompileError>) {
-    for n in nodes {
-        match n {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                span,
-                ..
-            } => {
-                if let Some(why) = refused_tag(tag) {
-                    errors.push(refusal(
-                        "terminal-tag",
-                        format!("`{tag}` in a terminal entry: {why}"),
-                        *span,
-                    ));
-                }
-                check_attrs(tag, attrs, errors);
-                walk(children, errors);
-            }
-            Node::Use { children, .. } => walk(children, errors),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, errors);
-                walk(otherwise, errors);
-            }
-            Node::Each { body, .. } => walk(body, errors),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, errors);
-                walk(none, errors);
-            }
-            Node::Children { .. } => {}
+    for n in Node::walk(nodes) {
+        let Node::Element {
+            tag, attrs, span, ..
+        } = n
+        else {
+            continue;
+        };
+        if let Some(why) = refused_tag(tag) {
+            errors.push(refusal(
+                "terminal-tag",
+                format!("`{tag}` in a terminal entry: {why}"),
+                *span,
+            ));
         }
+        check_attrs(tag, attrs, errors);
     }
 }
 

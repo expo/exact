@@ -58,17 +58,59 @@ impl Lowerer<'_> {
         Ok(slot)
     }
 
+    /// The tables' names, base first and the rest in name order.
+    fn table_names(&self) -> Vec<String> {
+        let Some(strings) = &self.types.shapes.strings else {
+            return Vec::new();
+        };
+        let others = strings.tables.keys().filter(|l| **l != strings.base);
+        std::iter::once(&strings.base)
+            .chain(others)
+            .cloned()
+            .collect()
+    }
+
+    /// The format locale a localized formatter's call reads as its last
+    /// argument (LLP 1054.000.003 D6): the slot, made by the first call,
+    /// when some table's locale formats otherwise than `en-US`; else `""`.
+    pub(crate) fn push_format_locale(&mut self, asm: &mut Asm) -> Result<(), LowerError> {
+        if self.format.is_none() {
+            let names = self.table_names();
+            self.format = Some(None);
+            if crate::formats::records(names.iter().map(String::as_str)).is_some() {
+                let ty = self.ty_id(&Ty::String)?;
+                let init = self.b.constant(&Value::str(&names[0]));
+                self.format = Some(Some(self.b.slot("#format", ty, init)));
+            }
+        }
+        match self.format.flatten() {
+            Some(slot) => {
+                asm.load_slot(slot);
+            }
+            None => {
+                let empty = self.b.str("");
+                asm.str(empty);
+            }
+        }
+        Ok(())
+    }
+
     /// The tables, base first and the rest in name order, each holding only
-    /// the keys some `t` names. Names and direction remain for data-only tables.
+    /// the keys some `t` names, and each its format data when a formatter
+    /// reads the format slot. Names and direction remain for data-only tables.
     pub(super) fn bake_texts(&mut self) -> Result<(), LowerError> {
         let Some(strings) = self.types.shapes.strings.clone() else {
             return Ok(());
         };
         let slot = self.locale_slot()?;
+        let names = self.table_names();
+        let records = match self.format {
+            Some(Some(_)) => crate::formats::records(names.iter().map(String::as_str)),
+            _ => None,
+        };
         let direction = icu_locale::LocaleDirectionality::new_extended();
-        let base = strings.tables.get_key_value(&strings.base);
-        let others = strings.tables.iter().filter(|(l, _)| **l != strings.base);
-        for (locale, table) in base.into_iter().chain(others) {
+        for (i, locale) in names.iter().enumerate() {
+            let table = &strings.tables[locale];
             let texts: Vec<(&str, &str)> = self
                 .texts_used
                 .iter()
@@ -78,9 +120,13 @@ impl Lowerer<'_> {
                 .parse::<icu_locale::Locale>()
                 .ok()
                 .is_some_and(|locale| direction.is_right_to_left(&locale.id));
-            self.b.locale(locale, rtl, &texts);
+            let format = records.as_ref().map_or("", |r| r[i].as_str());
+            self.b.locale(locale, rtl, format, &texts);
         }
         self.b.set_locale(slot);
+        if let Some(Some(format)) = self.format {
+            self.b.set_format(format);
+        }
         Ok(())
     }
 }

@@ -54,11 +54,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
-    /// A remote's key by its web names (LLP 1115.001.003 D3): the D-pad's
-    /// arrows and Select, down and up. They take the Linux display's
+    /// A key by its web names, down and up: Tab, and a remote's D-pad arrows
+    /// and Select (LLP 1115.001.003 D3). They take the Linux display's
     /// named-key path ([`crate::presenter::Presenter::hardware_key`]).
-    pub fn named_key(&mut self, code: &str, key: &str, down: bool, repeat: bool) {
+    /// Android tells Shift with the key, not as a press of its own, so it is
+    /// held for this key alone, as a field's Shift+Tab holds it
+    /// (`Presenter::reader_field_action`).
+    pub fn named_key(&mut self, code: &str, key: &str, down: bool, repeat: bool, shift: bool) {
+        let held = self.p.held & 1;
+        self.p.hold_modifier("ShiftLeft", shift);
         self.p.hardware_key(code, key, down, repeat);
+        self.p.hold_modifier("ShiftLeft", held != 0);
         self.force = true;
     }
 

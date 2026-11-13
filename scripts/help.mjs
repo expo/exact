@@ -364,9 +364,11 @@ artifacts under game/target only. Ports none. Runs to completion.`,
     usage: 'bun exact.mjs contract <subcommand> …      (paths from where you run it)',
     common: ['contract build <file> --json · contract vocab <name>…    diagnostics · any tag, property, colour role or recipe (no name: the card)'],
     flags: [],
-    body: `  build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)]
+    body: `  build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]
                                           --json: [] or each diagnostic with its range; --errors-only: omit warnings
                                           --entry: the named widget's plan, from app.json beside the input
+                                          --surface terminal: a plan the terminal host runs, to measure a GUI
+                                          source there; what a terminal entry refuses is a warning
                                           app.contract: app.ts type-checked too, as every host's build does
   types <file.contract> [-o <app.d.ts>]   the types app.ts imports (build app.contract, test, web refresh them)
   vocab [--json] [--all] [<name> …]       no name: the card, what an app writes, in one read (--all: every

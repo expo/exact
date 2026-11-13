@@ -287,6 +287,8 @@ impl<D: DataSource> Runner<D> {
         } else if self.plan.module_named(&p.source).is_some() {
             self.module_parse(p.target, ty, &p.source, outcome)
                 .map(Some)
+        } else if self.plan.fetch_named(&p.source).is_some() {
+            self.fetch_parse(ty, &p.source, outcome).map(Some)
         } else {
             let parsed = match outcome {
                 Outcome::Messages(batch) => self.parse_batch(&p, batch),

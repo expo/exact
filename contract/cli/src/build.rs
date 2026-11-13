@@ -2,7 +2,7 @@
 
 use std::{io::Write, path::Path, process::ExitCode};
 
-pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)]";
+pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
 
 struct Options<'a> {
     input: &'a str,
@@ -16,11 +16,15 @@ struct Options<'a> {
     /// A widget entry's kind (LLP 1126 D2): its plan instead of the app's,
     /// compiled as the bake compiles it from `app.json` beside the input.
     entry: Option<&'a str>,
+    /// `--surface terminal`: the terminal's lowering of a GUI source, for
+    /// measuring it on the terminal host (LLP 1121 stage 11 C), which runs
+    /// only a terminal plan (LLP 1101.003 D9).
+    profile: contract_lower::Profile,
 }
 
 fn options(args: &[String]) -> Option<Options<'_>> {
     let (mut input, mut output, mut json, mut map, mut entry) = (None, None, false, false, None);
-    let (mut errors_only, mut stdin) = (false, false);
+    let (mut errors_only, mut stdin, mut profile) = (false, false, None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -40,12 +44,21 @@ fn options(args: &[String]) -> Option<Options<'_>> {
                     return None;
                 }
             }
+            "--surface" if profile.is_none() => {
+                profile = Some(match args.next()?.as_str() {
+                    "gui" => contract_lower::Profile::Web,
+                    "terminal" => contract_lower::Profile::Terminal,
+                    _ => return None,
+                });
+            }
             name if !name.starts_with('-') && input.is_none() => input = Some(name),
             _ => return None,
         }
     }
     // An entry plan has no source map yet: `--map` with `--entry` is refused.
-    if (map || entry.is_some()) && output.is_none() || (map || stdin) && entry.is_some() {
+    if (map || entry.is_some()) && output.is_none()
+        || (map || stdin || profile.is_some()) && entry.is_some()
+    {
         return None;
     }
     Some(Options {
@@ -56,6 +69,7 @@ fn options(args: &[String]) -> Option<Options<'_>> {
         map,
         stdin,
         entry,
+        profile: profile.unwrap_or_default(),
     })
 }
 
@@ -191,6 +205,7 @@ fn build(options: &Options) -> ExitCode {
         errors_only,
         map,
         stdin,
+        profile,
         ..
     } = options;
     // The map is always built: it prices each component for the summary.
@@ -202,7 +217,7 @@ fn build(options: &Options) -> ExitCode {
         compiled: (compiled, mut warnings),
         surfaces,
         clocks,
-    } = contract::compile_path_advised(Path::new(input), true);
+    } = contract::compile_path_advised(Path::new(input), true, profile);
     let mut refused = match &surfaces {
         Ok(s) if s.newer.is_none() => s.findings.clone(),
         Ok(_) => Vec::new(),

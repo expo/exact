@@ -1,5 +1,6 @@
 package dev.exact.canvas
 
+import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -799,9 +800,18 @@ internal class Fields(context: Context) : FrameLayout(context) {
         /** How far out of sight a field with no place is kept, px. */
         private const val AWAY = 100000f
 
-        /** The context a measuring field is made in: the activity that reads the host, for its theme. */
+        /** The activity that reads the host, whose theme a measuring field is made in ([detached]). */
         @Volatile internal var context: Context? = null
         private val measurer = ThreadLocal<EditText>()
+
+        /** [context]'s theme over the application context. The measuring field is kept as long as exact2's thread,
+         * which outlives every activity (LLP 1115.001 D15.1), so it must not hold the activity it was made for. */
+        private fun detached(context: Context): Context {
+            val theme = (context as? Activity)?.let {
+                runCatching { it.packageManager.getActivityInfo(it.componentName, 0).themeResource }.getOrNull()
+            } ?: context.applicationInfo.theme
+            return ContextThemeWrapper(context.applicationContext, theme)
+        }
         private val faces = ConcurrentHashMap<String, Typeface>()
 
         /** An [EditText] with nothing of its style's that would move its text: no background and so no padding, no
@@ -894,7 +904,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             val context = context ?: return -1L
             // A host booting on a thread of exact2's own: a view wants a looper to be made on.
             if (Looper.myLooper() == null) Looper.prepare()
-            val v = measurer.get() ?: bare(EditText(unadjusted(context))).also {
+            val v = measurer.get() ?: bare(EditText(unadjusted(detached(context)))).also {
                 it.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
                 // Never attached, so no parent gives it these; once it has a layout, setText reads them
                 // (TextView.checkForResize) and would throw without them.

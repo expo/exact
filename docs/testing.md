@@ -233,6 +233,18 @@ The runner tests distinguish visits with the same URL and reject stale or
 cross-tab jumps. These tests use UIKit's public stack API; they do not establish
 activation of its Back-history menu.
 
+`ModalStackIOSTests.testBackHistoryMenuInThePrimaryStack` and
+`testBackHistoryMenuInThePresentedStack` use the XCTest touch runner to hold the
+active stack's Back control for 0.8 seconds. They require an exposed menu before
+selecting a destination, then check controller and visit identity with repeated
+URLs, with and without authored navigation. A missing menu keeps its accessibility
+snapshot and reports an unqualified interaction as a skip.
+On iPhone 18 Pro with iOS 27.0, the long press performs an adjacent Back in both
+fixtures and exposes no menu. Nonadjacent selection, repeated-URL identity and
+authored navigation through the menu remain unqualified there.
+Tests that declare `missing("touch", …)` run on the selected simulator without
+clones, so their fixture and the touch runner share one screen.
+
 With `EXACT_SIM` naming an iPhone Duo, rebuild Duo Lab and the host fixture, then run
 `bun scripts/smoke.mjs duo --only navigation,navigation-gestures,host-navigation`.
 These legs cover native Back taps, completed and cancelled edge and content swipes,

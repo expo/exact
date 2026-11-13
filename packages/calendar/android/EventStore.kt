@@ -276,11 +276,14 @@ internal class EventStore(private val context: ExtensionContext, private val say
         } to written
     }
 
-    /** The event row [id]: its calendar and whether it is a series or an occurrence of one; null where there is none. */
-    private fun row(id: Long): Pair<Long, Boolean>? =
-        resolver.query(ContentUris.withAppendedId(Events.CONTENT_URI, id), arrayOf(Events.CALENDAR_ID, Events.RRULE, Events.ORIGINAL_ID), null, null, null)?.use { c ->
-            if (!c.moveToFirst()) null else c.getLong(0) to (!c.isNull(1) || !c.isNull(2))
+    /** The event row [id]: its calendar and whether it is a series (a rule, or a list of dates alone, RFC 5545
+     * §3.8.5.2) or an occurrence of one; null where there is none. */
+    private fun row(id: Long): Pair<Long, Boolean>? {
+        val columns = arrayOf(Events.CALENDAR_ID, Events.RRULE, Events.RDATE, Events.ORIGINAL_ID)
+        return resolver.query(ContentUris.withAppendedId(Events.CONTENT_URI, id), columns, null, null, null)?.use { c ->
+            if (!c.moveToFirst()) null else c.getLong(0) to (1..3).any { !c.isNull(it) }
         }
+    }
 
     private fun save(args: JSONObject): JSONObject {
         val event = args.optJSONObject("event") ?: return CalendarModule.malformed

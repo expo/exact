@@ -715,11 +715,12 @@ it returns:
     Fields.measure(size px, weight, flags, tracking em, line px, font file, axes, features, text, width px): Long
 
 An `EditText` of that thread's own, never attached, is set as the field is (no background, no padding, no font
-padding, the field's size, weight, slant, tracking, line height, face, axes and OpenType features) and measured;
-the answer is its width, height and first baseline in pixels. A single line is as long as its text; a `textarea`
-wraps at the width offered. Each distinct question is asked once (a form of twenty fields in one font asks two).
-It is no request (D5): that queue is taken after the frame. The container's own insets are still the painter's
-(its border and padding, `field_chrome`); the `EditText` has none.
+padding, the field's size, weight, slant, tracking, line height, face, axes and OpenType features) and measured.
+It is made in the application context with the reading activity's theme: the thread outlives every activity, so the
+field holds none. The answer is its width, height and first baseline in pixels. A single line is as long as its
+text; a `textarea` wraps at the width offered. Each distinct question is asked once (a form of twenty fields in one
+font asks two). It is no request (D5): that queue is taken after the frame. The container's own insets are still the
+painter's (its border and padding, `field_chrome`); the `EditText` has none.
 
 **What exact2 tells** (`Native.fields(): IntArray?`, null while nothing changed; taken with each stream, before the
 stream is drawn). A count, then for each live field, in tree order:
@@ -818,7 +819,8 @@ field through the keyboard request (kind 6, with the field's id): the `EditText`
 shows. A focus that leaves the fields (a press on a button, `blur()`, Done) hides the keyboard and gives the focus
 back to the reader's view, so keys go on to exact2 (`Native.key`). Back closes the keyboard first, which the system
 does itself for an `EditText`: the IME takes Back before the reader's callback. A hardware keyboard types into the
-`EditText`; its Enter is the action key and its Tab the page's.
+`EditText`; its Enter is the action key and its Tab the page's. Off the fields, Tab and Shift+Tab go to exact2 by
+name (`Keys.named`, `Native.namedKey`) and move its focus.
 
 **A field that exact2 takes the focus from gives it up itself.** Two roads led the platform to move the focus on its
 own, both seen with Shelf on a Pixel and both closed in `Fields.kt`. A field that is covered while it holds the focus

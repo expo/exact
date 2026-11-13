@@ -5,8 +5,25 @@ use crate::code::{self, Scope};
 use exact_kernel::{PropId, StyleId};
 use exact_plan::{BindingKind, NodesId};
 use exact_runner::instance::Input;
+use std::fmt::Write as _;
 
 impl Em<'_> {
+    /// Node `i`'s `scrollFollowEnd` on an ordinary scroller, `constant` or
+    /// bound: follow.js's (LLP 1070.000 §15). A virtualized list's is list.js's.
+    pub(super) fn end_follow(&mut self, i: u32, e: &str, constant: Option<&String>) {
+        let bound = (self.plan.node(NodesId(i)).bindings.iter())
+            .map(|b| self.plan.binding(b))
+            .any(|b| b.kind == BindingKind::Prop && b.id == PropId::ScrollFollowEnd as u16);
+        if !bound && constant.is_none() {
+            return;
+        }
+        self.follow = true;
+        if let Some(v) = constant {
+            let p = self.uses.rt("P");
+            let v = serde_json::to_string(v).unwrap();
+            let _ = write!(self.out, "{p}({e},\"scrollFollowEnd\",()=>{v});");
+        }
+    }
     /// Read the same body inputs that invalidate native row measurements, outside the row.
     pub(super) fn row_inputs(&mut self, region: u32, scope: &Scope) -> Result<String, String> {
         let reads = self.answers.row_dependencies(region);

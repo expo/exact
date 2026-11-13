@@ -139,7 +139,10 @@ pub fn rust(plan: &Plan, call_records: &BTreeSet<String>) -> Result<String, Stri
     }
     for row in &plan.sources {
         let name = plan.str(row.name);
-        if exact_plan::runner_owned_source(name) || plan.module_named(name).is_some() {
+        if exact_plan::runner_owned_source(name)
+            || plan.module_named(name).is_some()
+            || plan.fetch_named(name).is_some()
+        {
             continue;
         }
         reach(plan, row.ty, &mut named)?;

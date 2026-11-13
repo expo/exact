@@ -897,6 +897,8 @@ impl<D: DataSource> Runner<D> {
                 self.mutation_requests += 1;
                 let answer = if Self::activity_send(&source) {
                     self.activity_request(&source, &args)
+                } else if self.plan.fetch_named(&source).is_some() {
+                    self.fetch_answer(&source, &args)
                 } else {
                     self.store.set_clock_ms(self.now_ms);
                     let answer = self

@@ -183,8 +183,11 @@ fn call_value(
             }
         }
         Stdlib::PerformanceNow => Value::Number(now_ms),
-        Stdlib::FormatTime => match args.get(2)?.as_str()? {
-            "short" => format_time(num(0)?, num(1)?),
+        // The core's `en-US`; another format locale's data is the linked
+        // capability's (LLP 1054.000.003 D6).
+        Stdlib::FormatTime => match (args.get(2)?.as_str()?, args.get(3)?.as_str()?) {
+            ("short", "") => format_time(num(0)?, num(1)?),
+            ("short", _) => return format?(f, args, plan),
             _ => return None,
         },
         // @ref LLP 1054.000.003 D8 — the linked capability, or a trap.
@@ -192,7 +195,7 @@ fn call_value(
         | Stdlib::FormatNumber
         | Stdlib::ToFixed
         | Stdlib::FormatDecimal
-        | Stdlib::FormatDay => return format?(f, args),
+        | Stdlib::FormatDay => return format?(f, args, plan),
         Stdlib::Length => Value::Number(match args.first()? {
             Value::List(items) => items.len() as f64,
             // The web's String.length (and `maxlength`): UTF-16 code units.

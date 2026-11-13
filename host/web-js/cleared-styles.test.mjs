@@ -17,7 +17,9 @@ const CASES = {
   removed: 'background-color=(mode == "color" ? "#000000" : none)',
   class: 'class=Paint',
 };
-const SOURCE = `style Paint
+const PRESENTATIONS = ['fullscreen', 'modal'];
+// An app has one navigation root, its view's root, so each case is its own app.
+const coverSource = (presentation, name) => `style Paint
   background-color="#123456"
 
 component App
@@ -33,22 +35,18 @@ component App
     fill = " \\t\\n"
     mode = "spaces"
   view
-    column
+    main navigationKey="cover" navigationBack="" position="relative" width=180 height=120
       button "Color" press=color testId="color"
       button "Clear" press=clear testId="clear"
       button "Whitespace" press=spaces testId="spaces"
       text mode testId="mode"
-${['fullscreen', 'modal'].flatMap(presentation => Object.entries(CASES).map(([name, attrs]) => {
-  const id = `${presentation}-${name}`;
-  return `      main navigationKey="cover" navigationBack="" position="relative" width=180 height=120
-        column navigationKey="home" testId="home-${id}" position="absolute" inset=0 background-color="#eeccaa"
-          text "Home"
-        column navigationKey="cover" navigationPresentation="${presentation}" testId="${id}" position="absolute" inset=0 ${attrs}
-          text "Cover"`;
-})).join('\n')}
+      column navigationKey="home" testId="home-${presentation}-${name}" position="absolute" inset=0 background-color="#eeccaa"
+        text "Home"
+      column navigationKey="cover" navigationPresentation="${presentation}" testId="${presentation}-${name}" position="absolute" inset=0 ${CASES[name]}
+        text "Cover"
 `;
 
-async function fixture(runtime, run, contract = SOURCE, files = {}, engine = 'chromium') {
+async function fixture(runtime, run, contract, files = {}, engine = 'chromium') {
   const dir = mkdtempSync(resolve(ROOT, 'target/cleared-styles-'));
   let server, browser, session;
   try {
@@ -92,11 +90,10 @@ async function fixture(runtime, run, contract = SOURCE, files = {}, engine = 'ch
   }
 }
 
-const read = `(() => Object.fromEntries(['fullscreen', 'modal'].flatMap(p => ${JSON.stringify(Object.keys(CASES))}.map(name => {
-  const id = p + '-' + name, route = document.querySelector('[data-testid="' + id + '"]');
-  const home = document.querySelector('[data-testid="home-' + id + '"]');
-  return [id, [getComputedStyle(route).backgroundColor, getComputedStyle(home).visibility]];
-}))))()`;
+const read = id => `(() => {
+  const route = document.querySelector('[data-testid="${id}"]'), home = document.querySelector('[data-testid="home-${id}"]');
+  return [getComputedStyle(route).backgroundColor, getComputedStyle(home).visibility];
+})()`;
 
 const MAPPED = {
   tracks: ['grid-template-columns', '20px 1fr', '40px 60px'],
@@ -310,21 +307,37 @@ component Fam
     text "Prop" class=Family font-family=f testId="prop"
 `), 120000);
 
-  check(`${runtime}: an empty bound background clears routes over authored classes and the neutral sheet`, () => fixture(runtime, async evaluate => {
-    const snapshots = [];
-    for (const mode of ['empty', 'color', 'empty', 'spaces', 'color', 'empty']) {
-      if (snapshots.length) await evaluate(`document.querySelector('[data-testid="${mode === 'empty' ? 'clear' : mode}"]').click()`);
-      await evaluate(`new Promise((ok, fail) => {
-        const deadline = performance.now() + 10000;
-        const ready = () => {
-          if (document.querySelector('[data-testid="mode"]').textContent === ${JSON.stringify(mode)}) return ok();
-          if (performance.now() >= deadline) return fail(new Error('the style action did not commit'));
-          requestAnimationFrame(ready);
-        }; ready();
-      })`);
-      const actual = await evaluate(read);
-      snapshots.push(actual);
-      for (const p of ['fullscreen', 'modal']) {
+  check(`${runtime}: an empty bound background clears routes over authored classes and the neutral sheet`, async () => {
+    const modes = ['empty', 'color', 'empty', 'spaces', 'color', 'empty'], snapshots = modes.map(() => ({}));
+    for (const p of PRESENTATIONS) for (const name of Object.keys(CASES)) await fixture(runtime, async evaluate => {
+      for (const [i, mode] of modes.entries()) {
+        if (i) await evaluate(`document.querySelector('[data-testid="${mode === 'empty' ? 'clear' : mode}"]').click()`);
+        await evaluate(`new Promise((ok, fail) => {
+          const deadline = performance.now() + 10000;
+          const ready = () => {
+            if (document.querySelector('[data-testid="mode"]').textContent === ${JSON.stringify(mode)}) return ok();
+            if (performance.now() >= deadline) return fail(new Error('the style action did not commit'));
+            requestAnimationFrame(ready);
+          }; ready();
+        })`);
+        snapshots[i][`${p}-${name}`] = await evaluate(read(`${p}-${name}`));
+      }
+      if (runtime === 'JS' && p === 'fullscreen' && name === 'lowered') {
+        expect(await evaluate(`[...document.querySelector('[data-testid="fullscreen-lowered"]').classList].some(name => name.startsWith('xa'))`)).toBe(true);
+        expect(await evaluate(`(async () => {
+          const { css, cssText } = await import('/rt.js');
+          const el = document.createElement('div'); el.style.color = 'red';
+          const values = [];
+          for (const value of ['', null, ' \\t', undefined, '']) {
+            css(el, 'color', '', value); values.push(el.style.color);
+          }
+          return { values, tokens: ['', ' \\t', null].map(v => cssText('--exact-said-font-weight', '', v)) };
+        })()`)).toEqual({ values: ['unset', '', 'unset', '', 'unset'], tokens: ['', ' \t', null] });
+      }
+    }, coverSource(p, name));
+    for (const [i, mode] of modes.entries()) {
+      const actual = snapshots[i];
+      for (const p of PRESENTATIONS) {
         for (const name of ['bound', 'bound-class', 'lowered']) {
           expect([mode, p, name, actual[`${p}-${name}`]]).toEqual([mode, p, name, [mode === 'color' ? 'rgb(0, 0, 0)' : 'rgba(0, 0, 0, 0)', 'visible']]);
         }
@@ -334,26 +347,14 @@ component Fam
       expect(actual['fullscreen-unsaid']).toEqual(['rgba(1, 2, 3, 0)', 'hidden']);
       expect(actual['modal-unsaid'][0]).not.toBe('rgba(0, 0, 0, 0)');
       expect(actual['modal-unsaid'][1]).toBe('visible');
-      for (const p of ['fullscreen', 'modal']) {
+      for (const p of PRESENTATIONS) {
         expect(actual[`${p}-removed`]).toEqual(mode === 'color' ? ['rgb(0, 0, 0)', 'visible'] : actual[`${p}-unsaid`]);
       }
     }
     expect(snapshots[0]).toEqual(snapshots[2]);
     expect(snapshots[0]).toEqual(snapshots[3]);
     expect(snapshots[0]).toEqual(snapshots[5]);
-    if (runtime === 'JS') {
-      expect(await evaluate(`[...document.querySelector('[data-testid="fullscreen-lowered"]').classList].some(name => name.startsWith('xa'))`)).toBe(true);
-      expect(await evaluate(`(async () => {
-        const { css, cssText } = await import('/rt.js');
-        const el = document.createElement('div'); el.style.color = 'red';
-        const values = [];
-        for (const value of ['', null, ' \\t', undefined, '']) {
-          css(el, 'color', '', value); values.push(el.style.color);
-        }
-        return { values, tokens: ['', ' \\t', null].map(v => cssText('--exact-said-font-weight', '', v)) };
-      })()`)).toEqual({ values: ['unset', '', 'unset', '', 'unset'], tokens: ['', ' \t', null] });
-    }
-  }), 120000);
+  }, 240000);
 
   check(`${runtime}: mapped clears preserve class precedence, companion absence and running animations`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {

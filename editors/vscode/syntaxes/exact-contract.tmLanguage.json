@@ -126,7 +126,7 @@
           }
         },
         {
-          "match": "^(fn)\\s+([A-Za-z_](?:[A-Za-z0-9_]|-[A-Za-z])*)",
+          "match": "^(fn|source)\\s+([A-Za-z_](?:[A-Za-z0-9_]|-[A-Za-z])*)",
           "captures": {
             "1": {
               "name": "keyword.declaration.exact-contract"

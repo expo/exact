@@ -57,6 +57,8 @@ fn node_out(n: &Node, w: &mut Writer) {
             w.u8(1);
             match term {
                 EnvTerm::Inset(edge) => w.u8(*edge as u8),
+                // A local inset (LLP 1123 D5): 4 + edge
+                EnvTerm::Local(edge) => w.u8(4 + *edge as u8),
                 EnvTerm::Segment(var, x, y) => {
                     w.u8(8 + *var as u8);
                     w.u8(*x);
@@ -182,6 +184,7 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
         1 => {
             let term = match r.u8().ok()? {
                 tag @ 0..=3 => EnvTerm::Inset(Edge::from_index(tag)?),
+                tag @ 4..=7 => EnvTerm::Local(Edge::from_index(tag - 4)?),
                 tag @ 8..=13 => {
                     let var = SegmentVar::from_index(tag - 8)?;
                     EnvTerm::Segment(var, r.u8().ok()?, r.u8().ok()?)

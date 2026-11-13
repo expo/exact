@@ -12,6 +12,33 @@ struct Metrics {
     stats: Stats,
 }
 
+/// What a snapshot reads from its surface when it is taken, not per frame.
+#[derive(Default)]
+pub(crate) struct Live {
+    pub thermal: exact_gpu::ThermalState,
+    /// The resolved quality rung's word, once a binding resolved it.
+    pub quality: Option<&'static str>,
+    /// The surface's frame cap, 0 for the display's rate.
+    pub max_fps: u32,
+    /// The canvas asks for no frames until something changes.
+    pub idle: bool,
+    /// The audio output's state, where the surface has one.
+    pub audio: Option<&'static str>,
+    /// Device bytes of the resident delivered textures and of the shared
+    /// vertex and index buffers, once the renderer exists.
+    pub memory: Option<(u64, u64)>,
+}
+
+/// The output's `state` as a snapshot names it: a suspension the host's
+/// interruption caused (an iOS call or alarm, a Windows window losing focus)
+/// is `interrupted`.
+pub(crate) fn audio(state: Option<&'static str>, interrupted: bool) -> Option<&'static str> {
+    state.map(|state| match state {
+        "suspended" if interrupted => "interrupted",
+        state => state,
+    })
+}
+
 #[derive(Default)]
 pub(crate) struct Report {
     pub phases: [Ring; 3],
@@ -81,7 +108,7 @@ impl Report {
             }
         }
     }
-    pub fn take(&mut self, now_ms: f64) -> Option<String> {
+    pub fn take(&mut self, now_ms: f64, live: &Live) -> Option<String> {
         if !self.rendered {
             return None;
         }
@@ -126,6 +153,32 @@ impl Report {
                 .unwrap();
             }
         }
+        // The host's state arrives with each drawn frame; with none in the
+        // window it may be stale.
+        if let Some(state) = live.thermal.keyword().filter(|_| self.frames > 0) {
+            write!(out, ",\"thermalState\":\"{state}\"").unwrap();
+        }
+        if let Some(rung) = live.quality {
+            write!(out, ",\"quality\":\"{rung}\"").unwrap();
+        }
+        if live.max_fps > 0 {
+            // The module honors caps down to 5 Hz (exact_gpu::Module::max_fps).
+            write!(out, ",\"maxFps\":{}", live.max_fps.max(5)).unwrap();
+        }
+        if let Some(state) = live.audio {
+            write!(out, ",\"audioState\":\"{state}\"").unwrap();
+        }
+        if let Some((textures, geometry)) = live.memory {
+            write!(
+                out,
+                ",\"textureMemoryBytes\":{textures},\"geometryMemoryBytes\":{geometry}"
+            )
+            .unwrap();
+        }
+        // Only a live clock rests; under a virtual one the fact is unknown.
+        if self.live == Some(true) {
+            write!(out, ",\"idle\":{}", live.idle).unwrap();
+        }
         out.push('}');
         self.clear_window();
         Some(out)
@@ -144,6 +197,85 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_interrupted_output_says_so_and_no_output_says_nothing() {
+        assert_eq!(audio(Some("suspended"), true), Some("interrupted"));
+        assert_eq!(audio(Some("running"), false), Some("running"));
+        assert_eq!(
+            audio(Some("closed"), true),
+            Some("closed"),
+            "no device is not interrupted"
+        );
+        assert_eq!(audio(None, true), None);
+    }
+
+    #[test]
+    fn live_facts_are_read_at_the_snapshot_and_unknown_ones_are_absent() {
+        let mut report = Report::default();
+        report.clock(true);
+        let frame = Frame {
+            width: 10.,
+            height: 10.,
+            scale: 1.,
+            now_ms: 0.,
+            seekable: true,
+            period_ms: 0.,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        };
+        report.encoded(&frame, &FrameTiming::default(), 1., 1, Stats::default(), 0);
+        report.submitted();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(0., &Live::default()).unwrap()).unwrap();
+        for absent in [
+            "thermalState",
+            "quality",
+            "maxFps",
+            "idle",
+            "textureMemoryBytes",
+            "audioState",
+        ] {
+            assert!(value.get(absent).is_none(), "{absent}");
+        }
+        report.clock(false);
+        let live = Live {
+            thermal: exact_gpu::ThermalState::Fair,
+            quality: Some("mid"),
+            max_fps: 2,
+            idle: true,
+            audio: Some("running"),
+            memory: Some((4096, 1024)),
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(0., &live).unwrap()).unwrap();
+        assert!(
+            value.get("thermalState").is_none(),
+            "no frame in the window carried the host's state"
+        );
+        report.encoded(
+            &Frame {
+                seekable: false,
+                ..frame
+            },
+            &FrameTiming::default(),
+            1.,
+            1,
+            Stats::default(),
+            0,
+        );
+        report.submitted();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(1000., &live).unwrap()).unwrap();
+        assert_eq!(value["thermalState"], "fair");
+        assert_eq!(value["quality"], "mid");
+        assert_eq!(value["maxFps"], 5, "caps below 5 Hz draw at 5 Hz");
+        assert_eq!(value["idle"], true);
+        assert_eq!(value["audioState"], "running");
+        assert_eq!(value["textureMemoryBytes"], 4096);
+        assert_eq!(value["geometryMemoryBytes"], 1024);
+    }
+
     #[test]
     fn snapshots_count_submitted_frames_honor_caps_and_reset_the_window() {
         let mut report = Report::default();
@@ -165,9 +297,13 @@ mod tests {
             ..Default::default()
         };
         report.encoded(&frame, &timing, 0.75, 4, Stats::default(), 30);
-        assert!(report.take(0.).is_none(), "encoding is not submission");
+        assert!(
+            report.take(0., &Live::default()).is_none(),
+            "encoding is not submission"
+        );
         report.submitted();
-        let value: serde_json::Value = serde_json::from_str(&report.take(0.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(0., &Live::default()).unwrap()).unwrap();
         assert!(
             value.get("longestGapMs").is_none(),
             "first-after-rest has no interval"
@@ -186,7 +322,8 @@ mod tests {
             Stats::default(),
             30,
         );
-        let value: serde_json::Value = serde_json::from_str(&report.take(0.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(0., &Live::default()).unwrap()).unwrap();
         assert_eq!(
             value["pixelWidth"], 150,
             "an encoded frame is not submitted yet"
@@ -208,7 +345,7 @@ mod tests {
         report.phases[0].push(4.);
         report.submitted();
         let value: serde_json::Value =
-            serde_json::from_str(&report.take(1000. / 30.).unwrap()).unwrap();
+            serde_json::from_str(&report.take(1000. / 30., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["pixelWidth"], 150);
         assert_eq!(value["devicePixelRatio"], 2.);
         assert_eq!(value["lateFrames"], 0);
@@ -221,7 +358,8 @@ mod tests {
         timing.interval_ms *= 2.;
         report.encoded(&frame, &timing, 0.75, 4, Stats::default(), 30);
         report.submitted();
-        let value: serde_json::Value = serde_json::from_str(&report.take(100.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(100., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["frames"], 1);
         assert_eq!(value["lateFrames"], 1);
         assert_eq!(value["missedFrames"], 1);
@@ -230,17 +368,20 @@ mod tests {
         timing.interval_ms = 400.;
         report.encoded(&frame, &timing, 0.75, 4, Stats::default(), 1);
         report.submitted();
-        let value: serde_json::Value = serde_json::from_str(&report.take(500.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(500., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["missedFrames"], 1, "caps below 5 Hz draw at 5 Hz");
         timing.display_period_ms = 0.;
         timing.interval_ms = 20.;
         report.encoded(&frame, &timing, 0.75, 4, Stats::default(), 0);
         report.submitted();
-        let value: serde_json::Value = serde_json::from_str(&report.take(520.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(520., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["fps"], 50.);
         assert_eq!(value["longestGapMs"], 20.);
         assert!(value.get("lateFrames").is_none(), "unknown target cadence");
-        let value: serde_json::Value = serde_json::from_str(&report.take(1520.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(1520., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["frames"], 0);
         assert_eq!(value["fps"], 0.);
         assert_eq!(value["windowMs"], 1000.);
@@ -255,7 +396,8 @@ mod tests {
             Stats::default(),
             0,
         );
-        let value: serde_json::Value = serde_json::from_str(&report.take(2520.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(2520., &Live::default()).unwrap()).unwrap();
         assert_eq!(
             value["fps"], 0.,
             "unsubmitted encode cannot switch clock mode"
@@ -264,7 +406,8 @@ mod tests {
         report.submitted();
         report.phases[0].push(2.);
         report.clock(true);
-        let value: serde_json::Value = serde_json::from_str(&report.take(3520.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(3520., &Live::default()).unwrap()).unwrap();
         assert!(
             value.get("fps").is_none(),
             "virtual time has no measured FPS"
@@ -276,18 +419,21 @@ mod tests {
         assert!(value.get("longestGapMs").is_none());
         assert!(value.get("cpuTickMs").is_none());
         report.clock(false);
-        let value: serde_json::Value = serde_json::from_str(&report.take(4520.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(4520., &Live::default()).unwrap()).unwrap();
         assert!(
             value.get("fps").is_none(),
             "mode change invalidates the window"
         );
-        let value: serde_json::Value = serde_json::from_str(&report.take(5520.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(5520., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["fps"], 0.);
         timing.display_period_ms = 20.;
         timing.interval_ms = 3000.;
         report.encoded(&frame, &timing, 0.75, 4, Stats::default(), 0);
         report.submitted();
-        let value: serde_json::Value = serde_json::from_str(&report.take(5540.).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&report.take(5540., &Live::default()).unwrap()).unwrap();
         assert_eq!(value["windowMs"], 20.);
         assert_eq!(
             value["longestGapMs"], 3000.,

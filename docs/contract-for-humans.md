@@ -1001,7 +1001,13 @@ strings: `width="50%"`, `height="auto"`, `padding-top="env(safe-area-inset-top)"
 `width="calc(100% - 24px)"`, and CSS's `min()`, `max()` and `clamp()` over px,
 percentages, the safe-area insets and viewport lengths: `padding-bottom="clamp(15px,
 env(safe-area-inset-bottom), 60px)"`, `bottom="calc(max(15px,
-env(safe-area-inset-bottom)) + 44px)"`, `width="min(50%, 600px)"`. Supported values
+env(safe-area-inset-bottom)) + 44px)"`, `width="min(50%, 600px)"`. `env()` is the
+screen's safe area; `var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`,
+`-left`) is the one where the box is: inside a route, its bars included, so
+`margin-top="calc(-1 * var(--exact-safe-area-inset-top))"` takes a background up
+under the navigation bar (LLP 1123 D9). A route is cleared of its bars by itself, the
+clearance added to its padding unless that padding reads the inset; `-exact-safe-area`
+on the route turns it off per edge (D3, D4). Supported values
 are property-specific; this is not
 an unrestricted browser stylesheet. The compiler and kernel reject unsupported
 names or values. `line-height=1.5` is a ratio; `line-height="24px"` is fixed.
@@ -1688,10 +1694,17 @@ device's. See
 [the locale fixture](../host/web-js/conformance/locale) and
 [the string tests](../contract/cli/tests/it/strings.rs).
 
-`formatTime`, `formatDate`, and `formatNumber` are deterministic formatting calls
-with specific accepted format literals. They print en-US whatever the viewer's
-locale, and their vocabulary is not a general `Intl` options object. App-specific
-wording belongs in app `fn`s.
+`formatTime`, `formatDate`, `formatDay` and `formatNumber` are deterministic
+formatting calls with specific accepted format literals. They format in the
+locale of the strings table the app shows, as `Intl` formats it: with a `de` table
+`formatDate(at, offset, "medium")` is `26.09.2026` and `formatNumber(1234.5,
+"decimal")` is `1.234,5`, and `setLocale` moves them with the text. An app with no
+tables, or only English ones, prints en-US. A table's region is its formats' region,
+so an app that wants British dates ships `strings/en-GB.json` (it may be `{}`).
+The viewer's forced 12- or 24-hour clock applies; dates are Gregorian in every
+locale ([formatting by locale](contract-grammar.md#formatting-by-locale)). Their
+vocabulary is not a general `Intl` options object. App-specific wording belongs in
+app `fn`s.
 
 ## Testing, diagnostics, and delivery
 

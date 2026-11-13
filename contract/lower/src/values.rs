@@ -319,35 +319,14 @@ fn scheme_colour(a: &Attr, rows: &[StyleId]) -> Result<(), LowerError> {
 /// Whether `e` puts a `-exact-platform-color(` literal into a value it computes.
 fn builds_platform_color(e: &Expr) -> bool {
     let named = |t: &str| t.contains("-exact-platform-color(");
-    match e {
+    let written = match e {
         Expr::Str(t, _) => named(t),
-        Expr::Template(parts, _) => parts.iter().any(|p| match p {
-            contract_syntax::TemplatePart::Text(t) => named(t),
-            contract_syntax::TemplatePart::Expr(e) => builds_platform_color(e),
-        }),
-        Expr::Some(e, _)
-        | Expr::Member(e, _, _)
-        | Expr::NamedArg(_, e, _)
-        | Expr::Unary(_, e, _)
-        | Expr::Typed(e, _, _) => builds_platform_color(e),
-        Expr::Arrow { body, .. } => builds_platform_color(body),
-        Expr::Call(_, args, _) => args.iter().any(builds_platform_color),
-        Expr::Binary(_, l, r, _) => builds_platform_color(l) || builds_platform_color(r),
-        Expr::Ternary(c, y, n, _) => [c, y, n].iter().any(|e| builds_platform_color(e)),
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => [subject, some, none]
+        Expr::Template(parts, _) => parts
             .iter()
-            .any(|e| builds_platform_color(e)),
-        Expr::Let { value, body, .. } => {
-            builds_platform_color(value) || builds_platform_color(body)
-        }
-        Expr::List(items, _) => items.iter().any(builds_platform_color),
-        Expr::Number(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => false,
-    }
+            .any(|p| matches!(p, contract_syntax::TemplatePart::Text(t) if named(t))),
+        _ => false,
+    };
+    written || e.operands().any(builds_platform_color)
 }
 /// `position-area` places a popover against the invoker that opens it (its
 /// implicit anchor, LLP 1021 §5): there is no `anchor-name`, so on any other
@@ -532,8 +511,12 @@ fn style_value(
                     span,
                 );
             }
-            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own.
-            if v.to_ascii_lowercase().contains("--exact-") {
+            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own,
+            // but for the safe area an author reads (LLP 1123 D9).
+            let read = ["top", "right", "bottom", "left"]
+                .map(|edge| format!("{}{edge}", exact_kernel::style::env::LOCAL_PREFIX));
+            let others = read.iter().fold(v.clone(), |v, name| v.replace(name, ""));
+            if others.to_ascii_lowercase().contains("--exact-") {
                 return err(
                     "lower-attr-value",
                     format!("`--exact-*` names are the host's own; write the author's `-exact-` name: `{}=\"{v}\"`", a.name),
