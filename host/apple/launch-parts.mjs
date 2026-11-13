@@ -34,23 +34,38 @@ export const launchServices = (modules, buildDir) => modules.filter(m => m.servi
 /** swiftc's arguments for a service dylib, before its target. */
 export const serviceArgs = svc => ['-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', `ExactService_${svc.name}`, ...svc.sources, '-lsqlite3', '-o', svc.built];
 
+/** The objects SwiftPM compiled ExactLaunchParts into, in `binDir` (its --show-bin-path): Swift Build links the
+ * target into one `ExactLaunchParts.o`; the native build system (what a Linux cross build runs) leaves one object
+ * per source in `ExactLaunchParts.build/`. Empty when neither is there. */
+export function launchPartsObjects(binDir) {
+  const merged = resolve(binDir, 'ExactLaunchParts.o'), dir = resolve(binDir, 'ExactLaunchParts.build');
+  if (existsSync(merged)) return [merged];
+  return existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.o')).sort().map(f => resolve(dir, f)) : [];
+}
+
 /** Throws unless the linked launch parts have at most 32 KiB of text and data
  * and no static initializer or ObjC +load, which would run outside the timed
- * `launch()` call, or if their object is missing and cannot be audited. */
-export function auditLaunchParts(object, modules, read) {
-  if (!existsSync(object)) {
-    throw new Error(`host/apple: module launch parts (app.json launch) cannot be audited: ${object} is missing`);
+ * `launch()` call, or if their objects are missing and cannot be audited.
+ * `objects` is one object or the list launchPartsObjects returns; the budget is their sum. */
+export function auditLaunchParts(objects, modules, read) {
+  const list = typeof objects === 'string' ? [objects] : objects;
+  if (!list.length || !list.every(existsSync)) {
+    throw new Error(`host/apple: module launch parts (app.json launch) cannot be audited: ${list.length ? `${list.find(o => !existsSync(o))} is missing` : 'SwiftPM left no ExactLaunchParts object'}`);
   }
-  const size = read('xcrun', ['size', object]), commands = read('otool', ['-l', object]);
-  const [, row] = (size.stdout ?? '').trim().split('\n');
-  const [text, data] = (row ?? '').trim().split(/\s+/).map(Number);
-  const sections = commands.stdout ?? '';
   const problems = [];
-  const validSize = size.status === 0 && [text, data].every(n => Number.isSafeInteger(n) && n >= 0);
+  let text = 0, data = 0, validSize = true, validCommands = true, sections = '';
+  for (const object of list) {
+    const size = read('xcrun', ['size', object]), commands = read('otool', ['-l', object]);
+    const [, row] = (size.stdout ?? '').trim().split('\n');
+    const [t, d] = (row ?? '').trim().split(/\s+/).map(Number);
+    if (size.status === 0 && [t, d].every(n => Number.isSafeInteger(n) && n >= 0)) { text += t; data += d; } else validSize = false;
+    if (commands.status !== 0 || !/\bcmd LC_SEGMENT(?:_64)?\b/.test(commands.stdout ?? '')) validCommands = false;
+    sections += `${commands.stdout ?? ''}\n`;
+  }
   if (!validSize) {
     problems.push('size inspection failed: xcrun size did not report nonnegative byte counts; check the Xcode toolchain and rebuild');
   }
-  if (commands.status !== 0 || !/\bcmd LC_SEGMENT(?:_64)?\b/.test(sections)) {
+  if (!validCommands) {
     problems.push('load-command inspection failed: otool did not report a Mach-O segment; check the Xcode toolchain and rebuild');
   }
   if (validSize && text + data > 32768) {
