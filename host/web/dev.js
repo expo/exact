@@ -54,8 +54,8 @@ const utf8Compare = (a, b) => {
   for (let i = 0; i < Math.min(aa.length, bb.length); i++) if (aa[i] !== bb[i]) return aa[i] - bb[i];
   return aa.length - bb.length;
 };
-// The trees a generation carries (serve.mjs `listAssets`), entry plans (`plans/`) among them.
-const validName = (name) => typeof name === "string" && /^(assets|deck|shaders|plans)\//.test(name)
+// The trees a generation carries (serve.mjs `assetTrees`), entry plans (`plans/`) and activity schemas among them.
+const validName = (name) => typeof name === "string" && /^(assets|deck|shaders|plans|activities)\//.test(name)
   && !name.includes("\\") && !name.includes(":") && !name.includes("\0")
   && name.split("/").every((part) => part && part !== "." && part !== "..");
 const sameOrigin = (path, base) => {
@@ -92,7 +92,7 @@ async function readEnvelope(url, signal) {
   const response = await readBounded(sameOrigin(url, location.href), 64 * 1024, signal);
   return { envelope: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes)), url: response.url };
 }
-async function fetchGeneration(message, signal, first = false) {
+async function fetchGeneration(message, signal, first = false, held = null) {
   const started = performance.now();
   const { envelope, url } = await readEnvelope(message.envelope, signal);
   const identity = envelope.dev;
@@ -102,9 +102,11 @@ async function fetchGeneration(message, signal, first = false) {
   if (!first) await globalThis.exact.ready;
   if (envelope.app?.id !== globalThis.exact.compat?.inputs?.app) throw new Error("the dev generation names another app");
   const assets = new Map(), names = new Set();
-  const load = async (card, name) => {
+  const load = async (card, name, kept) => {
     if (!card || !Number.isSafeInteger(card.bytes) || card.bytes < 0 || card.bytes > 64 * 1024 * 1024 || !/^[0-9a-f]{64}$/.test(card.sha256)) throw new Error(`invalid payload card: ${name}`);
     const path = sameOrigin(card.url, url);
+    // An unchanged asset keeps the bytes this page fetched and verified for its live generation.
+    if (kept?.sha256 === card.sha256 && kept.bytes.length === card.bytes) return { bytes: kept.bytes, url: path, sha256: card.sha256 };
     const { bytes } = await readBounded(path, card.bytes, signal);
     if (bytes.length !== card.bytes || await digest(bytes) !== card.sha256) throw new Error(`payload integrity failed: ${name}`);
     return { bytes, url: path, sha256: card.sha256 };
@@ -134,7 +136,7 @@ async function fetchGeneration(message, signal, first = false) {
       || cards.reduce((sum, card) => sum + card.bytes, 0) > 4 * 1024 * 1024 * 1024) throw new Error("generation exceeds the payload budget");
   // All admitted payloads are independent. One bounded queue avoids separate
   // network rounds for the plan, assets and module without raising concurrency.
-  const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.map(card => [card, card.name]),
+  const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.map(card => [card, card.name, held?.get(card.name)]),
     ...(envelope.module ? ['receipt', 'web'].map(key => [envelope.module[key], `module ${key}`]) : []),
     ...(rust ? [[rust.wasm.receipt, 'Rust receipt'], [rust.wasm.module, 'Rust Wasm']] : [])];
   const loaded = new Array(jobs.length);
@@ -233,7 +235,7 @@ if (es) {
   let retry = null, activeGeneration = null;
   // Inspect mode's outline, hidden on a new generation (set below).
   let outlineNone = () => {};
-  const client = generationClient({ fetchGeneration, programChanged: () => { clearTimeout(retry); location.reload(); },
+  const client = generationClient({ fetchGeneration: (message, signal) => fetchGeneration(message, signal, false, activeGeneration?.assets), programChanged: () => { clearTimeout(retry); location.reload(); },
     apply: async (candidate, current) => {
       if (!current()) return false;
       const t = performance.now();

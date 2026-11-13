@@ -36,7 +36,37 @@ fn tree(
     })
 }
 
-// Retained dev generations are ordinary immutable files. Quota admission and
+// One reply cannot hold a large tree. A page reads bodies until `limit` bytes
+// and gives null for each remaining file, which the next request names in `paths`.
+fn page(root: &Directory, input: &Value) -> io::Result<Value> {
+    let mut entries = serde_json::Map::new();
+    let mut left = input["limit"].as_u64().unwrap_or(u64::MAX);
+    let mut read = |path: &str, parent: &Directory, leaf: &str| {
+        let value = if left == 0 {
+            Value::Null
+        } else {
+            let body = parent.read(leaf)?;
+            left = left.saturating_sub(body.len() as u64);
+            Value::String(STANDARD.encode(body))
+        };
+        entries.insert(path.to_owned(), value);
+        Ok(())
+    };
+    match input["paths"].as_array() {
+        Some(paths) => {
+            for path in paths {
+                let path = path.as_str().ok_or_else(|| refuse("invalid path"))?;
+                let (parent, leaf) = root.parent(path, false)?;
+                read(path, &parent, &leaf)?;
+            }
+        }
+        None => root.visit_files("", &mut read)?,
+    }
+    Ok(Value::Object(entries))
+}
+
+// Retained dev generations are ordinary immutable files. A blob is a payload
+// under `blobs/`, named by its SHA-256 and shared by every generation. Quota admission and
 // publication share one OS lock; exhaustion never evicts an existing reader.
 fn retained_bytes(dir: &Directory) -> io::Result<u64> {
     let mut bytes = 0u64;
@@ -82,10 +112,15 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
     {
         return Err(refuse("invalid dev generation path"));
     }
-    let files = input["files"]
-        .as_object()
-        .ok_or_else(|| refuse("missing files"))?;
-    if !files.contains_key("exact.json") {
+    let none = serde_json::Map::new();
+    let blobs = input["blobs"].as_object().unwrap_or(&none);
+    // A request with blobs alone carries part of a generation; its envelope follows.
+    let files = match input["files"].as_object() {
+        Some(files) => files,
+        None if !blobs.is_empty() => &none,
+        None => return Err(refuse("missing files")),
+    };
+    if !files.is_empty() && !files.contains_key("exact.json") {
         return Err(refuse("retained generation needs an envelope"));
     }
     // Only the immediately preceding successful holder can reuse its count.
@@ -113,11 +148,15 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
             .ok_or_else(|| refuse("retained size overflow"))?,
     };
     let mut candidate = Vec::new();
-    for (name, encoded) in files {
-        let path = format!("{prefix}/{name}");
+    let own = files.iter().map(|(name, body)| (false, name, body));
+    for (blob, name, encoded) in own.chain(blobs.iter().map(|(name, body)| (true, name, body))) {
+        let path = format!("{}/{name}", if blob { "blobs" } else { prefix });
         let body = STANDARD
             .decode(encoded.as_str().ok_or_else(|| refuse("invalid bytes"))?)
             .map_err(|_| refuse("invalid base64"))?;
+        if blob && format!("{:x}", Sha256::digest(&body)) != *name {
+            return Err(refuse("a blob is not named by its digest"));
+        }
         let previous = root
             .parent(&path, false)
             .and_then(|(parent, leaf)| parent.read(&leaf));
@@ -130,7 +169,7 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
         total = total
             .checked_add(body.len() as u64)
             .ok_or_else(|| refuse("retained size overflow"))?;
-        candidate.push((name == "exact.json", path, body));
+        candidate.push((!blob && name == "exact.json", path, body));
     }
     if total > quota {
         return Err(refuse("retained generation cache quota exceeded"));
@@ -183,6 +222,9 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
             Ok(())
         })?;
         return Ok(Value::Object(entries));
+    }
+    if op == "tree" && (input["limit"].is_u64() || input["paths"].is_array()) {
+        return page(root, input);
     }
     if op == "tree" || op == "names" || op == "copy" {
         let mut entries = serde_json::Map::new();

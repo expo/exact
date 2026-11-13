@@ -177,6 +177,81 @@ fn retained_generation_quota_is_atomic_and_never_prunes() {
 }
 
 #[test]
+fn retained_blobs_are_stored_once_and_named_by_their_digest() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("cache");
+    let digest = format!("{:x}", Sha256::digest("payload"));
+    let request = |seq, files: Value, blobs: Value| {
+        let mut input = json!({"op":"retain", "path":format!("{}/{seq}", "e".repeat(32)),
+            "quota":1024, "token":TOKEN, "blobs":blobs});
+        if !files.is_null() {
+            input["files"] = files;
+        }
+        operate(&root, &input, None)
+    };
+    let envelope = json!({"exact.json":STANDARD.encode("envelope")});
+    let blob = json!({ digest.as_str(): STANDARD.encode("payload") });
+    // Blobs may precede the envelope in a request of their own.
+    let part = request(1, Value::Null, blob.clone()).unwrap()["bytes"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(part, 68 + 7);
+    assert!(!fixture
+        .path(&format!("cache/{}/1", "e".repeat(32)))
+        .exists());
+    let first = request(1, envelope.clone(), blob.clone()).unwrap()["bytes"]
+        .as_u64()
+        .unwrap();
+    let second = request(2, envelope, blob).unwrap()["bytes"]
+        .as_u64()
+        .unwrap();
+    assert_eq!((first, second), (part + 8, part + 16));
+    assert_eq!(
+        fs::read(fixture.path(&format!("cache/blobs/{digest}"))).unwrap(),
+        b"payload"
+    );
+    let wrong = json!({ digest.as_str(): STANDARD.encode("other") });
+    assert!(request(3, Value::Null, wrong)
+        .unwrap_err()
+        .to_string()
+        .contains("digest"));
+    assert!(request(3, Value::Null, json!({}))
+        .unwrap_err()
+        .to_string()
+        .contains("missing files"));
+    assert!(
+        request(3, json!({"app.plan":STANDARD.encode("plan")}), json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("envelope")
+    );
+}
+
+#[test]
+fn a_tree_page_reads_to_its_limit_and_names_the_rest() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("tree");
+    fixture.dir("tree/nested");
+    for (name, body) in [("a", "12345"), ("nested/b", "678"), ("nested/c", "9")] {
+        fs::write(fixture.path(&format!("tree/{name}")), body).unwrap();
+    }
+    let first = operate(&root, &json!({"op":"tree", "limit":6}), None).unwrap();
+    assert_eq!(
+        first,
+        json!({"a":STANDARD.encode("12345"), "nested/b":STANDARD.encode("678"), "nested/c":null})
+    );
+    let rest = operate(
+        &root,
+        &json!({"op":"tree", "limit":6, "paths":["nested/c"]}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(rest, json!({"nested/c":STANDARD.encode("9")}));
+    assert!(operate(&root, &json!({"op":"tree", "paths":["../tree/a"]}), None).is_err());
+    assert!(operate(&root, &json!({"op":"tree", "paths":["absent"]}), None).is_err());
+}
+
+#[test]
 fn retained_payload_failure_never_publishes_the_envelope() {
     let fixture = Fixture::new();
     let root = fixture.dir("cache");

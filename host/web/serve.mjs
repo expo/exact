@@ -13,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { arch, cpus, networkInterfaces, platform } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { filesystem, filesystemRead } from '../../scripts/filesystem.mjs';
+import { filesystem, filesystemRead, filesystemTree } from '../../scripts/filesystem.mjs';
 import { withLock } from './build-lock.mjs';
 import { canonicalBytes, readAssetIndex } from '../../scripts/deploy-signing.mjs';
 import { copyShaders, developmentURLScheme, resolveApp, webDist, webHostFiles } from '../../scripts/app.mjs';
@@ -116,8 +116,19 @@ export function moduleCards(files, appId) {
 export function retainDevGeneration(cache, epoch, seq, files, quota = DEV_GENERATION_CACHE_BYTES, previousToken = null) {
   if (!/^[0-9a-f]{32}$/.test(epoch) || !Number.isSafeInteger(seq) || seq < 0) throw new Error('invalid dev generation identity');
   try {
-    return filesystem({ op: 'retain', root: resolve(cache), path: `${epoch}/${seq}`, quota, previousToken,
-      files: Object.fromEntries([...files].map(([name, bytes]) => [staticRelative(name), Buffer.from(bytes).toString('base64')])) });
+    // The assets the index names are kept once, by digest, for every generation.
+    // One request cannot hold a large generation: full batches of new assets go first.
+    const root = resolve(cache), index = files.get('assets.json'), own = {}, kept = new Set(filesystem({ op: 'list', root, path: 'blobs' }) ?? []);
+    const digests = new Map(index ? JSON.parse(index).assets.map((asset) => [asset.name, asset.sha256]) : []);
+    let blobs = {}, pending = 0, result;
+    const send = (more) => { result = filesystem({ op: 'retain', root, path: `${epoch}/${seq}`, quota, previousToken, blobs, ...more }); previousToken = result.token; blobs = {}; pending = 0; };
+    for (const [name, bytes] of files) {
+      const digest = digests.get(name), encoded = Buffer.from(bytes).toString('base64');
+      if (!digest) own[staticRelative(name)] = encoded;
+      else if (!kept.has(digest)) { kept.add(digest); blobs[digest] = encoded; if ((pending += bytes.length) >= 64 * 1024 * 1024) send(); }
+    }
+    send({ files: own });
+    return result;
   } catch (error) {
     if (error.message.includes('cache quota exceeded')) throw new Error(`dev generation cache is full: ${resolve(cache)}; close all pages and native dev connections before manually removing this cache, then restart the dev server`);
     throw error;
@@ -141,9 +152,10 @@ function* devGenerationRead(cache, pathname) {
     const moduleKey = Object.keys(MODULE_FILES).find(key => MODULE_FILES[key] === name);
     const rustCard = Object.values(envelope.rust ?? {}).flatMap(v => [v.receipt, v.module]).find(card => card.url?.endsWith('/' + name) || card.url === name);
     let card = name === 'app.plan.map.json' ? envelope.dev.sourceMap : name === 'app.plan' ? envelope.plan : name === 'assets.json' ? envelope.assets : moduleKey ? envelope.module?.[moduleKey] : rustCard;
-    if (!card && envelope.assets) { const index = (yield { op: 'get', root: resolve(cache), path: `${prefix}/assets.json` }); card = index !== null && readAssetIndex(envelope.assets, Buffer.from(index, 'base64')).find((asset) => asset.name === name); }
+    let path = `${prefix}/${name}`;
+    if (!card && envelope.assets) { const index = (yield { op: 'get', root: resolve(cache), path: `${prefix}/assets.json` }); card = index !== null && readAssetIndex(envelope.assets, Buffer.from(index, 'base64')).find((asset) => asset.name === name); path = `blobs/${card?.sha256}`; }
     if (!card) return null;
-    const value = (yield { op: 'get', root: resolve(cache), path: `${prefix}/${name}` });
+    const value = (yield { op: 'get', root: resolve(cache), path });
     if (value === null) return null;
     const body = Buffer.from(value, 'base64');
     if (body.length !== card.bytes || sha256(body) !== card.sha256) return null;
@@ -249,9 +261,7 @@ export function syncStaticTree(source, target, validate = null) {
   }
 }
 
-function staticTreeSnapshot(root) {
-  return new Map(Object.entries(filesystem({ op: 'tree', root: resolve(root), optionalRoot: true }) ?? {}).map(([name, bytes]) => [name, Buffer.from(bytes, 'base64')]));
-}
+const staticTreeSnapshot = (root) => filesystemTree(resolve(root)) ?? new Map();
 
 /** Atomically reconcile a watched whole-tree creation/deletion and return
  * only changed leaf rows. Root events are common when Darwin removes a
@@ -1001,8 +1011,7 @@ const assetTrees = (rust) => ['assets', 'deck', 'shaders', 'plans', 'activities'
 export function captureAssets(dir, rust = false) {
   const files = new Map();
   for (const tree of assetTrees(rust)) {
-    const captured = filesystem({ op: 'tree', root: resolve(dir, tree), optionalRoot: true }) ?? {};
-    for (const [relative, encoded] of Object.entries(captured)) files.set(`${tree}/${relative}`, Buffer.from(encoded, 'base64'));
+    for (const [relative, bytes] of filesystemTree(resolve(dir, tree)) ?? []) files.set(`${tree}/${relative}`, bytes);
   }
   return files;
 }
