@@ -2,7 +2,10 @@
 
 Syntax highlighting and editing defaults for the current `.contract` language,
 and `$exact-contract`, a problem matcher for the Contract compiler's
-diagnostics. This extension has no runtime code or dependencies.
+diagnostics. Its only runtime code, `extension.js`, registers `.contract` with
+the TypeScript 7 extension when that is installed, so a project's content mapper
+(`editors/content-mapper`) answers hover, definition, references, rename and
+errors in a contract opened on its own. It has no dependencies.
 
 To package and install from the repository root:
 
@@ -31,7 +34,8 @@ resources (with `with`) and mutations, actions with `let` locals, host commands,
 record constructors, component `provide` sections, styles, keyframes,
 HTML/SVG/native tags, events, types, authored tests, double-quoted
 strings, and backtick templates with nested interpolations. Single quotes are
-not Contract strings. There is no language server or semantic completion.
+not Contract strings. The grammar itself is no language server: what an editor
+knows about a contract's names comes from `editors/content-mapper`.
 
 ## Building and testing from VS Code
 

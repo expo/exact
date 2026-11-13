@@ -1,0 +1,9 @@
+{
+  "name": "@exact/contract-content-mapper",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "TypeScript 7.1 content mapper for .contract files: definitions, references, rename and hover from the Contract compiler's own analysis, and its errors, in any editor that runs TypeScript's language server.",
+  "typescript": { "contentMapper": { "exec": ["bun", "server.js"] } },
+  "exports": { "./package.json": "./package.json", "./mapper": "./mapper.js" }
+}
