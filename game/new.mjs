@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { capturedLockDrift, gameDefaults, gameShells, prepareGame } from './app/shells.mjs';
 import { cargoEnvironment, lockedMetadata, pathFrom, patchLines } from '../scripts/app.mjs';
@@ -66,14 +66,30 @@ export function createGame(destination, directory = import.meta.dir, options = {
   destination = local ? resolve(destination) : resolve(directory, 'games', name);
   if (existsSync(destination) && readdirSync(destination).length) throw new Error(`Game already exists: ${destination}`);
   // A failure (Cargo cannot fetch the engine's crates offline, say) leaves
-  // nothing of ours behind: the directory itself when we made it, and only
-  // what it held before when the author did. Then exact new can run again.
+  // nothing of ours behind, so exact new can run again: the directory itself
+  // when we made it, its entries when the author made it empty. Only the
+  // directory we started in is cleared (the same device and inode), and a
+  // cleanup that fails never hides the error.
   const existed = existsSync(destination);
+  mkdirSync(destination, {recursive:true});
+  const started = statSync(destination);
   try {
     return writeGame(destination, directory, options, {name, local});
   } catch (error) {
-    if (existed) for (const entry of readdirSync(destination)) rmSync(resolve(destination, entry), {recursive:true, force:true});
-    else rmSync(destination, {recursive:true, force:true});
+    let removed = false;
+    try {
+      const now = lstatSync(destination);
+      if (now.isDirectory() && now.dev === started.dev && now.ino === started.ino) {
+        if (existed) for (const entry of readdirSync(destination)) rmSync(resolve(destination, entry), {recursive:true, force:true});
+        else rmSync(destination, {recursive:true, force:true});
+        removed = true;
+      }
+    } catch {}
+    // The Cargo error names a manifest in the game, which is gone now: the
+    // SDK's own game workspace locks the same engine crates.
+    if (removed && /^game Cargo graph: /.test(error?.message ?? '')) {
+      error.message += `\nexact new removed ${destination}. Fetch the engine's crates with cargo fetch --manifest-path ${JSON.stringify(resolve(directory, 'Cargo.toml'))}, then run exact new again.`;
+    }
     throw error;
   }
 }
