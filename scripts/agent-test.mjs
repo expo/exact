@@ -550,6 +550,18 @@ export async function serverRequest(base, st) {
 /** A launch line's op and the `open` option it sets (`size` aside: it is two numbers). */
 const LAUNCH = { epoch: 'epoch', 'time-zone': 'timeZone', locale: 'locale', seed: 'seed' };
 
+/** Literal comparisons in a scripted state assertion; numeric bounds never coerce another JSON type. */
+export function stateHolds(got, step) {
+  const equal = value => JSON.stringify(got) === JSON.stringify(value);
+  switch (step.comparison) {
+    case 'equal': return equal(step.value);
+    case 'at-least': return typeof got === 'number' && got >= step.value;
+    case 'at-most': return typeof got === 'number' && got <= step.value;
+    case 'in': return step.value.some(equal);
+    default: throw new Error(`unknown state comparison ${step.comparison}`);
+  }
+}
+
 /** Literal `always` predicates over the driver's JSON values (LLP 1151 D8). */
 export function propertyHolds(line, state, previous) {
   const bag = { ...state.derives, ...state.slots };
@@ -615,7 +627,7 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * `atStep(s, { name, line, op })` runs on the session after each input step (and `reload`) lands; returning 'stop' ends
  * that test there, 'done' every test from there (verify's tour of the screens the tests pass through).
  */
-export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
+export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
   const root = resolve(fileURLToPath(new URL('..', import.meta.url))), selected = resolveApp(app);
   webDist ??= defaultWebDist(selected);
   if (host === 'web' && !url) await backendPreflight(selected, resolve(webDist));
@@ -719,7 +731,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // (every `clock +N`, settle and timer), as the runner reports it; whole milliseconds, which every host takes.
     const first = facts.epoch; // the test's launch date, which a `reload` moves `facts.epoch` on from
     const reached = async () => { const { clock } = await s.op({ op: 'tags' }).catch(() => ({})); return facts.epoch + Math.floor(Number.isFinite(clock) ? clock : s.now); };
-    const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port });
+    const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port });
     let s = await launch(fresh);
     const prefer = async (st) => {
       const facts = { [st.name]: st.value };
@@ -757,7 +769,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
       if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; resetLogs(s); }
-      else { await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, url, storage: store, touch: fingers, chrome: bars, scale, port }); }
+      else { await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port }); }
       s.notes = notes;
       for (const [name, value] of Object.entries(media)) {
         const r = await s.prefer({ [name]: value });
@@ -965,7 +977,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
               got = got[field]; path += `.${field}`;
             }
             if (missing != null) { await fail(`${at}: ${path} has no field "${missing}" (${got !== null && typeof got === 'object' && !Array.isArray(got) ? `its fields: ${Object.keys(got).join(', ')}` : `it is ${JSON.stringify(got).slice(0, 200)}`})`); break; }
-            if (JSON.stringify(got) !== JSON.stringify(st.value)) await fail(`${at}: ${st.name} is ${JSON.stringify(got)}, expected ${JSON.stringify(st.value)}`);
+            if (!stateHolds(got, st)) {
+              const operator = {equal: '', 'at-least': '>= ', 'at-most': '<= ', in: 'in '}[st.comparison];
+              await fail(`${at}: ${st.name} is ${JSON.stringify(got)}, expected ${operator}${JSON.stringify(st.value)}`);
+            }
             break;
           }
           case 'expect-wakelock': {

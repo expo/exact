@@ -400,6 +400,15 @@ impl Module {
                 (first.seen.is_some() || first.presented.is_some()).then_some(first)
             })
             .collect();
+        // Canvases whose HUD reads `cpuSubmitMs`: only then is the submit timed.
+        let timed: Vec<u32> = (open.canvases.iter())
+            .map(|c| c.id)
+            .filter(|id| (self.instances.get(id)).is_some_and(|i| i.performance.enabled()))
+            .collect();
+        let submit = |encoder: wgpu::CommandEncoder| {
+            let commands = encoder.finish();
+            crate::performance::time(!timed.is_empty(), || gpu.queue.submit([commands])).1
+        };
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         let mut first = first;
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
@@ -412,18 +421,24 @@ impl Module {
             let before = ride
                 .then(|| ride_next_submit(&gpu.queue, std::mem::take(&mut first)))
                 .flatten();
-            gpu.queue.submit([open.encoder.finish()]);
+            let submit_ms = submit(open.encoder);
             // Every drawable of the frame, or none: a surface that drew
             // nothing into its target is in no command buffer, and then each
             // is presented the ordinary way (one already scheduled is not
             // scheduled twice).
-            before.is_some_and(|n| presented_with_submit(&gpu.queue) == Some(n + drawn))
+            let rode = before.is_some_and(|n| presented_with_submit(&gpu.queue) == Some(n + drawn));
+            (rode, submit_ms)
         };
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
-        let rode = {
-            gpu.queue.submit([open.encoder.finish()]);
-            false
-        };
+        let rode = (false, submit(open.encoder));
+        let (rode, submit_ms) = rode;
+        if let Some(ms) = submit_ms {
+            for id in &timed {
+                if let Some(i) = self.instances.get_mut(id) {
+                    i.performance.submitted(ms);
+                }
+            }
+        }
         let mut ok = true;
         for c in open.canvases {
             // Android presents a canvas that asks for its next texture on its

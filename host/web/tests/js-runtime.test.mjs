@@ -8,7 +8,7 @@
 // with the real shape.js.
 import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { standIns } from './stand-ins.mjs';
@@ -21,7 +21,7 @@ mkdirSync(resolve(root, 'web'));
 writeFileSync(resolve(root, 'web/address-space.js'), 'export const setSpaceState = () => {};');
 const webJs = name => resolve(fileURLToPath(new URL(`../../web-js/${name}`, import.meta.url)));
 
-const REAL = ['rt.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'uploads.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'modules.js', 'samples.js', 'spans.js', 'update.js', 'arrival.js', 'devices.js', 'wakes.js', 'reach.js', 'members.js', 'resource-inspection.js', 'sheets.js'];
+const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'uploads.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'modules.js', 'samples.js', 'spans.js', 'update.js', 'arrival.js', 'devices.js', 'wakes.js', 'reach.js', 'members.js', 'resource-inspection.js', 'sheets.js'];
 for (const f of REAL) copyFileSync(webJs(f), resolve(dir, f));
 // The stand-ins export what these modules and ts-data.js import; the values the tests read are stated.
 const STATED = {
@@ -1261,8 +1261,16 @@ test('an argument or a write past MAX_STRING is refused by name, and a trapping 
 });
 
 
+// A runtime with state of its own: the runtime's files copied to a directory of their own, so each module is loaded
+// afresh (a query on rt.js alone would load only rt.js again, not the files it is split into).
+const freshRuntime = tag => {
+  const own = resolve(root, `web-js-${tag}`);
+  cpSync(dir, own, { recursive: true });
+  return import(resolve(own, 'rt.js'));
+};
+
 test('a refused derive names itself and only the failed resources it reads', async () => {
-  const { memo, res, data } = await import(resolve(dir, 'rt.js') + '?derive-refusal');
+  const { memo, res, data } = await freshRuntime('derive-refusal');
   data.answer = () => { throw new Error('ambient Date is refused'); };
   const failed = res('profile', 'loadProfile', () => [], undefined, undefined, 's', '');
   const unrelated = res('other', 'loadOther', () => [], undefined, undefined, 's', '');
@@ -1276,7 +1284,7 @@ test('a refused derive names itself and only the failed resources it reads', asy
 
 
 test('a refused derive traces only failed resources it read through retained values', async () => {
-  const { memo, res, data } = await import(resolve(dir, 'rt.js') + '?retained-derive-refusal');
+  const { memo, res, data } = await freshRuntime('retained-derive-refusal');
   data.answer = () => { throw new Error('storage unavailable'); };
   const unrelated = res('other', 'loadOther', () => [], 1, [], 'n', 0);
   unrelated();
@@ -1292,7 +1300,7 @@ test('an input runs a due then before its own action', async () => {
   // Runner::dispatch_at moves the clock first, so a focus answer's `then` runs
   // at the start of the input that follows and reads the value it landed, not
   // the one this input writes (synthetic-then: wasm " a3 T3 T2 T12").
-  const { mut, sig, W, commit, on, onValue, clock } = await import(resolve(dir, 'rt.js') + '?dispatch-at');
+  const { mut, sig, W, commit, on, onValue, clock } = await freshRuntime('dispatch-at');
   clock.agent = true;
   const slot = sig(0);
   const m = mut('quick', slot, []);
@@ -1307,7 +1315,7 @@ test('an input runs a due then before its own action', async () => {
 });
 
 test('an async source failure remains named when its retained value breaks a derive', async () => {
-  const { memo, res, data, commit, journal } = await import(resolve(dir, 'rt.js') + '?async-derive-refusal');
+  const { memo, res, data, commit, journal } = await freshRuntime('async-derive-refusal');
   let reject;
   data.answer = () => new Promise((_, fail) => { reject = fail; });
   const count = res('count', 'loadCount', () => [], 0, [], 'n', 0);
@@ -1384,7 +1392,7 @@ test('focus handlers stop bubbling while a view transition holds their commit', 
   globalThis.requestAnimationFrame = f => setTimeout(f, 0);
   globalThis.document = { getElementById: () => ({}) };
   try {
-    const { on, onFocusWithin, act, C, pr, pieces } = await import(`${resolve(dir, 'rt.js')}?focus-events`);
+    const { on, onFocusWithin, act, C, pr, pieces } = await freshRuntime('focus-events');
     pr({}); await pieces();
     for (const kind of ['focusin', 'focusout']) {
       const listeners = [], heard = [];

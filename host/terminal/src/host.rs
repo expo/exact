@@ -595,7 +595,6 @@ impl<D: DataSource> Host<D> {
             layers: self.layers.iter().map(|(id, ..)| *id).collect(),
             images: &self.images,
             center: self.mode == Mode::Fullscreen,
-            env: self.runner.kernel().env(),
             // A disabled or inert box is still hit, and swallows the press
             // (`handler`), so nothing beneath it takes it either.
             presses: Box::new(|id| self.runner.handlers_of(id).contains(&EventKind::Press)),
@@ -999,7 +998,6 @@ impl<D: DataSource> Host<D> {
     /// least move that shows it (`nearest`).
     pub(crate) fn reveal_to(&mut self, id: ViewId, block: &str) {
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let Some(target) = kernel.node(id).map(|n| n.frame) else {
             return;
         };
@@ -1014,7 +1012,7 @@ impl<D: DataSource> Host<D> {
         while let Some(p) = at {
             let Some(n) = kernel.node(p) else { break };
             if Self::is_scroller(&n) {
-                let [bt, _, bb, _] = n.style.border_widths_in(&env);
+                let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
                 let top = n.frame.y + bt;
                 let height = n.frame.height - bt - bb;
                 let reach = (n.content.1 - height).max(0.0);
@@ -1045,7 +1043,6 @@ impl<D: DataSource> Host<D> {
     /// Keep a `scrollFollowEnd` scroller at its end while it was there.
     fn follow_ends(&mut self) {
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let mut stack: Vec<ViewId> = self.runner.roots();
         let mut ends = Vec::new();
         while let Some(id) = stack.pop() {
@@ -1054,7 +1051,7 @@ impl<D: DataSource> Host<D> {
                 && n.props.bool(PropId::ScrollFollowEnd) == Some(true)
                 && n.props.bool(PropId::Virtualized) != Some(true)
             {
-                let [bt, _, bb, _] = n.style.border_widths_in(&env);
+                let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
                 let reach = (n.content.1 - (n.frame.height - bt - bb)).max(0.0);
                 ends.push((id, reach));
             }

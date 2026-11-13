@@ -132,19 +132,10 @@ impl<D: DataSource> Runner<D> {
 impl<D: DataSource> Tamber<'_, D> {
     /// The app tuple at `place`.
     pub fn tuple(&self, place: Place) -> u32 {
-        let kernel = self.runner.kernel();
-        let mut at = match place {
-            Place::Node(id) => kernel.node(id),
-            Place::Root => None,
-        };
-        while let Some(node) = at {
-            // A pin's row holds the tuple it makes, plus one (bridge.rs).
-            if node.style.mask.has(StyleId::Mode) && node.style.mode > 0 {
-                return node.style.mode - 1;
-            }
-            at = node.parent.and_then(|p| kernel.node(p));
+        match place {
+            Place::Node(id) => self.runner.tuple_at(id),
+            Place::Root => self.runner.ids.theme.window,
         }
-        self.runner.ids.theme.window
     }
 
     /// Generated constant `token` at `place` (`SURFACE_CARD`): its value,

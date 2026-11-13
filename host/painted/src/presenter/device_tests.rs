@@ -261,22 +261,36 @@ fn a_fields_placeholder_is_its_label_and_floats_as_it_fills() {
 /// 1115.000 D12.3): the system font one step heavier, and back.
 #[test]
 fn bold_text_weights_the_system_font() {
-    let mut p = boot(READS);
-    let weight = |p: &Presenter<()>| {
+    let mut p = boot(
+        r#"component App
+  view
+    column
+      text "Default" testId="facts"
+      text "Authored" font-weight=500 testId="authored"
+      text "Named" font-family="Georgia, serif" font-weight=500 testId="named"
+"#,
+    );
+    let weight = |p: &Presenter<()>, name: &str| {
         let kernel = p.host().kernel();
-        let key = kernel.find_by_test_id("facts")[0];
+        let key = kernel.find_by_test_id(name)[0];
         kernel.node_by_key(key).unwrap().text_style().font_weight
     };
-    assert_eq!(weight(&p), 400);
+    assert_eq!(weight(&p, "facts"), 400);
+    assert_eq!(weight(&p, "authored"), 500);
+    assert_eq!(weight(&p, "named"), 500);
     assert!(p
         .set_device(&Device {
             bold_text: true,
             ..phone()
         })
         .is_none());
-    assert_eq!(weight(&p), 600);
+    assert_eq!(weight(&p, "facts"), 600);
+    assert_eq!(weight(&p, "authored"), 700);
+    assert_eq!(weight(&p, "named"), 500);
     assert!(p.set_device(&phone()).is_none());
-    assert_eq!(weight(&p), 400);
+    assert_eq!(weight(&p, "facts"), 400);
+    assert_eq!(weight(&p, "authored"), 500);
+    assert_eq!(weight(&p, "named"), 500);
 }
 
 #[test]

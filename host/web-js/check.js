@@ -196,6 +196,10 @@ export function observe(views, inactive = () => false) {
     const b = box(el);
     if (!shown(el, b)) continue;
     const cs = getComputedStyle(el), item = { id: ids.get(el), x: r2(b.x), y: r2(b.y), w: r2(b.width), h: r2(b.height) };
+    // A run of a paragraph that wraps is a box per line (CSS Inline 3 §2): its box bounds them all, and takes in the ends of
+    // lines it shares with the runs before and after it. The driver judges such a run by its lines.
+    const lines = cs.display === 'inline' ? [...el.getClientRects()].filter((r) => r.width > 0 && r.height > 0) : [];
+    if (lines.length > 1) item.lines = lines.map((r) => ({ x: r2(r.left), y: r2(r.top), w: r2(r.width), h: r2(r.height) }));
     // A padded percentage width wider than its parent is a finding wherever the box lies, below the fold too.
     const padded = widerThanParent(el, cs);
     if (padded) item.padded = padded;
@@ -296,26 +300,46 @@ export function observe(views, inactive = () => false) {
       item.control = el.localName === 'a' ? 'link' : el.localName === 'input' ? (el.type || 'text') : el.getAttribute('role') ?? (el.localName === 'button' || el.localName === 'select' || el.localName === 'textarea' ? el.localName : 'press');
       const own = SIZE.some((p) => authored(el, p));
       item.sized = !own && (el.hasAttribute('data-native') || el.matches(AGENT_SIZED)) ? 'platform' : 'author';
-      if (el.localName === 'a' && cs.display === 'inline') item.inline = true;
+      // A target in a sentence, its size the line's (WCAG 2.5.8's inline exception): a link or a pressable run in a
+      // paragraph that says more than it does.
+      if (cs.display === 'inline') {
+        let p = el.parentElement;
+        while (p && getComputedStyle(p).display === 'inline') p = p.parentElement;
+        if (p && p.textContent.trim() !== el.textContent.trim()) item.inline = true;
+      }
       if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') item.disabled = true;
+    }
+    // What lets taps through (`pointer-events: none`) is no target, and a hit test cannot say what lies over it. In an
+    // announcement laid over the page (a toast: a live region out of flow), it lies over what is beneath by design.
+    const through = cs.pointerEvents === 'none';
+    if (through) {
+      let live = false, out = false;
+      for (let e = el; e && e.id !== 'exact-root' && !live; e = e.parentElement) {
+        live = /^(polite|assertive)$/.test(e.getAttribute('aria-live') ?? '') || /^(status|alert)$/.test(e.getAttribute('role') ?? '');
+        out ||= /^(absolute|fixed)$/.test(getComputedStyle(e).position);
+      }
+      if (live && out) item.overlay = true;
     }
     // What a finger at its middle reaches; covered only where no scroller could move it clear. Past the screen's top
     // or bottom where nothing scrolls it in (a column taller than the screen) is out of reach: a control's finding.
-    if (item.control || text) {
-      const my = b.top + b.height / 2;
+    if ((item.control || text) && !through) {
+      // A wrapped run's middle may be another run's: a finger aims at its longest line.
+      const at = lines.length > 1 ? lines.reduce((p, q) => (q.width * q.height > p.width * p.height ? q : p)) : b;
+      const my = at.top + at.height / 2;
       if (my >= H || my < 0) { if (item.control && !reach(el, null, my < 0)) item.cover = { kind: 'offscreen', name: my < 0 ? 'the top of the screen' : 'the bottom of the screen' }; }
       else {
-        const cx = Math.min(Math.max(b.left + b.width / 2, 1), W - 1), hit = document.elementFromPoint(cx, my);
+        const cx = Math.min(Math.max(at.left + at.width / 2, 1), W - 1), hit = document.elementFromPoint(cx, my);
         if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
           // What is drawn over its middle at rest (the subtree beside it the hit is in), scrolled clear or not.
           let c = hit; while (c.parentElement && !c.parentElement.contains(el)) c = c.parentElement;
           const cb = c.getBoundingClientRect();
           item.beneath = { by: viewOf(c), x: r2(cb.left), y: r2(cb.top), w: r2(cb.width), h: r2(cb.height) };
-          if (!reach(el, hit, false, my) && !slides(el, b.left + b.width / 2)) item.cover = { by: viewOf(hit), name: hit.localName, kind: modal && !modal.contains(hit) ? 'sheet' : 'node' };
+          if (!reach(el, hit, false, my) && !slides(el, at.left + at.width / 2)) item.cover = { by: viewOf(hit), name: hit.localName, kind: modal && !modal.contains(hit) ? 'sheet' : 'node' };
         }
       }
-      if (text && !item.cut && b.bottom - H >= 2 && b.top < H && !reach(el, null, false)) item.cut = { edge: 'bottom', dx: 0, dy: r2(b.bottom - H) };
     }
+    // Past the screen's bottom where nothing scrolls to it: geometry, whether or not it takes taps.
+    if (text && !item.cut && b.bottom - H >= 2 && b.top < H && !reach(el, null, false)) item.cut = { edge: 'bottom', dx: 0, dy: r2(b.bottom - H) };
     // A card: a filled box, not itself text or a control, that holds a text or a control, its fill what sets that group
     // apart from the page. None is a box with square corners that reaches a side of the viewport (the page itself, or a
     // band across it); a list, whose ground is the page under its rows (a grouped list's grey, its sections the cards);

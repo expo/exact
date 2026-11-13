@@ -1355,7 +1355,8 @@ impl Point<'_> {
         // clips its own axis alone (CSS Overflow 3 §3.1). A `scroll` or
         // `list` with no `overflow-y` row scrolls on y, as the engine lays
         // it out (`style.rs`).
-        let border = style.border_widths_in(arena.env()).map(f64::from);
+        let env = arena.env_of(slot);
+        let border = style.border_widths_in(&env).map(f64::from);
         let ox = style.overflow_x;
         let oy =
             if !style.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default() {
@@ -1417,7 +1418,7 @@ impl Point<'_> {
         // Its own box grows by its hit slop, tested after its children and
         // before what is behind it, as a front box's slop takes the pointer
         // from a back box (Charlie, 2026-11-10).
-        let [t, r, b, l] = style.hit_slop(arena.env()).map(f64::from);
+        let [t, r, b, l] = style.hit_slop(&env).map(f64::from);
         let hit = inside([-l, -t, width + r, height + b])
             && pointer != PointerEvents::None
             && visibility == Visibility::Visible

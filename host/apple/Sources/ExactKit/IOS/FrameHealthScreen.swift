@@ -173,6 +173,7 @@ final class FrameHealthScreen {
         // Its work is the main thread's time in it, less its waits, taken to begin that much after the update was
         // scheduled and to end at the commit
         let start = min(finished, update.start + update.waited)
+        health.expireCapture(at: start)
         // Its work split, for a late frame the capture keeps
         if health.captureID != 0, finished > update.deadline {
             health.split(at: start, waited: update.waited, exact: end.phases - update.phases, card: end.card,
@@ -183,6 +184,7 @@ final class FrameHealthScreen {
         completedUpdate?(update.start, start, update.deadline, update.beforeCommit, finished, update.waited, end.card)
         chart?.screenFrame(at: presented, work: finished - start, budget: update.deadline - start)
         newest = max(newest, presented)
+        health.maintain(at: now)
     }
 
     /// What asked for an update as it was scheduled: the app session's `workload`, and, from bit 40, each of Exact's

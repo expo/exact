@@ -246,7 +246,6 @@ impl<D: DataSource> Presenter<D> {
         if !(if vertical { axes.1 } else { axes.0 }) {
             return None;
         }
-        let env = kernel.arena().env();
         let [bt, br, bb, bl] = node.style.border_widths();
         let r = &node.style.rare;
         let padding = [
@@ -267,7 +266,7 @@ impl<D: DataSource> Presenter<D> {
                 } else {
                     [&m.scroll_margin_left, &m.scroll_margin_right]
                 }
-                .map(|d| d.at_basis(env, 0.0));
+                .map(|d| d.at_basis(&kernel.env_of(c), 0.0));
                 let stop = n.style.scroll_snap_stop == exact_kernel::ScrollSnapStop::Always;
                 found.push((c, align, stop, grow));
             }
@@ -288,8 +287,8 @@ impl<D: DataSource> Presenter<D> {
         } else {
             (b.rect.0, b.rect.2, bl, br, s.max.0, (painted.0, s.offset.0))
         };
-        let env = self.host.kernel().arena().env();
-        let pad = |i: usize| padding[i].at_basis(env, length).max(0.0);
+        let env = self.host.kernel().env_of(id);
+        let pad = |i: usize| padding[i].at_basis(&env, length).max(0.0);
         let (pad_before, pad_after) = if vertical {
             (pad(0), pad(2))
         } else {

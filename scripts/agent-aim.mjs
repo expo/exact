@@ -8,6 +8,21 @@
 // never presses a control inside it in its name. `tap <target> at <x> <y>` is
 // a point and keeps a point's semantics.
 
+/** In the page: a wrapped inline's box centre can fall between its fragments. */
+export function pagePoint({ id }) {
+  const el = globalThis.exact.views.get(id), box = el?.getBoundingClientRect();
+  const on = (x, y) => {
+    const hit = document.elementFromPoint(x, y);
+    return !!hit && (el === hit || el.contains(hit));
+  };
+  if (!el || on(box.x + box.width / 2, box.y + box.height / 2)) return null;
+  for (const rect of el.getClientRects()) {
+    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+    if (rect.width && rect.height && on(x, y)) return [x, y];
+  }
+  return null;
+}
+
 /** In the page (self-contained: Chrome evaluates its source, Playwright passes it): where a plain tap on view `id`, aimed
  *  at (`x`, `y`) in the viewport, must land. Null: there. `{at, avoided}`: at that point instead, its middle reaching
  *  `avoided`. `{error, pressing}`: refused. A press is an element's own when it has a `press` handler, is a link, takes

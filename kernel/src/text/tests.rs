@@ -68,6 +68,7 @@ fn text_box_trim_cuts_to_the_cap_height_and_baseline() {
     let runs = [TextRun {
         text: "Ab".into(),
         style: style(10.0),
+        edges: Default::default(),
         inline: None,
     }];
     let mut p = paragraph();
@@ -115,6 +116,7 @@ fn a_trimmed_paragraphs_last_line_ends_at_its_height() {
     let runs = [TextRun {
         text: "Ab\nAb".into(),
         style: short,
+        edges: Default::default(),
         inline: None,
     }];
     let mut p = paragraph();
@@ -151,6 +153,7 @@ fn a_trimmed_paragraphs_last_line_ends_at_its_height() {
     let empty = [TextRun {
         text: "".into(),
         style: style(20.0),
+        edges: Default::default(),
         inline: None,
     }];
     let empty = m.measure(&TextMeasureRequest {
@@ -165,6 +168,7 @@ fn measure(text: &str, width: AxisOffer, lines: u32) -> TextMetrics {
     let runs = [TextRun {
         text: text.into(),
         style: style(10.0),
+        edges: Default::default(),
         inline: None,
     }];
     let mut p = paragraph();
@@ -212,6 +216,7 @@ fn measure_in(text: &str, width: AxisOffer, white_space: crate::WhiteSpace) -> T
     let runs = [TextRun {
         text: text.into(),
         style: style(10.0),
+        edges: Default::default(),
         inline: None,
     }];
     let mut p = paragraph();
@@ -302,11 +307,13 @@ fn runs_take_the_tallest_line_height() {
         TextRun {
             text: "ab".into(),
             style: style(10.0),
+            edges: Default::default(),
             inline: None,
         },
         TextRun {
             text: "cd".into(),
             style: style(20.0),
+            edges: Default::default(),
             inline: None,
         },
     ];
@@ -327,6 +334,7 @@ fn overflow_wrap_changes_emergency_breaks_and_only_anywhere_changes_min_content(
     let runs = [TextRun {
         text: "abcdefghijklmnopqrst".into(),
         style: style(10.0),
+        edges: Default::default(),
         inline: None,
     }];
     let mut request = TextMeasureRequest {

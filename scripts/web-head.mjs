@@ -3,8 +3,8 @@ import { posix } from 'node:path';
 import { webRequestURL } from './origin.mjs';
 
 // Exact's own files at the site's root: the JS target's entry, the wasm target's glue, its document glue, its
-// navigation module and its wasm. An entry may neither load nor preload one again.
-const OWN_FILES = new Set(['app.js', 'glue.js', 'document-glue.js', 'navigation.js', 'app.wasm']);
+// navigation module, audio session entry and wasm. An entry may neither load nor preload one again.
+const OWN_FILES = new Set(['app.js', 'glue.js', 'document-glue.js', 'navigation.js', 'audio-session.js', 'app.wasm']);
 // Whether a URL names one: resolved as the browser resolves it against the shells' `<base href="/">` at the app's
 // origin (`app.origin`, else a stand-in no other URL names), so a relative URL, a protocol-relative one and one that
 // names the origin whole are all the site's own; then as host/web/serve.mjs `treeFile` answers the path the page
@@ -98,6 +98,11 @@ export function webHead(manifest) {
     const open = `<${tag}${Object.entries(attrs).map(([name, value]) => value === true ? ` ${name}` : ` ${name}="${escape(value)}"`).join('')}>`;
     return tag === 'script' ? `${open}${typeof text === 'object' ? JSON.stringify(text).replace(SCRIPT_DATA_TAG, '\\u003C') : text ?? ''}</script>\n` : `${open}\n`;
   }).join('');
+}
+
+/** After the root, before the runtime: a classic script also precedes a capture script's deferred import. */
+export function webAudioSession(manifest) {
+  return manifest.audio_session ? '<script src="./audio-session.js"></script>\n' : '';
 }
 
 // A directive's name and value, as CSP3 §2.3 writes them: a name of letters, digits and `-` (lower case here, so a

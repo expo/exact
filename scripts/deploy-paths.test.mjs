@@ -1,12 +1,14 @@
-// LLP 1091 §11: capture admission uses native paths, not POSIX spellings.
-// Only Contract compiler discovery below runs Cargo; no install, signing, publication or host process is needed here.
+// Deployment classification and source capture admission (LLP 1091 §11).
+// Only Contract compiler discovery below runs Cargo; no native build or host process is needed here.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
+import { DirectoryOrigin, sha256 } from './origin.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, classify, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, snapshotOf, sourcePathspec, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
 import * as asyncLane from './async.mjs';
 import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
@@ -48,6 +50,64 @@ test('an explicit deploy platform omits unsupported targets before classificatio
   expect(table.dryRun).toBe(true);
   expect(table.rows).toEqual([{ kind: 'binary', platform: 'ios', compatibilityId: id, action: 'binary',
     reason: 'store.L=0: links no update store; deliver changes in the platform binary' }]);
+});
+
+test('the Swappable executor rename moves the cohort and refuses the old executor label', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-executor-cohort-'));
+  try {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const key = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64');
+    const app = { id: 'com.exact.executor', displayName: 'Executor', dir,
+      manifest: { deploy: { signing: { key: 'test', keys: { test: key } } } } };
+    const bundle = { plan: { bytes: Buffer.from('plan'), sha256: sha256(Buffer.from('plan')),
+      formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [] };
+    const previous = { version: 1, compat: { id: '', target: 'fixture' },
+      graph: { version: 1, artifacts: [{ name: 'app.plan', sha256: bundle.plan.sha256, bytes: bundle.plan.bytes.length }] },
+      binary: { sha256: '0'.repeat(64) } };
+    previous.compat.inputs = { app: app.id, platform: 'linux', store: { L: 'A', acceptedKinds: ['plan', 'assets', 'wasm'] },
+      executors: ['native', 'wasmtime'], keys: { test: key } };
+    previous.graph.sources = { count: { params: [], result: 'Int' } };
+    previous.graph.artifacts[0].requires = { sources: previous.graph.sources, executors: previous.compat.inputs.executors };
+    const compatibilityId = inputs => createHash('sha256').update('exact2 compatibility id v1\n')
+      .update(canonicalBytes(inputs)).digest('hex').slice(0, 32);
+    previous.compat.id = compatibilityId(previous.compat.inputs);
+    const candidate = structuredClone(previous);
+    candidate.compat.inputs.executors = ['native', 'wasmi'];
+    candidate.compat.id = compatibilityId(candidate.compat.inputs);
+    candidate.graph.artifacts[0].requires.executors = candidate.compat.inputs.executors;
+    candidate.binary.sha256 = '1'.repeat(64);
+    expect(candidate.compat.id).not.toBe(previous.compat.id);
+    const installed = cohortReceipt(previous);
+    expect(classifyArtifacts(previous, installed).bundle).toBe(true);
+    const old = classifyArtifacts(candidate, installed);
+    expect(old.binary).toBe(true);
+    expect(old.bundle).toBe(false);
+    expect(old.missing).toEqual(['app.plan: executors.wasmi']);
+    expect(classifyArtifacts(candidate, cohortReceipt(candidate))).toEqual({ binary: false, bundle: true, missing: [], warnings: [] });
+    const independent = structuredClone(candidate);
+    delete independent.graph.artifacts[0].requires.executors;
+    expect(classifyArtifacts(independent, installed).bundle).toBe(true);
+
+    const origin = new DirectoryOrigin(join(dir, 'origin'));
+    const stream = { channel: 'prod', compatibilityId: previous.compat.id };
+    const head = streamHead({ app, bundle, stream, seq: 1, release: 'old' });
+    head.cohort = installed;
+    head.signature = { keyId: 'test', ed25519: cryptoSign(null, canonicalBytes(head), privateKey).toString('base64') };
+    await origin.putHead(stream, Buffer.from(JSON.stringify(head)), { previousDigest: null });
+    const table = await classify({ app, opts: { platform: ['linux'] }, origin, channel: 'prod',
+      snapshot: { commit: 'executor', dirty: false, changes: [], repo: dir }, release: 'new', bundle,
+      compat: { linux: candidate.compat }, builds: { linux: candidate }, platforms: ['linux'], wantOrigin: false });
+    const oldRow = table.rows.find(row => row.kind === 'stream' && row.compatibilityId === previous.compat.id);
+    expect(oldRow.action).toBe('binary');
+    expect(oldRow.reason).toBe('app.plan: executors.wasmi');
+    expect(oldRow.cohort.E).toEqual(['native', 'wasmtime']);
+    expect(table.rows.find(row => row.kind === 'stream' && row.compatibilityId === candidate.compat.id).action).toBe('bundle');
+    const binary = table.rows.find(row => row.kind === 'binary');
+    expect(binary.compatibilityId).toBe(candidate.compat.id);
+    expect(binary.reason).toContain(`compatibility id moves to ${candidate.compat.id}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('deploy refuses unsupported requested platforms before capturing or building', () => {

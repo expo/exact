@@ -157,8 +157,9 @@ pub trait Source {
     /// The element an SVG reference from `from` names.
     fn resolve(&self, from: ViewId, id: &str) -> Option<ViewId>;
     /// `style`, node `id`'s, with the weight and leading a text style named
-    /// on it gives the wasm host (LLP 1115.000 D12.2). JavaScript's fills
-    /// are written from the node's facts instead.
+    /// on it gives the wasm host (LLP 1115.000 D12.2), and its animation row
+    /// held for a prefetched row (LLP 1055 D13). JavaScript's fills and holds
+    /// are applied when it adopts the document.
     fn with_style_rows<'s>(
         &self,
         _id: ViewId,
@@ -198,7 +199,10 @@ impl Source for KernelSource<'_> {
         style: Cow<'s, exact_kernel::StyleProps>,
     ) -> Cow<'s, exact_kernel::StyleProps> {
         match self.kernel.node(id) {
-            Some(node) if self.bare => super::element::with_style_rows(style, &node),
+            Some(node) if self.bare => super::element::with_style_rows(
+                super::element::animation_style(self.kernel, &node, style),
+                &node,
+            ),
             _ => style,
         }
     }

@@ -52,8 +52,9 @@ import { copyStaticTreeIfPresent } from '../host/web/serve.mjs';
 export const ANDROID_TARGET = 'aarch64-linux-android';
 /** The oldest Android the binary runs on (the NDK's clang wrapper names it). */
 const API = ANDROID_MIN_API;
-/** What a drive runs: the app's Linux host built for the phone, or with `--reader` (EXACT_ANDROID_READER) its APK. */
-export const androidBinary = (app, bin) => process.env.EXACT_ANDROID_READER ? readerApk(app)
+/** What a drive runs: the app's Linux host built for the phone, or on the Canvas reader (`reader`; unsaid,
+ * EXACT_ANDROID_READER decides) its APK. */
+export const androidBinary = (app, bin, reader = !!process.env.EXACT_ANDROID_READER) => reader ? readerApk(app)
   : resolve(app.target, ANDROID_TARGET, HOST_DEV, bin ?? app.crate('linux'));
 export const androidBuild = (app, bin = null) => [...linuxBuild(app, bin), '--target', ANDROID_TARGET];
 
@@ -264,6 +265,9 @@ export function apkDirs(app) {
   return own ? { app: resolve(root, 'app'), canvas: resolve(root, 'canvas'), cache: resolve(root, 'gradle'), kotlin: resolve(root, 'kotlin') }
     : { app: resolve(READER, 'app/build', app.name), canvas: resolve(READER, 'canvas/build', app.name), cache: resolve(READER, '.gradle/apps', app.name), kotlin: resolve(READER, '.kotlin/apps', app.name) };
 }
+/** Where `build <app> --apk` writes the shell's build: the roster it generates (`extensions/`), the merged manifests
+ * (`intermediates/`) and the APK (`outputs/apk/`). `app` is a name or a directory, resolved as the build resolves it. */
+export const apkBuildDir = (app) => apkDirs(resolveApp(app)).app;
 /** The APK `build <app> --apk` makes. */
 const readerApk = (app) => resolve(apkDirs(app).app, 'outputs/apk/release/app-release.apk');
 /** What `build --apk` records beside the APK, for a drive to tell whether it is older than its sources: when the build
@@ -273,7 +277,7 @@ export function apkRecord(app, apk = readerApk(app)) {
   try { return JSON.parse(readFileSync(resolve(dirname(apk), 'exact-build.json'), 'utf8')); } catch { return null; }
 }
 /** The reader's own sources, which every APK compiles. */
-export const READER_SOURCES = ['canvas/src', 'app/src'].map((d) => resolve(READER, d));
+export const READER_SOURCES = ['canvas/src', 'app/src', 'soundarm', '../apple/soundarm'].map((d) => resolve(READER, d));
 
 // A reader failure whose cleanup succeeded.
 const RELAY_CLEANED_ERROR = 70;
@@ -674,10 +678,10 @@ export function zipEntry(zip, name) {
 
 /** Why an APK's library is not the one its build staged, or null (LLP 1159.002 D2): Gradle can keep an earlier
  * build's library in its merged intermediates and report the task up to date (QUEUE, "Gradle's file watching"). */
-export function keptLibrary(staged, packaged, dirs) {
+export function keptLibrary(staged, packaged, dirs, name = "libexactcanvas.so") {
   const made = loadedImage(staged), held = packaged ? loadedImage(packaged) : null;
   if (made === held) return null;
-  return `the APK holds ${held ? `a libexactcanvas.so that is not the one this build made (${held.slice(0, 12)} in the APK, ${made.slice(0, 12)} staged, by what each loads)` : 'no libexactcanvas.so'}. Gradle kept an earlier build's: delete ${dirs.join(' and ')} and build again`;
+  return `the APK holds ${held ? `a ${name} that is not the one this build made (${held.slice(0, 12)} in the APK, ${made.slice(0, 12)} staged, by what each loads)` : `no ${name}`}. Gradle kept an earlier build's: delete ${dirs.join(' and ')} and build again`;
 }
 
 /** The smallest alignment of an ELF64 file's PT_LOAD segments (its program headers' p_align). */
@@ -748,12 +752,36 @@ export function jvmOptions(value = '', name = 'the JVM options') {
   return words;
 }
 
+/** Relay Gradle's progress unchanged and add lock advice only after a dependency failure. Runs in a child Bun. */
+async function gradleWithAdvice(command, args, advice) {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(command, args, { stdio: ['inherit', 'pipe', 'pipe'] });
+  let dependencyFailure = false;
+  for (const [source, destination] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+    let tail = '';
+    source.on('data', chunk => {
+      destination.write(chunk);
+      const text = tail + chunk.toString('utf8');
+      dependencyFailure ||= /dependency verification failed|dependency lock state|strict dependency locking/i.test(text.replace(/\x1b\[[0-9;]*m/g, ''));
+      tail = text.slice(-256);
+    });
+  }
+  const result = await new Promise(resolve => {
+    child.once('error', error => { console.error(`could not start Gradle (${command}): ${error.message}`); resolve({ code: 1 }); });
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  if (result.code && dependencyFailure) console.error(advice);
+  if (result.signal) process.kill(process.pid, result.signal);
+  else process.exitCode = result.code ?? 1;
+}
+
 /** Gradle in the reader with `args`, under `options` (its `env` names the JDK): whether it succeeded. A Gradle that
  * could not be started is said so. */
-export function runGradle(args, options, platform = process.platform, { studio, run = spawnSync } = {}) {
+export function runGradle(args, options, platform = process.platform, { studio, run = spawnSync, lockAdvice } = {}) {
   const env = androidJavaEnv(options.env, platform, studio) ?? options.env;
   const [command, ...prefix] = gradleWrapper(platform, env);
-  const gradle = run(command, [...prefix, ...args], { cwd: READER, stdio: 'inherit', ...options, env });
+  const invocation = lockAdvice ? [process.execPath, ['--no-env-file', '-e', `await (${gradleWithAdvice})(...JSON.parse(process.argv[1]))`, JSON.stringify([command, [...prefix, ...args], lockAdvice])]] : [command, [...prefix, ...args]];
+  const gradle = run(...invocation, { cwd: READER, stdio: 'inherit', ...options, env });
   if (gradle.error) console.error(`could not start Gradle (${command}): ${gradle.error.message}`);
   return gradle.status === 0;
 }
@@ -903,6 +931,27 @@ export function stageGpuLibraries(libraries, jniLibs) {
   return libraries.length ? [`-PgpuModules=${libraries.map((library) => basename(library)).join(',')}`] : [];
 }
 
+/** The optional sound arm: a separate ELF, never linked into libexactcanvas. */
+export function soundLibraryCommand(library, env) {
+  const mixer = resolve(READER, '../apple/soundarm'), arm = resolve(READER, 'soundarm');
+  const cc = env.CC_aarch64_linux_android, wrapper = /aarch64-linux-android(\d+)-clang\.cmd$/i.exec(cc);
+  // spawnSync cannot execute an NDK .cmd wrapper without a shell.
+  const compiler = wrapper ? [cc.replace(wrapper[0], 'clang.exe'), `--target=aarch64-linux-android${wrapper[1]}`] : [cc];
+  return [...compiler, '-std=gnu11', '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror',
+    '-Wl,-z,max-page-size=16384', '-Wl,-soname,libexact_sound.so', '-I', mixer,
+    resolve(mixer, 'sound_mixer.c'), resolve(arm, 'sound_wav.c'), resolve(arm, 'sound_arm.c'),
+    '-laaudio', '-lm', '-o', library];
+}
+
+export function stageSoundLibrary(jniLibs, env) {
+  const library = resolve(jniLibs, 'libexact_sound.so');
+  mkdirSync(jniLibs, { recursive: true });
+  const [command, ...args] = soundLibraryCommand(library, env);
+  const built = spawnSync(command, args, { env, stdio: 'inherit' });
+  if (built.status !== 0) throw new Error('Android sound arm did not build');
+  return library;
+}
+
 /** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_painted::canvas_jni!`; a game's
  * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets and its icon and banner
  * (`androidIcons`), where the Gradle shell packages them (host/android/app), then `:app:assembleRelease`. An app with
@@ -956,6 +1005,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   // The reader loads one name whatever the app; the plan names `assets/…` under the APK's `app/`.
   copyFileSync(built(crate), resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so'));
   const gpuArgs = stageGpuLibraries(gpu, resolve(staged, 'jniLibs/arm64-v8a'));
+  const sound = stageSoundLibrary(resolve(staged, 'jniLibs/arm64-v8a'), env);
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
@@ -975,7 +1025,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
     assembled = runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...(launch ? [`-PappTheme=${launch}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } });
+      ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...(launch ? [`-PappTheme=${launch}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } }, process.platform, { lockAdvice: maven.length && !writeLocks ? `${app.name}: Gradle locks or verification metadata do not match its dependencies; for an intended graph change, run ${androidLockCommand(app)}, then review and commit gradle.lockfile and gradle-verification.xml` : null });
     if (assembled) graph.kept();
   } finally {
     graph.done();
@@ -984,6 +1034,8 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   const apk = bundle ? resolve(dirs.app, 'outputs/bundle/release/app-release.aab') : readerApk(app);
   const kept = keptLibrary(readFileSync(resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so')), zipEntry(readFileSync(apk), `${bundle ? 'base/' : ''}lib/arm64-v8a/libexactcanvas.so`), [dirs.app, dirs.canvas]);
   if (kept) { console.error(`exact android: ${kept}`); return null; }
+  const keptSound = keptLibrary(readFileSync(sound), zipEntry(readFileSync(apk), `${bundle ? 'base/' : ''}lib/arm64-v8a/libexact_sound.so`), [dirs.app], 'libexact_sound.so');
+  if (keptSound) { console.error(`exact android sound: ${keptSound}`); return null; }
   writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, library: built(crate), workspace: app.workspace ?? app.dir,
     sources: [...READER_SOURCES, ...[resolve(app.dir, 'modules/android')].filter(existsSync)] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.
@@ -1021,7 +1073,7 @@ export function mavenCoordinates(app, bound) {
   return [...versions.values()].map(v => v.coordinate).sort();
 }
 
-function mavenLocksPresent(app, maven) {
+export function mavenLocksPresent(app, maven) {
   if (!maven.length || ['gradle.lockfile', 'gradle-verification.xml'].every(file => existsSync(resolve(app.dir, file)))) return true;
   console.error(`${app.name}: its modules or own Kotlin name Maven libraries (${maven.join(', ')}); before compiling, write gradle.lockfile and gradle-verification.xml by running ${androidLockCommand(app)}, and keep them with the app`);
   return false;

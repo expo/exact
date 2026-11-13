@@ -179,7 +179,6 @@ fn layout<D: DataSource>(host: &Host<D>) -> String {
     use exact_kernel::style::cells::{COLUMN, ROW};
     use std::fmt::Write;
     let kernel = host.kernel();
-    let env = kernel.env();
     let (cols, rows) = host.size();
     let num = |n: f64| format!("{n}");
     let mut nodes = Vec::new();
@@ -201,6 +200,7 @@ fn layout<D: DataSource>(host: &Host<D>) -> String {
         // and of its height down (`at_basis`), none below 0, one length where
         // the two agree, else the pair `[across, down]`.
         .map(|d| {
+            let env = kernel.env_of(n.id);
             let (across, down) = (
                 d.at_basis(&env, f.width).max(0.0),
                 d.at_basis(&env, f.height).max(0.0),

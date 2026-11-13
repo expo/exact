@@ -114,6 +114,27 @@ test('a declared directory that is gone refuses the build, though its last insta
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);
 
+// The package suites' fixtures install packages packed as a registry carries them; every build of one was refused.
+test('a file: tarball is no directory to keep installed: the build goes on, before and after the tarball is removed', () => {
+  const { dir, app, source } = installed('../lib/p');
+  try {
+    const packed = resolve(dir, 'packed');
+    mkdirSync(packed);
+    const pack = spawnSync(process.execPath, ['pm', 'pack', '--destination', packed, '--quiet'], { cwd: source, encoding: 'utf8' });
+    assert.equal(pack.status, 0, pack.stderr);
+    const tarball = resolve(packed, readdirSync(packed).find(f => f.endsWith('.tgz')));
+    writeFileSync(resolve(app, 'package.json'), JSON.stringify({ name: 'app', private: true, dependencies: { '@x/p': `file:${tarball}` } }));
+    const bun = spawnSync(process.execPath, ['install'], { cwd: app, encoding: 'utf8' });
+    assert.equal(bun.status, 0, bun.stderr);
+    assert.deepEqual(fileDependencies(app), []);
+    const run = counted();
+    installedFileDependencies(app, run);
+    rmSync(packed, { recursive: true });
+    installedFileDependencies(app, run);
+    assert.equal(run.calls.length, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
 // Two installs outside the app's own node_modules directory: a Bun workspace member's package, which Bun 1.4.2 links
 // from the member's node_modules into the workspace's store (`node_modules/.bun`, its default isolated linker), and
 // a package installed only in an ancestor's node_modules, which the resolver finds walking up as Node does.

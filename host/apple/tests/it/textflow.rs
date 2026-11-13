@@ -80,6 +80,7 @@ fn raster_region_retires_before_flowed_native_ink() {
             content: "content",
             pending: "pending",
         },
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     for _ in 0..20 {

@@ -121,7 +121,8 @@ function apply(batch) {
         // LLP 1096 D7: the voice table's ops, after first paint; never under the agent, whose clock is virtual (D10); LLP 1125 D7: the MIDI queue's ops and the ports, after first paint; never under the agent, whose runner answers a request itself
         case "create": {
           // Canvas overlays use a div; data-surface is the host-owned drawing leaf.
-          const el = host.page?.adopting?.get(op.id) ?? (op.ns ? document.createElementNS(op.ns, op.tag) : document.createElement(op.tag === "canvas" ? "div" : op.tag));
+          const adopted = host.page?.adopting?.get(op.id);
+          const el = adopted ?? (op.ns ? document.createElementNS(op.ns, op.tag) : document.createElement(op.tag === "canvas" ? "div" : op.tag));
           // an adopted document's element (LLP 1048.000 D6); SVG in its namespace (LLP 1055 D4)
           if (op.tag === "canvas" && el.firstElementChild?.dataset.surface === undefined) {
             const surface = document.createElement("canvas");
@@ -129,7 +130,7 @@ function apply(batch) {
             surface.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1";
             el.append(surface);
           }
-          applyProps(el, op.props, []);
+          applyProps(el, op.props, [], !!adopted);
           const css = op.css + (el.hasAttribute("data-action") ? ";touch-action:none" : "");
           if ((el.getAttribute("style") ?? "") !== css) {
             el.style.cssText = css;
@@ -1034,6 +1035,9 @@ export function applyBatch(batch) {
   } finally {
     const outer = --globalThis.exact.applyDepth === 0;
     if (outer) {
+      // After a commit (its `at` op), a held press paints again over the boundaries as they are now (input-glue.js
+      // `repaintPress`), as modes.js does after each JS-target commit: a boundary's `data-exact-from` may have moved.
+      if (batch.ops?.some((op) => op.op === "at")) globalThis.exact.repaintPress?.();
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
       globalThis.exact.committed?.();

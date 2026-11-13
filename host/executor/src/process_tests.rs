@@ -656,7 +656,7 @@ fn an_exec_files_signal_deadline_ends_it_as_a_timeout() {
     let file = script(r#"{"execFile":{"stdout":"","stderr":"","code":0,"after":5000}}"#);
     let (core, woke) = setup(&[("path:t3", &format!("script:{file}"))]);
     let mut out = request(1, r#"{"kind":"execFile","program":"path:t3"}"#, false);
-    // What `AbortSignal.timeout(100)` gives a request (js/src/prelude.js).
+    // What `AbortSignal.timeout(100)` gives a request (js/src/fetch.js).
     out.request.timeout_ms = Some(100);
     core.run(out, None).unwrap();
     let clock = clock(&core);

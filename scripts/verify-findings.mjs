@@ -200,6 +200,35 @@ export async function iosNavigationContent(nodes, readStyle) {
   return projected;
 }
 
+/** The navigation root's tab bar, which UIKit's tab bar controller draws in the web boxes' place (NavigationTabs.swift):
+ * the root's own `tablist` with a tab naming one of the root's `tabpanel`s, and what it holds but those panels. UITabBar keeps its items at
+ * one size at every text size and offers the large content viewer instead (Apple HIG, "Tab bars"), so the web's bar,
+ * which grows with the root font, does not measure it. A tablist with `appearance="none"` is the app's own bar (LLP
+ * 1075.003 §9.10) and stays judged. Read with the same root rule as `iosNavigationContent`. */
+export function iosTabBar(nodes) {
+  const children = n => (n?.children ?? []).map(id => nodes.get(id)).filter(Boolean);
+  const parents = new Map([...nodes.values()].flatMap(n => children(n).map(c => [c.id, n])));
+  const root = [...nodes.values()].find(n => !parents.has(n.id)), bar = new Set();
+  if (root?.props?.navigationKey == null || root.props.navigationBack == null) return bar;
+  const role = n => n.props?.accessibilityRole;
+  const owner = n => {
+    let at = parents.get(n.id);
+    while (at && at.props?.navigationKey == null) at = parents.get(at.id);
+    return at;
+  };
+  const panels = new Set([...nodes.values()].filter(n => role(n) === 'tabpanel' && n.props?.id != null && owner(n) === root).map(n => n.props.id));
+  const list = [...nodes.values()].find(n => role(n) === 'tablist' && owner(n) === root && children(n).some(t => role(t) === 'tab' && panels.has(t.props?.accessibilityControls)));
+  if (!list || (list.style?.appearance?.value === 'none' && ['authored', 'dynamic'].includes(list.style.appearance.source))) return bar;
+  // A tablist that holds the root's panels keeps them, and their routes, in the page, and so the boxes around them
+  // (NavigationCoversIOS.swift `covered`): only what holds no panel is the bar's.
+  const kept = new Set([...nodes.values()].filter(n => role(n) === 'tabpanel' && panels.has(n.props?.id)).map(n => n.id));
+  const holds = n => kept.has(n.id) || children(n).some(holds);
+  const add = n => { bar.add(n.id); children(n).forEach(add); };
+  const cover = n => { if (!holds(n)) add(n); else children(n).filter(c => !kept.has(c.id)).forEach(cover); };
+  cover(list);
+  return bar;
+}
+
 const WRAP = 'wrap the row: flex-wrap="wrap" with a flex-basis in rem on its items (docs/recipes/responsive-columns.md)';
 /** The remedy for a finding at the largest size: never a smaller or fixed font. A text in a list's row (`inRow`) is cut by
  * the row, which wrapping the row does not change: at the accessibility sizes UIKit's cells wrap a label and grow taller,

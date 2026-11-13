@@ -1,6 +1,5 @@
-//! Sound and MIDI on Linux (LLP 1096 D9; LLP 1125 D1): the runner keeps the
-//! voice table and the MIDI queue as the record, and this host plays and
-//! sends nothing, so their ops are drained and dropped. Off the agent a
+//! MIDI on Linux and Android stays record-only (LLP 1125 D1). Android
+//! hands Contract sound ops to its reader; Linux keeps only the record. Off the agent a
 //! request finds no MIDI (`unavailable`); under it the runner answers one
 //! itself, and the driver's `prefer midi.*` and `tap midi` are the runner's.
 
@@ -8,10 +7,9 @@ use super::Host;
 use exact_runner::{DataSource, Timed};
 
 impl<D: DataSource> Host<D> {
-    /// The voice table's and the MIDI queue's ops since the last take,
-    /// dropped: there is no output here.
+    /// Hand Android its sound operations; MIDI has no executor here.
     pub(super) fn drain_outputs(&mut self) {
-        drop(self.runner.take_sounds());
+        self.sound.take(self.runner.take_sounds());
         drop(self.runner.take_midi());
     }
 

@@ -379,7 +379,7 @@ fn the_token_union_follows_exports() {
     let contract = dir.join("app.contract");
     let plan = contract::compile_path(&contract).unwrap();
     let exports = contract::design_exports(&contract);
-    let types = contract::typescript_exporting(&plan, exports.as_deref()).unwrap();
+    let types = contract::typescript_exporting(&plan, exports.as_deref(), &[]).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
         types.contains(r#"export type ColorToken = "badge.ink";"#),

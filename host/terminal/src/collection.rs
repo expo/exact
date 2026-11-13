@@ -103,7 +103,7 @@ impl<D: DataSource> Host<D> {
                 let Some(node) = kernel.node(snapshot.view) else {
                     continue;
                 };
-                let [bt, br, bb, bl] = node.style.border_widths_in(&kernel.env());
+                let [bt, br, bb, bl] = node.style.border_widths_in(&kernel.env_of(node.id));
                 let (pl, pt, pr, pb) = kernel.resolved_padding(node.key).unwrap_or_default();
                 let port_main = if visible {
                     (node.frame.height - bt - bb).max(0.0) as f64

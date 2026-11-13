@@ -12,6 +12,7 @@ import { installLock, withInstallLock } from './filesystem.mjs';
 // Not a package's sources: its own installs, and its repository. Bun copies both; no build reads either from it.
 const NOT_SOURCE = new Set(['node_modules', '.git']);
 const KINDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
+const TARBALL = /\.(tgz|tar|tar\.gz)$/;
 
 /** The `file:` dependencies of the `package.json` nearest above `appDir` that are installed: each one's name, the
  * declared directory (`source`), where it is installed (`installed`: the nearest `node_modules/<name>` above
@@ -34,6 +35,9 @@ export function fileDependencies(appDir) {
   const out = [];
   for (const kind of KINDS) for (const [name, spec] of Object.entries(manifest?.[kind] ?? {})) {
     if (typeof spec !== 'string' || !spec.startsWith('file:')) continue;
+    // A tarball (`bun pm pack`'s, as a registry carries a package) is a snapshot its install already holds whole; only
+    // a directory can change under its install. npm and Bun tell one by its extension.
+    if (TARBALL.test(spec)) continue;
     // One not installed is the resolver's to report, with the command that installs it.
     const modules = located(name);
     if (!modules) continue;

@@ -176,7 +176,7 @@ export function createDocument(shell = '') {
     title: '', head, body, documentElement: body, styleSheets: [], // symbols.js reads a tint from the stylesheets: a render has none
     createElement: t => new Element(t, fonts), createElementNS: (_, t) => new Element(t, fonts),
     createTextNode: t => new Text(t), createComment: () => new Comment(), createDocumentFragment: () => new Fragment(),
-    getElementById: id => (id === 'exact-root' ? root : id ? root.getElementsByTagName('*').find(e => e.getAttribute('id') === id) ?? null : null), // navigation.js `opensPopover` names a popover
+    getElementById: id => (id === 'exact-root' ? root : id ? root.getElementsByTagName('*').find(e => e.getAttribute('id') === id) ?? null : null), // navigation.js `opens` names a popover or dialog
     querySelector: sel => (/meta\[name="description"\]/.test(sel) ? head.childNodes.find(m => m.getAttribute?.('name') === 'description') ?? null : null),
     querySelectorAll: () => [],
     root, rootHTML: () => root.childNodes.map(c => c.html()).join(''),

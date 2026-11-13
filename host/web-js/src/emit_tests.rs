@@ -455,6 +455,26 @@ fn a_literal_progress_value_is_its_attribute() {
     assert!(made.contains("\"max\":\"1\""), "{made}");
 }
 
+/// LLP 1075.003 §9.9 (expo/exact#391): a tab that names its panel and holds
+/// a badge is the platform's tab, which the neutral look draws as a tab with
+/// its badge; it was a bare button, drawn as a plain one.
+#[test]
+fn a_tab_with_a_badge_is_a_native_tab() {
+    let plan = contract::compile(
+        "component App\n  state n = 1\n  view\n    column\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel\" aria-selected=true\n          image \"symbol:bookmark\"\n          text \"Saved\"\n          if n > 0\n            row background-color=\"-exact-system-red\"\n              text `${n}`\n      column role=\"tabpanel\" id=\"panel\"\n        text \"Panel\"\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let tab = js
+        .split("const e")
+        .find(|made| made.contains("\"role\":\"tab\""))
+        .expect("a tab");
+    assert!(
+        tab.contains("\"data-button-style\":\"bordered\""),
+        "a native tab: {tab}"
+    );
+}
+
 /// LLP 1116.004 D5.2: a radio group of radios is native buttons whose shell
 /// look is the segmented control, and its page loads the input piece, which
 /// gives it the arrow keys and one Tab stop, even when its radios are bare.

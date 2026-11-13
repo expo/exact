@@ -165,6 +165,33 @@ fn native_buttons_preserve_newlines_before_clamping_the_title() {
     }
 }
 
+/// LLP 1075.003 §9.9 (expo/exact#391): a tab that names its panel holds its
+/// badge beside its native face; the terminal measures and paints it after
+/// the title, where it had painted the badge box as a child of a bare tab.
+#[test]
+fn a_native_tabs_badge_is_measured_and_painted_after_its_title() {
+    let source = "component App\n  state n = 3\n  view\n    column\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel\" aria-selected=true testId=\"tab\"\n          text \"Saved\"\n          if n > 0\n            row background-color=\"-exact-system-red\"\n              text `${n}`\n      column role=\"tabpanel\" id=\"panel\"\n        text \"Panel\"\n";
+    let plan = contract::compile_terminal(source).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 30, 6).unwrap();
+    let id = host.by_test_id("tab").unwrap();
+    assert_eq!(
+        host.kernel().press_face(id).unwrap().badge.as_deref(),
+        Some("3")
+    );
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let text = vt.text(false);
+    assert!(
+        text.lines().next().unwrap_or("").contains("Saved (3)"),
+        "{text}"
+    );
+    // One cell of chrome either side of the title and its badge.
+    assert_eq!(
+        host.kernel().node(id).unwrap().frame.width,
+        ("Saved (3)".len() + 2) as f32 * exact_kernel::style::cells::COLUMN
+    );
+}
+
 #[test]
 fn overflow_clip_leaves_the_other_axis_visible() {
     for (overflow, placement, expected) in [
@@ -1419,4 +1446,17 @@ fn dashed_and_dotted_borders_draw_their_own_lines() {
             "{border}"
         );
     }
+}
+
+/// A corner rounds by its own box's radius, which may read the safe area
+/// where the box is (LLP 1123 D9): here an inset its parent declares.
+#[test]
+fn a_corner_reads_its_boxs_own_inset() {
+    let source = "component App\n  view\n    column --exact-safe-area-inset-top=\"8px\"\n      column width=\"6ch\" height=\"3lh\" border=\"thin solid\" border-radius=\"var(--exact-safe-area-inset-top)\"\n";
+    let plan = contract::compile(source).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 20, 6).unwrap();
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let screen = vt.text(false);
+    assert!(screen.starts_with('╭'), "{screen}");
 }

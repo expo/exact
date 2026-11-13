@@ -27,7 +27,8 @@ import { closeSync, createWriteStream, existsSync, linkSync, mkdirSync, openSync
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { compilerWarnings, warningLines, CONFIG_JSON, DECLARATIONS, depInfoInputs, moduleGraph, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
+import { compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
+import { CONFIG_JSON, DECLARATIONS, moduleGraph } from './module-graph.mjs';
 import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
 
@@ -184,7 +185,7 @@ const appleBuild = (args, log, say, app) => logged(process.execPath, [resolve(RO
 // ---------------------------------------------------------------- a plan-only edit (LLP 1116.003)
 
 // What a plan is made of and nothing native reads: the Contract, and the
-// TypeScript and JSON app.ts imports (agent-launch.mjs `moduleGraph`; every
+// TypeScript and JSON app.ts imports (module-graph.mjs `moduleGraph`; every
 // TypeScript file when that cannot be read), outside the trees a native build
 // takes files from and the app's Rust crates (which can include any file
 // beside them). A file app.ts does not import is no input at all.

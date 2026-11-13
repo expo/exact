@@ -70,6 +70,7 @@ pub fn expand(source: &Run) -> Vec<Run> {
                 bold_text: source.bold_text,
                 text: p.text,
                 inline: None,
+                edges: exact_kernel::InlineEdges::default(),
             }
         })
         .collect()

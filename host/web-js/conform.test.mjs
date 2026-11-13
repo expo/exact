@@ -3,14 +3,93 @@ import { conformArgs } from './conform-args.mjs';
 import { clockOnAll, clockVerdict, parseStep } from './conform-steps.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
-import { readFileSync, readdirSync } from 'node:fs';
+import { browserMissing } from '../../scripts/agent-playwright.mjs';
+import { need } from '../../scripts/coverage.mjs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 // Load the comparisons without starting the harness's builds and browser drives.
 const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
-const { comparisonTree, norm, diffLists, diffLayout } = new Function(comparisonSource.slice(
+const { comparisonTree, comparisonLayout, norm, diffLists, diffLayout } = new Function(comparisonSource.slice(
   comparisonSource.indexOf('async function comparisonTree('), comparisonSource.indexOf('function diffPng('),
-) + '; return { comparisonTree, norm, diffLists, diffLayout };')();
+) + '; return { comparisonTree, comparisonLayout, norm, diffLists, diffLayout };')();
+
+async function pageSnapshot(page) {
+  const [layout, document] = await comparisonLayout({
+    layout: () => page.evaluate(() => {
+      globalThis.exact = { views: new Map(['root', 'child'].map((testId, id) => [id, document.getElementById(testId)])) };
+      return { nodes: [...exact.views].map(([id, el]) => {
+        const b = el.getBoundingClientRect(); return { id, testId: el.id, x: b.x, y: b.y, w: b.width, h: b.height };
+      }) };
+    }),
+    carrier: { evaluate: expression => page.evaluate(expression) },
+  }, true);
+  return { layout, document };
+}
+
+for (const engine of ['chromium', 'firefox', 'webkit']) {
+  need(engine, await browserMissing(engine))(`document scroll is compared once with a testId on the root (${engine})`, async () => {
+    const browser = await suiteBrowser(engine), page = await browser.newPage({ viewport: { width: 420, height: 600 } });
+    try {
+      await page.setContent(`<main id="root" style="width:1800px;height:1600px"><div id="child" style="margin:20px;width:80px;height:80px"></div></main>`);
+      const snapshot = () => pageSnapshot(page);
+      const tree = { nodes: [{ id: 0, children: [1] }, { id: 1, children: [] }] }, before = await snapshot();
+      await page.evaluate(() => scrollTo(23, 80));
+      await page.waitForFunction(() => scrollX === 23 && scrollY === 80);
+      const after = await snapshot();
+      const compare = b => diffLayout(before.layout, b.layout, tree, tree, true, 'chrome', engine, before.document, b.document);
+      expect(compare(after).map(d => d.field)).toEqual(['layout.$document.sx', 'layout.$document.sy']);
+      await page.locator('#root').evaluate(el => { el.style.marginLeft = '20px'; });
+      expect(compare(await snapshot()).map(d => d.field)).toEqual(['layout.root.x', 'layout.$document.sx', 'layout.$document.sy']);
+    } finally { await browser.close(); }
+  });
+
+  need(engine, await browserMissing(engine))(`a viewport-fixed root stays relative to the viewport (${engine})`, async () => {
+    const browser = await suiteBrowser(engine), page = await browser.newPage({ viewport: { width: 420, height: 600 } });
+    try {
+      await page.setContent(`<body style="width:1800px;height:1600px"><main id="root" style="position:fixed;left:0;top:0;width:200px;height:200px"><div id="child" style="margin:20px;width:80px;height:80px"></div></main>`);
+      const snapshot = () => pageSnapshot(page);
+      const tree = { nodes: [{ id: 0, children: [1] }, { id: 1, children: [] }] }, before = await snapshot();
+      await page.evaluate(() => scrollTo(23, 80));
+      await page.waitForFunction(() => scrollX === 23 && scrollY === 80);
+      const compare = b => diffLayout(before.layout, b.layout, tree, tree, true, 'chrome', engine, before.document, b.document);
+      expect(compare(await snapshot()).map(d => d.field)).toEqual(['layout.$document.sx', 'layout.$document.sy']);
+      await page.locator('#root').evaluate(el => { el.style.left = '20px'; });
+      expect(compare(await snapshot()).map(d => d.field)).toEqual(['layout.root.x', 'layout.$document.sx', 'layout.$document.sy']);
+    } finally { await browser.close(); }
+  });
+}
+
+test('an engine launch failure stops synthetic compilation and reports only the launch', () => {
+  const out = mkdtempSync(resolve(tmpdir(), 'exact-conform-preflight-'));
+  try {
+    for (const engine of ['firefox', 'webkit']) {
+      const compiler = resolve(out, `${engine}-compiler`), destination = resolve(out, engine);
+      const run = spawnSync(process.execPath, ['-e', `
+        import { mock } from 'bun:test';
+        import { writeFileSync } from 'node:fs';
+        const processes = await import('node:child_process'), spawnSync = processes.spawnSync;
+        mock.module('node:child_process', () => ({ ...processes, spawnSync(command, ...args) {
+          if (command !== 'cargo') return spawnSync(command, ...args);
+          writeFileSync(${JSON.stringify(compiler)}, 'compiled');
+          return { status: 1, stdout: '', stderr: 'compiler must not run after failed preflight' };
+        } }));
+        mock.module('playwright-core', () => ({ ${engine}: { launchServer: async () => { throw new Error('fixture launch failure'); } } }));
+        process.argv = [process.execPath, 'conform.mjs', '--synthetic', '--only', 'document', '--browser', ${JSON.stringify(engine)},
+          '--build-js', '--build', '--strict', '--out', ${JSON.stringify(destination)}, '--wasm-root', ${JSON.stringify(resolve(out, 'wasm'))}];
+        await import(${JSON.stringify(resolve(import.meta.dir, 'conform.mjs'))});
+      `], { encoding: 'utf8', timeout: 15000 });
+      expect(run.status, run.stderr).toBe(1);
+      const report = JSON.parse(readFileSync(resolve(destination, 'report.json'), 'utf8'));
+      expect(report.failures).toEqual([{ target: 'engine', step: 'launch', what: `web carrier unavailable: ${engine}: fixture launch failure` }]);
+      expect(existsSync(compiler)).toBe(false);
+      expect(report.targets).toEqual({});
+      expect(report.steps).toEqual([]);
+    }
+  } finally { rmSync(out, { recursive: true, force: true }); }
+}, 30000);
 
 test('unopened and cached-hidden tab panels compare by their visible content', () => {
   const home = { id: 1, type: 'Text', depth: 1, props: { testId: 'route-home', text: 'home' } };
@@ -250,6 +329,19 @@ test('every existing step parses and keeps the driver call forms', async () => {
     ['resize 800x600', [['resize', [800, 600]]]],
   ];
   for (const [line, calls] of forms) expect(await record(line), line).toEqual(calls);
+});
+
+test('cross-browser wheel steps request hover and wheel at one resolved point', async () => {
+  const calls = [], session = who => ({ tap: async (...args) => { calls.push([who, ...args]); } });
+  const step = parseStep('wheel strip 20 10', { hoverWheel: true });
+  await step.run(session('chrome')); await step.run(session('other'));
+  expect(calls).toEqual([
+    ['chrome', 'strip', { wheel: [10, 20], hover: true }],
+    ['other', 'strip', { wheel: [10, 20], hover: true }],
+  ]);
+  for (const line of ['wheel strip NaN', 'refused wheel strip 0 Infinity']) {
+    expect(() => parseStep(line, { hoverWheel: true })).toThrow(`not a step: ${line}: `);
+  }
 });
 
 test('conformance selects menus without treating the job count as an app', () => {

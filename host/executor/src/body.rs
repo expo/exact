@@ -229,7 +229,7 @@ fn named(path: &str, e: ibex2::boundary::HostError) -> Outcome {
 /// A filesystem refusal of `path`, named by the option `what`.
 pub(super) fn named_as(what: &str, path: &str, e: ibex2::boundary::HostError) -> Outcome {
     match e {
-        // As `readFile`'s denial reads (js/src/prelude.js `deniedPath`).
+        // As `readFile`'s denial reads (js/src/storage.js `deniedPath`).
         ibex2::boundary::HostError::Denied { capability } => refused(format!(
             "{what} {path}: denied: {capability} {path}: no grant covers it; grant `{capability} {path}`"
         )),

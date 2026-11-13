@@ -1019,3 +1019,61 @@ pub(super) fn active_tab_background_has_one_native_paint_owner() {
         );
     }
 }
+
+/// LLP 1075.003 §9.9 (expo/exact#391): a tab's badge box is no part of its
+/// native face; the neutral painter draws the face's badge as the web's
+/// sheet does, a pill in the system red from the symbol's middle toward its
+/// trailing side, and none while the box is gone.
+pub(crate) fn a_tab_badge_is_a_red_pill_over_its_symbol() {
+    let plan = contract::compile(
+        r##"component App
+  state n = 0
+  action bump
+    n = n + 1
+  view
+    column width=320 background-color="#ffffff"
+      row role="tablist" testId="tabs"
+        button role="tab" aria-controls="panel" aria-selected=true press=bump flex=1 testId="tab"
+          image "symbol:bookmark"
+          text "Saved"
+          if n > 0
+            row background-color="-exact-system-red"
+              text `${n}`
+      column role="tabpanel" id="panel"
+        text "Panel"
+"##,
+    )
+    .unwrap();
+    let (mut p, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (320.0, 200.0),
+        1.0,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    let _roles = p.host().runner().bind_roles();
+    assert!(error.is_none(), "{error:?}");
+    let red = |p: &mut Presenter<()>| {
+        text_pixels(p, "tab")
+            .into_iter()
+            .filter(|[r, g, b]| *r > 200 && *g < 90 && *b < 90)
+            .count()
+    };
+    assert_eq!(red(&mut p), 0, "no box, no badge");
+    tab_action(&mut p, "tab");
+    let face = p.host().kernel().press_face(id(&p, "tab")).unwrap();
+    assert_eq!(face.badge.as_deref(), Some("1"));
+    // About an 18 px pill at the 16 px root, less its white count.
+    let pill = red(&mut p);
+    assert!(pill > 150, "the pill: {pill} red pixels");
+    let (_, _, w, _) = p.rect_of(id(&p, "tab")).unwrap();
+    let top = |p: &mut Presenter<()>, dx: f32| {
+        (0..30)
+            .map(|y| pixel(p, "tab", w / 2.0 + dx, y as f32))
+            .any(|[r, g, b]| r > 200 && g < 90 && b < 90)
+    };
+    assert!(top(&mut p, 12.0), "past the symbol's middle");
+    assert!(!top(&mut p, -12.0), "not before it");
+}

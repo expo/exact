@@ -702,7 +702,8 @@ extension Agent {
         }
         guard let v = view(req), let win = v.window else { return ["error": "no view \(req["id"] ?? "?") on screen"] }
         guard presenter.toolbar.visible(v), !v.inert else { return ["error": "view \(v.id) is hidden or inert"] }
-        let b = v.tapBox(box(v))
+        // A row drawn as a push button is clicked on its bezel, which bounds its hit (FormRowsMac.swift).
+        let b = v.rowBezelRect.map { box(v, region: $0) } ?? v.tapBox(box(v))
         // A wrapped run's union can include blank space. Hover or click a
         // painted fragment of a run (the web's driver clicks the span's), not
         // its paragraph's middle, then let the normal hit test decide who
@@ -836,7 +837,7 @@ extension Agent {
                 return ["error": "tap #\(v.id): #\(cover.id) (\(cover.layoutPosition)) covers its middle, and no scroll clears it", "covered": Int(cover.id)]
             }
             let window = { [self] (q: CGPoint) in pointerPoint(q, in: win) }
-            switch Agent.addressedAim(v, middle: center, area: apart ? b : b.intersection(CGRect(origin: .zero, size: clip.bounds.size)), reach: { q in pressReach(v, at: window(q), in: win) }) {
+            switch Agent.addressedAim(v, middle: center, area: apart ? b : b.intersection(CGRect(origin: .zero, size: clip.bounds.size)), landsOutside: { [self] q in landing(at: window(q), in: win) }, reach: { q in pressReach(v, at: window(q), in: win) }) {
             case .refused(let refusal): return refusal.reply
             case .at(let q, let middle):
                 if let middle { avoided = middle; p = window(q); at = [Agent.r2(q.x), Agent.r2(q.y)] }

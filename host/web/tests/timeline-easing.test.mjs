@@ -343,6 +343,8 @@ component App
           text "unchanged"
         button testId="reset" press=reset
           text "reset"
+        button testId="release" press=released
+          text "release"
       box testId="scope" timeline-scope="--drag, --other, --inactive" width=360 height=500 position="relative" overflow="hidden"
         box testId="consumer" position="absolute" left=0 top=0 width=40 height=40 opacity=0.55 background-color="#000000" animation=(mode == 4 ? "none" : (mode == 5 ? "fade 1s linear reverse both" : "fade 1s linear both")) animation-timeline=(mode == 4 ? "auto" : (mode == 3 ? "--other" : (mode == 6 ? "--inactive" : "--drag"))) animation-range=(mode == 2 ? "0px 600px" : "0px 300px")
         box testId="handle" swiperight=released touch-action="pan-y" position="absolute" left=0 top=50 width=300 height=80 transition="translate -exact-spring(300, 30, 1)"
@@ -372,7 +374,7 @@ check('a real commit rebinds a spring follower on the wasm and JS runtimes', asy
     for (const [target, dist] of [['wasm', prepared ? resolve(preparedWasm) : wasmDist], ['js', prepared ? resolve(preparedJs) : jsDist]]) {
       session = await open({ host: 'web', plan, app, webDist: dist });
       await session.clock('settle');
-      const read = () => session.carrier.evaluate(`(() => {
+      const presentation = `() => {
         const vector = id => { const v=getComputedStyle(document.querySelector('[data-testid="'+id+'"]')).translate.trim().split(/\\s+/); return v[0]==='none'?[0,0]:[parseFloat(v[0]),parseFloat(v[1]??'0')]; };
         const consumer=document.querySelector('[data-testid="consumer"]'), animations=consumer.getAnimations();
         return {source:vector('source'),other:vector('other'),opacity:parseFloat(getComputedStyle(consumer).opacity),
@@ -381,7 +383,8 @@ check('a real commit rebinds a spring follower on the wasm and JS runtimes', asy
           sourceAnimations:document.querySelector('[data-testid="source"]').getAnimations().map(a=>[a.animationName,a.playState,a.currentTime]),
           syncs:globalThis.__followerSyncs??0,
           sameBasis:globalThis.__followerBasis===undefined||globalThis.__followerBasis===animations.find(a=>a.animationName!==undefined)};
-      })()`);
+      }`;
+      const read = () => session.carrier.evaluate(`(${presentation})()`);
       const expected = (kind, sample) => {
         if (kind === 'remove' || kind === 'inactive') return 0.55;
         const value = kind === 'axis' ? sample.source[1] : kind === 'rebind' ? sample.other[0] : sample.source[0];
@@ -410,6 +413,73 @@ check('a real commit rebinds a spring follower on the wasm and JS runtimes', asy
           const values = samples.map(s => kind === 'axis' ? s.source[1] : kind === 'rebind' ? s.other[0] : s.source[0]);
           expect(Math.max(...values) - Math.min(...values), `${target} ${kind}: the new source keeps moving after the commit`).toBeGreaterThan(1);
         }
+      }
+      // The agent's clock reconciles timelines on every advance. Open the same
+      // plan without it so only the page's frame callback can keep a rebound
+      // consumer following its source.
+      const liveUrl = new URL(await session.carrier.evaluate('location.href'));
+      liveUrl.searchParams.delete('agent');
+      await session.carrier.call('Page.navigate', { url: liveUrl.href });
+      for (const bound = Date.now() + 10000;;) {
+        const booted = await session.carrier.evaluate(`location.href === ${JSON.stringify(liveUrl.href)} && Boolean(document.getElementById('exact-root')?.dataset.bootMs) && Boolean(globalThis.exact?.ready)`).catch(() => false);
+        if (booted) break;
+        if (Date.now() >= bound) throw new Error(`${target}: the live page did not boot`);
+        await Bun.sleep(50);
+      }
+      await session.carrier.evaluate('exact.ready');
+      if (target === 'wasm') await session.carrier.evaluate(`fetch('/__plan').then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b), true)).then(() => exact.ready)`);
+      else await session.carrier.evaluate(`(async () => {
+        const bound = performance.now() + 10000;
+        while (!exact.synced || exact.inflight.n) {
+          if (performance.now() >= bound) throw new Error('the live motion engine did not load');
+          await new Promise(requestAnimationFrame);
+        }
+      })()`);
+      for (const kind of ['unchanged', 'range', 'rebind']) {
+        const { before, samples, agent } = await session.carrier.evaluate(`(async () => {
+          const read = ${presentation};
+          const tap = id => document.querySelector('[data-testid="'+id+'"]').click();
+          const springs = () => ['source', 'other'].flatMap(id => document.querySelector('[data-testid="'+id+'"]').getAnimations())
+            .filter(a => a.animationName === undefined);
+          tap('reset');
+          await Promise.all(springs().map(a => a.finished));
+          tap('release');
+          // Start sampling in flight, with all compositor copies at the same point.
+          for (const a of document.getAnimations().filter(a => a.animationName === undefined)) a.currentTime = 120;
+          const before = read();
+          tap('${kind}');
+          const moving = springs(), samples = [read()];
+          if (moving.length !== 2) throw new Error('expected two release springs');
+          await new Promise((resolve, reject) => {
+            let frame;
+            const bound = setTimeout(() => {
+              cancelAnimationFrame(frame);
+              reject(new Error('release springs did not finish: ' + JSON.stringify(samples.at(-1))));
+            }, 5000);
+            const sample = () => {
+              samples.push(read());
+              if (moving.every(a => a.playState === 'finished')) {
+                clearTimeout(bound); resolve();
+              } else next();
+            };
+            // Read after all callbacks in this frame, including the host's seek.
+            const next = () => { frame = requestAnimationFrame(() => setTimeout(sample, 0)); };
+            next();
+          });
+          return { before, samples, agent: typeof exact.agentSettled === 'function' };
+        })()`);
+        expect(agent, `${target}: sampling runs without the agent`).toBe(false);
+        expect(before.followers, `${target} ${kind}: release made a compositor follower`).toBe(1);
+        expect(samples[0].followers, `${target} ${kind}: a changed binding hands off to frame seeking`).toBe(kind === 'unchanged' ? 1 : 0);
+        for (const [i, sample] of samples.entries()) expect(sample.opacity, `${target} live ${kind} sample ${i}`).toBeCloseTo(expected(kind, sample), 3);
+        const values = samples.map(s => kind === 'rebind' ? s.other[0] : s.source[0]);
+        const intermediate = values.findIndex((v, i) => i > 0 && i < values.length - 1 && Math.abs(v - values[0]) > 1 && Math.abs(v - values.at(-1)) > 1);
+        expect(intermediate, `${target} ${kind}: presentation advances through an intermediate value`).toBeGreaterThan(0);
+        expect(Math.abs(samples[intermediate].opacity - samples[0].opacity), `${target} ${kind}: the consumer keeps moving without the agent`).toBeGreaterThan(0.001);
+        const end = samples.at(-1);
+        expect(end.source[0], `${target} ${kind}: the source finished`).toBeCloseTo(260, 2);
+        expect(end.other[0], `${target} ${kind}: the rebound source finished`).toBeCloseTo(220, 2);
+        expect(end.followers, `${target} ${kind}: the completed follower is retired`).toBe(0);
       }
       await session.close(); session = null;
     }

@@ -15,8 +15,9 @@
 // its texts compared before and after (LLP 1116.010 D6; `judgeReload` says what it forgives): a screen that reloads into another state
 // ('Card 2 of 3' → '0 / 0') is a note, not a problem, since a game or a draft in progress lives in memory by design (LLP 1116.011 D5);
 // it is a finding only when a saved value came back different (`savedChanges`: a `persist` state, a field showing what the app kept).
-// A native host's cold launch is `/` (LLP 1038 §7), so iOS has no such reload to compare. A refusal
-// the host journaled during the run (`logs`: 'swipeContent … is refused: …') is shown first in the report (LLP 1116.010 D5). One capture of each screen is kept in
+// Native relaunch opens at the launch location (on iOS, the manifest's `start_url` by default), so verify
+// compares end-route reloads only on the web. A refusal the host journaled during the run
+// (`logs`: 'swipeContent … is refused: …') is shown first in the report (LLP 1116.010 D5). One capture of each screen is kept in
 // .exact/verify/ for milestones (four of the first screen: each width and scheme). It prints one short report
 // ending "verify: clean" or "verify: N problems" (`--json`: one object). Exit 1 when the build, a test, a launch
 // or the relaunch fails; check's findings, the relaunch's, those at the largest text size and the compiler's warnings
@@ -48,9 +49,9 @@ import { findings as feelFindings, summary as feelSummary } from '../host/apple/
 import { compilerWarnings, information, windowsWindow } from './app-cli.mjs';
 import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
-import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
+import { backendOriginSelection, privateNetwork, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
-import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent } from './verify-findings.mjs';
+import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent, iosTabBar } from './verify-findings.mjs';
 import { cargoDiagnosticFilter } from './cargo-check.mjs';
 export { byRule, groups, ruleOf, largeRemedy };
 
@@ -704,7 +705,8 @@ const ANDROID = 'not on Android yet: check\'s findings (each screen is captured 
 // simulator's own size, which UIKit's controls and Exact's text both follow; the web, where a builder iterates, sets the root
 // font size to iOS's body at that size on the phone's width. Only the kinds of finding a larger text makes are kept, each with
 // a remedy that keeps the text's size: a smaller font is the platform tell this pass exists to prevent. The web omits
-// content iOS projects into its navigation bar: its authored web boxes do not measure UIKit's title and items.
+// what iOS projects into its navigation bar and its tab bar: the web's boxes there do not measure UIKit's title, items
+// and tabs.
 export const LARGEST = 'accessibility-extra-extra-extra-large', LARGEST_PX = 53;
 const LARGE_KINDS = new Set(['overflow', 'clipped', 'overlap', 'squeezed']), PAGES = 6;
 /** LLP 1116.020 D4: each font size the app's own Contract fixes (no-tells.mjs `fixedSizesIn`), which no spill shows (a fixed
@@ -761,7 +763,7 @@ export async function largestText(s, screen) {
     await s.clock('settle');
     const [{ judge, line, accepts }, tree] = await Promise.all([import('./agent-check.mjs'), s.op({ op: 'tree' })]);
     const nodes = new Map((tree.nodes ?? []).map((n) => [n.id, n])), looked = new Set(), found = new Map();
-    const projected = web ? await iosNavigationContent(nodes, async id => (await s.op({ op: 'layout', id })).node?.style) : new Set();
+    const projected = web ? new Set([...await iosNavigationContent(nodes, async id => (await s.op({ op: 'layout', id })).node?.style), ...iosTabBar(nodes)]) : new Set();
     let obs; const shots = [];
     // A screen at a time, as check reads one: the page is scrolled to the first node with a testId that no reading has
     // held yet, at most PAGES times (a list's rows off the screen have no cells to read). Never to projected content:
@@ -1455,6 +1457,8 @@ async function deviceMain(argv, emitJSON, declined, ended) {
 // a server verify will not start or write to) stops both: it is one line and nothing runs (LLP 1116.008 D1).
 async function main(argv) {
   const args = guardFlags('verify', argv), json = args.includes('--json');
+  const backend = args.indexOf('--backend');
+  if (backend >= 0) { selectBackendOrigin(args[backend + 1]); args.splice(backend, 2); }
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(args.includes('--app') ? args[args.indexOf('--app') + 1] : undefined);
   const semantics = contractVerify(app, json);

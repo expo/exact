@@ -273,6 +273,48 @@ fn a_plan_graph_names_the_plans_own_format() {
 }
 
 #[test]
+fn rust_plan_receipts_require_the_baked_wasmi_executor() {
+    let mut builder = exact_plan::builder::PlanBuilder::new(0, 0);
+    let number = builder.primitive(exact_plan::TypeKind::Number);
+    builder.source("count", &[], number);
+    let plan = builder.finish().unwrap();
+    let (root, _, _) = rust_fixture(&plan.encode());
+    std::fs::create_dir_all(root.join("linux/src")).unwrap();
+    let target = "x86_64-unknown-linux-gnu";
+    for (mode, host, expected) in [
+        ("off", "Swappable<App>\n", json!(["native", "wasmi"])),
+        ("wasm", "", json!(["native", "wasmi"])),
+        (
+            "tiered",
+            "Swappable<App>\n",
+            json!(["native", "native-dylib", "wasmi"]),
+        ),
+    ] {
+        std::fs::write(root.join("linux/src/lib.rs"), host).unwrap();
+        std::fs::write(
+            root.join("app.json"),
+            json!({"app":{"id":"com.exact.caltrain","name":"Test"},
+                "rust":{"mode":mode,"module":{"package":"test-logic"}}})
+            .to_string(),
+        )
+        .unwrap();
+        let manifest = Manifest::read(&root).unwrap();
+        let compat =
+            crate::compat::compatibility_id(&root, "linux", target, &manifest, Some("")).unwrap();
+        let graph = artifact_graph(&plan, &compat.inputs, &[], false, target).unwrap();
+        assert_eq!(
+            graph["artifacts"][0]["requires"]["executors"], expected,
+            "{mode}"
+        );
+        assert_eq!(
+            compat.inputs["store"]["acceptedKinds"],
+            json!(["plan", "assets", "wasm"])
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn loopback_callback_ports_retain_the_listener() {
     let plan = exact_plan::builder::PlanBuilder::new(0, 0)
         .finish()

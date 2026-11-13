@@ -838,7 +838,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             css.push_str(&exact_web::host::template::look_colour_below(
                 &at,
                 looks,
-                i + 1,
+                exact_web::host::template::look_marks(i + 1),
             ));
         }
     }

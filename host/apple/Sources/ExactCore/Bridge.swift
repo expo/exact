@@ -226,6 +226,11 @@ package final class Runtime {
     package func useNativeTimers(_ enabled: Bool) {
         on { () -> Void in _ = exact_native_timers(rt, enabled ? 1 : 0) }
     }
+    /// Rebind retiring list rows to new items (LLP 1078): the presenter
+    /// resets what it keeps by view on each `renew`.
+    package func useRowReuse(_ on: Bool) {
+        self.on { () -> Void in _ = exact_row_reuse(rt, on ? 1 : 0) }
+    }
     /// The wake for a request's reply (LLP 1016 D2), on the executor's thread.
     package func setWake(_ wake: ExactWakeFn?, ctx: UnsafeMutableRawPointer?) {
         let ctx = UInt(bitPattern: ctx)

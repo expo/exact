@@ -154,17 +154,35 @@ export function judge(obs, png, { host = 'web', nodes = new Map() } = {}) {
     }
   }
   // Where a text's lines are drawn (`ink`, where the host says it is not the box, already cut to a box that clips it),
-  // within what a scroller presents of its box (`vis`) and above the keyboard.
-  const drawn = (it) => { const k = it.ink ?? it, v = shown(it.vis ? it : { ...it, ...k }, obs.keyboard), x = Math.max(v.x, k.x), y = Math.max(v.y, k.y); return { x, y, w: Math.min(v.x + v.w, k.x + k.w) - x, h: Math.min(v.y + v.h, k.y + k.h) - y }; };
+  // within what a scroller presents of its box (`vis`) and above the keyboard: a rectangle, or one a line for a run of a
+  // paragraph that wraps (`lines`), whose box takes in the ends of lines it shares with its neighbours.
+  const cut = (r, v) => { const x = Math.max(v.x, r.x), y = Math.max(v.y, r.y); return { x, y, w: Math.min(v.x + v.w, r.x + r.w) - x, h: Math.min(v.y + v.h, r.y + r.h) - y }; };
+  const drawn = (it) => {
+    if (it.lines) { const v = shown(it, obs.keyboard); return it.lines.map((l) => cut(l, v)).filter((r) => r.w > 0 && r.h > 0); }
+    const k = it.ink ?? it;
+    return [cut(k, shown(it.vis ? it : { ...it, ...k }, obs.keyboard))];
+  };
+  // Where two items' rectangles meet most, as `inter` and where.
+  const meeting = (as, bs) => {
+    let best = { w: 0, h: 0, x: 0, y: 0 };
+    for (const p of as) for (const q of bs) {
+      const i = inter(p, q);
+      if (i.w > 0 && i.h > 0 && i.w * i.h > best.w * best.h) best = { ...i, x: Math.max(p.x, q.x), y: Math.max(p.y, q.y) };
+    }
+    return best;
+  };
   // Controls overlapping each other, or a text where it is drawn (a word wider than its box runs into the button beside
   // it): neither holds the other and they share more than a sliver of what is presented of each (`vis`: a row its list
-  // or scroller cuts overlaps nothing past that edge, LLP 1116.006 D5).
-  const controls = items.filter((it) => it.control && !it.inline);
-  // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it: no overlap.
+  // or scroller cuts overlaps nothing past that edge, LLP 1116.006 D5). A pressable run of a paragraph that wraps meets
+  // others only where its lines are.
+  const controls = items.filter((it) => it.control && !it.overlay);
+  const where = (it) => (it.control && !it.lines ? [shown(it, obs.keyboard)] : drawn(it));
+  // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it, and an announcement laid
+  // over the page that lets taps through (`overlay`, a toast) over what it passes: no overlap.
   for (const a of controls) for (const b of items) {
-    if (a === b || !(b.control || b.text) || b.pinned || (b.control && b.id < a.id && controls.includes(b))) continue;
+    if (a === b || !(b.control || b.text) || b.pinned || b.overlay || (b.control && b.id < a.id)) continue;
     if (!b.control && (b.of === a.id || controls.some((c) => c !== a && holds(c, b)))) continue; // its own label, or another control's
-    const i = inter(shown(a, obs.keyboard), b.control ? shown(b, obs.keyboard) : drawn(b));
+    const i = meeting(where(a), where(b));
     if (i.w >= 2 && i.h >= 2 && !holds(a, b) && !holds(b, a)) add('overlap', a, { with: b.id, by: [r0(i.w), r0(i.h)] }, 'give them room (a gap, or let the row wrap)');
   }
   // Two texts running into each other: where their lines are drawn (`ink`, where the host says it is not the box) share
@@ -176,11 +194,9 @@ export function judge(obs, png, { host = 'web', nodes = new Map() } = {}) {
   // `beneath`, `on` and `solid`; a label running past its bar's edge still meets the row outside it).
   const hides = (top, below, i) => below.beneath != null && top.on === below.beneath.by && top.solid && holds(below.beneath, i);
   for (const [k, a] of texts.entries()) for (const b of texts.slice(k + 1)) {
-    if (holds(a, b) || holds(b, a) || a.pinned || b.pinned) continue;
-    const da = drawn(a), db = drawn(b);
-    if (da.w <= 0 || da.h <= 0 || db.w <= 0 || db.h <= 0) continue;
-    const i = inter(da, db), meet = { x: Math.max(da.x, db.x), y: Math.max(da.y, db.y), w: i.w, h: i.h };
-    if (hides(a, b, meet) || hides(b, a, meet)) continue;
+    if (holds(a, b) || holds(b, a) || a.pinned || b.pinned || a.overlay || b.overlay) continue;
+    const i = meeting(drawn(a), drawn(b));
+    if (hides(a, b, i) || hides(b, a, i)) continue;
     if (i.w > 0.5 && i.h >= 2) add('overlap', a, { with: b.id, by: [Math.round(i.w * 10) / 10, r0(i.h)] }, 'give them room (a gap, or let the row wrap)');
   }
   // A control's own text covered with it is one finding: the control's.

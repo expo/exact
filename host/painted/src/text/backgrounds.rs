@@ -13,6 +13,29 @@ pub(crate) struct InlineBackground {
     pub color: [u8; 4],
     pub id: ViewId,
     pub radii: [Dimension; 4],
+    /// How far its box's padding box stands out from its text at its first
+    /// character and its last (`NodeRef::inline_background_reach`): its
+    /// padding and border, which the background covers (CSS 2 §14.2).
+    pub reach: exact_kernel::InlineEdges,
+    /// The boxes around it with backgrounds of their own, nearest first,
+    /// which paint under it.
+    pub outer: Vec<InlineBackground>,
+}
+
+impl InlineBackground {
+    /// Its boxes, outermost first: each one's paint order (CSS 2 Appendix E).
+    fn layers(&self) -> impl Iterator<Item = &InlineBackground> {
+        self.outer.iter().rev().chain(std::iter::once(self))
+    }
+}
+
+/// One box's background over part of a glyph, with its run's metrics.
+struct Span<'a> {
+    lo: f32,
+    hi: f32,
+    run: usize,
+    layer: &'a InlineBackground,
+    depth: usize,
 }
 
 #[derive(Default)]
@@ -51,14 +74,21 @@ impl Paragraph {
         backgrounds: &[Option<InlineBackground>],
         env: &Env,
     ) -> Vec<(Shape, [u8; 4])> {
-        if !backgrounds.iter().flatten().any(|b| {
-            b.radii.iter().any(|d| match d {
-                Dimension::Auto => false,
-                Dimension::Points(n) | Dimension::Percent(n) => *n > 0.0,
-                Dimension::Calc(p, n) => *p > 0.0 || *n > 0.0,
-                _ => true,
+        // The room beside a box (`Run::edges`) is no glyph's ink: only its
+        // own boxes' reach covers it, read by character.
+        let edged = self.source.spec.runs.iter().any(|r| !r.edges.is_empty());
+        if !edged
+            && !backgrounds.iter().flatten().any(|b| {
+                !b.reach.is_empty()
+                    || !b.outer.is_empty()
+                    || b.radii.iter().any(|d| match d {
+                        Dimension::Auto => false,
+                        Dimension::Points(n) | Dimension::Percent(n) => *n > 0.0,
+                        Dimension::Calc(p, n) => *p > 0.0 || *n > 0.0,
+                        _ => true,
+                    })
             })
-        }) {
+        {
             return self
                 .run_backgrounds(
                     &backgrounds
@@ -77,14 +107,17 @@ impl Paragraph {
         let hard_ranges = &ownership.hard;
         let mut boxes: BTreeMap<ViewId, Range<usize>> = BTreeMap::new();
         let mut add = |range: Range<usize>, run: usize| {
-            if let Some(background) = backgrounds.get(run).and_then(Option::as_ref) {
+            let Some(background) = backgrounds.get(run).and_then(Option::as_ref) else {
+                return;
+            };
+            for layer in background.layers() {
                 boxes
-                    .entry(background.id)
+                    .entry(layer.id)
                     .and_modify(|b| {
                         b.start = b.start.min(range.start);
                         b.end = b.end.max(range.end);
                     })
-                    .or_insert(range);
+                    .or_insert(range.clone());
             }
         };
         if flow.is_some() {
@@ -144,13 +177,19 @@ impl Paragraph {
             for g in line.glyphs {
                 let local = g.range();
                 if local.is_empty() {
-                    // An ellipsis carries its run's background, but no endpoint.
-                    if backgrounds.get(g.run()).and_then(Option::as_ref).is_some() && g.w > 0.0 {
-                        spans.push(Piece {
-                            lo: g.x,
-                            hi: g.x + g.w,
-                            run: g.run(),
-                        });
+                    // An ellipsis carries its run's backgrounds, but no endpoint.
+                    if let Some(background) = backgrounds.get(g.run()).and_then(Option::as_ref) {
+                        if g.w > 0.0 {
+                            for (depth, layer) in background.layers().enumerate() {
+                                spans.push(Span {
+                                    lo: g.x,
+                                    hi: g.x + g.w,
+                                    run: g.run(),
+                                    layer,
+                                    depth,
+                                });
+                            }
+                        }
                     }
                     continue;
                 }
@@ -161,20 +200,63 @@ impl Paragraph {
                 if g.w <= 0.0 || local.start >= trim {
                     continue;
                 }
-                spans.extend(ownership.pieces(g, range).into_iter().filter(|piece| {
-                    backgrounds
-                        .get(piece.run)
-                        .and_then(Option::as_ref)
-                        .is_some()
-                }));
+                for piece in ownership.pieces(g, range.clone()) {
+                    let Some(own) = backgrounds.get(piece.run).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    for (depth, background) in own.layers().enumerate() {
+                        let Piece {
+                            mut lo,
+                            mut hi,
+                            run,
+                        } = piece;
+                        // Its padding past its first and last characters: from its
+                        // first glyph back, and from its last glyph's own end, less
+                        // the room after it (`Run::edges`), on (the line's) start
+                        // and end sides. Inside it, the room before a later run's
+                        // first glyph is its own too.
+                        if let Some(extent) = boxes.get(&background.id) {
+                            let rtl = g.level % 2 == 1;
+                            let first = runs.get(run).map(|r| r.0.start);
+                            let before = if range.contains(&extent.start) {
+                                background.reach.start
+                            } else if first.is_some_and(|f| range.contains(&f)) {
+                                self.source.spec.runs[run].edges.start
+                            } else {
+                                0.0
+                            };
+                            if rtl {
+                                hi += before;
+                            } else {
+                                lo -= before;
+                            }
+                            if range.contains(&(extent.end - 1)) {
+                                let room = self.source.spec.runs[run].edges.end;
+                                let past = background.reach.end - room;
+                                if rtl {
+                                    lo -= past;
+                                } else {
+                                    hi += past;
+                                }
+                            }
+                        }
+                        spans.push(Span {
+                            lo,
+                            hi,
+                            run,
+                            layer: background,
+                            depth,
+                        });
+                    }
+                }
             }
-            spans.sort_by(|a, b| a.lo.total_cmp(&b.lo));
-            let mut merged: Vec<Piece> = Vec::new();
+            // Outer boxes first, so that a box inside another paints over it.
+            spans.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.lo.total_cmp(&b.lo)));
+            let mut merged: Vec<Span> = Vec::new();
             for span in spans {
                 match merged.last_mut() {
                     Some(last)
-                        if backgrounds[last.run].clone().unwrap().id
-                            == backgrounds[span.run].clone().unwrap().id
+                        if last.layer.id == span.layer.id
                             && metrics[last.run] == metrics[span.run]
                             && span.lo <= last.hi + 0.01 =>
                     {
@@ -184,14 +266,12 @@ impl Paragraph {
                 }
             }
             for (i, piece) in merged.iter().enumerate() {
-                let edge = edges
-                    .entry(backgrounds[piece.run].clone().unwrap().id)
-                    .or_default();
+                let edge = edges.entry(piece.layer.id).or_default();
                 edge.left.get_or_insert(i);
                 edge.right = i;
             }
             for (i, piece) in merged.into_iter().enumerate() {
-                let background = backgrounds[piece.run].clone().expect("background span");
+                let background = piece.layer;
                 let edge = &edges[&background.id];
                 let left = edge.left == Some(i) && if rtl { edge.end } else { edge.start };
                 let right = edge.right == i && if rtl { edge.start } else { edge.end };

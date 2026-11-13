@@ -91,10 +91,47 @@ package final class ChainingScrollView: NSScrollView {
         insetScrollersFromChrome()
         guard let owner = pointerOwner else { return }
         // Clip geometry can differ through rounding or insets even without
-        // a scrollbar. Only a visible legacy scroller occupies a gutter.
-        let right = scrollerStyle == .legacy && verticalScroller?.isHidden == false ? verticalScroller?.frame.width ?? 0 : 0
-        let bottom = scrollerStyle == .legacy && horizontalScroller?.isHidden == false ? horizontalScroller?.frame.height ?? 0 : 0
-        owner.presenter?.covers.report("scroller-\(owner.id)", [owner.id: .gutter(right: right, bottom: bottom)])
+        // a scrollbar. Only a visible legacy scroller occupies a gutter, and
+        // only on an axis that overflows with the other scroller hidden: the
+        // vertical one narrows the clip, which shows the horizontal one until
+        // the kernel lays the content out narrower.
+        let legacy = scrollerStyle == .legacy
+        let vertical = legacy && verticalScroller?.isHidden == false ? verticalScroller?.frame.width ?? 0 : 0
+        let horizontal = legacy && horizontalScroller?.isHidden == false ? horizontalScroller?.frame.height ?? 0 : 0
+        let document = documentView?.frame.size ?? .zero, clip = contentView.frame.size
+        var gutter = (right: document.height > clip.height + horizontal ? vertical : 0,
+                      bottom: document.width > clip.width + vertical ? horizontal : 0)
+        if legacy { keepGutter(&gutter, content: owner.content) } else { kept = nil }
+        if gutter != reported { claimed = (reported, owner.content) }
+        reported = gutter
+        owner.presenter?.covers.report("scroller-\(owner.id)", [owner.id: .gutter(right: gutter.right, bottom: gutter.bottom)])
+    }
+
+    /// The gutter last reported.
+    private var reported: (right: CGFloat, bottom: CGFloat) = (0, 0)
+    /// The gutter before the last change and the content it was laid out with.
+    private var claimed: (gutter: (right: CGFloat, bottom: CGFloat), content: CGSize)?
+    /// Content and frame for which a gutter is kept although its scroller hid.
+    private var kept: (content: CGSize, frame: CGSize)?
+
+    /// A gutter whose own layout made the content fit is kept, as a browser
+    /// keeps a scrollbar through the relayout that adding it caused: the
+    /// content, laid out without it again, would overflow again, and the
+    /// gutter would never settle. A layout for any other reason (other
+    /// content, another frame) decides again.
+    private func keepGutter(_ gutter: inout (right: CGFloat, bottom: CGFloat), content: CGSize) {
+        if let kept, kept.content != content || kept.frame != frame.size { self.kept = nil }
+        // The kernel answered a claim: the content narrowed or shortened by the gutter it was given.
+        if let claimed, claimed.content != content {
+            let narrowed = abs(claimed.content.width - content.width - (reported.right - claimed.gutter.right)) < 0.5
+            let shortened = abs(claimed.content.height - content.height - (reported.bottom - claimed.gutter.bottom)) < 0.5
+            if (gutter.right < reported.right && reported.right > claimed.gutter.right && narrowed)
+                || (gutter.bottom < reported.bottom && reported.bottom > claimed.gutter.bottom && shortened) {
+                kept = (content, frame.size)
+            }
+            self.claimed = nil
+        }
+        if kept != nil { gutter = (max(gutter.right, reported.right), max(gutter.bottom, reported.bottom)) }
     }
 
     /// Taffy reserves an RTL vertical gutter on the left. AppKit keeps

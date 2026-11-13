@@ -1,4 +1,4 @@
-// The smoke's inspection steps (`smoke.mjs` imports them as it does
+// The smoke's web builds and inspection steps (`smoke.mjs` imports them as it does
 // `smoke-duo.mjs`): 2b, `layout <node>` (LLP 1035.002 D1); 2c, `state`'s
 // host sections (D2, D3); 7a, `layout agree` (LLP 1080.001 D5) at the drive's
 // settled points; and the pooling drive on Carousel's virtualized feed.
@@ -9,11 +9,40 @@ import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { HOST_DEV } from './app.mjs';
+import { HOST_DEV, resolveApp } from './app.mjs';
 
 const byTestId = (t, id) => t.nodes.find((n) => n.props.testId === id);
 const box = (l, id) => l.nodes.find((n) => n.testId === id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function webSmokeBuild(app, appOnly) {
+  const root = resolve(import.meta.dir, '..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-smoke-web-'));
+  process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+  const build = (selected, dist, flags = [], env = {}) => {
+    const result = spawnSync(process.execPath, [resolve(root, 'host/web/build.mjs'), selected.crate('web'), ...flags], {
+      cwd: root, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: selected.dir, EXACT_WEB_DIST: dist, ...env },
+    });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+  };
+  const selectedWebDist = resolve(dir, 'dist');
+  build(app, selectedWebDist);
+  if (appOnly) return { selectedWebDist, fixtureWebDist: null, fixtureOptions: null };
+  // Generic plans need neither the selected app's module nor its source declarations.
+  // Orientation Fixture has an empty data source and no replaceable module.
+  const fixtureApp = resolveApp(resolve(root, 'apps/orientation-fixture'));
+  const fixtureAppDist = resolve(dir, 'fixture-app');
+  const fixtureWebDist = resolve(dir, 'fixtures');
+  build(fixtureApp, fixtureAppDist);
+  build(fixtureApp, fixtureWebDist, ['--wasm'], { EXACT_WEB_LINK: 'all' });
+  return { selectedWebDist, fixtureWebDist, fixtureOptions: { app: fixtureApp.dir, webDist: fixtureAppDist } };
+}
+
+export function webSmokeSweep(fixtureWebDist) {
+  // The JS fixtures choose Caltrain explicitly, even when the smoke's app came from the environment.
+  return spawnSync('cargo', ['test', '-p', 'exact-web', '--test', 'it', 'navigation::', '--', '--ignored', '--nocapture'], {
+    cwd: resolve(import.meta.dir, '..'), stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: '', EXACT_ROUTER_DIST: fixtureWebDist },
+  });
+}
 
 export function isDeckURL(source, base) {
   // Native trees keep the authored path; web trees expose src under the page's base.

@@ -757,10 +757,31 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();
-    for (mode, target, executor) in [
-        ("native", Some("aarch64-apple-darwin"), Some("native-dylib")),
-        ("wasm", Some("wasm32-unknown-unknown"), Some("wasmi")),
-        ("off", None, None),
+    for (mode, target, executors, kinds) in [
+        (
+            "native",
+            Some("aarch64-apple-darwin"),
+            serde_json::json!(["native", "native-dylib"]),
+            serde_json::json!(["plan", "assets"]),
+        ),
+        (
+            "wasm",
+            Some("wasm32-unknown-unknown"),
+            serde_json::json!(["native", "wasmi"]),
+            serde_json::json!(["plan", "assets", "wasm"]),
+        ),
+        (
+            "tiered",
+            Some("aarch64-apple-darwin"),
+            serde_json::json!(["native", "native-dylib", "wasmi"]),
+            serde_json::json!(["plan", "assets", "wasm"]),
+        ),
+        (
+            "off",
+            None,
+            serde_json::json!(["native"]),
+            serde_json::json!(["plan", "assets"]),
+        ),
     ] {
         manifest.json["rust"] = serde_json::json!({"mode":mode,"module":{"package":"app-logic"}});
         let receipt = compatibility_with_trust(
@@ -782,11 +803,13 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
                 serde_json::json!(super::RUST_ABI)
             }
         );
-        let expected = executor.map_or_else(
-            || serde_json::json!(["native"]),
-            |e| serde_json::json!(["native", e]),
-        );
-        assert_eq!(receipt.inputs["executors"], expected);
+        assert_eq!(receipt.inputs["executors"], executors, "{mode}");
+        assert_eq!(receipt.inputs["store"]["acceptedKinds"], kinds, "{mode}");
+        if matches!(mode, "wasm" | "tiered") {
+            let mut old = receipt.inputs.clone();
+            old["store"]["acceptedKinds"] = serde_json::json!(["plan", "assets"]);
+            assert_ne!(receipt.id, super::compatibility_digest(&old), "{mode}");
+        }
         assert!(
             !ids.contains(&receipt.id),
             "executor capability changes cohort identity"
@@ -794,6 +817,69 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
         ids.push(receipt.id);
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn swappable_receipts_name_wasmi_and_move_the_compatibility_id() {
+    use serde_json::json;
+    let dir = app("swappable-executor");
+    std::fs::create_dir_all(dir.join("apple/src")).unwrap();
+    std::fs::write(dir.join("apple/src/lib.rs"), "Swappable<App>\n").unwrap();
+    let mut manifest = Manifest::read(&dir).unwrap();
+    for (platform, target) in [
+        ("ios", "aarch64-apple-ios"),
+        ("macos", "aarch64-apple-darwin"),
+        ("linux", "x86_64-unknown-linux-gnu"),
+    ] {
+        let receipt =
+            compatibility_with_trust(&dir, platform, target, &manifest, Some(""), "development")
+                .unwrap();
+        let serialized: serde_json::Value = serde_json::from_str(&receipt.to_json()).unwrap();
+        assert_eq!(
+            serialized["inputs"]["executors"],
+            json!(["native", "wasmi"])
+        );
+        assert_eq!(
+            serialized["inputs"]["store"]["acceptedKinds"],
+            json!(["plan", "assets", "wasm"])
+        );
+        let mut old = receipt.inputs.clone();
+        old["executors"] = json!(["native", "wasmtime"]);
+        assert_ne!(receipt.id, super::compatibility_digest(&old), "{platform}");
+    }
+    std::fs::write(dir.join("app.ts"), "").unwrap();
+    let receipt = |manifest: &Manifest| {
+        compatibility_with_trust(
+            &dir,
+            "linux",
+            "x86_64-unknown-linux-gnu",
+            manifest,
+            Some(""),
+            "development",
+        )
+        .unwrap()
+    };
+    let mixed = receipt(&manifest);
+    assert_eq!(
+        mixed.inputs["executors"],
+        json!(["hermes", "native", "wasmi"])
+    );
+    assert_eq!(
+        mixed.inputs["store"]["acceptedKinds"],
+        json!(["plan", "assets", "bytecode", "wasm"])
+    );
+    manifest.json["deploy"]["store"] = json!({"linux":"0"});
+    assert_eq!(
+        receipt(&manifest).inputs["store"]["acceptedKinds"],
+        json!([])
+    );
+    std::fs::create_dir_all(dir.join("linux/src")).unwrap();
+    std::fs::write(dir.join("linux/src/lib.rs"), "pub struct App;\n").unwrap();
+    assert_eq!(
+        receipt(&manifest).inputs["executors"],
+        json!(["hermes", "native"])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

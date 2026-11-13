@@ -400,8 +400,9 @@ pub trait Surface {
     /// Disabled by default; collection must not affect saved state or replay.
     fn set_performance_reporting(&mut self, _enabled: bool) {}
     /// The latest snapshot as a JSON object, without unavailable metrics or the module's
-    /// own (`processMemoryBytes`, `gameHeapBytes`). Called only while enabled, at most once
-    /// a second; `now_ms` is the host's monotonic clock, polled while rendering is idle too.
+    /// own (`processMemoryBytes`, `gameHeapBytes`, `cpuSubmitMs`, `cpuSubmitMaxMs`).
+    /// Called only while enabled, at most once a second; `now_ms` is the host's
+    /// monotonic clock, polled while rendering is idle too.
     fn take_performance(&mut self, _now_ms: f64) -> Option<String> {
         None
     }

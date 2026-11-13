@@ -1052,6 +1052,8 @@ fn fingerprint(spec: &Spec) -> u64 {
         run.hang.hash(&mut h);
         run.mark.hash(&mut h);
         run.href.hash(&mut h);
+        run.edges.start.to_bits().hash(&mut h);
+        run.edges.end.to_bits().hash(&mut h);
         if let Some(b) = run.inline {
             for v in [b.width, b.height, b.shift] {
                 v.to_bits().hash(&mut h);
@@ -1089,6 +1091,7 @@ fn equal(a: &Spec, b: &Spec) -> bool {
                     && a.font_variant_ligatures == b.font_variant_ligatures
                     && a.font_features == b.font_features
                     && a.inline == b.inline
+                    && a.edges == b.edges
             })
 }
 

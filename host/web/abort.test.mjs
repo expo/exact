@@ -6,6 +6,7 @@ import { abortServer, TESTS, within } from '../../scripts/abort-fixture.mjs';
 import { chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { hostFixtureFile } from './tests/glue-fixture.mjs';
+import { modulePrelude } from '../web-js/glue.mjs';
 
 const chromeTest = need('chrome', chromium().unavailable);
 
@@ -21,8 +22,9 @@ for (const wrappedAny of [false, true]) for (const placement of ['main', 'worker
       return new Response('late reply');
     }
     if (path === '/') return new Response('<!doctype html><body></body>', { headers: { 'content-type': 'text/html' } });
-    const source = path === '/module-prelude.js' ? '../../js/src/prelude.js'
-      : path === '/module-binary.js' ? '../../js/src/binary.js' : path.slice(1);
+    // The page loads the prelude's scripts as the web build joins them (host/web-js/glue.mjs `modulePrelude`).
+    if (path === '/module-prelude.js') return new Response(modulePrelude(resolve(import.meta.dir, '../..')), { headers: { 'content-type': 'text/javascript' } });
+    const source = path === '/module-binary.js' ? '../../js/src/binary.js' : path.slice(1);
     if (!existsSync(resolve(import.meta.dir, source))) return new Response('not found', { status: 404 });
     return new Response(hostFixtureFile(resolve(import.meta.dir, source)), { headers: { 'content-type': 'text/javascript' } });
   } });

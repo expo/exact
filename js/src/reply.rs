@@ -111,7 +111,7 @@ impl Module {
                             warning: reply.get("bakeWarning").and_then(Json::as_bool) == Some(true),
                         }
                     }
-                    // What it let through, by class (LLP 1109 D3; prelude.js `failureCode`).
+                    // What it let through, by class (LLP 1109 D3; reply.js `failureCode`).
                     _ => FailureCode::seam_error(
                         reply.get("failure").and_then(Json::as_str),
                         message,

@@ -29,6 +29,14 @@ fn main() {
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
+        "src/time.js",
+        "src/crypto.js",
+        "src/module-work.js",
+        "src/fetch.js",
+        "src/auth.js",
+        "src/store.js",
+        "src/storage.js",
+        "src/reply.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",
@@ -121,12 +129,22 @@ fn main() {
 
     // Ibex installs PURE | CRYPTO | ABORT before Exact's trusted policy
     // and data-seam layers; application bytecode follows after
-    // Adapter::capture_intrinsics() and Adapter::harden().
+    // Adapter::capture_intrinsics() and Adapter::harden(). The web's module
+    // realm evaluates binary.js and then the prelude's scripts, time.js
+    // through prelude.js, in this order (host/web-js/glue.mjs `MODULE_PRELUDE`).
     let prelude = [
         "src/pure.js",
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
+        "src/time.js",
+        "src/crypto.js",
+        "src/module-work.js",
+        "src/fetch.js",
+        "src/auth.js",
+        "src/store.js",
+        "src/storage.js",
+        "src/reply.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",

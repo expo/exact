@@ -81,7 +81,7 @@ async function withRenderRuntime(run) {
   const previous = globalThis.document, doc = createDocument();
   globalThis.document = doc;
   try {
-    const real = ['rt.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js'];
+    const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js'];
     for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
     for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
     await run(doc, await import(resolve(dir, 'rt.js')));

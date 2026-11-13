@@ -7,6 +7,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
+import { modulePrelude } from '../web-js/glue.mjs';
 
 const ROOT = resolve(import.meta.dir, '../..');
 // The runner's normalized set for `net.fetch https://api.castle.test` (as tests/it/request.rs's batch carries it).
@@ -16,7 +17,7 @@ test('image writes notify only for a successful widget-readable destination', as
   const realm = vm.createContext({ URL, TextEncoder, TextDecoder, AbortController, AbortSignal, crypto,
     __exact_host: () => '', console: { error() {} } });
   vm.runInContext(readFileSync(resolve(ROOT, 'js/src/binary.js'), 'utf8'), realm);
-  vm.runInContext(readFileSync(resolve(ROOT, 'js/src/prelude.js'), 'utf8'), realm);
+  vm.runInContext(modulePrelude(ROOT), realm);
   vm.runInContext(`
     exact = { grants: 'fs.read app:/data/output.jpg', answer(source, args, store, storage) {
       return globalThis.result = storage.fs[args[0]](args[1], args[2], {
@@ -75,7 +76,7 @@ export { refuseCodeFromStrings } from ${JSON.stringify(resolve(ROOT, 'host/web/s
     // Each read lands when the test says, in the order issued.
     writeFileSync(resolve(dir, 'storage-fs.js'), `export const createFileSystem = () => ({
   readFile: path => new Promise(ok => globalThis.reads.push(() => ok(new TextEncoder().encode(path)))), dispose() {} });`);
-    const prelude = readFileSync(resolve(ROOT, 'js/src/prelude.js'), 'utf8');
+    const prelude = modulePrelude(ROOT);
     const binary = readFileSync(resolve(ROOT, 'js/src/binary.js'), 'utf8');
     const script = new TextEncoder().encode(`exact = { abi: 1, appId: 'test.storage', grants: 'net.fetch https://api.castle.test', answer(source, args, store, storage) {
   const read = path => storage.fs.readFile(path).then(bytes => new TextDecoder().decode(bytes));
@@ -149,7 +150,7 @@ export { refuseCodeFromStrings } from ${JSON.stringify(resolve(ROOT, 'host/web/s
     writeFileSync(resolve(dir, 'storage-sqlite.js'), `export const createSqlite = () => ({
   open: async () => ({ query: async (_sql, params) => params,
     prepare: async () => ({ query: async params => params, close: async () => {} }), close: async () => {} }), dispose() {} });`);
-    const prelude = readFileSync(resolve(ROOT, 'js/src/prelude.js'), 'utf8');
+    const prelude = modulePrelude(ROOT);
     const binary = readFileSync(resolve(ROOT, 'js/src/binary.js'), 'utf8');
     const bytes = new TextEncoder().encode(`exact = { abi: 1, appId: 'test.storage', grants: ${JSON.stringify(declaration)}, answer(source, args, store, storage) {
   const read = path => storage.fs.readFile(path).then(bytes => new TextDecoder().decode(bytes));

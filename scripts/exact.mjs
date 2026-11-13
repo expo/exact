@@ -759,6 +759,8 @@ export function typeDiagnostics(report, dir) {
   const found = [], at = (file) => relative(process.cwd(), resolve(dir, file));
   for (const line of report.split(/\r?\n/)) {
     if (line.startsWith('warning: ') || /^.+:\d+:\d+ warning \[[\w-]+\] /.test(line)) continue;
+    const backend = /^error \[backend-selection\]: (.*)$/.exec(line);
+    if (backend) { found.push({id: 'backend-selection', severity: 'error', message: backend[1], file: at('app.ts'), line: 0, col: 0, end_col: 0, related: []}); continue; }
     const m = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);
     if (m) found.push({id: `typescript-${m[4]}`, severity: 'error', message: m[5], file: at(m[1]), line: Number(m[2]), col: Number(m[3]), end_col: Number(m[3]), related: []});
     else if (line.trim() && !/^error: .*: app\.ts failed the type check/.test(line)) {

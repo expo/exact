@@ -13,7 +13,9 @@ use exact_plan::Plan;
 pub use super::element::attribute_rows;
 // A node's state looks as page rules (LLP 1121 D8), for the JS target's sheet.
 use super::mode::looks;
-pub use super::mode::looks::{colour_below as look_colour_below, rules as look_rules};
+pub use super::mode::looks::{
+    colour_below as look_colour_below, marked as look_marks, rules as look_rules,
+};
 
 /// An element as the live host would create it.
 #[derive(Debug, Clone, PartialEq)]

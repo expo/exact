@@ -24,6 +24,17 @@ receipt-listed archive, header, compiler and ICU filter against its digest,
 independently of the selected Intl data tier. Android’s JSI, Boost and base ICU archives
 must be present in the manifest.
 
+## Distrusted emSign keys
+
+The portable transports trust what `webpki-roots` compiles in when the system
+has no roots, and verify with `rustls-webpki`. Both locks, like Exact's root
+lock, hold `webpki-roots` 1.0.12, without the emSign roots Mozilla removed
+(RUSTSEC-2026-0381), and `rustls-webpki` 0.103.17, which refuses a path holding
+the distrusted emSign intermediate keys (RUSTSEC-2026-0382). Exact's
+`transport/trust_tests.rs`, with its certificates in
+`transport/testdata/distrusted/`, checks both against either kind of store;
+replay it on a refresh unless upstream carries the same check.
+
 ## Portable event-stream timeouts
 
 `transport/rustls_http.rs` removes implicit read deadlines after a successful

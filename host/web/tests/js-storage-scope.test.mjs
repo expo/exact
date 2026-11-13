@@ -16,7 +16,7 @@ import { standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const webJs = fileURLToPath(new URL('../../web-js/', import.meta.url)), web = fileURLToPath(new URL('../', import.meta.url));
-const REAL = ['rt.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
+const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
 const root = mkdtempSync(resolve(tmpdir(), 'exact-js-storage-'));
 /** The runtime as a build lays it out for the app at `appDir`, or as written (a release) when it is null. */
 function runtime(name, appDir) {

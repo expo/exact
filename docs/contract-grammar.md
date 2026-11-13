@@ -144,7 +144,10 @@ A font face's weight is a whole number in 1–1000. Keyframe percentages are in
 0–100; `from` and `to` are 0% and 100%. Lowering checks whether keyframe properties
 are animatable and constant-call values can be evaluated at compilation.
 Styles accept literal style attributes and explicitly styleable props (currently
-`buttonStyle`), not arbitrary expressions or event props.
+`backgroundMaterial`, `glassGroup` and `buttonStyle`), not arbitrary expressions
+or event props. In a conditional class, each prop must be set in both styles or
+neither, unless the node supplies its own value. Each arm's literal is checked
+as a direct attribute would be.
 
 A part is CSS's pseudo-element as a block: `::placeholder`, then its
 declarations indented beneath it, in a `style` (literal) or under an `input` or
@@ -776,7 +779,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "expect" ( "disabled" | "enabled" ) STRING NL  (* a control's `disabled` (LLP 1116.010 D3) *)
               | "expect" "refusal" STRING NL          (* one observed refusal of the named mutation slot *)
               | "expect" "text" STRING "==" STRING NL
-              | "expect" "state" IDENT { "." ( IDENT | NUMBER ) } "==" test-value NL
+              | "expect" "state" IDENT { "." ( IDENT | NUMBER ) }
+                  ( "==" test-value | ( ">=" | "<=" ) [ "-" ] NUMBER | "in" test-value { test-value } ) NL
               | "expect" "sound" ( "has" | "missing" ) STRING
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
@@ -990,13 +994,30 @@ value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key;
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
-web page reloads its current history entry in the same profile, keeping Back
-and Forward entries; each separate test starts with an isolated history.
-A native app relaunches on the same scratch store. Its state starts over and
-`performanceNow()` is 0 again, at the date the test had
-reached (`epoch` plus its `clock` steps); what the app
-stored is what it reads, so persistence is testable. `close` presses the
-window's close button as ⌘W or the red button does (the driver's `close`): its
+web page reloads its current URL in the same profile, keeping Back and Forward
+entries; each separate test starts with an isolated history. A native app
+relaunches on the same scratch store with a fresh navigation stack. On Linux,
+Windows, macOS and iOS, a path or app scheme `--url` supplies the launch
+location. Without one, the host uses its no-link cold launch location: the
+manifest's `start_url` on Apple (`/` by default), `/` on Linux and Windows.
+An HTTP(S) `--url` selects a development
+server and does not override that launch location. A leading `at` changes
+only the test's first launch, not the native reload destination. On every
+host, state starts over and `performanceNow()` is 0 again, at the date the test
+had reached (`epoch` plus its `clock` steps); what the app stored is what it
+reads, so persistence is testable.
+
+To test a detail-route launch on Linux, Windows, macOS or iOS, lead the test
+with `at "/item/7"` and assert the detail screen before any `reload`. To test
+reloading at that URL, run
+`bun exact.mjs agent linux --url /item/7 --test app.test.contract`
+(or use `windows`, `macos` or `ios`). That opens a fresh stack at `/item/7`
+on each reload; it does not preserve the stack the test built through navigation.
+Android's APK reader refuses a path or app scheme `--url` and a leading `at`
+path. `agent android --headless` runs the Linux host on Android and accepts both.
+
+`close` presses the window's close button as ⌘W or the red button does (the
+driver's `close`): its
 `beforeunload` handlers hear it, and a window one keeps stays open, so the
 test goes on to the app's own "Save changes?" (on the web the browser's "Leave
 site?", answered "Stay"). A window that closes, by `close` or by a press the app

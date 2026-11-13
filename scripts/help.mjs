@@ -29,7 +29,7 @@ export const missingValue = (arg) => arg === undefined || /^-[^\d.]/.test(arg);
 // which the repository's smokes and pixel fixtures are written against.
 const DRIVE = [
   ['--port <n>', 'web: the page’s port (or EXACT_PORT); backend origins remain those app.ts grants'],
-  ['--backend <url>', 'web: select the backend origin for this build'],
+  ['--backend <url>', "select the backend for this build: app.ts needs one top-level const origin, a literal or import.meta.env.NAME ?? '<literal>', used in net.fetch ${origin}"],
   ['--storage <name>', 'a scratch store, kept on native hosts; Chrome\'s starts empty'],
   ['--keep-storage · --reset-storage', 'reopen a named store (Chrome, or a compare) · empty a named store first, on any host'],
   ['--size <w>x<h>', 'the viewport (default 420x900; a simulator\'s own)'],
@@ -121,7 +121,7 @@ export const HELP = {
       ['--render rust|js|none', 'pre-rendered pages: rust (the app\'s <app>-render entry; the default where it has one), js (Bun; the default otherwise), none'],
       jsonBuilt(),
     ],
-    internal: ['--js', '--wasm', '--bake'],
+    internal: ['--js', '--wasm', '--bake', '--check'],
     body: `Builds the JS target (a game: wasm) into the app's target/web-dist; about a second when
 nothing changed. A capability the JS runtime lacks fails the build, named. Beside the pages
 are shell.html and routes.json, the route table a static host serves them by (serve).
@@ -202,6 +202,7 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
     usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
+      DRIVE.find(([flag]) => flag === '--backend <url>'),
       ['--sim <udid|name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro)'],
       ['--shots <dir>', 'also copy every screenshot it captured there, named as in .exact/verify/ (a test\'s own `screenshot` steps too)'],
       ['--rescroll · --strict', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI)'],
@@ -212,9 +213,8 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
 beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
-both widths; ios runs the tests with UIKit's bars). Then the app relaunches once, on real time, on the store a
-passing test left, and says whether its first screen shows what that test stored. One short report: the build if
-it built, the compiler's warnings (as contract build says them, built or not), the tests, check's findings (each
+both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
+One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
 once, naming the screens it was on), the relaunch, then "verify: clean" or "verify: N problems". A clean verify
 is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
 test's named by the test, the relaunch's): look at them when the features work.
@@ -222,7 +222,7 @@ Large    each of those screens again at the largest text size (ios: the simulato
          after; web: a 53 px root, iOS's body there, at 390x844, and the tests run again there
          to read up to 12 screens they pass through). Reports spills past an edge, squeezing and
          overlap, with remedies that give text room. The web comparison leaves out content iOS
-         projects into its navigation bar. A smaller or fixed font is the tell, as is a line-clamp
+         projects into its navigation bar and its tab bar. A smaller or fixed font is the tell, as is a line-clamp
          in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
          than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
@@ -327,11 +327,11 @@ Ports    none. Runs to completion.`,
       ['--release', 'optimize the APK for speed; set EXACT_UPDATE_TRUST=production for distribution'],
       ['--bundle', 'build a production .aab with an upload key; implies --release and no install'],
       ['--headless', 'build the Linux host for Android instead (agent android --headless runs it under adb shell)'],
+      ['--write-locks', 'regenerate gradle.lockfile and gradle-verification.xml after graph changes; review and commit both'],
       jsonBuilt(', installed (the device\'s serial, or null with none ready)', '; printed after the install; not with --run'),
     ],
-    // `--apk --install` are the verb's own; --release builds the release profile, for measuring; --write-locks writes
-    // the Gradle lock and verification files of an app whose modules name Maven libraries.
-    internal: ['--apk', '--install', '--write-locks'],
+    // `--apk --install` are the verb's own.
+    internal: ['--apk', '--install'],
     body: `Builds android/ for aarch64-linux-android, packages it with exact2's Canvas reader
 (host/android) into an APK under target/android/, prints its path and installs it on the
 device: ANDROID_SERIAL, else the one adb lists (with several and none named, it refuses).

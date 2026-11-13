@@ -49,7 +49,7 @@ import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep
 import { fileURLToPath } from 'node:url';
 import { buildRust, publishedSignature, rustBundle, rustPackage, tieredNative } from './rust.mjs';
 import { appleProduction } from '../host/apple/link.mjs';
-import { assertOwnTarget, cargoReproducibilityFlags, readManifest, buildBake, bakeTarget, readBuilds, cohortReceipt, classifyArtifacts, resolveApp, shaderWatchRoots } from './app.mjs';
+import { assertOwnTarget, bakedEntryAssets, cargoReproducibilityFlags, readManifest, buildBake, bakeTarget, readBuilds, cohortReceipt, classifyArtifacts, resolveApp, shaderWatchRoots } from './app.mjs';
 import { gameShells } from "../game/app/shells.mjs";
 import { blobPath, channelOrigin, openOrigin, OriginUnavailable, sha256, streamPath, parseWebRoot, webRootPath, webRootStream, webReleasePath, validateChannel } from './origin.mjs';
 import { filesystemLock, removePrivateTree } from './filesystem.mjs';
@@ -662,6 +662,21 @@ function readBundle(web, app) {
     return { name: card.name, sha256: card.sha256, bytes };
   });
   return { envelope, plan: { sha256: envelope.plan.sha256, bytes: plan, formatVersion: envelope.plan.formatVersion, kernelSchema: envelope.plan.kernelSchema }, assets };
+}
+
+/** Hold each platform's bake graph to the bundle its stream publishes. A TypeScript app's widget and activity
+ * generation lists its module pair (`typescript/`, bake/src/widgets.rs), which the web bundle carries as its own
+ * module instead: that platform's bundle (`bundle.platforms`) adds the pair its bake made. Any other difference refuses. */
+export function holdBundles(bundle, builds, directory) {
+  const cards = (b) => canonicalJson([{ name: 'app.plan', sha256: b.plan.sha256, bytes: b.plan.bytes.length },
+    ...b.assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length }))].sort((a, c) => a.name.localeCompare(c.name)));
+  const { platforms, ...base } = bundle;
+  for (const [platform, build] of Object.entries(builds)) {
+    const pair = bakedEntryAssets(directory, build, (name) => name.startsWith('typescript/'));
+    if (pair.length) bundle.platforms = { ...bundle.platforms, [platform]: { ...base, assets: [...base.assets, ...pair] } };
+    const graph = build.graph.artifacts.map(({ name, sha256, bytes }) => ({ name, sha256, bytes })).sort((a, c) => a.name.localeCompare(c.name));
+    if (canonicalJson(graph) !== cards(bundle.platforms?.[platform] ?? base)) refuse(`${platform} bake graph differs from the packaged bundle`);
+  }
 }
 
 /** Compile the actual target/grants producer. Analysis artifacts have no
@@ -1324,10 +1339,7 @@ async function deployCaptured(opts, capsule) {
   if(!webOnly&&!builds.web)refuse('the web build emitted no completed graph receipt');
   for(const platform of platforms)builds[platform]=buildFor(app,platform,sourceRoot,run);
   const compat=Object.fromEntries(Object.entries(builds).map(([p,r])=>[p,r.compat]));
-  for(const [platform,build] of Object.entries(builds)) {
-    const cards=[{name:'app.plan',sha256:bundle.plan.sha256,bytes:bundle.plan.bytes.length},...bundle.assets.map(a=>({name:a.name,sha256:a.sha256,bytes:a.bytes.length}))];
-    if(canonicalJson(build.graph.artifacts.map(({name,sha256,bytes})=>({name,sha256,bytes})).sort((a,b)=>a.name.localeCompare(b.name)))!==canonicalJson(cards.sort((a,b)=>a.name.localeCompare(b.name))))refuse(`${platform} bake graph differs from the packaged bundle`);
-  }
+  if (!webOnly) holdBundles(bundle, builds, resolve(run, 'bake'));
   if (!webOnly && rustPackage(app)) {
     bundle.platforms = {};
     const env = sealedSourceEnv(sourceRoot, {CARGO_TARGET_DIR:app.target,EXACT_UPDATE_TRUST:'production'});

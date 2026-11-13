@@ -10,7 +10,7 @@ import { bodyFromRefusal, methodOf, readBodyFile } from './ts-body-from.js';
 import { refuseStreamBody } from './uploads.js';
 
 const KINDS = ['Response', 'Network', 'Refused', 'Unsupported', 'Aborted', , , , , , 'Timeout'], said = new TextDecoder(), utf8 = new TextEncoder();
-// Hermes's checks and words on `init` (js/src/prelude.js `fetch`): a
+// Hermes's checks and words on `init` (js/src/fetch.js `request`): a
 // refusal ends the stream with that message, which fails the answer.
 function request(input, init, redirect, protocols) {
   if (typeof init.exactStream !== 'function') throw new TypeError('exactStream maps each event to the answer: (event) => value');
@@ -54,7 +54,7 @@ function uploadOf(init, method, url, redirect) {
   if (redirect !== undefined && redirect !== 'follow') throw new TypeError('exactUploadProgress: an upload follows its redirects');
   return true;
 }
-// `exactLongPoll` (LLP 1016.000 D8), as js/src/prelude.js `longPollOf` checks it.
+// `exactLongPoll` (LLP 1016.000 D8), as js/src/binary.js `longPollOf` checks it.
 function longPollOf(poll, method, url) {
   if (poll === undefined) return undefined;
   if (/^wss?:/i.test(url)) throw new TypeError('exactLongPoll: a long poll is HTTP, not a WebSocket');
@@ -204,17 +204,20 @@ export function open({ input, init, redirect, protocols }, conv, grantSet, deliv
     const turn = socket && frame ? answering.mapper = { owner: controller, socketOps: null, overload: null } : null;
     // The call is the mapper's in every turn, and no answer's (ts-fetch.js `answering.mapperCall`).
     const outer = { call: answering.call, mapperCall: answering.mapperCall };
-    answering.call = null; answering.mapperCall = controller;
+    answering.call = null;
+    // Settled once it has answered or its stream was let go: entropy is then refused (ts-fetch.js `answerOnly`).
+    let ended = false;
+    const call = answering.mapperCall = { get settled() { return ended || controller.active?.() === false; } };
     try {
       const v = map(event, socket);
       if (turn?.overload) throw turn.overload;
       // A socket no resource owns (a mutation's stream) takes none, as natively.
       if (turn?.socketOps?.length && !controller.resource) throw new DOMException('the socket is not open', 'InvalidStateError');
       const ops = turn?.socketOps, effects = ops?.length ? [Object.assign(() => { try { publish(ops)(); } catch (e) { refused(e?.message ?? e); } }, { refused })] : null;
-      if (!v || typeof v.then !== 'function') return effects ? { v: conv(v), effects } : { v: conv(v) };
+      if (!v || typeof v.then !== 'function') { ended = true; return effects ? { v: conv(v), effects } : { v: conv(v) }; }
       effects?.[0]();
-      return Promise.resolve(v).then(v => controller.active?.() === false ? { error: 'the stream was let go', code: 'error' } : { v: conv(v) }).catch(e => failed(e));
-    } catch (e) { return failed(e, turn); } finally { if (turn) answering.mapper = null; Object.assign(answering, outer); }
+      return Promise.resolve(v).then(v => controller.active?.() === false ? { error: 'the stream was let go', code: 'error' } : { v: conv(v) }).catch(e => failed(e)).finally(() => { ended = true; });
+    } catch (e) { ended = true; return failed(e, turn); } finally { if (turn) answering.mapper = null; Object.assign(answering, outer); }
   };
   // A later frame's mapper call waits for an earlier one's promise, and so
   // does the end: `behind` is the last call still settling.
@@ -251,7 +254,7 @@ export function open({ input, init, redirect, protocols }, conv, grantSet, deliv
     batch.push(m);
     if (m.more) return;
     const ms = batch; batch = [];
-    if (!behind) return void inOrder(() => each(ms));
+    if (!behind) { inOrder(() => each(ms)); return behind; }
     const bytes = ms.reduce((n, m) => n + bytesOf(m), 0);
     if (held + ms.length > 4096 || heldBytes + bytes > 64 << 20) {
       fellBehind = true;
@@ -259,12 +262,13 @@ export function open({ input, init, redirect, protocols }, conv, grantSet, deliv
     }
     held += ms.length; heldBytes += bytes;
     inOrder(() => { held -= ms.length; heldBytes -= bytes; return each(ms); });
+    return behind;
   };
   const timed = m => {
     const g = gate();
     if (!g) return message(m);
     g.enter(controller.streamName, m.received);
-    try { message(m); } finally { g.leave(); }
+    try { return message(m); } finally { g.leave(); }
   };
   return streamed(req, grantSet, timed, controller, (path, set) => readBodyFile(path, set, controller), protocol)
     .then(o => {

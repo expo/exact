@@ -481,7 +481,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         } else {
             crate::HookTime::default()
         };
-        if !self.perf.armed() {
+        // The agent's armed timing keeps samples a snapshot's does not: arming
+        // replaces the snapshot's, and with neither there is none.
+        let armed = self.perf.armed();
+        if !(armed || self.perf.reporting.is_some())
+            || (armed && self.gpu_timing.as_ref().is_some_and(|t| !t.armed()))
+        {
             self.gpu_timing = None;
         }
         if feed.mouse_look() {
@@ -506,11 +511,15 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         self.perf.lights(input.lights.len(), input.lights_dropped);
         input.headroom = frame.headroom;
         // Armed perf adds asynchronous pass timings and per-view culling counts.
-        if self.perf.armed() {
-            renderer.count_culled(true);
+        // A snapshot's reader adds the pass timings alone (`gpuMs`).
+        let armed = self.perf.armed();
+        if armed || self.perf.reporting.is_some() {
+            if armed {
+                renderer.count_culled(true);
+            }
             if self.gpu_timing.is_none() {
-                self.gpu_timing = crate::hooks::gpu_timing::GpuTiming::new(device, queue);
-                if H::ENABLED && self.gpu_timing.is_some() {
+                self.gpu_timing = crate::hooks::gpu_timing::GpuTiming::new(device, queue, armed);
+                if H::ENABLED && armed && self.gpu_timing.is_some() {
                     renderer
                         .hook_metrics
                         .get_or_insert_with(Default::default)
@@ -518,7 +527,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                         .buffers += crate::hooks::gpu_timing::GpuTiming::BUFFERS;
                 }
             }
-            if H::ENABLED {
+            if H::ENABLED && armed {
                 renderer
                     .hook_metrics
                     .get_or_insert_with(Default::default)

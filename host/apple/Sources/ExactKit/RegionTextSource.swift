@@ -29,6 +29,9 @@ struct RegionTextRun: Sendable {
     let font: RegionFont
     let lineHeight: CGFloat?
     let letterSpacing: CGFloat
+    /// Its inline boxes' room beside its text (`Run.inlineStart`, `inlineEnd`).
+    let inlineStart: CGFloat
+    let inlineEnd: CGFloat
     let color: CGColor
     /// `Run.fixedInk`: its colour is one its author fixed.
     let fixedInk: Bool
@@ -95,7 +98,7 @@ final class RegionTextSource: Sendable {
             engine.presentation?.attributes(run, color: spec.color, scale: engine.lineScale, attributes: &paint)
             paints.append(paint as NSDictionary)
             return RegionTextRun(text: run.text, font: font(run), lineHeight: run.lineHeight,
-                                 letterSpacing: run.letterSpacing,
+                                 letterSpacing: run.letterSpacing, inlineStart: run.inlineStart, inlineEnd: run.inlineEnd,
                                  color: TextEngine.color(run.color ?? spec.color).cgColor,
                                  fixedInk: run.fixedInk && run.color != nil,
                                  underline: run.underlined || run.underlineColor != nil,
@@ -110,7 +113,7 @@ final class RegionTextSource: Sendable {
         let base = spec.strut ?? spec.runs.first
         strut = base.map(font); strutExplicit = base?.lineHeight != nil
         align = spec.align; direction = spec.direction; lineClamp = spec.lineClamp; overflowWrap = spec.overflowWrap
-        textIndent = spec.textIndent; hyphens = spec.hyphens; language = spec.language
+        textIndent = spec.firstLineIndent; hyphens = spec.hyphens; language = spec.language
         hyphenated = !spec.source.inserted.isEmpty; emergencyBreaks = spec.emergencyBreaks
         textBox = (spec.textBoxTrim, spec.textBoxOver, spec.textBoxUnder)
         balance = spec.balance
@@ -131,6 +134,7 @@ final class RegionTextSource: Sendable {
     var insets: LineInsets {
         var value = LineInsets()
         value.textIndent = textIndent; value.rtl = direction == 1
+        value.edgeStarts = LineInsets.edgeStarts(runs.map { (text: $0.text, start: $0.inlineStart) })
         return value
     }
 
@@ -178,6 +182,7 @@ final class RegionTextSource: Sendable {
             if let c = run.strikeColor { attributes[.strikethroughColor] = c }
             value.append(NSAttributedString(string: run.text, attributes: attributes))
         }
+        TextEngine.kernInlineEdges(value, runs: runs.map { (text: $0.text, start: $0.inlineStart, end: $0.inlineEnd) })
         TextEngine.setBaseDirection(value, direction: direction)
         PresentedText().finish(value)
         if let tabInterval { TextEngine.setTabStops(value, interval: tabInterval) }

@@ -500,11 +500,13 @@ mod storage {
             TextRun {
                 text: source.as_str().into(),
                 style,
+                edges: Default::default(),
                 inline: None,
             },
             TextRun {
                 text: "".into(),
                 style: strut,
+                edges: Default::default(),
                 inline: None,
             },
         ];
@@ -538,6 +540,8 @@ mod storage {
                 box_width: 0.0,
                 box_height: 0.0,
                 box_shift: 0.0,
+                inline_start: 0.0,
+                inline_end: 0.0,
             },
             CRun {
                 text: "".as_ptr(),
@@ -564,6 +568,8 @@ mod storage {
                 box_width: 0.0,
                 box_height: 0.0,
                 box_shift: 0.0,
+                inline_start: 0.0,
+                inline_end: 0.0,
             },
         ];
         let widths = [

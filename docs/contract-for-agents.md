@@ -1282,6 +1282,11 @@ bun exact.mjs contract rust app.contract -o /tmp/shapes.rs
 ```
 
 Use those generated declarations with the existing TypeScript/Rust integration.
+A mixed app imports `TypeScriptSources` and `TypeScriptAnswer` from
+`app.contract.d.ts`; its `build_mixed_with` bake excludes Rust-owned providers.
+Run `bun exact.mjs contract build app.contract` to generate and check that narrowed
+declaration. Standalone `contract types` has no Rust roster; `Sources` always
+describes the complete seam. See [the provider types](reference.md#generate-typescript-data-source-types).
 A shape has no exported name in the `.d.ts`: name one by its source,
 `type Recipe = Result<'recipe'>` (a list's element: `Result<'recipes'>[number]`;
 an optional answer is `… | null`, so `NonNullable<Result<'find'>>`).
@@ -1465,6 +1470,35 @@ next `open` asks for the token again and sends it as the first message.
 The token never enters the URL, subprotocols or a Contract answer. Adapt the
 message and refusal handling to the service; do not retry indefinitely.
 
+**Development identity servers.** `issuer`, every `endpoints` URL and each
+`apis` origin require HTTPS, except loopback (`localhost`, `127.0.0.1` or
+`[::1]`). A refusal names the option, such as `endpoints.token` or `apis[2]`.
+For a phone reaching your Mac over the LAN, serve the identity server and API
+through HTTPS with a certificate the phone trusts, or an HTTPS tunnel. A
+simulator can use the Mac's loopback server. Development builds keep this
+HTTPS rule; they have no insecure-origin switch.
+
+**Parameters chosen at the press.** Keep provider defaults in
+`authorizationParams`; pass a login hint, connection or account-choice prompt
+with the sign-in itself:
+
+```ts
+provider.signIn(store, { params: { login_hint: email, prompt: 'select_account' } });
+```
+
+`params` overrides those defaults for this request alone, including when
+`authorize` sends it. The package still opens a prepared browser request
+before awaiting anything. Both parameter maps refuse `response_type`,
+`client_id`, `redirect_uri`, `scope`, `state`, `code_challenge`,
+`code_challenge_method`, `nonce` and `max_age` with `TypeError`; the package
+sets those fields or cannot validate what they ask for.
+
+For flows the package does not cover, data code may use `openAuthSession`
+and `authCallback` directly; their public declarations and rejection statuses
+are in the generated `app.d.ts`. A callback must carry exactly one `state`,
+equal to the nonempty value supplied to `openAuthSession`. Keep callback URLs
+in data code: they can contain credentials.
+
 **An app's own sign-in screens.** A provider that lets an app sign the person
 in with its own screens (ForgeRock's authentication trees) still issues an
 authorization code. The app sends the authorization request as the provider
@@ -1565,8 +1599,9 @@ validation to AuthenticationServices; an authorization failure returns `Identity
 does not establish successful sign-in on a signed device.
 
 Google on Apple, `getCredentialState`, and the combined Apple/passkey sheet
-remain unimplemented. The existing native capabilities still advertise
-Google active requests and the Apple/passkey combination. A combined `publicKey` and passive `identity` call still belongs to
+remain unimplemented. Native capabilities report Google unavailable and Apple
+`withPublicKey: false`. For Google on Apple, use `@exact/oauth` through the
+system browser. A combined `publicKey` and passive `identity` call still belongs to
 passkeys; this Apple-only path does not implement it (LLP 1133.014 D10).
 
 ### Convex live queries
@@ -1806,9 +1841,13 @@ states would stop their input.
 
 `class=Style` applies literal style values; node attributes win. Conditional
 classes select two named styles with `class=(condition ? A : B)`. Computed values
-go on nodes. There is no selector cascade, dynamic style object, or arbitrary
-class-string composition. A style branch can mix a number and a CSS keyword in
-a property's admitted value space; this does not add general union types.
+go on nodes. Styles can also carry `backgroundMaterial`, `glassGroup` and
+`buttonStyle`. In a conditional class, each prop must be set in both styles or
+neither, unless the node supplies its own value. `backgroundMaterial="none"`
+explicitly removes a material. There is no selector cascade, dynamic style
+object, or arbitrary class-string composition. A style branch can mix a number
+and a CSS keyword in a property's admitted value space; this does not add
+general union types.
 On a number-only row such as `opacity`, a computed branch known to be a string
 is refused at build time even when another branch is numeric.
 
@@ -2111,7 +2150,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `input type="radio"` (the radios of one `name` are a group) | the SF Symbols circle, filled at its centre when checked, at body size; in a grouped list's row no circle but the row's checkmark, which a tap on the row moves (LLP 1115.000 D13.2) |
 | `input type="range"` (as wide as what holds it; in a `row`, `flex=1 min-width=0` beside its label) | `UISlider` |
 | `input type="date"`, `"time"`, `"datetime-local"` | `UIDatePicker`; with an empty `value` its pill shows your `placeholder` (`placeholder="Add a date"`) or, with none, no words (LLP 1115.000 D13.1). Opening it accepts the current local date or time within `min`/`max`. On macOS, typing, an arrow or Return accepts the field's displayed value; focus alone leaves it empty. The web shows the browser's own empty field. Android shows Material's filled field, the value as the phone writes dates and `placeholder` its floating label, and Material 3's picker, in the control's `accent-color` where it has one (LLP 1115.001.000) |
-| `select` of `option`s | a pop-up button with its menu |
+| `select` of `option`s (no wider than what holds it, however long its options) | a pop-up button with its menu |
 | `progress value=done max=goal` (a goal, an upload; as wide as what holds it) | `UIProgressView`, tinted by `accent-color` (LLP 1116 D8); never a drawn track and fill |
 | `progress` (no `value`) | `UIActivityIndicatorView`, `.large` from a 37-point box (LLP 1069.001); on Android Material's circular indicator, turning (LLP 1115.001 D9) |
 | `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, Exact's menu rule; a `role="group"` box of rows with an `aria-label`: a titled section) | `UIMenu`, nested; a section an inline `UIMenu(title:)` (LLP 1021) |
@@ -2368,7 +2407,12 @@ drag starts with `playSound(…, group="drag")` on `pointerdown` and changes wit
 what is left of its file, and a voice that had no `pan=` is panned from then on,
 so give one that will pan its starting pan in `playSound` (a mono sound is 3 dB
 quieter once panned, even centred). The web plays the first sound after the page's first
-tap or key; Linux, Windows and Android keep the record and play nothing.
+tap or key. Android plays through an arm loaded at the first sound, sharing Apple's
+mixer. Its `audio_session` defaults to `"ambient"`: mixing, no audio focus, and
+silent while the ringer is silent or vibrating. `"playback"` takes focus;
+`"playback-mix"` mixes without ducking other audio. Android stops effects in the
+background and when headphones are unplugged; the next foreground effects open
+the output again. Linux and Windows keep the record and play nothing.
 
 ```contract
 sound "assets/ding.wav"
@@ -3028,9 +3072,10 @@ its data; so is a miss, with 404, when the `notfound` route is declared so. A st
 their shell. `npm start` runs `bun exact.mjs serve`, which with no directory serves the last
 `web-build` without `--out`.
 
-A launch that no link starts opens at the manifest's `start_url` (for example
-`"/today"`), as an installed web app does; Apple builds bake it in. A launch
-that a link starts opens where the link goes.
+On Apple, a launch that no link starts opens at the manifest's `start_url`
+(for example `"/today"`, `/` by default), as an installed web app does; Apple
+builds bake it in. Linux and Windows open at `/` without a launch location.
+A launch that a link starts opens where the link goes.
 
 For a custom scheme, declare `protocol_handlers` in `app.json`, for example
 `[{"protocol":"web+notes","url":"/open?u=%s"}]`. The Apple hosts register
@@ -3177,7 +3222,8 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   panel's `for e in t.stack` like the others, and is presented over the tabs; with
   tabs the root's own children are no routes, and one with a `navigationKey` is refused.
 - On iOS the panels become a `UITabBarController`: a tab of one symbol over its label
-  is its bar item, a filled box holding a text is the item's badge, and the
+  is its bar item, a filled box holding a text is the item's badge (the tab stays the
+  platform's tab; the web draws the box as a badge on the symbol), and the
   tablist's `accent-color` (inherited, as in CSS) tints the selected item; `tap tab-…`
   works on every host. An app's `bun exact.mjs agent ios` and `test ios` drive what a
   person sees (`--chrome platform`; `--chrome agent` paints the authored tablist and
@@ -3475,6 +3521,27 @@ round's tick (`when screen == "play"`), a flight's frames
 one gated task, and each is the root's: a child component declares none
 (`type-child-resource`), so a sheet a component draws has its task in the root.
 
+**Retry backoff.** For a bounded ladder of delays, use one gated task per step.
+Only the active step has a timer, which wakes once at its deadline:
+
+```text
+  state waiting = false
+  state attempt = 1
+  task retry1 when waiting and attempt == 1
+    after(250, again)
+  task retry2 when waiting and attempt == 2
+    after(500, again)
+  task retry3 when waiting and attempt >= 3
+    after(1000, again)
+```
+
+Have `again` clear `waiting` and send the request. On failure, increment `attempt`
+and set `waiting` again; reset `attempt` to 1 on success. A new attempt then arms
+its step's timer. If the step stays active between retries, use `key=attempt` to
+restart its timer. Computed intervals remain refused. A wait that must track a
+continuous value can use a gated `every(frame, check)` and compare
+`performanceNow()` with its deadline; see "Following the transport" for tempo.
+
 **Repeating while a condition holds.** Use a task with `when` and `every`. The
 timer runs only while the condition is true. Any action that makes it false
 stops the timer.
@@ -3537,6 +3604,11 @@ As in CSS, a `transition` or `animation` value's units, keywords and function
 names read in any ASCII case (`0.3S EASE` is `0.3s ease`), its numbers are CSS's
 (`1.s` and `infs` are no times), and a keyframes name keeps its case: in
 `animation="Spin 1s EASE"` the name is `Spin` and `EASE` is the easing.
+
+In a virtualized list, `-exact-animation-trigger="view"` (the default) holds a
+prefetched row's animations until the row first overlaps its list's port.
+`"none"` starts them on insertion. Reveal preserves authored pauses; leaving
+and returning to the port replays only if the row was retired and mounted again.
 
 ### Motion that follows a scroll
 
@@ -4205,8 +4277,18 @@ Apple, Windows): `running`, `suspended` (hidden, or waiting for a gesture),
 `interrupted` (suspended by the host's interruption: a call or alarm on iOS,
 the window losing focus on Windows) or `closed` (no device: under the
 agent's virtual clock, or not yet opened); `none` on the Linux family and for
-a game without audio. `gpuMs`, `gpuMaxMs`, `cpuSubmitMs` and
-`cpuSubmitMaxMs` are not measured on any host yet and stay `none`. The 16 KiB snapshot limit is separate from the public surface
+a game without audio. `gpuMs` and `gpuMaxMs` are the mean and longest GPU
+execution of the window's frames, from the first pass's start to the last
+pass's end by GPU timestamps, read back a frame or two late: on Metal natively
+(macOS, iOS, tvOS), on the web only where the browser grants
+`timestamp-query`, and on the Linux family and Windows where the adapter has
+timestamp queries; `none` elsewhere and for a window with no sample. A canvas
+writes timestamps only while a plan reads the resource (or the agent's `perf`
+is armed). `cpuSubmitMs` and
+`cpuSubmitMaxMs` are the mean and longest wall time of the queue submission of
+the frames the canvas drew in the window, on every host (on Apple the
+submission also schedules the frame's presentation); a frame shared by several
+canvases is one submission, which each of them reports. The 16 KiB snapshot limit is separate from the public surface
 record's limit.
 
 A GPU HUD can show its last successful publication while its world loads:
@@ -4784,12 +4866,20 @@ contacts. The CLI forms are `tap world mouse [at <x> <y>]` and `tap world contex
 click (each press counting 1, 2, 3); every click form and a wheel take `at <x> <y>` and
 `modifiers Shift+Meta`, and `down … modifiers Shift` or `drag … modifiers Shift` holds
 them to the lift. Chrome and macOS deliver these as a hand's (on macOS through the
-application, so its local event monitors see them); iOS, Linux, Windows, Firefox and
-WebKit answer `delivery: "unsupported"`, and a word a form does not use is refused by
-name. `tap stage wheel 0 -20 modifiers Control`
+application, so its local event monitors see them). Other carriers answer
+`delivery: "unsupported"` for forms they cannot carry; Firefox and WebKit carry
+clicks and wheels at a point, including wheels with modifiers. A word a form does
+not use is refused by name. `tap stage wheel 0 -20 modifiers Control`
 is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS). Plain canvas taps and held contacts are
 fingers, so their platform pointer identity and retained press history can differ
 from a mouse's; use the intended physical input when comparing game saves.
+
+On Firefox and WebKit, a wheel positions the pointer at its delivery point first;
+if it moves, the reply's `hovered: [x, y]` reports that input. To compare wheels across engines,
+use `session.tap(target, { hover: true, wheel: [dx, dy] })` on every page. It resolves
+one viewport point for the hover and wheel, keeping it if hover changes the layout.
+The wheel may also name `at: [x, y]` and `modifiers: 'Control'`.
+`conform.mjs --browser` does this and reports the comparison as hover followed by wheel.
 
 `tap` and `type` scroll a target whose middle is out of view into it first (its
 nearest scroll containers, then the page) and say so in the reply's `scrolled`.
@@ -5085,8 +5175,17 @@ string, number, `true`, `false` or `null`), `resize
 800x600` (the window, mid-test), `reload`
 (the app restarts on the store it had, including a `secret.keep`, its state and
 clock starting over, so a test shows what persists; the web reloads its current
-URL, including its agent launch facts; a native app reopens at its launch
-location), `close` (the window's close button, as ⌘W: a `beforeunload` that
+URL, including its agent launch facts; on Linux, Windows, macOS and iOS a
+native app reopens at the drive's path or app scheme `--url`, otherwise at
+its no-link cold launch location:
+the manifest's `start_url` on Apple, `/` on Linux and Windows; an HTTP(S)
+`--url` selects a development server, not a launch location. Native reload
+builds a fresh navigation stack; `at` changes only the first launch, so
+assert a detail-route launch before reloading. Android's APK reader refuses
+these launch URLs and a leading `at` path; `agent android --headless` runs
+the Linux host on Android and accepts both. See
+[reload and native launch tests](contract-grammar.md#authored-tests)),
+`close` (the window's close button, as ⌘W: a `beforeunload` that
 calls `preventDefault()` keeps it open and the test goes on to the app's "Save
 changes?"; macOS and the web), `back` (the platform's Back: a dialog's cancel,
 a sheet's dismissal, the pushed route popped; a refusal is a note, nothing to
@@ -5097,7 +5196,10 @@ go back from fails),
 options, and a checkbox with a `checked` binding `true` or `false`; else its descendants' — a button's label — else a field's value), and
 `expect state name == <number|string|bool|none|[]>`, where `name` may go on into
 a record's fields (`board.active.present`) or a list index (`rows.0`), and the
-number may be negative (`== -3`). `expect wakelock held|released` reads
+number may be negative (`== -3`). Numeric bounds use `>=` or `<=` (`expect state offset >= 90`
+and `expect state offset <= 110`); they require a number, without coercing strings or bools.
+`expect state mode in "idle" "ready"` checks literal membership; alternatives use the same
+literals as `==`, separated by spaces. A mismatch names the value read. `expect wakelock held|released` reads
 `state.wakelock.held`: the runner's record of displayed elements requesting the
 lock, not whether the OS or browser granted it. A mismatch names the holding
 view ids and their testIds when present, or says nothing holds it.

@@ -245,6 +245,88 @@ const wrong: Result<'board'> = [{ id: 'mv', name: 'Mountain View', zone: 4, dist
 }
 
 #[test]
+#[ignore = "async lane: typechecks mixed providers with tsc"]
+fn mixed_providers_require_only_the_typescript_half() {
+    let plan = contract::compile(CONTRACT).unwrap();
+    let fixture = Fixture::new();
+    let rust = vec!["save".into(), "search".into()];
+    let declarations = contract::typescript_exporting(&plan, None, &rust).unwrap();
+    fixture.write("app.contract.d.ts", &declarations);
+    let mixed = r#"
+import type { TypeScriptAnswer, TypeScriptSources, Args, Sources } from './app.contract.d.ts';
+const sources: TypeScriptSources = { find: () => null };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
+const rustArgs: Args<'save'> = ['Palo', true];
+declare const complete: Sources;
+complete.save(rustArgs, {} as any, {} as any);
+// @ts-expect-error Rust sources remain outside the TypeScript dispatcher
+answer('save', rustArgs, {} as any, {} as any);
+"#;
+    let output = fixture.check(mixed);
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary = declarations.split("\n\n").next().unwrap();
+    assert!(summary.contains("//   find:"));
+    assert!(!summary.contains("//   save:") && !summary.contains("//   search:"));
+    for (bad, missing) in [
+        (mixed.replace("{ find: () => null }", "{}"), "find"),
+        (
+            mixed.replace("sources: TypeScriptSources", "sources: Sources"),
+            "search",
+        ),
+    ] {
+        let output = fixture.check(&bad);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(missing));
+    }
+    fixture.write(
+        "app.contract.d.ts",
+        &contract::typescript_exporting(&plan, None, &["search".into()]).unwrap(),
+    );
+    let output = fixture.check(mixed);
+    assert!(
+        !output.status.success(),
+        "moving save to TypeScript must require it"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("save"));
+
+    fixture.write("app.contract.d.ts", &contract::typescript(&plan).unwrap());
+    let output = fixture.check(
+        &VALID
+            .split("\ndeclare const store:")
+            .next()
+            .unwrap()
+            .replace("Sources", "TypeScriptSources")
+            .replace("Answer", "TypeScriptAnswer"),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    fixture.write(
+        "app.contract.d.ts",
+        &contract::typescript_exporting(
+            &plan,
+            None,
+            &["save".into(), "search".into(), "find".into()],
+        )
+        .unwrap(),
+    );
+    let output = fixture.check("import type { TypeScriptSource, TypeScriptSources, Sources } from './app.contract.d.ts';\nconst sources: TypeScriptSources = {};\n// @ts-expect-error all sources belong to Rust\nconst source: TypeScriptSource = 'find';\n// @ts-expect-error Sources still requires every provider\nconst complete: Sources = {};\n");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 #[ignore = "async lane: typechecks the guides' TypeScript examples with tsc; bun scripts/async.mjs runs it"]
 fn every_typescript_example_in_the_guides_checks_against_its_contracts_types() {
     // LLP 1086 D10: each `ts` block after a `contract` block in the same

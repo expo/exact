@@ -84,6 +84,7 @@ final class FrameHealth {
     var hudBounds: CGRect?
     private(set) var virtual = false
     var publicationDirty = false
+    var publicationForced = false
     /// The source of the card's observer of the screen, whose frames have work against UIKit's deadlines and no frame
     /// times (LLP 1079.000 §7.4)
     static let screenSource = "ui-update"
@@ -185,7 +186,6 @@ final class FrameHealth {
         let valid = arrival.isFinite && target.isFinite && period.isFinite && finished.isFinite
             && arrival > 0 && target > 0 && period >= 0 && target >= period && finished >= arrival
         let outcome: UInt32 = sent != 0 ? 1 : ran ? 0 : held ? 2 : 3
-        if valid { expireCapture(at: arrival) }
         let accepted = valid && exact_frame_health_record(handle, Self.nanoseconds(arrival), Self.nanoseconds(target),
             Self.nanoseconds(period), Self.nanoseconds(finished), outcome, flags) != 0
         // The card's charts take the frame before the work it finished within its callback
@@ -207,7 +207,7 @@ final class FrameHealth {
         }
         guard valid else { return }
         running = true
-        (publicationOwner ?? self).publicationDue(at: finished)
+        (publicationOwner ?? self).markPublication()
     }
 
     /// Work of `kind` is about to start for the frame starting at `start`. Owner work is registered
@@ -241,7 +241,7 @@ final class FrameHealth {
         }
         guard recorded else { return }
         // A landing after the source stopped is the last change; publish it past the throttle
-        if running { (publicationOwner ?? self).publicationDue(at: now) } else { (publicationOwner ?? self).publish() }
+        (publicationOwner ?? self).markPublication(force: !running)
     }
 
     /// A canvas render that waited on its drawable will not draw: its canvas left, or the source
@@ -267,10 +267,20 @@ final class FrameHealth {
         return (frames.count, frames.filter { now > $0.deadline }.count)
     }
 
-    func publicationDue(at now: Double) {
+    func markPublication(force: Bool = false) {
         guard changed != nil else { return }
         publicationDirty = true
-        FrameHealthPublication.request(at: now)
+        publicationForced = publicationForced || force
+    }
+
+    /// Existing frame, landing and apply passes publish after the recording hook returns.
+    /// An idle collector needs neither a timer nor a new run-loop observer.
+    func maintain(at time: Double? = nil) {
+        guard enabled else { return }
+        let now = time ?? CACurrentMediaTime()
+        if let publicationOwner { publicationOwner.maintain(at: now); return }
+        guard changed != nil, publicationDirty else { return }
+        FrameHealthPublication.request(at: now, force: publicationForced)
     }
 
     func snapshot() -> ExactFrameHealthSnapshot { enabled ? exact_frame_health_snapshot(handle) : ExactFrameHealthSnapshot() }
@@ -309,9 +319,8 @@ final class FrameHealth {
     }
 
     fileprivate func publish() {
-        guard changed != nil else { return }
-        publicationDirty = true
-        FrameHealthPublication.request(at: CACurrentMediaTime(), force: true)
+        markPublication(force: true)
+        maintain()
     }
 
     func uiReply() -> [String: Any] {

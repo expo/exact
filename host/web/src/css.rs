@@ -816,6 +816,13 @@ fn dashed(out: &mut String, name: &str) {
     }
 }
 
+/// Colour `c` as CSS, as a colour row writes it.
+pub(crate) fn colour(c: exact_kernel::ColorValue) -> String {
+    let mut out = String::new();
+    declared(&mut out, StyleId::TextColor, &RowValue::ColorValue(c));
+    out
+}
+
 fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
     match value {
         // CSS's unbounded maximum is `none`; `max-width: auto` is no value (LLP 1102 §3.11).

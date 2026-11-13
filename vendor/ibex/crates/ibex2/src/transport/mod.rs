@@ -103,3 +103,5 @@ impl crate::stdlib::fetch::Transport for LazyDefaultTransport {
 
 #[cfg(test)]
 mod stream_tests;
+#[cfg(test)]
+mod trust_tests;

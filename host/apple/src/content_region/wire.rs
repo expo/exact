@@ -170,6 +170,14 @@ pub(super) fn request(
                 }
                 out.push('{');
                 metric(run.style, &mut out);
+                // Its inline boxes' room beside its text (`TextRun::edges`).
+                if !run.edges.is_empty() {
+                    let _ = write!(
+                        out,
+                        ",\"edges\":[{},{}]",
+                        run.edges.start, run.edges.end
+                    );
+                }
                 out.push_str(",\"text\":");
                 quote(&run.text, &mut out);
                 colors(leaf, &mut out);

@@ -5,10 +5,30 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, ut
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
-import { chooseSimulator, crashReports, crashSummary, crashWatch, forwardedEnv, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
+import { chooseSimulator, crashReports, crashSummary, crashWatch, forwardedEnv, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
+
+test('phone startup failures distinguish reported locks from possible prompts and retain diagnostics', () => {
+  const locked = phoneStartupFailure('the app exited', ['app: FBSOpenApplicationErrorDomain: Locked']);
+  expect(locked).toContain('the iPhone is locked: unlock it and run again');
+  expect(locked).toContain('FBSOpenApplicationErrorDomain: Locked');
+  expect(phoneStartupFailure('launch failed', ['app: FBSOpenApplicationServiceErrorDomain', 'app: for reason: Locked'])).toContain('the iPhone is locked:');
+  for (const cause of ['No route to host', 'deadline expired before handshake (waiting for foreground)']) {
+    const prompt = phoneStartupFailure(cause, []);
+    expect(prompt).toContain(cause);
+    expect(prompt).toContain('local-network prompt may be waiting');
+    expect(prompt).toContain('on the phone');
+    expect(prompt).not.toContain('the iPhone is locked:');
+  }
+  const silent = phoneStartupFailure('the app never became ready', []);
+  expect(silent).toContain('the app printed nothing');
+  expect(silent).toContain('Unlock the phone');
+  const crash = phoneStartupFailure('launch failed', ['app: custom failure']);
+  expect(crash).toContain('custom failure');
+  expect(crash).not.toContain('local-network prompt may be waiting');
+});
 
 // Native startup retries do not change the per-launch authentication boundary.
 test('a refused phone token cannot admit a command carrier; the right token still can', async () => {
@@ -823,3 +843,35 @@ test('a Mac build with widgets and push resolves one profile and one team for bo
   expect(macSigning(app, compat, { current: '-', find, identityFor, log: (l) => adHoc.push(l) }).provisioning).toBeNull();
   expect(adHoc[0]).toMatch(/since this build is signed ad hoc \(EXACT_IDENTITY=-\)/);
 });
+
+test('Mac launches preserve exit statuses, signals and launch failures', async () => {
+  const {runMac}=await import('./devices.mjs');
+  const dir=mkdtempSync(resolve(tmpdir(),'exact-mac-exit-')), binary=resolve(dir,'app'), said=[];
+  const options={stdio:'ignore',say:line=>said.push(line)};
+  try {
+    writeFileSync(binary,'#!/bin/sh\nexit 7\n'); chmodSync(binary,0o755);
+    expect(runMac(binary,process.env,options)).toBe(7); expect(said).toEqual([]);
+    writeFileSync(binary,'#!/bin/sh\nkill -TERM $$\n');
+    expect(runMac(binary,process.env,options)).toBe(143);
+    expect(said).toEqual([`${binary}: killed by SIGTERM`]);
+    said.length=0;
+    expect(runMac(resolve(dir,'missing'),process.env,options)).toBe(1); expect(said[0]).toContain('launch failed');
+    writeFileSync(binary,'#!/bin/sh\nexit 0\n');
+    expect(runMac(binary,process.env,options)).toBe(0);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+
+test.skipIf(process.platform !== 'darwin')('Mac aborts print the real delayed diagnostic report', async () => {
+  const {runMac}=await import('./devices.mjs'), {basename}=await import('node:path');
+  const dir=mkdtempSync(resolve(tmpdir(),'exact-abort-')), binary=resolve(dir,'exactDriveCrash'+basename(dir).slice(-6)), said=[];
+  try {
+    const source=resolve(dir,'abort.c'); writeFileSync(source,'#include <stdlib.h>\nint main(void) { abort(); }\n');
+    const compiled=spawnSync('cc',[source,'-o',binary],{encoding:'utf8'}); expect(compiled.status,compiled.stderr).toBe(0);
+    expect(runMac(binary,process.env,{stdio:'ignore',say:line=>said.push(line)})).toBe(134);
+    expect(said[0]).toBe(`${binary}: killed by SIGABRT`);
+    const report=said.find(line=>line.startsWith('crash report: '));
+    expect(report).toMatch(/Library\/Logs\/DiagnosticReports\/exactDriveCrash.*\.(ips|crash)/);
+    expect(existsSync(report.slice('crash report: '.length).split(' (')[0])).toBe(true);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+}, 20_000);

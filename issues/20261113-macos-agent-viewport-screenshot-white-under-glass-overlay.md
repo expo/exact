@@ -45,3 +45,19 @@ captured by `Capture.picture(of:)`. If the glass's content is what goes missing,
 the glass's area as `paintedContent` fills a covered canvas. Until then, a picture that
 comes out one flat colour while the tree has visible nodes should say so in the reply and
 point to `screenshot <png> window`.
+
+## Verification
+
+The blank viewport does not reproduce on macOS 27. `GlassGroupMacTests.testViewportCaptureKeepsTheContentOfAGlassRoot`
+captures a full-size content view with controls overlay, a cover viewport, a glass
+root and a red child. The child remains red in `Capture.picture(of:)`. A CLI drive
+of the glass-root plan also captures its red child and text.
+
+`NodeViewMac.swift` places the authored children in `NSGlassEffectView.contentView`,
+and `Capture.draw` in `Mac/AgentMac.swift` captures those descendants through
+`cacheDisplay`. No glass replacement is needed on this OS. The reported macOS 26.6
+environment was unavailable; window-server comparison was also unavailable because
+the current screen supplied no window image.
+
+A macOS 26.6 run is owed. The macOS 27 regression test does not establish that
+the reported capture failure is fixed; no capture implementation changed.

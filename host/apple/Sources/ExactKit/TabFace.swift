@@ -34,6 +34,8 @@ struct TabFace: Equatable {
             symbol = face.symbol
             icon = face.symbolIcon
             if let title = face.title, !title.isEmpty { label = title }
+            // Its children are its face and draw no views: the kernel reads its badge.
+            if let badge = face.badge { badges.append(badge) }
         }
         for case let child as NodeView in tab.container.subviews {
             if child.kind == "image", let name = child.faceSymbol { symbol = name }

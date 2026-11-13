@@ -522,7 +522,7 @@ public final class ExactSession {
         canvases = SurfacesLink.installed?.canvases() ?? NoCanvases()
         webviews = WebViews()
         frames = Frames()
-        presenter.session = self
+        presenter.session = self; RowReuse.adopt(self)
         canvases.session = self
         webviews.session = self
         natives.session = self
@@ -684,6 +684,7 @@ public final class ExactSession {
                 if case .fill(let view) = next.kind { landedFill(view, stale: true) }
                 continue
             }
+            frameHealth.expireCapture(at: began)
             var batch = next.batch
             if batch.frameWorkTiming != nil { batch.frameWorkTiming?.landed = began }
             if case .advance = next.kind { applyUnlessEmpty(batch) } else if !(changesNothing(batch) && clockUnchanged(batch)) {
@@ -694,7 +695,7 @@ public final class ExactSession {
             #endif
             // A frame's owner work finishes when it lands, applied or skipped (LLP 1079.000 §4.6), and the card's charts show it
             if case .tick = next.kind { frameHealth.landed(FrameHealth.tick) } else if case .advance = next.kind { frameHealth.landed(FrameHealth.advance) }
-            frameHealth.chart?.present()
+            frameHealth.chart?.present(); frameHealth.maintain()
             if case .reply = next.kind {
                 sampler?.replyPump(main: submitted + (CACurrentMediaTime() - began) * 1000)
                 retryActivation(generation: next.generation)
@@ -1129,7 +1130,7 @@ public final class ExactSession {
         // What applying it cost, with its transactions, for the next sampled frame (LLP 1079 D3), told to the sampler there was when it began while the session keeps it: a recording the batch starts makes a new one, and one it stops lets a production bake's go.
         let timed = sampler, began = CACurrentMediaTime()
         defer { if let timed, timed === sampler { timed.batch(batch.seq, ms: outermost ? (CACurrentMediaTime() - began) * 1000 : 0) }; if let q = batch.seq { natives.hatchClock.seq = q.1 }; logAlerts(batch.alerts); logJournal(batch.journal) }
-        defer { if outermost, frameHealth.enabled { frameHealth.applied(batch, began: began, flags: frameHealth.frameFlags(frames, session: self)) } }
+        defer { if outermost { recordFrameHealthApply(batch, began: began) } }
         if batch.facts { app.scheduleStatus() } // the app's own `setMode` or `setRootFontSize` (LLP 1122 D4)
         if let must = batch.mustFinish { finishHold.moved(must) }
         // Each batch says what its turn left owed; batches apply in the owner's order, so the last one applied is the runner's now.
@@ -1382,7 +1383,7 @@ public final class ExactSession {
     }
     /// The appearance last reported for the session, and each node view found painting motion in another (a sheet's override, say), by id.
     private(set) var schemeDark: Bool?
-    private(set) var viewDark: [UInt32: Bool] = [:]
+    var viewDark: [UInt32: Bool] = [:]
     private var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views

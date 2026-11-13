@@ -150,6 +150,8 @@ impl Lowerer<'_> {
     fn styled_button_face(&self, nodes: &[Node]) -> Result<bool, LowerError> {
         for node in nodes {
             let styled = match node {
+                // A tab's badge is the author's own box, drawn as written.
+                node if crate::controls::is_badge(node) => false,
                 Node::Element { attrs, .. } => {
                     let class = self
                         .class_rows(attrs)?

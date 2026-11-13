@@ -91,7 +91,7 @@ const EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'web
 export const extension = type => EXTENSIONS[type];
 
 const WORDS = { flip: ['horizontal', 'vertical'], resizeQuality: ['pixelated', 'low', 'medium', 'high'], metadata: ['keep', 'no-location', 'none'] };
-/** D14's options checked, as the prelude's binary.js `imageOptions` checks
+/** D14's options checked, as the prelude's storage.js `imageOptions` checks
  * them, for a Rust source's request that did not pass it: `rotate`, `flip`
  * and `crop`, and with `transform` the rest. A bad one is a TypeError. */
 export function editOptions(api, options, transform) {

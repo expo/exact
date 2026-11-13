@@ -139,11 +139,12 @@ impl Em<'_> {
             }
         }
         Ok(format!(
-            "{{x:{x},ph:[{}],pw:[{}],est:{est},gap:{gap},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\"}}",
+            "{{x:{x},ph:[{}],pw:[{}],est:{est},gap:{gap},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\",animations:{}}}",
             ph.join(","),
             pw.join(","),
             edges[0],
-            edges[1]
+            edges[1],
+            !plan.keyframes.is_empty()
         ))
     }
 }

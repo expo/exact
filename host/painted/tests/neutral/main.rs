@@ -309,6 +309,7 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     segments::segment_faces_are_the_buttons();
     tabs::active_tab_background_has_one_native_paint_owner();
     tabs::narrow_tab_geometry_follows_root_metrics_and_authored_rows();
+    tabs::a_tab_badge_is_a_red_pill_over_its_symbol();
 }
 
 fn route_header_classes_restore_defaults() {

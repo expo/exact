@@ -128,3 +128,36 @@ fn an_authored_position_area_wins_over_the_insets() {
         "centred on the invoker"
     );
 }
+
+/// An anchored surface's margin is its own length, read where it is (LLP
+/// 1123 D9): an inset its parent declares places it as the written length.
+#[test]
+fn an_anchored_surfaces_margin_reads_its_own_inset() {
+    let at = |margin: &str| {
+        let source = APP
+            .replace(
+                "column width=\"100%\" height=\"100%\"",
+                "column width=\"100%\" height=\"100%\" --exact-safe-area-inset-top=\"30px\"",
+            )
+            .replace(
+                "margin=0 width=120",
+                &format!("margin=0 margin-top=\"{margin}\" position-area=\"bottom\" width=120"),
+            );
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            (),
+            (480., 400.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.serve_overlays();
+        p.frame();
+        click(&mut p, 30., 8., 0.)
+    };
+    let written = at("30px");
+    assert_ne!(at("0px"), written, "the margin places it");
+    assert_eq!(at("var(--exact-safe-area-inset-top)"), written);
+}

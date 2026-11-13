@@ -8,7 +8,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { moduleGraph, notBuildInput, receiptChanges, refuseBinaryBackend } from './agent-launch.mjs';
+import { notBuildInput, receiptChanges, refuseBinaryBackend } from './agent-launch.mjs';
+import { moduleGraph } from './module-graph.mjs';
 import { directoryInputSnapshot } from './cargo-dep-info.mjs';
 import { buildArgs, buildFirst, buildReason, childFailure, failureSummary, linuxRebuild, lockHolder, logged, nativeBuild, overrideDir, planOverride, planSource, planSources, ownVerb, prebuild, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { openStdio } from './agent-stdio.mjs';
@@ -16,13 +17,15 @@ import { bakeOutput, hermesBundle, hermesTarget, linuxBinary, resolveApp, window
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
 import { writePackagedReceipt } from '../host/windows/build.mjs';
 
-test('Mac drives use the assembled app bundle even without catalogs or widgets', () => {
+test('Mac drives use the assembled app bundle even without catalogs or widgets, and the sample host its own', () => {
   const { dir } = scratchApp('ats-drive');
   try {
     const app = resolveApp(dir);
     const paths = appleArtifacts(app);
     assert.equal(appleRunBinary(app), resolve(paths.bundle, 'Contents/MacOS', paths.executable));
-    assert.equal(appleRunBinary(app, true), appleArtifacts(app, { host: true }).binary);
+    const host = appleArtifacts(app, { host: true });
+    assert.equal(appleRunBinary(app, true), resolve(host.bundle, 'Contents/MacOS', 'ExactHostMac'));
+    assert.match(host.bundle, / Host\.app$/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -390,6 +393,10 @@ test('missing native products name their build command before checking backend m
       await assert.rejects(openStdio({ host, app: dir }), host === 'macos' ? /EXACT_MAC_BIN names no file/ : /run .* first/);
     }
     await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /run bun host\/apple\/build.mjs --device first/);
+    // The Canvas reader's drive runs the APK, whose build is the one named; the headless one names the Linux host's.
+    delete process.env.EXACT_ANDROID_BIN;
+    await assert.rejects(openStdio({ host: 'android', app: dir, reader: true }), /bun exact\.mjs android\) first/);
+    await assert.rejects(openStdio({ host: 'android', app: dir, reader: false }), /bun exact\.mjs android --headless\) first/);
   } finally {
     for (const key of ['EXACT_MAC_BIN', 'EXACT_WINDOWS_BIN', 'EXACT_LINUX_BIN', 'EXACT_ANDROID_BIN']) {
       if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
@@ -1064,6 +1071,13 @@ test('a failed web build keeps the explanation under a bare error marker', async
   // The capture's size caps say which packages (js/bake/src/typescript.mjs `stagePackages`).
   const capped = 'package declarations exceed 64 MiB: heavy 69.0 MiB (from page/main.ts). The type check stages …';
   assert.deepEqual(webBuildFailure(`${capped}\nerror: app: app.ts failed the type check every host's build runs\n`), [`${capped}\nerror: app: app.ts failed the type check every host's build runs`]);
+  for (const refusal of [
+    '@scratch/module@1.0.0 requires peer @scratch/peer@^1.4.0, but the app has @scratch/peer@2.0.0; install a compatible version',
+    'package declarations: two copies of pkg (/app/node_modules/pkg, /module/node_modules/pkg); install one',
+  ]) {
+    const stderr = `${refusal}\nerror: app: app.ts failed the type check every host's build runs`;
+    assert.deepEqual(webBuildFailure(stderr), [stderr]);
+  }
 });
 
 // An Apple build's bake says its warnings on every build: the SF Symbols only the web draws blank one line where the

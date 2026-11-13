@@ -7,6 +7,61 @@ import { layoutArgs, perfOp } from './agent-inspect.mjs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
+/** Observed only while CDP holds a finger. Cancellation ends the DOM pointer
+ * stream even though the driver still has to lift its injected touch. */
+export function pageContact(phase, point) {
+  const key = '__exactAgentContact', previous = globalThis[key];
+  if (phase !== 'start') {
+    previous?.stop();
+    delete globalThis[key];
+    return previous?.notes.size ? [...previous.notes].join('; ') : null;
+  }
+  previous?.stop();
+  const notes = new Set();
+  const nodes = new Map([...(globalThis.exact?.views ?? [])].map(([id, view]) => [view, id]));
+  let pointer;
+  const named = target => {
+    for (let node = target; node; node = node.parentElement) {
+      const id = nodes.get(node);
+      if (id != null) return { element: node, name: `node #${id}` };
+    }
+    return { element: target, name: target?.localName ?? 'page' };
+  };
+  const name = target => named(target).name;
+  const effectiveTouchAction = target => {
+    const all = ['pan-left', 'pan-right', 'pan-up', 'pan-down', 'pinch-zoom', 'double-tap-zoom'];
+    const expand = value => value.split(/\s+/).flatMap(word => ({
+      auto: all, manipulation: all.slice(0, 5), none: [],
+      'pan-x': all.slice(0, 2), 'pan-y': all.slice(2, 4),
+    })[word] ?? [word]);
+    let allowed = new Set(all), panning = true;
+    for (let node = target; node; node = node.parentElement) {
+      const style = getComputedStyle(node), own = new Set(expand(style.touchAction));
+      allowed = new Set([...allowed].filter(action => (!panning && action.startsWith('pan-')) || own.has(action)));
+      // Pointer Events §7.2: panning stops at the scroll container; zooming reads through to the document.
+      if (node === document.scrollingElement || [style.overflowX, style.overflowY].some(value => /^(auto|scroll|hidden)$/.test(value))) panning = false;
+    }
+    if (allowed.size === all.length) return 'auto';
+    if (allowed.size === all.length - 1 && !allowed.has('double-tap-zoom')) return 'manipulation';
+    const result = [];
+    for (const [axis, first, second] of [['pan-x', 'pan-left', 'pan-right'], ['pan-y', 'pan-up', 'pan-down']]) {
+      if (allowed.has(first) && allowed.has(second)) { result.push(axis); allowed.delete(first); allowed.delete(second); }
+    }
+    return [...result, ...allowed].join(' ') || 'none';
+  };
+  const hit = document.elementFromPoint(point.x, point.y), target = named(hit);
+  const start = { name: target.name, touchAction: target.element ? getComputedStyle(target.element).touchAction : 'auto', effective: effectiveTouchAction(hit) };
+  const down = event => { if (event.isTrusted && event.pointerType === 'touch' && pointer == null) pointer = { id: event.pointerId, ...start }; };
+  const cancel = event => {
+    if (!event.isTrusted || event.pointerId !== pointer?.id) return;
+    notes.add(`pointercancel at ${pointer.name} (touch-action ${pointer.touchAction}; effective ${pointer.effective} at contact start): the pointer stream ended; use touch-action="none" on a target that should own the finger, or drag … mouse`);
+  };
+  const scroll = event => { if (pointer != null) notes.add(`scrolled ${name(event.target)} during the contact`); };
+  const listeners = [['pointerdown', down], ['pointercancel', cancel], ['scroll', scroll]];
+  for (const [kind, fn] of listeners) window.addEventListener(kind, fn, true);
+  globalThis[key] = { notes, stop() { for (const [kind, fn] of listeners) window.removeEventListener(kind, fn, true); } };
+}
+
 /** A drag's `during` op is a read or the clock, not a second finger (drums R8).
  * A filmed screenshot (`over … every`) loops on the clock, a comparison settles
  * first, and `perf … during` drives ops of its own. The test parser checks the

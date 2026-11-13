@@ -786,6 +786,8 @@ package final class Presenter {
     var onListIndex: ((UInt32, String) -> Int?)?
     var onListText: ((UInt32, (String, Int, Int)?, (String, Int, Int)?) -> String)?
     private(set) var listViews: [UInt32: NodeView] = [:]
+    /// Views this batch renewed for another list item (RenewMac.swift), and the accessibility watch that allows it.
+    var renewing = Set<UInt32>(), rowReuseWatch: [NSKeyValueObservation] = []
 
     /// Everything kept for `id`, out of the maps (not out of the window);
     /// `forget` releases its resources too, as a destroy does and a leaving
@@ -925,6 +927,22 @@ package final class Presenter {
     /// In `reset`, from its first teardown (FocusEvents keeps the focus it last reported: ResetGate).
     private(set) var resetting = false
     private var pendingGeometry: (() -> Void)?
+    private var drainingGeometry = false
+
+    private func settleGeometry() {
+        guard !drainingGeometry else { return }
+        drainingGeometry = true
+        defer { drainingGeometry = false }
+        for _ in 0..<8 {
+            guard let geometry = pendingGeometry else { return }
+            pendingGeometry = nil
+            geometry()
+        }
+        if pendingGeometry != nil {
+            pendingGeometry = nil
+            session?.log("Geometry did not settle after 8 corrections")
+        }
+    }
 
     /// Window chrome can synchronously resize ExactView while an older batch
     /// is still being installed. Commit its geometry after that batch, so the
@@ -1070,7 +1088,7 @@ package final class Presenter {
         // Create, frame or content ops: rows may have come or moved (`HeavyLeaves.batchApplied`).
         let moved = batch.ops.contains { [.create, .frame, .content].contains($0.op) }
         // What may now lie under a resting pointer: boxes made, moved, gone or transformed.
-        let relaid = batch.ops.contains { [.create, .frame, .children, .roots, .destroy, .present, .style, .props, .rank, .sticky, .fragments, .exit].contains($0.op) }
+        let relaid = batch.ops.contains { [.create, .renew, .frame, .children, .roots, .destroy, .present, .style, .props, .rank, .sticky, .fragments, .exit].contains($0.op) }
         defer {
             collections.endBatch()
             collections.observeKnobDrags()
@@ -1079,11 +1097,9 @@ package final class Presenter {
             if outermost {
                 applying = false
                 videoVisibility?.changed()
-                let geometry = pendingGeometry
-                pendingGeometry = nil
                 let q = waiting
                 waiting = []
-                geometry?()
+                settleGeometry()
                 for (id, f) in q where textHost(id) != nil { f() }
                 let later = afterBatchWork
                 afterBatchWork = []
@@ -1098,7 +1114,7 @@ package final class Presenter {
         }
         if !batch.ops.isEmpty { textViewportIndex = nil }
         var reparented = Set<UInt32>()
-        let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .style].contains($0.op) }
+        let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
         if structureChanged { selection.structureChanged() }
         // A button's face changes only in a batch that says so or one that touches it (`ControlHost.face`).
         if batch.controls { controls.facesChanged() }
@@ -1107,7 +1123,7 @@ package final class Presenter {
             let id = op.id
             switch kind {
             // `fieldContent` carries resolved padding the face holds (a percentage of a box that resized).
-            case .create, .props, .style, .children, .paragraph, .flow, .frame, .fieldContent: controls.faceChanged(id)
+            case .create, .renew, .props, .style, .children, .paragraph, .flow, .frame, .fieldContent: controls.faceChanged(id)
             default: break
             }
             if kind == .children { touched(id, children: true) } else if kind != .roots && kind != .create { touched(id, textChanged: kind == .props || kind == .style || kind == .destroy || kind == .fieldContent) }
@@ -1203,6 +1219,7 @@ package final class Presenter {
             case .sticky: stickies.apply(id, op.payload)
             case .fragments: views[id]?.applyColumns(op.payload)
             case .unknown: blocks.applied(op)
+            case .renew: renew(id)
             case .destroy:
                 elements.destroyed(id)
                 blocks.destroyed(id)
@@ -1246,7 +1263,7 @@ package final class Presenter {
             default: break
             }
         }
-        regridMoved()
+        regridMoved(); if !renewing.isEmpty { renewsApplied() }
         NodeView.inkPlaced(reparented.compactMap { views[$0] })
         if !flights.isEmpty { flightsBatchApplied() }
         tables.sync(batch)

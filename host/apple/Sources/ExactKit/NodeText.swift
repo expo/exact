@@ -180,33 +180,35 @@ extension NodeView {
             }
             // A container's background covers its descendants' fragments (CSS).
             if backs {
-                // A leaf paints one background, its nearest, and a box's ends
-                // are read from the characters that paint it: a box inside
-                // another visible background, and that outer box, keep square
-                // corners, which would otherwise show the page at their seams.
-                let visible = { (c: [Double]?) in c.map { $0.count < 4 || $0[3] > 0 } ?? false }
-                var square = Set<UInt32>()
+                // A leaf's nearest background is its own; each box around it
+                // with one paints under it, every box its own fragments,
+                // corners and padding (`OuterBackground`).
                 for (i, leaf) in inlineText.filter(\.paints).enumerated() {
-                    var nested: [UInt32] = visible(runs[i].background) ? [runs[i].backgroundBox] : []
                     var up = byId[leaf.parent]
                     while let run = up {
                         up = byId[run.parent]
                         let paint = run.run(dark: night, contrast: contrast, elevated: elevated, tint: tint)
-                        guard !paint.hidden, paint.background != nil else { continue }
+                        guard !paint.hidden, let color = paint.background else { continue }
                         if runs[i].background == nil {
-                            runs[i].background = paint.background
+                            runs[i].background = color
                             (runs[i].backgroundBox, runs[i].backgroundRadii) = (paint.backgroundBox, paint.backgroundRadii)
+                            (runs[i].backgroundBefore, runs[i].backgroundAfter) = (paint.backgroundBefore, paint.backgroundAfter)
+                        } else if paint.backgroundBox != 0 {
+                            runs[i].outerBackgrounds.append(OuterBackground(color: color, box: paint.backgroundBox, radii: paint.backgroundRadii,
+                                                                            before: paint.backgroundBefore, after: paint.backgroundAfter))
                         }
-                        if visible(paint.background), !nested.contains(paint.backgroundBox) { nested.append(paint.backgroundBox) }
                     }
-                    if nested.count > 1 { square.formUnion(nested) }
                 }
-                for i in runs.indices where square.contains(runs[i].backgroundBox) { runs[i].backgroundRadii = [] }
             }
             // A box's identity is paint only where a box is rounded: square
             // backgrounds keep sharing what they share (TextPaint's keys).
-            if !runs.contains(where: { $0.background != nil && $0.backgroundRadii.contains { !$0.isZero } }) {
-                for i in runs.indices { runs[i].backgroundBox = 0; runs[i].backgroundRadii = [] }
+            // So is one that reaches past its text (its padding), or stands in
+            // another's, or beside a box's room, which no background covers
+            // but its own boxes'.
+            if !runs.contains(where: { $0.background != nil && ($0.backgroundRadii.contains { !$0.isZero } || $0.backgroundBefore != 0 || $0.backgroundAfter != 0
+                                                                   || !$0.outerBackgrounds.isEmpty) })
+                && !runs.contains(where: { $0.inlineStart != 0 || $0.inlineEnd != 0 }) {
+                for i in runs.indices { runs[i].backgroundBox = 0; runs[i].backgroundRadii = []; runs[i].outerBackgrounds = [] }
             }
         }
         // The paragraph's own lines reach every run its children paint

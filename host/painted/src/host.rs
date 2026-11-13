@@ -121,6 +121,7 @@ pub struct Host<D: DataSource> {
     #[cfg(test)]
     pub(crate) layout_calls: usize,
     data_activated: bool,
+    pub(crate) sound: crate::sound::Pending,
     /// Reader-owned [`lower::LOWERED`] animations and their change count.
     lowering: bool,
     lowered: std::collections::HashMap<u64, u8>,
@@ -330,6 +331,7 @@ impl<D: DataSource> Host<D> {
             #[cfg(test)]
             layout_calls: 0,
             data_activated: false,
+            sound: crate::sound::Pending::default(),
             lowering: false,
             lowered: Default::default(),
             lower_colors: false,

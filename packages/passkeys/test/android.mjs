@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ensureShells } from '../../../scripts/app-shells.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const pkg = resolve(import.meta.dir, '..'), root = resolve(pkg, '../..');
 const run = (cmd, args, cwd, env = process.env) => {
@@ -50,12 +51,11 @@ try {
     /^androidx\.credentials:credentials:1\.6\.0=/m.test(locked) && /^androidx\.credentials:credentials-play-services-auth:1\.6\.0=/m.test(locked), locked.slice(0, 400) || `no ${lock}`);
   const sums = existsSync(checksums) ? readFileSync(checksums, 'utf8') : '';
   check('the checksums cover the graph', /<component group="androidx\.credentials" name="credentials" version="1\.6\.0">/.test(sums) && /sha256/.test(sums), sums.slice(0, 400) || `no ${checksums}`);
-  const generated = resolve(root, 'host/android/app/build', name, 'extensions/exact/app/ExactExtensions.kt');
+  const out = apkBuildDir(app), generated = resolve(out, 'extensions/exact/app/ExactExtensions.kt');
   const roster = existsSync(generated) ? readFileSync(generated, 'utf8') : '';
   check('the roster names the passkeys extension', roster.includes('exact.passkeys.PasskeysModule'), roster || `no ${generated}`);
   const strict = build();
   check('a build checks the graph against the lock and checksums', strict.status === 0, (strict.stdout + strict.stderr).slice(-2000));
-  const out = resolve(root, 'host/android/app/build', name);
   const apk = existsSync(out) ? readdirSync(out, { recursive: true }).map(String).find((f) => f.endsWith('.apk') && f.includes('release')) : null;
   if (apk) console.log(`APK ${apk}: ${(statSync(resolve(out, apk)).size / 1048576).toFixed(2)} MiB`);
 } finally {

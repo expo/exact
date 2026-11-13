@@ -1425,7 +1425,7 @@
         "playback",
         "playback-mix"
       ],
-      "description": "The audio session the app's sounds, media and canvas audio share (LLP 1096 D8). On iOS and tvOS: ambient (default) mixes with other apps' audio and obeys the ring/silent switch; playback ignores the switch and interrupts other audio; playback-mix ignores the switch and mixes without ducking, for sound played over another app's audio, and is never Now Playing. On the web the sound output sets the Audio Session API's type where the browser has it: playback-mix as ambient, the other values as written; an app with no sound output keeps the browser's auto. The Mac has no session."
+      "description": "The audio session the app's sounds, media and canvas audio share (LLP 1096 D8). On iOS and tvOS: ambient (default) mixes with other apps' audio and obeys the ring/silent switch; playback ignores the switch and interrupts other audio; playback-mix ignores the switch and mixes without ducking, for sound played over another app's audio, and is never Now Playing. On the web page initialization sets the Audio Session API's type where the browser has it: playback-mix as ambient, the other values as written, without requiring sound output. An omitted setting keeps the browser's auto. The Mac has no session."
     },
     "dev": {
       "type": "object",

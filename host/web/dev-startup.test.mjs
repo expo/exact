@@ -6,7 +6,7 @@ import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
-import { stopBuildTree } from './dev-startup.mjs';
+import { claimDevLoop, stopBuildTree } from './dev-startup.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 afterEach(() => stopAll());
@@ -250,3 +250,20 @@ for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer
     }
   }, 40_000);
 }
+
+test('a frontend claim names its live owner, separates targets, and releases after a crash', async () => {
+  const dir=mkdtempSync(resolve(root,'dev-loop-claim-'));
+  let owner, wasm, next, child;
+  try {
+    owner=claimDevLoop(dir,'js'); owner.url('http://127.0.0.1:9876');
+    expect(()=>claimDevLoop(dir,'js')).toThrow(`already runs at http://127.0.0.1:9876 (pid ${process.pid})`);
+    wasm=claimDevLoop(dir,'wasm'); wasm.close(); owner.close();
+    const script=`import {claimDevLoop} from ${JSON.stringify(resolve(root,'host/web/dev-startup.mjs'))}; const claim=claimDevLoop(process.argv[1],'js'); claim.url('http://127.0.0.1:9877'); console.log('claimed'); setInterval(()=>{},1000);`;
+    child=spawnOwned(process.execPath,['-e',script,dir],{stdio:['ignore','pipe','pipe']});
+    await new Promise(ok=>child.stdout.once('data',ok));
+    expect(()=>claimDevLoop(dir,'js')).toThrow(`http://127.0.0.1:9877 (pid ${child.pid})`);
+    const exit=new Promise(ok=>child.once('exit',ok)); child.kill('SIGKILL'); await exit;
+    next=claimDevLoop(dir,'js'); next.url('http://127.0.0.1:9878');
+    expect(JSON.parse(readFileSync(resolve(dir,'.exact/web-js-loop.json'),'utf8')).url).toBe('http://127.0.0.1:9878');
+  } finally { next?.close(); wasm?.close(); owner?.close(); rmSync(dir,{recursive:true,force:true}); }
+});

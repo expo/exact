@@ -1028,10 +1028,12 @@ component App
 The element's own attributes override its class. `class=(selected ? Active :
 Idle)` chooses between two named styles. This is not CSS selector matching, a
 cascade, or a string of multiple class names. Put computed values on the node;
-style bodies are constant. Properties omitted by the selected style revert to
-their defaults rather than keeping the other style's previous value. The one
-host-policy prop a style can hold, `buttonStyle`, must be set in both styles or
-neither.
+style bodies are constant. Style rows omitted by the selected style revert to
+their defaults rather than keeping the other style's previous value. A style
+can also hold the props `backgroundMaterial`, `glassGroup` and `buttonStyle`.
+In a conditional class, each prop must be set in both styles or neither, unless
+the element supplies its own value. Use `backgroundMaterial="none"` to remove
+a material.
 
 Useful property families include flex/block layout; sizes and min/max sizes;
 padding, margin, and gaps; borders and radii; overflow and clipping; text metrics
@@ -1571,8 +1573,9 @@ appropriate [motion fixture](../contract/corpus/spring.contract).
 In a `list virtualized=true` row, an animation waits until its row first
 shows in the list (`-exact-animation-trigger="view"`, the default), because the list
 builds rows before they scroll in; `-exact-animation-trigger="none"` starts it when
-the row is built, so the row arrives settled. The web build does not hold it
-yet.
+the row is built, so the row arrives settled. Revealing a row preserves an authored
+`animation-play-state="paused"`. A row that stays mounted plays only once;
+retiring and mounting it again starts a new play.
 
 `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines
 (`-exact-drag-timeline`, `animation-timeline`, `animation-range`, `timeline-scope`) are

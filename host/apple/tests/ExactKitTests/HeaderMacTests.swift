@@ -600,6 +600,25 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertTrue(attach(["commandfor": "more", "command": "toggle-popover"]).identifiers.contains("exact.menu.16"), "a command-only menu item")
     }
 
+    /// A header button that shows an alert by `commandfor` alone, pressing
+    /// nothing, is a toolbar item, and its item shows the alert (#387).
+    func testAButtonShowingAnAlertByItsCommandAloneIsAToolbarItem() throws {
+        let clear = view(16, "button", ["accessibilityLabel": "Clear", "commandfor": "clear", "command": "show-modal"]) + view(160, "image", ["symbolName": "trash"])
+            + view(40, "view", ["semanticTag": "dialog", "id": "clear", "accessibilityRole": "alertdialog", "accessibilityLabel": "Clear History?"])
+            + view(43, "text", ["text": "Every conversation will be deleted."])
+            + view(41, "button", ["commandfor": "clear", "command": "close", "destructive": "true"], press: true) + view(411, "text", ["text": "Clear History"])
+            + view(42, "button", ["commandfor": "clear", "command": "close"]) + view(421, "text", ["text": "Cancel"])
+            + [children(16, [160]), children(41, [411]), children(42, [421]), children(40, [43, 41, 42]), children(10, [11, 12, 13, 14, 16]), children(2, [10, 15, 40])]
+        let p = fixture(extra: clear)
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        XCTAssertEqual(window.title, "Library", "the header is the window's bar")
+        XCTAssertTrue(identifiers().contains("exact.command.16"), "\(identifiers())")
+        XCTAssertEqual(p.toolbar.activate(try node(p, 16)), true)
+        XCTAssertEqual(p.alerts.presented?.alert.messageText, "Clear History?")
+        _ = p.alerts.close(try node(p, 40))
+        p.toolbar.detach()
+    }
+
     func testAFormWithAuthoredPopoverPlacementKeepsItsPaintedHeader() throws {
         for style: [String: Any] in [
             ["position_area": "top", "margin_bottom": 12],

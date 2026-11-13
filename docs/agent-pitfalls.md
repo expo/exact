@@ -1039,10 +1039,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   session is `ambient`. An app whose purpose includes media playback should
   set `"audio_session": "playback"` in `app.json`, as Recorder does. For sound
   over another app's audio, `"playback-mix"` also ignores the switch on iOS and
-  tvOS while mixing without ducking. On the web only sound output applies the
-  setting, mapping it to `ambient`, which obeys the switch in WebKit; media or
-  GPU audio alone leaves the browser's `auto`. Raising the media volume alone
-  does not override Silent mode. (LLP 1096 D8.)
+  tvOS while mixing without ducking. On the web, page initialization applies
+  `ambient` and `playback` as given and maps `playback-mix` to `ambient`, which
+  obeys the switch in WebKit. This also applies to pages with only `video`,
+  `audio` or GPU audio, where the Audio Session API exists. Raising the media
+  volume alone does not override Silent mode. (LLP 1096 D8.)
 
 - **A scheduled sound plays after Stop.** A sequencer that schedules each step
   ahead (`playSounds(…)` with a future `at=`) keeps sounding the hits already
@@ -1172,6 +1173,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   left button. iOS refuses `mouse`; macOS and Linux drag with the mouse anyway
   ([authored tests](contract-grammar.md#authored-tests)). (Stocks diary: the chart
   readout unmounted, about 10 minutes, 2026-10-04.)
+  A finger on a box with its own pointer handlers also needs
+  `touch-action="none"` when that box should own the drag: otherwise the browser
+  may scroll and send `pointercancel`, ending its moves. The web drag reply names
+  observed cancellation and scrolling, with the named node’s `touch-action` and
+  the effective intersection through its ancestors at contact start. Changing
+  `touch-action` during a contact does not change the browser's decision for it.
+  `drag … mouse` exercises the mouse path.
 
 - **A `pan` hears nothing from a finger on the web.** A drag with
   `tap <id> drag dx dy` (or a real touch) moves nothing and logs nothing. Cause:

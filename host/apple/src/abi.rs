@@ -81,6 +81,8 @@ pub struct Bridge<D: DataSource> {
     live_clock: Option<LiveClockFn>,
     wait_kinds: u8,
     native_timers: bool,
+    /// Whether retiring list rows are rebound to new items, for every boot (`set_row_reuse`).
+    row_reuse: bool,
     input: Vec<u8>,
     output: Vec<u8>,
 }
@@ -130,6 +132,7 @@ impl<D: DataSource> Bridge<D> {
             live_clock: None,
             wait_kinds: 0,
             native_timers: false,
+            row_reuse: false,
             input: Vec::new(),
             output: Vec::new(),
         }

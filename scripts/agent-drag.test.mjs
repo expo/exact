@@ -4,6 +4,49 @@ import { test, expect } from 'bun:test';
 import { dragTap, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
 import { DRAG_BOUNDS, realTap, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
 
+import assert from 'node:assert/strict';
+import { open } from './agent.mjs';
+import { chromium } from './agent-launch.mjs';
+import { need } from './coverage.mjs';
+
+need('chrome', chromium().unavailable)('a web contact reports browser cancellation and scrolling only for the affected finger', async () => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html>
+    <style>body{margin:0}#target{height:2000px;background:#ddd}</style>
+    <main id="exact-root" data-boot-ms="0"><div id="target"><div id="inner" style="height:2000px"></div></div></main>
+    <script>globalThis.exact = {ready: Promise.resolve(), views: new Map([[1, document.querySelector('#target')]]),
+      agentSettled: async req => ({clock:0, nodes: req.op === 'layout' ? [{id:1, x:0, y:0, w:400, h:2000}] : []})};</script>`,
+    { headers: { 'content-type': 'text/html' } },
+  ) });
+  let session;
+  try {
+    for (const mode of ['pan-y', 'auto', 'ancestor', 'scroller', 'changed', 'none', 'mouse']) {
+      session = await open({ host: 'web', url: server.url.href, size: [400, 400] });
+      const c = session.carrier;
+      await c.evaluate(`
+        const target = document.querySelector('#target'), root = document.querySelector('#exact-root');
+        target.style.touchAction = '${mode === 'ancestor' ? 'pan-y pinch-zoom' : mode === 'none' ? 'none' : ['pan-y', 'ancestor', 'scroller'].includes(mode) ? 'pan-y' : 'auto'}';
+        root.style.touchAction = '${mode === 'ancestor' ? 'pan-y' : mode === 'scroller' ? 'none' : 'auto'}';
+        ${mode === 'scroller' ? "target.style.cssText += ';height:400px;overflow:auto'" : ''};
+        ${mode === 'changed' ? "window.addEventListener('pointerdown', () => { target.style.touchAction = 'none'; root.style.touchAction = 'none'; }, {once:true, capture:true})" : ''};
+        globalThis.cancelTarget = null;
+        window.addEventListener('pointercancel', e => globalThis.cancelTarget = e.target.id, {once:true});
+        scrollTo(0, 0)`);
+      await c.input(1, 'down', { x: 100, y: 300, mouse: mode === 'mouse' });
+      if (mode === 'changed') assert.equal(await c.evaluate("getComputedStyle(document.querySelector('#target')).touchAction"), 'none');
+      await c.input(null, 'move', { x: 100, y: 100, ms: 200 });
+      const up = await c.input(null, 'up', {});
+      if (['auto', 'pan-y', 'ancestor', 'scroller', 'changed'].includes(mode)) {
+        assert.equal(await c.evaluate('globalThis.cancelTarget'), 'inner', mode);
+        const own = ['auto', 'changed'].includes(mode) ? 'auto' : mode === 'ancestor' ? 'pan-y pinch-zoom' : 'pan-y';
+        const effective = mode === 'ancestor' ? 'pan-y' : own;
+        assert.match(up.note ?? '', new RegExp(`pointercancel.*node #1.*touch-action ${own}; effective ${effective}`));
+        assert.match(up.note, /scroll/);
+      } else assert.equal(up.note, undefined, mode);
+      await session.close(); session = null;
+    }
+  } finally { try { await session?.close(); } finally { server.stop(true); } }
+}, 30_000);
+
 /** A session and carrier whose journal says `lines` during the drag; replies settle a tick later. */
 function drive(lines, { touches = false, notes = {} } = {}) {
   const later = (v) => new Promise((done) => setTimeout(() => done(v), 1));

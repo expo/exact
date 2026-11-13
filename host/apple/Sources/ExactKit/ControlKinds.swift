@@ -250,6 +250,9 @@ struct ButtonFace: Equatable {
     var leading = true
     var label: String?
     var fits = true
+    /// A tab's badge (LLP 1075.003 §9.9): the text of the filled box beside
+    /// its face, which the kernel reads from the tab's children.
+    var badge: String?
     var style: String?
     var ios = ButtonFace.unsaid
     var iosBefore26 = ButtonFace.unsaid
@@ -275,6 +278,7 @@ struct ButtonFace: Equatable {
         leading = o["leading"] as? Bool ?? true
         label = o["label"] as? String
         fits = o["fits"] as? Bool ?? true
+        badge = o["badge"] as? String
         style = o["style"] as? String
         ios = o["ios"] as? String ?? ios
         iosBefore26 = o["iosBefore26"] as? String ?? iosBefore26

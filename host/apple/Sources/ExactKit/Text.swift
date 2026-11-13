@@ -80,26 +80,45 @@ final class PresentedText: TextPresentation {
         if !r.hidden, let fill = r.background.map(TextEngine.color), fill.cgColor.alpha > 0 {
             let f = a[.font] as! PlatformFont
             let (ascent, descent) = CSSLineBox.content(f as CTFont, scale: scale)
+            let outer = r.outerBackgrounds.map {
+                InlineBackground(color: TextEngine.color($0.color).cgColor, ascent: ascent, descent: descent, box: $0.box, radii: $0.radii, reach: ($0.before, $0.after))
+            }
             a[.exactBackground] = InlineBackground(color: fill.cgColor, ascent: ascent, descent: descent,
-                                                   box: r.backgroundBox, radii: r.backgroundRadii)
+                                                   box: r.backgroundBox, radii: r.backgroundRadii,
+                                                   reach: (r.backgroundBefore, r.backgroundAfter), outer: outer)
         }
     }
     /// Every inline box's extent in the paragraph, once its runs are set,
-    /// where any box is rounded: one table that all of its backgrounds
+    /// where any box is rounded, reaches past its text, stands in another or
+    /// beside an inline box's room: one table that all of its backgrounds
     /// share, so runs of one colour and font stay one CTRun, as they were
     /// measured, and the painter tells boxes apart by character.
     func finish(_ string: NSMutableAttributedString) {
         let all = NSRange(location: 0, length: string.length)
-        var boxes: [InlineBoxes.Box] = [], at: [UInt32: Int] = [:], rounded = false
+        var boxes: [InlineBoxes.Box] = [], at: [UInt32: Int] = [:]
+        // The room kerned beside a box is no glyph's: its own boxes' reach
+        // covers it, read by character.
+        var tabled = false
+        string.enumerateAttribute(.exactEdgeRoom, in: all) { value, _, stop in
+            if value != nil { tabled = true; stop.pointee = true }
+        }
         string.enumerateAttribute(.exactBackground, in: all) { value, range, _ in
-            guard let fill = value as? InlineBackground, fill.box != 0 else { return }
-            rounded = rounded || !fill.radii.isEmpty
-            if let i = at[fill.box] { boxes[i].extent = NSUnionRange(boxes[i].extent, range) }
-            else { at[fill.box] = boxes.count; boxes.append(InlineBoxes.Box(extent: range, radii: fill.radii)) }
+            guard let inner = value as? InlineBackground, inner.box != 0 else { return }
+            // Its boxes, outermost first, each as deep as the boxes around it.
+            for (depth, fill) in ([inner] + inner.outer).reversed().enumerated() {
+                tabled = tabled || !fill.radii.isEmpty || fill.reach.before != 0 || fill.reach.after != 0 || !inner.outer.isEmpty
+                if let i = at[fill.box] {
+                    boxes[i].extent = NSUnionRange(boxes[i].extent, range)
+                } else {
+                    at[fill.box] = boxes.count
+                    boxes.append(InlineBoxes.Box(extent: range, radii: fill.radii, color: fill.color, depth: depth,
+                                                 before: fill.reach.before, after: fill.reach.after))
+                }
+            }
         }
         guard !boxes.isEmpty else { return }
         let rtl = (string.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.baseWritingDirection == .rightToLeft
-        let table = rounded ? InlineBoxes(boxes, rtl: rtl) : nil
+        let table = tabled ? InlineBoxes(boxes, rtl: rtl) : nil
         string.enumerateAttribute(.exactBackground, in: all) { value, range, _ in
             guard let fill = value as? InlineBackground, fill.box != 0 else { return }
             string.addAttribute(.exactBackground, value: fill.sharing(table), range: range)
@@ -213,18 +232,24 @@ extension TextEngine {
 /// An inline box's `background-color`, carried on the attributed source so
 /// that the main thread's paint and a worker's raster read the same value.
 /// The content area is the run's own font's, as the web's inline box is.
-/// `box` and `radii` are the run's box and its `border-radius` until
-/// `PresentedText.finish` puts the paragraph's table of boxes in their place.
+/// `box`, `radii` and `reach` are the run's box, its `border-radius` and
+/// how far its padding box stands out from its text (`before` its first
+/// character, `after` its last), and `outer` the boxes around it with
+/// backgrounds, nearest first, until `PresentedText.finish` puts the
+/// paragraph's table of boxes in their place.
 final class InlineBackground: NSObject, @unchecked Sendable {
     let color: CGColor
     let ascent: CGFloat
     let descent: CGFloat
     let box: UInt32
     let radii: [InlineRadius]
+    let reach: (before: CGFloat, after: CGFloat)
+    let outer: [InlineBackground]
     let boxes: InlineBoxes?
-    init(color: CGColor, ascent: CGFloat, descent: CGFloat, box: UInt32 = 0, radii: [InlineRadius] = [], boxes: InlineBoxes? = nil) {
+    init(color: CGColor, ascent: CGFloat, descent: CGFloat, box: UInt32 = 0, radii: [InlineRadius] = [],
+         reach: (before: CGFloat, after: CGFloat) = (0, 0), outer: [InlineBackground] = [], boxes: InlineBoxes? = nil) {
         self.color = color; self.ascent = ascent; self.descent = descent
-        self.box = box; self.radii = radii.contains { !$0.isZero } ? radii : []; self.boxes = boxes
+        self.box = box; self.radii = radii.contains { !$0.isZero } ? radii : []; self.reach = reach; self.outer = outer; self.boxes = boxes
     }
     func sharing(_ boxes: InlineBoxes?) -> InlineBackground {
         InlineBackground(color: color, ascent: ascent, descent: descent, boxes: boxes)
@@ -232,23 +257,24 @@ final class InlineBackground: NSObject, @unchecked Sendable {
     override func isEqual(_ object: Any?) -> Bool {
         guard let other = object as? InlineBackground else { return false }
         return color == other.color && ascent == other.ascent && descent == other.descent && box == other.box
-            && radii == other.radii && boxes == other.boxes
+            && radii == other.radii && reach == other.reach && outer == other.outer && boxes == other.boxes
     }
     override var hash: Int { color.hashValue ^ ascent.hashValue ^ descent.hashValue ^ box.hashValue }
 }
 
-/// A paragraph's inline boxes with backgrounds, where one is rounded: each
-/// box's range of characters and its `border-radius`, and the paragraph's
-/// direction, which says which side a box starts on.
+/// A paragraph's inline boxes with backgrounds (`PresentedText.finish`):
+/// each box's range of characters, its `border-radius`, its colour, how
+/// many boxes with backgrounds it stands in and its reach
+/// (`InlineBackground.reach`), and the paragraph's direction, which says
+/// which side a box starts on.
 final class InlineBoxes: NSObject {
-    struct Box: Equatable { var extent: NSRange; let radii: [InlineRadius] }
+    struct Box: Equatable {
+        var extent: NSRange; let radii: [InlineRadius]; let color: CGColor; let depth: Int
+        var before: CGFloat = 0, after: CGFloat = 0
+    }
     let boxes: [Box]
     let rtl: Bool
     init(_ boxes: [Box], rtl: Bool) { self.boxes = boxes; self.rtl = rtl }
-    /// The innermost box holding the character at `index`.
-    func box(at index: Int) -> Int? {
-        boxes.indices.filter { NSLocationInRange(index, boxes[$0].extent) }.min { boxes[$0].extent.length < boxes[$1].extent.length }
-    }
     override func isEqual(_ object: Any?) -> Bool {
         guard let other = object as? InlineBoxes else { return false }
         return self === other || boxes == other.boxes && rtl == other.rtl
@@ -294,20 +320,25 @@ enum TextLinePaint {
     struct Fill { let rect: CGRect; let path: CGPath?; let color: CGColor }
 
     /// CSS: an inline box's background covers each of its line fragments,
-    /// its glyphs' advance across and its font's content area down. Glyph
-    /// runs that fallback or bidi split are joined again where they touch,
-    /// within one box; two boxes side by side stay two. A box's
-    /// `border-radius` rounds only its own start and end (`slice`), in
-    /// visual order as CSS 2's §8.6 places them: under `ltr` the start on
+    /// its glyphs' advance across and its font's content area down, and its
+    /// padding past its first and last characters. Glyph runs that fallback
+    /// or bidi split are joined again where they touch, within one box; two
+    /// boxes side by side stay two, and a box inside another paints over it
+    /// (CSS 2 Appendix E: each inline box's background in tree order). The
+    /// room kerned after a glyph for the boxes beside it (`exactEdgeRoom`)
+    /// is no glyph's: a box covers it only inside its own last character.
+    /// A box's `border-radius` rounds only its own start and end (`slice`),
+    /// in visual order as CSS 2's §8.6 places them: under `ltr` the start on
     /// the leftmost piece of the line that holds its first character and
     /// the end on the rightmost of the line that holds its last; under
     /// `rtl` the other way about. Percentages resolve against each piece.
     static func backgrounds(_ line: CTLine, at origin: CGPoint) -> [Fill] {
-        struct Piece { var lo: CGFloat, hi: CGFloat; let box: Int?; let fill: InlineBackground }
+        struct Piece { var lo: CGFloat, hi: CGFloat; let box: Int?; let color: CGColor; let fill: InlineBackground }
         var spans: [Piece] = []
         // The boxes whose first and whose last character is on this line.
         var starts = Set<Int>(), ends = Set<Int>()
         let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+        let lineEnd = CTLineGetStringRange(line).location + CTLineGetStringRange(line).length
         // CSS removes the collapsible spaces that end a line: a wrapped run's
         // background stops at its last glyph, as the browser paints it. A
         // left-to-right line ends on the right (LLP 1053 §0, the Linux parity).
@@ -331,7 +362,7 @@ enum TextLinePaint {
                     hi = max(hi, positions[i].x, positions[i].x + advances[i].width)
                 }
                 hi = min(hi, end)
-                if hi > lo { spans.append(Piece(lo: lo, hi: hi, box: nil, fill: fill)) }
+                if hi > lo { spans.append(Piece(lo: lo, hi: hi, box: nil, color: fill.color, fill: fill)) }
                 continue
             }
             // Each glyph's characters: from its index to the next one up.
@@ -342,39 +373,48 @@ enum TextLinePaint {
             let next = Dictionary(uniqueKeysWithValues: zip(stops.dropLast(), stops.dropFirst()))
             // The ellipsis stands for what was cut, not for the box's end.
             let token = attributes[NSAttributedString.Key.exactTruncation] != nil
+            let room = attributes[NSAttributedString.Key.exactEdgeRoom] as? CGFloat ?? 0
+            let backwards = CTRunGetStatus(run).contains(.rightToLeft)
+            // A start room kerned on the line's last glyph is the next line's.
+            let leaves = attributes[NSAttributedString.Key.exactBreakRoom] as? CGFloat ?? 0
             for i in 0..<count {
-                let from = indices[i], to = next[from]!
-                // Where a box starts or ends, whatever this glyph's advance (a
-                // trimmed space, a zero-width or combining character).
-                for (b, box) in boxes.boxes.enumerated() where !token && NSIntersectionRange(box.extent, NSRange(location: from, length: to - from)).length > 0 {
-                    if from <= box.extent.location { starts.insert(b) }
-                    if NSMaxRange(box.extent) <= to { ends.insert(b) }
-                }
-                let lo = min(positions[i].x, positions[i].x + advances[i].width)
-                let hi = min(end, max(positions[i].x, positions[i].x + advances[i].width))
-                guard hi > lo else { continue }
-                // A glyph of several characters in several boxes (a ligature
-                // across two) is shared between them by characters, in the
-                // run's direction, as a caret divides a ligature.
-                var groups: [(count: Int, box: Int?)] = []
-                for c in from..<to {
-                    let b = boxes.box(at: c)
-                    if let last = groups.last, last.box == b { groups[groups.count - 1].count += 1 } else { groups.append((1, b)) }
-                }
-                let share = (hi - lo) / CGFloat(to - from), backwards = CTRunGetStatus(run).contains(.rightToLeft)
-                var done = 0
-                for group in groups {
-                    let near = CGFloat(done) * share, far = CGFloat(done + group.count) * share
-                    done += group.count
-                    let (a, z) = backwards ? (hi - far, hi - near) : (lo + near, lo + far)
-                    if z > a { spans.append(Piece(lo: a, hi: z, box: group.box, fill: fill)) }
+                let from = indices[i], to = next[from]!, glyph = NSRange(location: from, length: to - from)
+                let last = to == lineEnd ? leaves : 0
+                let lo = min(positions[i].x, positions[i].x + advances[i].width) + (backwards ? last : 0)
+                let hi = min(end, max(positions[i].x, positions[i].x + advances[i].width) - (backwards ? 0 : last))
+                for (b, box) in boxes.boxes.enumerated() {
+                    let mine = NSIntersectionRange(box.extent, glyph)
+                    guard mine.length > 0 else { continue }
+                    // Where a box starts or ends, whatever this glyph's advance (a
+                    // trimmed space, a zero-width or combining character).
+                    if !token, from <= box.extent.location { starts.insert(b) }
+                    if !token, NSMaxRange(box.extent) <= to { ends.insert(b) }
+                    guard hi > lo else { continue }
+                    // A glyph of several characters in several boxes (a ligature
+                    // across two) is shared between them by characters, in the
+                    // run's direction, as a caret divides a ligature.
+                    let share = (hi - lo) / CGFloat(to - from)
+                    let near = CGFloat(mine.location - from) * share, far = CGFloat(NSMaxRange(mine) - from) * share
+                    var (a, z) = backwards ? (hi - far, hi - near) : (lo + near, lo + far)
+                    // Its padding past its first and last characters: from its
+                    // first glyph back, and from its last glyph's own end, less
+                    // the room kerned after it.
+                    if box.before != 0, NSLocationInRange(box.extent.location, glyph) {
+                        if backwards { z += box.before } else { a -= box.before }
+                    }
+                    if NSLocationInRange(NSMaxRange(box.extent) - 1, glyph) {
+                        if backwards { a += room - last - box.after } else { z += box.after - room + last }
+                    }
+                    if z > a { spans.append(Piece(lo: a, hi: z, box: b, color: box.color, fill: fill)) }
                 }
             }
         }
-        spans.sort { $0.lo < $1.lo }
+        // Outer boxes first, so that a box inside another paints over it.
+        let depth = { (p: Piece) in p.box.flatMap { p.fill.boxes?.boxes[$0].depth } ?? 0 }
+        spans.sort { (depth($0), $0.lo) < (depth($1), $1.lo) }
         var merged: [Piece] = []
         for span in spans {
-            if let last = merged.last, last.fill.isEqual(span.fill), last.box == span.box, span.lo <= last.hi + 0.01 {
+            if let last = merged.last, last.box == span.box, span.box != nil || last.fill.isEqual(span.fill), span.lo <= last.hi + 0.01 {
                 merged[merged.count - 1].hi = max(last.hi, span.hi)
             } else { merged.append(span) }
         }
@@ -389,12 +429,12 @@ enum TextLinePaint {
         return merged.indices.map { i in
             let piece = merged[i], fill = piece.fill
             let rect = CGRect(x: origin.x + piece.lo, y: origin.y - fill.ascent, width: piece.hi - piece.lo, height: fill.ascent + fill.descent)
-            guard let b = piece.box, let radii = fill.boxes?.boxes[b].radii, !radii.isEmpty else { return Fill(rect: rect, path: nil, color: fill.color) }
+            guard let b = piece.box, let radii = fill.boxes?.boxes[b].radii, !radii.isEmpty else { return Fill(rect: rect, path: nil, color: piece.color) }
             let corners = zip(radii, kept[i]).map { radius, kept in
                 kept ? CGSize(width: radius.length(basis: rect.width), height: radius.length(basis: rect.height)) : .zero
             }
-            guard corners.contains(where: { $0 != .zero }) else { return Fill(rect: rect, path: nil, color: fill.color) }
-            return Fill(rect: rect, path: BorderPaint.roundedRect(rect, BorderPaint.reduced(corners, in: rect)), color: fill.color)
+            guard corners.contains(where: { $0 != .zero }) else { return Fill(rect: rect, path: nil, color: piece.color) }
+            return Fill(rect: rect, path: BorderPaint.roundedRect(rect, BorderPaint.reduced(corners, in: rect)), color: piece.color)
         }
     }
 }

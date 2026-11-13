@@ -191,16 +191,16 @@ final class TableFeedKeyMacTests: XCTestCase {
         XCTAssertTrue(f.cells[12]?.row === first, "back: the same row, in its cell again")
         XCTAssertEqual(f.table.rowView(atRow: 12, makeIfNecessary: false)?.isSelected, true)
         // With the keyboard elsewhere the row is no one's focus. Scrolled
-        // away: the runner destroys it and the table lets its view go.
+        // away: the runner lets it go (destroyed, or rebound to another item)
+        // and the table lets its view go.
         // Back: another row for the same item, selected.
         XCTAssertTrue(f.window.makeFirstResponder(nil))
         f.scroll(to: 20_000)
-        XCTAssertNil(f.presenter.views[first.id], "the runner destroyed the selected row")
+        XCTAssertFalse(f.shows(first, item: 12), "the runner let the selected row go: destroyed it, or rebound it to another item")
         XCTAssertNil(f.table.rowView(atRow: 12, makeIfNecessary: false))
         XCTAssertEqual(f.table.selectedRow, 12)
         f.scroll(to: 0)
         let again = try XCTUnwrap(f.cells[12]?.row)
-        XCTAssertFalse(again === first, "a new row for the item")
         XCTAssertEqual(f.item(again), 12)
         XCTAssertEqual(f.table.rowView(atRow: 12, makeIfNecessary: false)?.isSelected, true)
         XCTAssertTrue(f.status.hasPrefix("opened 12 presses 1 "), "coming back pressed nothing: \(f.status)")
@@ -250,12 +250,12 @@ final class TableFeedKeyMacTests: XCTestCase {
         let key = try XCTUnwrap(f.feed.selectedKey)
         XCTAssertEqual(selected.props["listItemKey"], key)
 
-        // With the keyboard elsewhere, leaving the runner's window destroys
+        // With the keyboard elsewhere, leaving the runner's window lets go of
         // the row. Subsequent data changes must use its key, without bringing
         // the row or the table's port back to it.
         XCTAssertTrue(f.window.makeFirstResponder(nil))
         f.scroll(to: 3_000)
-        XCTAssertNil(f.presenter.views[selected.id])
+        XCTAssertFalse(f.shows(selected, item: 12))
         XCTAssertNil(f.table.rowView(atRow: 12, makeIfNecessary: false))
         XCTAssertGreaterThan(f.clip.bounds.minY, 2_000)
 

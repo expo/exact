@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backendFetchPrefixes, churnLines, disabledExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
+import { backendFetchPrefixes, churnLines, disabledExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, stateHolds, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
 import { axFindings } from './agent-ax.mjs';
 import { withEpoch } from './agent-launch.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
@@ -110,6 +110,19 @@ test "boot only"
 `);
     const boot = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/` });
     expect(boot.failed).toBe(1);
+    writeFileSync(file, `test "bounded clock"
+  clock +100
+  expect state n >= 1
+  expect state n <= 1
+  expect state n in 0 1
+  expect state textValue in "" "ok"
+test "wrong lower bound"
+  expect state n >= 1
+`);
+    const bounds = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/` });
+    expect([bounds.passed, bounds.failed]).toEqual([1, 1]);
+    expect(bounds.results[1].failures.join('\n')).toContain('n is 0, expected >= 1');
+
     expect(boot.results[0].failures.join('\n')).toContain('at step 0: boot');
   } finally { server.close(); rmSync(dir, { recursive: true, force: true }); }
 }, 180_000);
@@ -873,4 +886,14 @@ test('a fault on a path is armed under the API, and fails that API\'s absolute U
     expect(takeFault('http://127.0.0.1:4790/planets/5')).toBe(true);
     expect(takeFault('http://127.0.0.1:4791/planets/5')).toBe(false);
   } finally { delete globalThis.__exactFaults; }
+});
+
+test('script state comparisons use inclusive numeric bounds and typed literal membership', () => {
+  const holds=(got,comparison,value)=>stateHolds(got,{comparison,value});
+  expect(holds(-2,'at-least',-2)).toBe(true); expect(holds(2,'at-most',2)).toBe(true);
+  expect(holds(-3,'at-least',-2)).toBe(false); expect(holds(3,'at-most',2)).toBe(false);
+  for (const got of ['2',null,false,[],{}]) { expect(holds(got,'at-least',1)).toBe(false); expect(holds(got,'at-most',3)).toBe(false); }
+  for (const got of [-2,'ready',false,null,[]]) expect(holds(got,'in',[-2,'ready',false,null,[]])).toBe(true);
+  expect(holds('2','in',[2])).toBe(false); expect(holds(2,'in',['2'])).toBe(false);
+  expect(holds([],'equal',[])).toBe(true);
 });

@@ -128,11 +128,16 @@ impl<D: DataSource> Host<D> {
     fn store_read_finished(&mut self, read: crate::store::StoreRead) {
         // An accepted peer value supersedes the local value still owed to disk.
         self.pending_store_writes.retain(|write| {
-            read.values
+            let retained = read
+                .values
                 .iter()
                 .find(|(name, _)| name == &write.name)
                 .map(|(_, value)| value.as_slice())
-                == write.value.as_deref()
+                == write.value.as_deref();
+            if !retained {
+                self.reported_store_failures.remove(&write.name);
+            }
+            retained
         });
         self.store_refresh_pending = !read.complete || !read.omitted.is_empty();
         self.store_retry_names = if read.complete {

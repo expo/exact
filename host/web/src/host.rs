@@ -22,6 +22,7 @@ use mode::mirror::Mirror;
 
 #[path = "auth.rs"]
 mod auth;
+mod boot;
 #[path = "canvas2d.rs"]
 mod canvas2d;
 mod complete;
@@ -336,6 +337,8 @@ pub struct Host<D: DataSource> {
     collections: String,
     /// Head nodes (LLP 1048.003 D1): the page's `<head>`, never an element.
     heads: SortedSet<ViewId>,
+    /// The boundaries that do not set their own colour (LLP 1121 D7, D8).
+    boundaries: SortedSet<ViewId>,
     /// The head the page was last told, and whether a commit may move it.
     head: exact_runner::Head,
     language: Option<String>,
@@ -353,117 +356,11 @@ pub struct Host<D: DataSource> {
 }
 
 impl<D: DataSource> Host<D> {
-    /// Boot from plan bytes: decode (a validation pass), boot the runner, and
-    /// produce the first batch, which creates the whole tree.
-    pub fn boot(
-        plan_bytes: &[u8],
-        data: D,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(plan_bytes, data, None, Vec::new(), None, viewport, launch)
-    }
-
     /// Whether `location` names a pattern the plan's route table declares —
     /// never only its notfound fallback. The page follows a same-origin link
     /// to one in place (LLP 1038 §7) instead of loading a document.
     pub fn route_matches(&self, location: &str) -> bool {
         self.runner.route_matches(location)
-    }
-
-    /// Boot with the page's snapshot of the app's kept secrets (LLP 1018
-    /// D6): what `localStorage` holds under `exact.secret.<name>`, read by
-    /// the glue before boot; the runner keeps the granted names.
-    pub fn boot_stored(
-        plan_bytes: &[u8],
-        data: D,
-        snapshot: Vec<(String, Vec<u8>)>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(plan_bytes, data, None, snapshot, None, viewport, launch)
-    }
-
-    /// Boot carrying an earlier host's state (the dev loop's reload, LLP
-    /// 1007 §6): slots by name where their types still fit, settled
-    /// resources where their arguments still match, the clock. Carried state
-    /// is never why a boot fails — what no longer fits starts fresh.
-    pub fn boot_with(
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(
-            plan_bytes,
-            data,
-            carried,
-            Vec::new(),
-            None,
-            viewport,
-            launch,
-        )
-    }
-
-    /// Boot knowing what this wasm was built as (LLP 1030 D7): `compat` is
-    /// the archive's `compat.json`, which the `delivery` resource answers
-    /// from. The other three boots are this one with nothing to say.
-    pub fn boot_delivered(
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        snapshot: Vec<(String, Vec<u8>)>,
-        compat: Option<&str>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_linked(
-            HostLinks::ALL,
-            plan_bytes,
-            data,
-            carried,
-            snapshot,
-            compat,
-            viewport,
-            launch,
-        )
-    }
-
-    /// [`Host::boot_delivered`], with what the artifact links (LLP 1047 D3).
-    #[allow(clippy::too_many_arguments)]
-    pub fn boot_linked(
-        links: HostLinks<D>,
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        snapshot: Vec<(String, Vec<u8>)>,
-        compat: Option<&str>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        let plan = decode_plan(plan_bytes).map_err(HostError::Plan)?;
-        crate::link::admit(&plan)?;
-        let kernel = browser_kernel();
-        // @ref LLP 1039 D3 — both host facts precede the first settlement.
-        let delivery = compat.map_or_else(Default::default, |json| {
-            exact_runner::Delivery::default().with_compat(json)
-        });
-        let mut runner = Runner::boot_with_delivery_linked(
-            crate::link::runner_links(),
-            plan,
-            data,
-            kernel,
-            carried,
-            snapshot,
-            delivery,
-            viewport,
-            launch,
-        )
-        .map_err(HostError::Runner)?;
-        runner.measure_unless_production(compat, false); // LLP 1079 D1: the browser lays out
-        runner.admit_live(compat);
-        Host::open(links, runner, launch, Batch::new(), Default::default())
     }
 
     /// The host over a booted runner, and its first batch — `batch`'s ops,
@@ -508,6 +405,7 @@ impl<D: DataSource> Host<D> {
             exclusions: Default::default(),
             textflow: String::new(),
             heads: Default::default(),
+            boundaries: Default::default(),
             head: Default::default(),
             language: None,
             large_title_size: None,
@@ -963,9 +861,7 @@ impl<D: DataSource> Host<D> {
                         self.head_dirty = true;
                         continue;
                     }
-                    if self.mirror.remove(&id).is_some_and(|m| !m.looks.is_empty()) {
-                        batch.looks(id, "");
-                    }
+                    self.forget_looks(id, batch);
                     self.layers.forget(id);
                     self.exclusions.remove(&id);
                     if let Some(drag) = self.drag {
@@ -993,6 +889,7 @@ impl<D: DataSource> Host<D> {
                     self.update(id, batch);
                 }
             }
+            self.reveal_animations(r, batch);
             // This commit's springs, at its own time: the style (the target)
             // is in the page before the frames that approach it start playing.
             // Adopt this receipt's time/targets/transitions while the hold is
@@ -1033,6 +930,7 @@ impl<D: DataSource> Host<D> {
         }
         if !receipts.is_empty() {
             self.emit_textflow(batch);
+            self.emit_boundaries(batch);
         }
         // A canvas's inputs (LLP 1009 D2): the runner's side-output, only
         // from commits that applied.
@@ -1387,10 +1285,9 @@ impl<D: DataSource> Host<D> {
             Mirror {
                 props,
                 css,
-                children: Vec::new(),
                 in_button,
                 handled: !kinds.is_empty(),
-                looks: String::new(),
+                ..Default::default()
             },
         );
         self.emit_looks(id, batch);

@@ -129,7 +129,8 @@ fn memory_hints() -> wgpu::MemoryHints {
 }
 
 /// Optional features, each granted only where the adapter has it: timestamp
-/// diagnostics (no queries or buffers until a surface arms them), the two
+/// diagnostics (no queries or buffers until a surface arms them or a plan
+/// reads its `gpuMs`), the two
 /// block-compressed texture families a surface may choose its payloads from,
 /// forced early depth tests (a game's forward shaders, where nothing discards),
 /// half-precision shader arithmetic (a game's colour math, which a mobile GPU

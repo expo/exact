@@ -252,14 +252,17 @@ extension NavigationHost {
                 // only the edges they reach; leave the viewport and bar
                 // backgrounds full-size. A sheet leaves them where they are
                 // (LLP 1123 D1).
-                let rect = list.convert(list.bounds, to: view)
-                let safe = view.bounds.inset(by: view.safeAreaInsets)
-                let edges = HostCover.Edges(
-                    top: max(0, min(rect.height, safe.minY - rect.minY)),
-                    right: max(0, min(rect.width, rect.maxX - safe.maxX)),
-                    bottom: max(0, min(rect.height, rect.maxY - safe.maxY)),
-                    left: max(0, min(rect.width, safe.minX - rect.minX)))
-                if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[list.id] = .edges(edges) }
+                // Authored overflow outside the viewport is no additional unsafe area.
+                let rect = list.convert(list.bounds, to: view).intersection(view.bounds)
+                if !rect.isNull && !rect.isEmpty {
+                    let safe = view.bounds.inset(by: view.safeAreaInsets)
+                    let edges = HostCover.Edges(
+                        top: max(0, min(rect.height, safe.minY - rect.minY)),
+                        right: max(0, min(rect.width, rect.maxX - safe.maxX)),
+                        bottom: max(0, min(rect.height, rect.maxY - safe.maxY)),
+                        left: max(0, min(rect.width, safe.minX - rect.minX)))
+                    if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[list.id] = .edges(edges) }
+                }
             }
         }
         applyClearance(extras)
@@ -288,19 +291,28 @@ extension NavigationHost {
     /// persona switcher lay under the large title, drawn over by it and
     /// untappable (LLP 1116.006 D1).
     func deliverCovers() {
+        guard !deliveringCovers else { return }
         // A callback the runtime waits on can make no runtime call: deliver once it returns
         if Owner.shared.isServingMain {
             DispatchQueue.main.async { [weak self] in self?.deliverCovers() }
             return
         }
-        let views = presenter.views
-        presenter.session?.localInsets(localInsets.take { views[$0] != nil })
-        var changes: [(UInt32, HostCover?)] = []
-        for (id, cover) in covers where delivered[id] != cover { changes.append((id, cover)) }
-        for id in delivered.keys where covers[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
-        delivered = covers
-        guard !changes.isEmpty else { return }
-        presenter.onCovers?(changes)
+        deliveringCovers = true
+        defer { deliveringCovers = false }
+        var toldInsets = localInsets.wanted
+        for _ in 0..<8 {
+            toldInsets = localInsets.wanted
+            let views = presenter.views
+            let locals = localInsets.take { views[$0] != nil }
+            presenter.session?.localInsets(locals)
+            var changes: [(UInt32, HostCover?)] = []
+            for (id, cover) in covers where delivered[id] != cover { changes.append((id, cover)) }
+            for id in delivered.keys where covers[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
+            delivered = covers
+            guard !changes.isEmpty || !locals.isEmpty else { return }
+            if !changes.isEmpty { presenter.onCovers?(changes) }
+        }
+        if delivered != covers || localInsets.wanted != toldInsets { presenter.session?.log("Navigation covers did not settle after 8 corrections") }
     }
 
     /// @ref LLP 1123 D9 — each route's own safe area, which its content reads

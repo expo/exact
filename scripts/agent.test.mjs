@@ -2,7 +2,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -12,6 +12,7 @@ import { browserMissing, reloadPlaywrightPage } from './agent-playwright.mjs';
 import { need, notApplicable } from './coverage.mjs';
 import { typeCommand } from './agent-keys.mjs';
 import { render, stateOp } from './agent-inspect.mjs';
+import { parseStep } from '../host/web-js/conform-steps.mjs';
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
   need(engine, await browserMissing(engine))(`a Playwright reload keeps the current entry and its Back and Forward entries (${engine})`, async () => {
@@ -46,6 +47,153 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
       await page.goBack();
       assert.equal(new URL(page.url()).pathname, '/');
     } finally { await browser.close(); await server.stop(true); }
+  }, 30000);
+
+  need(engine, await browserMissing(engine))(`keys keep browser ownership and ordinary focus delivery (${engine})`, async () => {
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html>
+      <div id="exact-root" data-boot-ms="1">
+        <button id="button">Press</button><input id="field" value="abc">
+        <iframe id="guest" srcdoc="<input id='inside'>"></iframe>
+        <canvas id="world" tabindex="0" width="10" height="10"></canvas>
+      </div><script>
+        const elements = ['button', 'field', 'guest', 'world'].map(id => document.getElementById(id));
+        globalThis.requests = []; globalThis.presses = []; globalThis.keys = [];
+        elements[0].onclick = e => presses.push(e.isTrusted);
+        elements[1].onkeydown = e => keys.push([e.key, e.isTrusted]);
+        globalThis.exact = { ready: Promise.resolve(), views: new Map(elements.map((el, i) => [i + 1, el])),
+          gpu: { wantsInput: id => id === 4 },
+          async agentSettled(req) {
+            requests.push(req);
+            if (req.op === 'layout') return { nodes: elements.map((el, i) => {
+              const b = el.getBoundingClientRect(); return { id: i + 1, x: b.x, y: b.y, w: i === 3 ? 0 : b.width, h: i === 3 ? 0 : b.height };
+            }) };
+            if (req.op === 'type') return req.id === 2 ? {} : { guest: true };
+            if (req.op === 'focus') { const el = this.views.get(req.id); el.focus(); return { ok: document.activeElement === el }; }
+            return {};
+          }
+        };
+      </script>`, { headers: { 'content-type': 'text/html' } }) });
+    let s;
+    try {
+      s = await open({ host: 'web', browser: engine === 'chromium' ? 'chrome' : engine, url: server.url.href });
+      const c = s.carrier;
+      await c.input(1, 'key', { key: 'Enter' });
+      await c.input(2, 'key', { key: 'ArrowRight' });
+      let world;
+      try { world = (await c.input(4, 'key', { key: 'ArrowLeft' })).delivery; }
+      catch (e) { world = e.message; }
+      const held = await c.input(3, 'key', { key: 'Shift', phase: 'down' });
+      await held.release?.();
+      // An ordinary iframe key still belongs to its guest bridge.
+      const guest = await c.input(3, 'key', { key: 'Enter' });
+      const observed = await c.evaluate(`JSON.parse(JSON.stringify({ presses, keys, requests: requests.filter(r => ['type', 'focus'].includes(r.op)) }))`);
+      assert.deepEqual({ ...observed, world, guest: guest.guest }, {
+        presses: [true], keys: [['ArrowRight', true]], world: 'platform', guest: true,
+        requests: [{ op: 'type', id: 2, key: 'ArrowRight' }, { op: 'focus', id: 2, select: false },
+          { op: 'focus', id: 4, world: true }, { op: 'type', id: 3, key: 'Enter' }],
+      });
+    } finally { await s?.close(); await server.stop(true); }
+  }, 30000);
+
+  need(engine, await browserMissing(engine))(`a wheel reports its pointer move and honours its point (${engine})`, async () => {
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html>
+      <div id="exact-root" data-boot-ms="1"><div id="port" style="position:fixed;left:20px;top:200px;width:220px;height:160px;overflow:auto"><div style="height:1000px">Scroll</div></div></div>
+      <script>
+        const port = document.getElementById('port'); globalThis.wheels = []; globalThis.enters = 0; globalThis.moves = 0; globalThis.reveals = 0;
+        port.onpointerenter = () => enters++;
+        port.onpointermove = () => moves++;
+        port.addEventListener('wheel', e => { wheels.push([e.clientX, e.clientY, e.deltaX, e.deltaY, e.isTrusted]); e.preventDefault(); }, { passive: false });
+        globalThis.exact = { ready: Promise.resolve(), views: new Map([[1, port]]), async agentSettled(req) {
+          if (req.op === 'tree') return { nodes: [{ id: 1, type: 'View', depth: 0, props: { testId: 'port' }, children: [] }] };
+          if (req.op === 'reveal') { reveals++; return { scrolled: false }; }
+          const b = port.getBoundingClientRect(); return req.op === 'layout' ? { nodes: [{ id: 1, x: b.x, y: b.y, w: b.width, h: b.height }] } : {};
+        } };
+      </script>`, { headers: { 'content-type': 'text/html' } }) });
+    let s;
+    try {
+      s = await open({ host: 'web', browser: engine === 'chromium' ? 'chrome' : engine, url: server.url.href });
+      const reply = await s.tap('port', { wheel: [3, 12], at: [30, 40] });
+      assert.deepEqual(await s.carrier.evaluate('wheels'), [[50, 240, 3, 12, true]]);
+      assert.deepEqual(reply.at, [50, 240]);
+      assert.deepEqual(reply.hovered, engine === 'chromium' ? undefined : [50, 240]);
+      assert.equal(await s.carrier.evaluate('enters'), engine === 'chromium' ? 0 : 1);
+      await s.carrier.evaluate('wheels.length = 0; moves = 0');
+      await parseStep('wheel port 12 3', { hoverWheel: true }).run(s);
+      assert.deepEqual(await s.carrier.evaluate('({ moves, wheels })'), { moves: 1, wheels: [[130, 280, 3, 12, true]] });
+      await s.carrier.evaluate(`
+        wheels.length = 0; moves = 0;
+        port.style.width = '100px';
+        port.onpointermove = () => { moves++; port.style.width = '120px'; };
+      `);
+      await parseStep('wheel port 12 3', { hoverWheel: true }).run(s);
+      assert.deepEqual(await s.carrier.evaluate('({ moves, wheels })'), { moves: 1, wheels: [[70, 280, 3, 12, true]] });
+      assert.equal(await s.carrier.evaluate('port.getBoundingClientRect().width'), 120);
+      assert.equal(await s.carrier.evaluate('reveals'), 2);
+      await s.carrier.evaluate(`wheels.length = 0; port.onwheel = e => { globalThis.controlWheel = e.ctrlKey; };`);
+      await s.tap('port', { hover: true, wheel: [0, -20], at: [30, 40], modifiers: 'Control' });
+      assert.deepEqual(await s.carrier.evaluate('wheels'), [[50, 240, 0, -20, true]]);
+      assert.equal(await s.carrier.evaluate('controlWheel'), true);
+    } finally { await s?.close(); await server.stop(true); }
+  }, 30000);
+
+  need(engine, await browserMissing(engine))(`a hover wheel outside the viewport moves the pointer off a hovered control (${engine})`, async () => {
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html>
+      <style>body { margin: 0; height: 3000px; }</style>
+      <div id="exact-root" data-boot-ms="1"><button id="control" style="position:fixed;left:20px;top:20px;width:120px;height:40px">Hover</button>
+        <div id="low" style="position:fixed;left:20px;top:880px;width:200px;height:100px"></div></div>
+      <script>
+        const control = document.getElementById('control'), low = document.getElementById('low');
+        globalThis.leaves = 0; control.onpointerleave = () => leaves++;
+        globalThis.exact = { ready: Promise.resolve(), views: new Map([[1, control], [2, low]]), async agentSettled(req) {
+          if (req.op === 'tree') return { nodes: [{ id: 1, type: 'View', depth: 0, props: { testId: 'control' }, children: [] },
+            { id: 2, type: 'View', depth: 0, props: { testId: 'low' }, children: [] }] };
+          if (req.op === 'reveal') return { scrolled: false };
+          return req.op === 'layout' ? { viewport: { w: innerWidth, h: innerHeight }, nodes: [control, low].map((el, i) => {
+            const b = el.getBoundingClientRect(); return { id: i + 1, x: b.x, y: b.y, w: b.width, h: b.height };
+          }) } : {};
+        } };
+      </script>`, { headers: { 'content-type': 'text/html' } }) });
+    let s;
+    try {
+      s = await open({ host: 'web', browser: engine === 'chromium' ? 'chrome' : engine, url: server.url.href });
+      await s.tap('control', { hover: true });
+      assert.equal(await s.carrier.evaluate('control.matches(":hover")'), true);
+      const reply = await s.tap('low', { hover: true, wheel: [0, 40] });
+      assert.ok(reply.at[1] >= 900);
+      assert.deepEqual(reply.hovered, engine === 'chromium' ? undefined : reply.at);
+      assert.deepEqual(await s.carrier.evaluate('({ hover: control.matches(":hover"), leaves, scrolled: scrollY })'),
+        { hover: false, leaves: 1, scrolled: 40 });
+    } finally { await s?.close(); await server.stop(true); }
+  }, 30000);
+
+  need(engine, await browserMissing(engine))(`a hover wheel reaches a wrapped inline fragment (${engine})`, async () => {
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html>
+      <div id="exact-root" data-boot-ms="1"><p style="font:20px/60px monospace"><span id="wrapped">first fragment<br>second fragment</span></p></div>
+      <script>
+        const wrapped = document.getElementById('wrapped'); globalThis.events = [];
+        for (const type of ['pointermove', 'wheel']) document.addEventListener(type, e => {
+          events.push([type, e.target.id, Math.floor(e.clientX), Math.floor(e.clientY), e.isTrusted]);
+          if (type === 'wheel') e.preventDefault();
+        }, { passive: false });
+        globalThis.exact = { ready: Promise.resolve(), views: new Map([[1, wrapped]]), async agentSettled(req) {
+          if (req.op === 'tree') return { nodes: [{ id: 1, type: 'Text', depth: 0, props: { testId: 'wrapped' }, children: [] }] };
+          const b = wrapped.getBoundingClientRect(); return req.op === 'layout' ? { nodes: [{ id: 1, x: b.x, y: b.y, w: b.width, h: b.height }] } : {};
+        } };
+      </script>`, { headers: { 'content-type': 'text/html' } }) });
+    let s;
+    try {
+      s = await open({ host: 'web', browser: engine === 'chromium' ? 'chrome' : engine, url: server.url.href });
+      const { middleHits, fragment } = await s.carrier.evaluate(`(() => {
+        const b = wrapped.getBoundingClientRect(), c = wrapped.getClientRects()[0];
+        return { middleHits: document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === wrapped,
+          fragment: [c.x + c.width / 2, c.y + c.height / 2] };
+      })()`);
+      assert.equal(middleHits, false);
+      const reply = await s.tap('wrapped', { hover: true, wheel: [0, 40] });
+      assert.deepEqual(reply.at, fragment);
+      assert.deepEqual(await s.carrier.evaluate('events'), ['pointermove', 'wheel'].map(type =>
+        [type, 'wrapped', ...fragment.map(Math.floor), true]));
+    } finally { await s?.close(); await server.stop(true); }
   }, 30000);
 }
 
@@ -161,6 +309,183 @@ need('chrome', chromium().unavailable)('the web agent keeps desktop input facts 
     try { await session?.close(); } finally { server.stop(true); }
   }
 }, 30_000);
+
+async function playwrightScreenshot(ask, frame, page) {
+  const {glueNode} = await import('../host/web/tests/glue-fixture.mjs');
+  const method = glueNode(readFileSync(new URL('./agent-playwright.mjs', import.meta.url), 'utf8'),
+    node => node.type === 'Property' && node.key?.name === 'screenshot' && node.value?.type === 'FunctionExpression' && node);
+  return new Function('ask', 'frame', 'page', `return ({${method}}).screenshot;`)(ask, frame, page);
+}
+
+for (const browser of ['chrome', 'firefox', 'webkit']) {
+  const run = need(browser, await browserMissing(browser === 'chrome' ? 'chromium' : browser));
+  run(`web screenshots settle GPU work started during frame and image waits (${browser})`, async () => {
+    const html = `<!doctype html><main id="exact-root" data-boot-ms="0"></main><script>
+      let stage, wait, pending = false, first = true, release, observed;
+      globalThis.arm = (at, held) => {
+        stage = at; wait = held; pending = false; first = true;
+        globalThis.gate = new Promise(resolve => release = resolve);
+        globalThis.settling = new Promise(resolve => observed = resolve);
+        globalThis.release = () => { pending = false; release(); };
+      };
+      globalThis.exact = {ready:Promise.resolve(),
+        imageFrames:async () => {
+          if (stage === 'image') pending = true;
+          if (stage === 'last frame') requestAnimationFrame(() => { pending = true; });
+        },
+        agentSettled:async () => {
+          if (first) {
+            first = false;
+            if (stage === 'first frame') requestAnimationFrame(() => { pending = true; });
+          }
+          if (pending) {
+            observed();
+            if (wait) await gate;
+            else return {error:'GPU is not settled: controlled work'};
+          }
+          return {clock:0, epoch:1, incarnation:1};
+        }};
+    </script>`;
+    const server = Bun.serve({hostname:'127.0.0.1', port:0,
+      fetch:() => new Response(html, {headers:{'content-type':'text/html'}})});
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-screenshot-settle-'));
+    let session;
+    try {
+      session = await open({host:'web', browser, url:server.url.href});
+      const {evaluate, screenshot} = session.carrier;
+      for (const film of [false, true]) for (const stage of ['first frame', 'image', 'last frame']) {
+        await evaluate(`arm(${JSON.stringify(stage)}, false)`);
+        const path = resolve(dir, `${stage}-${film}.png`);
+        await assert.rejects(screenshot(path, false, film), /GPU is not settled: controlled work/);
+        assert.equal(existsSync(path), false);
+      }
+      await evaluate("arm('image', true)");
+      const path = resolve(dir, 'waited.png');
+      const capture = screenshot(path);
+      try {
+        assert.equal(await Promise.race([
+          capture.then(() => 'captured'), evaluate('settling').then(() => 'settling'),
+        ]), 'settling');
+        assert.equal(existsSync(path), false);
+      } finally { await evaluate('release()'); await capture; }
+      assert.equal(existsSync(path), true);
+    } finally {
+      try { await session?.close(); }
+      finally { server.stop(true); rmSync(dir, {recursive:true, force:true}); }
+    }
+  }, 30000);
+  run(`web screenshots preserve the JS animation adapter's picture hold (${browser})`, async () => {
+    const html = `<!doctype html><main id="exact-root"><div id="moving" style="opacity:0;transition:opacity 1000ms linear">Moving</div></main><script>
+      globalThis.exact = {clock:{now:0, epoch:0}, After:[], views:new Map()};
+      exact.ready = import('/host/web-js/agent.js').then(({install}) => {
+        install(exact);
+        globalThis.arm = () => {
+          delete exact.gpu; delete exact.imageFrames;
+          moving.style.transition = 'none'; moving.style.opacity = '0'; getComputedStyle(moving).opacity;
+          moving.style.transition = 'opacity 1000ms linear'; getComputedStyle(moving).opacity;
+          moving.style.opacity = '1';
+          return exact.agentSettled({op:'tags'});
+        };
+        document.getElementById('exact-root').dataset.bootMs = '0';
+      });
+    </script>`;
+    const server = Bun.serve({hostname:'127.0.0.1', port:0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/') return new Response(html, {headers:{'content-type':'text/html'}});
+      if (path === '/favicon.ico') return new Response(null, {status:204});
+      if (path.endsWith('/names.js')) return new Response('export default [[],[],[]]; export const types=[[],[],[]], sourceTypes={};', {headers:{'content-type':'text/javascript'}});
+      const local = new URL('..' + path, import.meta.url);
+      const file = existsSync(local) ? local : new URL('..' + path.replace('/host/web-js/', '/host/web/'), import.meta.url);
+      return new Response(readFileSync(file), {headers:{'content-type':'text/javascript'}});
+    }});
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-screenshot-hold-'));
+    let session;
+    try {
+      session = await open({host:'web', browser, url:server.url.href});
+      const {evaluate, screenshot} = session.carrier;
+      const captures = [screenshot];
+      // Chromium also exercises Playwright's capture method against the real animation adapter.
+      if (browser === 'chrome') captures.push(await playwrightScreenshot(session.carrier.ask, () => webFrame(evaluate), {
+        evaluate,
+        screenshot: async ({path}) => {
+          const {data} = await session.carrier.call('Page.captureScreenshot', {format:'png'});
+          writeFileSync(path, Buffer.from(data, 'base64'));
+        },
+        viewportSize: () => ({width:100, height:100}),
+      }));
+      for (const capture of captures) {
+        for (const film of [false, true]) {
+          await evaluate('arm()');
+          assert.equal(await evaluate('moving.getAnimations()[0].currentTime'), 0);
+          await capture(resolve(dir, `${film}.png`), false, film);
+          assert.equal(await evaluate('moving.getAnimations()[0].currentTime'), film ? 0 : 999.5);
+          assert.equal(await evaluate('exact.clock.now'), 0);
+        }
+        await evaluate(`arm().then(() => {
+          let pending = false;
+          exact.imageFrames = async () => { pending = true; };
+          exact.gpu = {settled:async () => {
+            if (!pending) return [];
+            pending = false;
+            return [{name:'controlled transient work'}];
+          }};
+        })`);
+        const refused = resolve(dir, 'transient.png');
+        await assert.rejects(capture(refused), /GPU is not settled: controlled transient work/);
+        assert.equal(existsSync(refused), false);
+        assert.equal(await evaluate('moving.getAnimations()[0].currentTime'), 999.5);
+        assert.equal(await evaluate('exact.clock.now'), 0);
+      }
+    } finally {
+      try { await session?.close(); }
+      finally { server.stop(true); rmSync(dir, {recursive:true, force:true}); }
+    }
+  }, 30000);
+}
+
+test('Playwright screenshots settle work from each wait before capture', async () => {
+  for (const film of [false, true]) for (const stage of ['first frame', 'image', 'last frame']) for (const mode of ['refuse', 'transient', 'wait']) {
+    const wait = mode === 'wait';
+    let pending = false, frames = 0, captured = false, lastOp;
+    const gate = Promise.withResolvers(), observed = Promise.withResolvers();
+    const screenshot = await playwrightScreenshot(async ({op}) => {
+      lastOp = op;
+      if (pending) {
+        observed.resolve();
+        if (mode === 'transient') pending = false;
+        if (!wait) return {error:'GPU is not settled: controlled work'};
+        await gate.promise;
+      }
+      return {};
+    }, async () => {
+      if (++frames === (stage === 'first frame' ? 1 : stage === 'last frame' ? 2 : 0)) pending = true;
+    }, {
+      evaluate: async () => { if (stage === 'image') pending = true; return 0; },
+      screenshot: async () => { captured = true; },
+      viewportSize: () => ({width:100, height:100}),
+    });
+    const capture = screenshot('unused.png', false, film);
+    if (wait) {
+      try { await observed.promise; assert.equal(captured, false); }
+      finally { pending = false; gate.resolve(); await capture; }
+      assert.equal(captured, true);
+    } else {
+      await assert.rejects(capture, /GPU is not settled: controlled work/);
+      assert.equal(captured, false);
+    }
+    assert.equal(lastOp, film ? 'tags' : 'picture');
+  }
+  const ops = [];
+  const screenshot = await playwrightScreenshot(async ({op}) => {
+    ops.push(op);
+    return op === 'picture' ? {error:'unknown op: picture'} : {};
+  }, async () => {}, {
+    evaluate: async () => 0, screenshot: async () => {},
+    viewportSize: () => ({width:100, height:100}),
+  });
+  await screenshot('unused.png');
+  assert.deepEqual(ops, ['picture', 'tags', 'picture', 'tags']);
+});
 
 test('malformed input is labelled before delivery; a state refusal is not', async () => {
   const carrier = { host: 'web', browser: 'chrome', launchFacts: launchFacts({}), reset() {},
@@ -682,6 +1007,24 @@ test('a native named store is kept unless the drive resets it, under its lock; a
     }
     await assert.rejects(main(['web', '--reset-storage', 'state'], injected), /need --storage <name>/);
   } finally { [console.log, console.error] = quiet; }
+});
+
+// `--reader` and `--headless` reach the Android carrier as `open`'s `reader` (LLP 1107 D1), never through the
+// environment of the driver's process.
+test('main hands --reader and --headless to open', async () => {
+  const quiet = [console.log, console.error], before = process.env.EXACT_ANDROID_READER, said = [];
+  console.log = console.error = () => {};
+  delete process.env.EXACT_ANDROID_READER;
+  try {
+    const injected = { driveServer: async () => null, exclusiveNativeStore: async (key, launch) => launch(), resolveDevice: () => 'a device',
+      open: async (o) => { said.push(o.reader); return { state: async () => ({}), close: async () => {} }; } };
+    for (const flags of [[], ['--reader'], ['--headless']]) assert.equal(await main(['android', ...flags, 'state'], injected), 0);
+    assert.deepEqual(said, [undefined, true, false]);
+    assert.equal(process.env.EXACT_ANDROID_READER, undefined);
+  } finally {
+    [console.log, console.error] = quiet;
+    if (before !== undefined) process.env.EXACT_ANDROID_READER = before;
+  }
 });
 
 // The euxy port's `tap play` missed on a mode an earlier drive persisted, and the miss read like a broken view.

@@ -22,6 +22,7 @@ use crate::layout::LayoutMirror;
 use crate::segmented;
 use crate::selector::SelectorIndex;
 use crate::wire::Op;
+mod capacity;
 mod defaults;
 mod inherited;
 use inherited::{inherited_changed, propagate_inherited};
@@ -123,15 +124,18 @@ struct Staged<'a> {
 }
 
 impl<'a> Staged<'a> {
-    fn new(arena: &'a NodeArena) -> Self {
+    fn new(arena: &'a NodeArena, capacity: &capacity::Batch) -> Self {
         Staged {
             arena,
-            created: IdMap::default(),
-            destroyed: IdSet::default(),
-            parents: IdMap::default(),
-            children: IdMap::default(),
-            roots_added: IdSet::default(),
-            roots_removed: IdSet::default(),
+            created: IdMap::with_capacity_and_hasher(capacity.created, Default::default()),
+            destroyed: IdSet::with_capacity_and_hasher(capacity.destroyed, Default::default()),
+            parents: IdMap::with_capacity_and_hasher(capacity.parents, Default::default()),
+            children: IdMap::with_capacity_and_hasher(capacity.children, Default::default()),
+            roots_added: IdSet::with_capacity_and_hasher(capacity.roots_added, Default::default()),
+            roots_removed: IdSet::with_capacity_and_hasher(
+                capacity.roots_removed,
+                Default::default(),
+            ),
         }
     }
 
@@ -289,17 +293,24 @@ impl<'a> Staged<'a> {
             self.roots_added.remove(&id);
             self.roots_removed.insert(id);
         }
-        let mut stack = vec![id];
-        while let Some(n) = stack.pop() {
+        // A single op can destroy more nodes than the batch has operations.
+        let mut subtree = vec![id];
+        let mut next = 0;
+        while next < subtree.len() {
+            subtree.extend(self.children_of(subtree[next]));
+            next += 1;
+        }
+        self.destroyed.reserve(subtree.len());
+        for n in subtree {
             self.destroyed.insert(n);
             self.created.remove(&n);
-            stack.extend(self.children_of(n));
         }
     }
 }
 
-fn validate(arena: &NodeArena, ops: &[Op]) -> Result<(), ApplyError> {
-    let mut staged = Staged::new(arena);
+fn validate(arena: &NodeArena, ops: &[Op]) -> Result<capacity::Batch, ApplyError> {
+    let capacity = capacity::Batch::new(arena, ops);
+    let mut staged = Staged::new(arena, &capacity);
     let mut creates: u64 = 0;
     // Children placed under a parent they did not have: what can deepen a tree.
     let mut arrivals: Vec<(usize, ViewId)> = Vec::new();
@@ -498,7 +509,7 @@ fn validate(arena: &NodeArena, ops: &[Op]) -> Result<(), ApplyError> {
     if arena.slot_space() as u64 + creates > u32::MAX as u64 {
         return Err(ApplyError::SlotSpaceExhausted);
     }
-    Ok(())
+    Ok(capacity)
 }
 
 /// Everything the apply engine writes.
@@ -598,7 +609,7 @@ pub(crate) fn continue_document(
     language: Option<(&str, crate::Direction)>,
     commit: &mut DocumentCommit,
 ) -> Result<(), ApplyError> {
-    validate(target.arena, ops)?;
+    let capacity = validate(target.arena, ops)?;
     let Target {
         arena,
         layout,
@@ -612,7 +623,11 @@ pub(crate) fn continue_document(
         leavers,
         ..
     } = commit;
-    let mut detach = Detach::default();
+    created.reserve(capacity.created);
+    let mut detach = Detach {
+        seen: IdSet::with_capacity_and_hasher(capacity.destroyed, Default::default()),
+        ..Detach::default()
+    };
     // A node this batch creates and then styles: its first engine style
     // would be derived twice, at the create (from the default style) and at
     // the style. It is created with the engine's default instead and derived

@@ -6,7 +6,9 @@
 // - `authenticate` allows BIOMETRIC_WEAK and the device credential unless the call says otherwise (D3): biometrics
 //   alone for `biometricOnly`, with a Cancel button; `android.allowedAuthenticators` beats both. API 29 has no
 //   allowed authenticators: it allows the credential with `setDeviceCredentialAllowed`.
-// - The prompt shows only over a resumed activity (D8); a call while none is fails SYSTEM_CANCEL at once.
+// - The prompt shows only over the resumed activity (D8): SystemUI dismisses one whose app is not the top activity of
+//   a visible task. A call while the activity shows paused, as a permission dialog's answer finds it, shows it at the
+//   resume; one while none shows, or whose app stops first, fails SYSTEM_CANCEL.
 // - The status: no permission is asked on Android, so `state` is `granted`; `biometry` is `other` when a biometric of
 //   the allowed class is enrolled, the platform naming no modality; its own button label is `android.label` (API 31).
 // - The authenticator entry (D13): the reader's presence backend hands it the key's `CryptoObject` and the policy's
@@ -43,8 +45,13 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
     private val app: Context get() = context.application
     private val manager get() = app.getSystemService(BiometricManager::class.java)
     private val keyguard get() = app.getSystemService(android.app.KeyguardManager::class.java)
-    /** Prompts up, cancelled if the session ends. */
-    private val signals = mutableSetOf<CancellationSignal>()
+    /** Prompts up, by the send that asked (null for the authenticator entry's), cancelled when the session ends or
+     * the send is let go. */
+    private val signals = mutableMapOf<CancellationSignal, Int?>()
+    /** A prompt waiting for the resume: the send that asked, how it ends unshown, and how its wait is withdrawn. */
+    private class Waiting(val request: Int?, val unshown: () -> Unit) { var withdraw: () -> Unit = {} }
+    /** Prompts waiting for the resume, ended unshown when the session ends or the send is let go. */
+    private val waiting = mutableSetOf<Waiting>()
     private var said: String? = null
 
     override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
@@ -62,8 +69,16 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
     }
 
     override fun destroy(done: () -> Unit) {
-        signals.toList().forEach { it.cancel() }
+        signals.keys.toList().forEach { it.cancel() }
+        waiting.toList().forEach { it.withdraw(); it.unshown() }
+        waiting.clear()
         done()
+    }
+
+    /** The send [request] was let go (a newer one superseded it): its prompt is cancelled, or never shown. */
+    override fun cancel(request: Int) {
+        signals.filterValues { it == request }.keys.forEach { it.cancel() }
+        waiting.filter { it.request == request }.forEach { waiting -= it; it.withdraw(); it.unshown() }
     }
 
     // The status
@@ -117,11 +132,37 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
             .put("android", JSONObject().put("code", code))
     }
 
-    /** A prompt over the resumed activity, with the module's words, the hatch, then what the module owns again. */
-    private fun prompt(reason: String, authenticators: Int, words: JSONObject, done: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit,
-                       crypto: BiometricPrompt.CryptoObject?) {
-        val activity = context.activity
-        if (activity == null || !context.resumed) return done(null, JSONObject().put("error", "SYSTEM_CANCEL").put("message", "the app is not in front"))
+    /** A prompt for the send [request] over the resumed activity ([ExtensionContext.whenResumed]); none shown fails
+     * SYSTEM_CANCEL. */
+    private fun prompt(request: Int?, reason: String, authenticators: Int, words: JSONObject,
+                       done: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit, crypto: BiometricPrompt.CryptoObject?) {
+        val wait = Waiting(request) { done(null, JSONObject().put("error", "SYSTEM_CANCEL").put("message", "the app is not in front")) }
+        waiting += wait
+        wait.withdraw = context.whenResumed({ waiting -= wait; wait.unshown() }) { activity ->
+            waiting -= wait
+            show(activity, request, reason, authenticators, words, done, crypto)
+        }
+    }
+
+    /** The prompt over [activity] for the send [request]. One the platform refuses to build or show (an empty title:
+     * `BiometricPrompt.Builder.build`) fails SYSTEM_CANCEL with its message: shown at a resume, this runs from
+     * `onResume`, where nothing else would catch it. */
+    private fun show(activity: android.app.Activity, request: Int?, reason: String, authenticators: Int, words: JSONObject,
+                     done: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit, crypto: BiometricPrompt.CryptoObject?) {
+        val signal = CancellationSignal()
+        signals[signal] = request
+        try {
+            build(activity, reason, authenticators, words, done, crypto, signal)
+        } catch (e: RuntimeException) {
+            signals -= signal
+            done(null, JSONObject().put("error", "SYSTEM_CANCEL").put("message", "BiometricPrompt refused the prompt: ${e.message}"))
+        }
+    }
+
+    /** The prompt, with the module's words, the hatch, then what the module owns again, started under [signal]. */
+    private fun build(activity: android.app.Activity, reason: String, authenticators: Int, words: JSONObject,
+                      done: (BiometricPrompt.AuthenticationResult?, JSONObject?) -> Unit, crypto: BiometricPrompt.CryptoObject?,
+                      signal: CancellationSignal) {
         val credential = authenticators and Authenticators.DEVICE_CREDENTIAL != 0
         val own = { b: BiometricPrompt.Builder ->
             b.setTitle(reason)
@@ -140,8 +181,6 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
             builder.setNegativeButton(text, executor) { _, _ -> }
         }
         hatch?.let { it(builder); own(builder) }
-        val signal = CancellationSignal()
-        signals += signal
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) { signals -= signal; done(result, null) }
             override fun onAuthenticationError(code: Int, message: CharSequence?) { signals -= signal; done(null, failure(code, message)) }
@@ -160,7 +199,7 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
             args.optBoolean("biometricOnly") -> Authenticators.BIOMETRIC_WEAK
             else -> Authenticators.BIOMETRIC_WEAK or Authenticators.DEVICE_CREDENTIAL
         }
-        prompt(args.optString("reason"), authenticators, words, { result, error ->
+        prompt(context.request, args.optString("reason"), authenticators, words, { result, error ->
             if (error != null) return@prompt reply(error)
             val out = JSONObject().put("timestamp", System.currentTimeMillis().toDouble())
             if (Build.VERSION.SDK_INT >= 30 && result != null) {
@@ -176,7 +215,7 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
     override fun authenticate(crypto: BiometricPrompt.CryptoObject?, authenticators: Int, reason: String, origin: String,
                               done: (BiometricPrompt.CryptoObject?, JSONObject?) -> Unit) {
         if (origin != "app") return done(null, JSONObject().put("error", "PERMISSION_DENIED").put("message", "person-required"))
-        prompt(reason, authenticators, JSONObject(), { result, error ->
+        prompt(null, reason, authenticators, JSONObject(), { result, error ->
             if (error != null) done(null, error) else done(result?.cryptoObject ?: crypto, null)
         }, crypto)
     }

@@ -762,6 +762,40 @@ component App
     }
 }
 
+// A header of buttons alone is the bar when it places all of them: a button
+// that shows a dialog by its command, pressing nothing, is one of its items
+// (#387), and one whose command only closes the dialog is not.
+#[test]
+fn a_button_that_shows_a_dialog_by_its_command_is_a_bar_item() {
+    let src = |command: &str| {
+        format!(
+            r#"
+routes nav
+  tab home "/"
+component App
+  view
+    main navigationKey=`${{top(nav).id}}` navigationBack="back" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${{e.id}}`
+          header testId="header"
+            button commandfor="clear" command="{command}" aria-label="Clear"
+              text "Clear"
+          dialog id="clear" role="alertdialog" aria-label="Clear History?"
+            text "Every conversation will be deleted."
+            button commandfor="clear" command="close"
+              text "Cancel"
+"#
+        )
+    };
+    for (command, bar) in [("show-modal", true), ("close", false)] {
+        let doc = host(&src(command), Says(""), "/").document().unwrap().root;
+        let at = doc.find("data-testid=\"header\"").unwrap();
+        let start = doc[..at].rfind('<').unwrap();
+        let tag = &doc[start..at + doc[at..].find('>').unwrap() + 1];
+        assert_eq!(tag.contains("data-exact-bar"), bar, "{command}: {tag}");
+    }
+}
+
 // @ref LLP 1075.003 §3.3, §3.7 — with tabs, each tab's panel holds its own
 // stack, built when the tab is first selected: the unselected panel is
 // hidden and inert; an app's data-* words are attributes of their own. Both are linked
