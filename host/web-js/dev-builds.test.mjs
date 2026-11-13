@@ -47,7 +47,7 @@ async function devLoop(dir, env = {}) {
   return { base: `http://127.0.0.1:${port}`, stop, said: () => out, dist };
 }
 
-test('the JS loop carries dollar patterns literally in a checkpoint', async () => {
+test('the JS loop carries a checkpoint literally across document probes and retries', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-checkpoint-dollars-'));
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Checkpoint', app: { id: 'test.checkpoint', name: 'Checkpoint' } }));
   writeFileSync(join(dir, 'app.contract'), 'component App\n  state body = "initial"\n  view\n    text body testId="body"\n');
@@ -67,15 +67,110 @@ test('the JS loop carries dollar patterns literally in a checkpoint', async () =
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(checkpoint),
     });
     expect((await post()).status).toBe(204);
+    expect((await fetch(`${loop.base}/?__exactDev=1-2-3-4`, { method: 'HEAD' })).status).toBe(200);
+    const abandoned = await fetch(`${loop.base}/?__exactDev=1-2-3-4`);
+    await abandoned.body.cancel();
     const html = await (await fetch(`${loop.base}/?__exactDev=1-2-3-4`)).text();
     const data = html.match(/<script type="application\/vnd\.exact\.dev-checkpoint"[^>]*>(.*?)<\/script>/s)?.[1];
+    expect(data).toBeDefined();
     expect(JSON.parse(data)).toEqual(checkpoint);
     expect(html.match(/<!doctype html>/gi)).toHaveLength(1);
-    expect((await post()).status).toBe(204);
     await page.goto(`${loop.base}/?__exactDev=1-2-3-4`);
     await page.waitForFunction(() => globalThis.exact?.ready);
     expect(await page.getByTestId('body').textContent()).toBe(body);
     expect(await page.evaluate(() => globalThis.__injected)).toBeUndefined();
+  } finally {
+    await browser?.close();
+    await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180000);
+
+test.each([false, true])('a blurred autofocus field stays blurred after a carried reload (bound: %s)', async bound => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-blurred-carry-'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Blurred carry', app: { id: 'test.blurred.carry', name: 'Blurred carry' } }));
+  const contract = label => `component App
+  state wantsFocus = true
+  view
+    column
+      input autofocus=${bound ? 'wantsFocus' : 'true'} testId="draft"
+      text "${label}" testId="label"
+`;
+  writeFileSync(join(dir, 'app.contract'), contract('before'));
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    expect(loop.said()).not.toContain('does not build');
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(loop.base);
+    await page.waitForFunction(() => document.activeElement === document.querySelector('[data-testid="draft"]'));
+    await page.getByTestId('draft').blur();
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    writeFileSync(join(dir, 'app.contract'), contract('after'));
+    await page.waitForFunction(() => document.querySelector('[data-testid="label"]')?.textContent === 'after');
+    // Let the browser flush its own autofocus candidates as well as the runtime's mount work.
+    await page.evaluate(() => new Promise(ok => requestAnimationFrame(() => requestAnimationFrame(ok))));
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  } finally {
+    await browser?.close();
+    await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180000);
+
+test('the JS loop drops settled answers when a page module or its imported helper changes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-native-carry-'));
+  const modules = join(dir, 'modules/web');
+  mkdirSync(modules, { recursive: true });
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Native carry', app: { id: 'test.native.carry', name: 'Native carry' } }));
+  const contract = label => `shape Sample
+  value: string
+component App
+  state draft = "initial"
+  resource sample = sample() as shape Sample
+  action edit(value)
+    draft = value
+  view
+    column
+      input value=draft input=edit testId="draft"
+      text sample.value testId="sample"
+      text "${label}" testId="label"
+`;
+  writeFileSync(join(dir, 'app.contract'), contract('before'));
+  writeFileSync(join(dir, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
+export const grants = '';
+export const answer: Answer = (_source, _args, _store, _storage, native) => native!.later({}) as ReturnType<Answer>;
+`);
+  const helper = value => `export const value = () => '${value}:' + crypto.getRandomValues(new Uint32Array(2)).join('.');\n`;
+  const entry = suffix => `import { value } from './value.js';\nexport const later = () => ({ value: value() + '${suffix}' });\n`;
+  writeFileSync(join(modules, 'value.js'), helper('before'));
+  writeFileSync(join(modules, 'index.js'), entry('entry-before'));
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    expect(loop.said()).not.toContain('does not build');
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(loop.base);
+    await page.waitForFunction(() => document.querySelector('[data-testid="sample"]')?.textContent.startsWith('before:'));
+    const before = await page.getByTestId('sample').textContent();
+    const revision = () => readFileSync(join(loop.dist, '.exact-dev-logic.json'), 'utf8');
+    const originalRevision = revision();
+    await page.getByTestId('draft').fill('carried');
+    writeFileSync(join(dir, 'app.contract'), contract('presentation'));
+    await page.waitForFunction(() => document.querySelector('[data-testid="label"]')?.textContent === 'presentation');
+    expect(revision()).toBe(originalRevision);
+    expect(await page.getByTestId('draft').inputValue()).toBe('carried');
+    expect(await page.getByTestId('sample').textContent()).toBe(before);
+    writeFileSync(join(modules, 'value.js'), helper('helper-after'));
+    await page.waitForFunction(() => document.querySelector('[data-testid="sample"]')?.textContent.startsWith('helper-after:'));
+    expect(revision()).not.toBe(originalRevision);
+    const helperRevision = revision();
+    writeFileSync(join(modules, 'index.js'), entry('entry-after'));
+    await page.waitForFunction(() => document.querySelector('[data-testid="sample"]')?.textContent.endsWith('entry-after'));
+    expect(revision()).not.toBe(helperRevision);
+    expect(await page.getByTestId('draft').inputValue()).toBe('carried');
   } finally {
     await browser?.close();
     await loop?.stop();

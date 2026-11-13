@@ -160,3 +160,37 @@ fn an_implementation_failure_is_not_asked_again_until_the_source_changes() {
     images.sync(&k, &roots);
     assert_eq!(images.package_asks()[0].source, "photos:agent-4");
 }
+
+/// A larger picture the budget could not take leaves the box at the size it
+/// shows, so the next sync asks for the larger one again.
+#[test]
+fn a_growth_the_budget_refused_is_asked_again() {
+    let k = kernel(&["photos:agent-1"]);
+    let mut images = door();
+    let (id, source, fit) = (
+        k.roots()[0],
+        "photos:agent-1",
+        exact_kernel::ObjectFit::Fill,
+    );
+    images.package.want(id, source, (10., 10.), fit, true);
+    let first = images.package_asks().remove(0);
+    images.package_answer(first.ticket, Ok(pixels(10, 10)));
+    images.package.want(id, source, (40., 40.), fit, true);
+    let grown = images.package_asks().remove(0);
+    assert_eq!((grown.width, grown.height), (40, 40));
+    images.backend.session.pause();
+    assert!(images
+        .package_answer(grown.ticket, Ok(pixels(40, 40)))
+        .is_empty());
+    images.backend.session.resume();
+    images.package.want(id, source, (40., 40.), fit, true);
+    let again = images.package_asks();
+    assert_eq!(
+        again
+            .iter()
+            .map(|a| (a.width, a.height))
+            .collect::<Vec<_>>(),
+        [(40, 40)],
+        "asked again at the size the budget refused"
+    );
+}

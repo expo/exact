@@ -248,6 +248,7 @@ fn the_reader_moves_a_scroller_and_is_told_where_it_is() {
     // () is told before a touch asks.
     assert_eq!(p.reader_scrollers(&[], 2.), None);
     assert_eq!(p.reader_scrolled(page, (0., 10.), 0), None, "never told");
+    assert_eq!(p.person_scrolls, 0, "a dropped sample is no scroll");
     // The touch's answer, in the reader's pixels (two a point).
     let words = p.reader_under(400., 480., 2.);
     assert_eq!(
@@ -329,14 +330,18 @@ fn a_scroll_the_app_makes_moves_the_revision_on_and_drops_a_stale_move() {
     p.tap(id(&p, "jump")).unwrap();
     settle(&mut p);
     assert_eq!(p.scroll_of(page), (0., 300.));
-    // A move the reader sent before it knew is dropped: the app's offset stands.
+    // A move the reader sent before it knew is dropped: the app's offset
+    // stands, and the person did not scroll (a fragment scroll still runs).
+    let scrolls = p.person_scrolls;
     assert_eq!(p.reader_scrolled(page, (0., 60.), 0), None);
     assert_eq!(p.scroll_of(page), (0., 300.));
+    assert_eq!(p.person_scrolls, scrolls);
     // The reader is told the offset under a new revision, and goes on from it.
     let all = p.reader_scrollers(&[], 1.).unwrap();
     let (_, rev, at) = told(&all, page);
     assert_eq!((rev, at[1]), (1, 300.));
     assert_eq!(p.reader_scrolled(page, (0., 60.), 1), Some((0., 60.)));
+    assert_eq!(p.person_scrolls, scrolls + 1);
     assert_eq!(told(&p.reader_scrollers(&[], 1.).unwrap(), page).1, 1);
     // A list's own correction of its offset is no such move: the content
     // stays where it shows, and the revision with it.

@@ -190,6 +190,17 @@ impl<D: DataSource> Presenter<D> {
         error
     }
 
+    /// Whether a handler run since `commands` held `from` called
+    /// `preventDefault()`. Those calls are taken: the event that queued them
+    /// has its answer. One an earlier event queued is not this event's, and
+    /// stays for the loop's drain, which drops it.
+    pub(super) fn prevented_since(&mut self, from: usize) -> bool {
+        let tail = self.commands.split_off(from.min(self.commands.len()));
+        let queued = self.commands.len() + tail.len();
+        (self.commands).extend(tail.into_iter().filter(|c| c.name != "preventDefault"));
+        self.commands.len() != queued
+    }
+
     /// A walk ended: a contact one of its handlers retired is cancelled now.
     fn walked(&mut self, outer: bool) {
         self.pointer_walking = outer;
@@ -290,18 +301,10 @@ impl<D: DataSource> Presenter<D> {
             return (None, false);
         };
         let mut error = None;
-        // Only the up's own `preventDefault()` counts: one its down or a
-        // move queued may still wait for the loop's commands.
-        let prevents = |p: &Self| {
-            p.commands
-                .iter()
-                .filter(|c| c.name == "preventDefault")
-                .count()
-        };
-        let earlier = prevents(self);
         // The caller retires the contact after the up's walk.
         let outer = std::mem::replace(&mut self.pointer_walking, true);
         self.stopped();
+        let from = self.commands.len();
         for key in path {
             let Some(view) = self.host.kernel().node_by_key(key).map(|n| n.id) else {
                 continue;
@@ -317,7 +320,7 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         self.pointer_walking = outer;
-        (error, prevents(self) > earlier)
+        (error, self.prevented_since(from))
     }
 
     /// DOM's `wheel` at a viewport point (studio diary R3): every enabled
@@ -348,14 +351,13 @@ impl<D: DataSource> Presenter<D> {
                 held: point.held,
             };
             let now = self.pointer_now();
+            let from = self.commands.len();
             if let Some(error) =
                 self.pointer_dispatch(view, EventKind::Wheel, Event::Wheel(wheel), now)
             {
                 self.host.log(error);
             }
-            let queued = self.commands.len();
-            self.commands.retain(|c| c.name != "preventDefault");
-            prevented |= self.commands.len() != queued;
+            prevented |= self.prevented_since(from);
             if self.stopped() {
                 break;
             }

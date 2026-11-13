@@ -84,10 +84,14 @@ fn producer_bakes_the_bytecode_keeps_sources_untouched_and_refuses_bad_candidate
     assert_eq!(first.bytecode, repeat.bytecode);
     assert_eq!(first.script, repeat.script);
     assert_eq!(first.receipt, repeat.receipt);
-    assert!(
-        !f.0.join("app.contract.d.ts").exists(),
-        "generated types stay in the snapshot"
-    );
+    if std::env::var("EXACT_UPDATE_TRUST").is_ok_and(|trust| trust != "development") {
+        assert!(!f.0.join("app.contract.d.ts").exists());
+    } else {
+        assert_eq!(
+            std::fs::read_to_string(f.0.join("app.contract.d.ts")).unwrap(),
+            first.declarations
+        );
+    }
     assert_eq!(std::fs::read_to_string(f.0.join("app.ts")).unwrap(), SOURCE);
     let candidate = paired(&first);
     assert!(

@@ -474,42 +474,44 @@ impl super::NodeInst {
                 }
                 continue;
             }
-            let want = u.theme.inherited[k].clone();
+            let mut want = u.theme.inherited[k].clone();
             let implied = self.rare().implied.get_or_insert_with(Default::default);
             if want == implied[k] && !force {
                 continue;
             }
-            match &want {
-                Some(text) => {
-                    let p = patch.get_or_insert_with(Box::default);
-                    exact_kernel::style::theme::take_named();
-                    let set = crate::bridge::set_plan_style(p, style as u16, text, plan);
-                    let tokens = exact_kernel::style::theme::take_named();
-                    if set.is_ok() {
-                        u.ids.theme.put(
-                            view,
-                            ThemedRow {
-                                style,
-                                text: text.clone(),
-                                tuple,
-                                written: false,
-                                implied: true,
-                                tokens,
-                            },
-                        );
-                    }
+            if let Some(text) = &want {
+                let p = patch.get_or_insert_with(Box::default);
+                exact_kernel::style::theme::take_named();
+                let set = crate::bridge::set_plan_style(p, style as u16, text, plan);
+                let tokens = exact_kernel::style::theme::take_named();
+                if set.is_ok() {
+                    u.ids.theme.put(
+                        view,
+                        ThemedRow {
+                            style,
+                            text: text.clone(),
+                            tuple,
+                            written: false,
+                            implied: true,
+                            tokens,
+                        },
+                    );
+                    implied[k] = want;
+                    continue;
                 }
-                None if implied[k].is_some() => {
-                    let mut mask = exact_kernel::StyleMask::default();
-                    mask.set(style);
-                    u.ops.push(exact_kernel::Op::ClearStyle {
-                        id: view,
-                        mask,
-                        written: false,
-                    });
-                    u.ids.theme.drop_row(view, style);
-                }
-                None => {}
+                // Refused in this tuple: the text is left unset, so the next
+                // visit parses it again, and a row it implied before goes.
+                want = None;
+            }
+            if implied[k].is_some() {
+                let mut mask = exact_kernel::StyleMask::default();
+                mask.set(style);
+                u.ops.push(exact_kernel::Op::ClearStyle {
+                    id: view,
+                    mask,
+                    written: false,
+                });
+                u.ids.theme.drop_row(view, style);
             }
             implied[k] = want;
         }

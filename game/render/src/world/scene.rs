@@ -4,6 +4,8 @@ use exact_game::{
 };
 use glam::{Mat4, Vec3};
 
+use super::visibility::ParentChanges;
+
 mod pointer;
 use pointer::CameraPointer;
 
@@ -141,6 +143,15 @@ pub(crate) fn snap(w: &World, mut e: Entity, parent_changed: bool) -> bool {
     }
     false
 }
+/// [`snap`] in a feed that knows which chains changed: `chains`, given when
+/// some parent edge did, answers for `e`'s own chain, so an edit elsewhere in
+/// the hierarchy leaves `e`'s interpolation alone.
+pub(crate) fn snap_in(w: &World, e: Entity, chains: Option<&ParentChanges>) -> bool {
+    match chains {
+        Some(chains) => chains.get(w, e),
+        None => snap(w, e, false),
+    }
+}
 #[derive(Clone, Copy)]
 struct History {
     entity: Entity,
@@ -155,9 +166,9 @@ impl History {
             curr,
         }
     }
-    fn update(&mut self, w: &World, next_tick: bool, parent_changed: bool) {
+    fn update(&mut self, w: &World, next_tick: bool, chains: Option<&ParentChanges>) {
         if let Some(curr) = pose(w, self.entity) {
-            let reset = snap(w, self.entity, parent_changed);
+            let reset = snap_in(w, self.entity, chains);
             self.update_to(curr, next_tick, reset);
             if reset {
                 if let Some(previous) = interpolation_origin(w, self.entity) {
@@ -268,7 +279,7 @@ impl Scene {
         next_tick: bool,
         moved: bool,
         structure: bool,
-        parent_changed: bool,
+        chains: Option<&ParentChanges>,
     ) {
         let versions = [
             w.revision::<Camera>(),
@@ -295,16 +306,16 @@ impl Scene {
             });
         }
         if let Some((history, _)) = &mut self.camera {
-            history.update(w, next_tick, parent_changed);
+            history.update(w, next_tick, chains);
         }
         self.pointer.feed(
             w,
             self.camera.map(|(h, _)| h.entity),
             next_tick,
             structure,
-            parent_changed,
+            chains,
         );
-        let visibility_changed = old.is_none_or(|v| v[6] != versions[6]) || parent_changed;
+        let visibility_changed = old.is_none_or(|v| v[6] != versions[6]) || chains.is_some();
         if old.is_none_or(|v| v[1] != versions[1]) || structure || visibility_changed {
             // The first two posed directional lights: the sun, then a fill.
             let (sun, fill) = (self.sun, self.fill);
@@ -324,7 +335,7 @@ impl Scene {
             self.fill = posed.next();
         }
         for (history, _) in [&mut self.sun, &mut self.fill].into_iter().flatten() {
-            history.update(w, next_tick, parent_changed);
+            history.update(w, next_tick, chains);
         }
         if old.is_none_or(|v| v[2..] != versions[2..]) || structure || visibility_changed {
             // Compact departures once; keep each kind's histories in entity order
@@ -415,7 +426,7 @@ impl Scene {
                 displayed(&self.attachments.output, h.entity, h.curr).position
             });
             for (i, light) in self.lights.iter_mut().enumerate() {
-                light.history.update(w, next_tick, parent_changed);
+                light.history.update(w, next_tick, chains);
                 // Eligibility is evaluated at the same tick endpoint as distance.
                 let intensity = light.light.intensity
                     * light
@@ -626,10 +637,16 @@ impl Owner {
             offsets: Vec::new(),
             priming: Default::default(),
         };
-        owner.update(w, entity, false, true);
+        owner.update(w, entity, false, None);
         owner
     }
-    fn update(&mut self, w: &World, entity: Entity, next_tick: bool, parent_changed: bool) {
+    fn update(
+        &mut self,
+        w: &World,
+        entity: Entity,
+        next_tick: bool,
+        chains: Option<&ParentChanges>,
+    ) {
         // Keep leaf-to-root history in place; ancestor edits snap the changed chain.
         let mut at = entity;
         let mut length = 0;
@@ -659,7 +676,7 @@ impl Owner {
                     h.prev = h.curr;
                 }
                 h.curr = value;
-                if snap(w, at, parent_changed) {
+                if snap_in(w, at, chains) {
                     h.prev = origin.unwrap_or(value);
                 }
             }
@@ -765,7 +782,7 @@ impl Attachments {
         w: &World,
         initial: bool,
         next_tick: bool,
-        parent_changed: bool,
+        chains: Option<&ParentChanges>,
         _models_changed: bool,
     ) {
         self.node_offsets.update(w, initial);
@@ -777,7 +794,7 @@ impl Attachments {
         self.diagnostics.borrow_mut().observe(w);
         for (&entity, owner) in &mut self.owners {
             owner.first_attachment = None;
-            owner.update(w, entity, next_tick, parent_changed);
+            owner.update(w, entity, next_tick, chains);
         }
         // Retain animated owners before attachments are spawned so a new charm
         // inherits the owner's displayed history, rather than snapping its bones.
@@ -822,7 +839,7 @@ impl Attachments {
                 w.tick(),
                 (self.assignments.revision(e), digest),
                 sampled.is_some(),
-                initial || exact_game::animation::socket_stale(w, e) || snap(w, e, parent_changed),
+                initial || exact_game::animation::socket_stale(w, e) || snap_in(w, e, chains),
                 self.node_offsets.pair(e, false)[1],
             );
             if owner.priming.capturing() {
@@ -916,9 +933,9 @@ impl Attachments {
             }
             let item = &mut self.items[at];
             item.history
-                .update_to(home, next_tick, snap(w, e, parent_changed));
+                .update_to(home, next_tick, snap_in(w, e, chains));
             item.drawn
-                .update_to(offset_of(w, e), next_tick, snap(w, e, parent_changed));
+                .update_to(offset_of(w, e), next_tick, snap_in(w, e, chains));
             self.owners
                 .entry(target)
                 .or_insert_with(|| Owner::new(w, target))
@@ -1108,7 +1125,7 @@ mod diagnostic_tests {
         w.propagate();
         let mut a = Attachments::default();
         a.model_digests.insert("rig.model".into(), digest);
-        a.feed(w, true, true, true, true);
+        a.feed(w, true, true, None, true);
         assert_eq!(a.owners.len(), 1);
         assert_eq!(a.items.len(), 3);
         assert!(a
@@ -1117,7 +1134,7 @@ mod diagnostic_tests {
             .all(|v| v.owner == owner && v.model_digest == digest));
         // A residency identity is supplied, never rediscovered from model bytes.
         a.model_digests.insert("rig.model".into(), digest ^ 1);
-        a.feed(w, false, true, false, true);
+        a.feed(w, false, true, None, true);
         assert!(a.items.iter().all(|v| v.model_digest == digest ^ 1));
         assert_eq!(crate::models::model_hash_count(), before + 1);
     }
@@ -1161,7 +1178,7 @@ mod diagnostic_tests {
         let capture = |w: &World| {
             let saved = w.save();
             let mut attachments = Attachments::default();
-            attachments.feed(w, true, true, true, true);
+            attachments.feed(w, true, true, None, true);
             assert_eq!(attachments.items[0].chain.len(), 10);
             let mut bits = Vec::new();
             for pair in &attachments.items[0].chain {
@@ -1217,7 +1234,7 @@ mod diagnostic_tests {
         let tail = w.spawn((Transform::default(), SocketFollow::new(old, "joint")));
         w.propagate();
         let mut a = Attachments::default();
-        a.feed(w, true, true, true, true);
+        a.feed(w, true, true, None, true);
         a.frame(0.5);
         assert_eq!(
             displayed(&a.output, tail, Transform::default()).position.x,
@@ -1233,7 +1250,7 @@ mod diagnostic_tests {
         w.get_mut::<SocketFollow>(tail).unwrap().target = FollowTarget::Entity(replacement);
         w.get_mut::<SocketFollow>(middle).unwrap().joint = "missing".into();
         w.propagate();
-        a.feed(w, false, true, false, false);
+        a.feed(w, false, true, None, false);
         assert_eq!(
             a.items.iter().map(|v| v.history.entity).collect::<Vec<_>>(),
             [replacement, tail]
@@ -1250,7 +1267,7 @@ mod diagnostic_tests {
 
         w.get_mut::<SocketFollow>(middle).unwrap().joint = "joint".into();
         w.remove::<SocketFollow>(replacement);
-        a.feed(w, false, false, false, false);
+        a.feed(w, false, false, None, false);
         assert_eq!(
             a.items.iter().map(|v| v.history.entity).collect::<Vec<_>>(),
             [middle, tail]
@@ -1291,7 +1308,7 @@ mod diagnostic_tests {
         let mut attachments = Attachments::default();
         let mut check = |w: &mut World, expected: &[Entity]| {
             w.propagate();
-            attachments.feed(w, false, true, true, false);
+            attachments.feed(w, false, true, None, false);
             for alpha in [0., 0.5, 1.] {
                 attachments.frame(alpha);
                 assert_eq!(
@@ -1332,12 +1349,12 @@ mod diagnostic_tests {
         let mut owner = Owner::new(&w, child);
         let allocation = owner.chain.as_ptr();
         for _ in 0..100 {
-            owner.update(&w, child, true, false);
+            owner.update(&w, child, true, None);
             assert_eq!(owner.chain.as_ptr(), allocation);
             assert_eq!(owner.chain.len(), 2);
         }
         w.remove::<Parent>(child);
-        owner.update(&w, child, true, true);
+        owner.update(&w, child, true, None);
         assert_eq!(owner.chain.len(), 1);
         assert_eq!(owner.chain.as_ptr(), allocation);
     }

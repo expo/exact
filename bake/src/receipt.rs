@@ -671,6 +671,24 @@ fn artifact_graph(
         {
             requires.extend(rust_requirements.as_object().unwrap().clone());
         }
+        // The module pair runs only on a binary whose TypeScript source holds
+        // exactly its grants (js/src/paired.rs refuses any other) and has its
+        // prelude's runtime.
+        if asset["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("typescript/"))
+        {
+            requires.insert(
+                "javascriptGrants".into(),
+                inputs["javascriptGrants"].clone(),
+            );
+            if inputs.get("typescriptRuntime").is_some() {
+                requires.insert(
+                    "typescriptRuntime".into(),
+                    inputs["typescriptRuntime"].clone(),
+                );
+            }
+        }
         if let Some(stem) = asset["name"]
             .as_str()
             .and_then(|n| n.strip_prefix("shaders/"))

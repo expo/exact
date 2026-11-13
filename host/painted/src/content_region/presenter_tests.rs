@@ -1318,3 +1318,32 @@ fn retained_text_stays_inside_its_overflow_clip() {
     assert!(inside > 20, "the text paints");
     assert_eq!(past, 0, "no glyph past the text's padding edge");
 }
+
+#[test]
+fn an_accepted_retained_press_commits_and_blurs_the_focused_field() {
+    let _service = crate::content_region::test_service();
+    let source = actions::source()
+        .replace(
+            "  state draft = \"\"",
+            "  state draft = \"\"\n  state blurred = false",
+        )
+        .replace(
+            "  action edit(value)\n",
+            "  action left\n    blurred = true\n  action edit(value)\n",
+        )
+        .replace(
+            "input value=draft input=edit",
+            "input value=draft change=edit blur=left",
+        );
+    let mut p = actions::boot(&source, true, actions::Rows::default());
+    let composer = actions::id(&p, "composer");
+    p.type_text(composer, "typed").unwrap();
+    assert_eq!((p.focus, p.edited), (Some(composer), Some(composer)));
+    let reply = actions::id(&p, "reply-message-0");
+    let at = actions::point(&mut p, reply);
+    assert_eq!(p.press_at(at.0, at.1, 10.), Some(reply));
+    assert_eq!(actions::selected(&p), Value::str("message-0"));
+    assert_eq!((p.focus, p.edited), (None, None), "focus left the field");
+    assert_eq!(p.host.runner().slot("draft"), Some(&Value::str("typed")));
+    assert_eq!(p.host.runner().slot("blurred"), Some(&Value::Bool(true)));
+}

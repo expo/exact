@@ -32,9 +32,9 @@ export interface OAuthSession {
 /** What `signIn()` and `signOut()` answer; `OAuthResult` in Contract. */
 export interface OAuthResult {
   ok: boolean;
-  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "auth_session", "network", "server", "config", "invalid_response", or the provider's OAuth error code. */
+  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "auth_session", "network", "server", "config", "invalid_response", the provider's OAuth error code, or, on a sign-out that is ok, "end_session": the provider's own sign-in may stand. */
   code: string;
-  /** A sentence for the person; "" when ok. */
+  /** A sentence for the person; "" when ok with no `code`. */
   error: string;
   /** Trying again later may succeed. */
   retryable: boolean;
@@ -45,8 +45,8 @@ export interface OAuthResult {
 export interface OAuthConfig {
   /** The issuer. Discovery reads `<issuer>/.well-known/openid-configuration`, then RFC 8414's document. */
   issuer?: string;
-  /** Endpoints for a provider without discovery. With an exact `issuer` (no `issuerTemplate`), `authorization` and `token` both given make no discovery: the ID token and a callback's `iss` are still checked against `issuer`, a callback without `iss` is taken, and sign-out revokes only at `revocation`. Otherwise they override what discovery found. */
-  endpoints?: { authorization?: string; token?: string; revocation?: string };
+  /** Endpoints for a provider without discovery. With an exact `issuer` (no `issuerTemplate`), `authorization` and `token` both given make no discovery: the ID token and a callback's `iss` are still checked against `issuer`, a callback without `iss` is taken, and sign-out revokes only at `revocation`. Otherwise they override what discovery found. `endSession` is where `signOut`'s `endSession` ends the provider's own sign-in (`end_session_endpoint`, OpenID Connect RP-Initiated Logout 1.0 §2). */
+  endpoints?: { authorization?: string; token?: string; revocation?: string; endSession?: string };
   clientId: string;
   scopes: string[];
   /** The `secret.keep` name the session is kept under. */
@@ -79,6 +79,8 @@ export interface OAuthConfig {
   cancelCodes?: string[];
   /** Ask the browser for a private session with no shared cookies, to choose another account. */
   ephemeral?: boolean;
+  /** The end-session request's parameter that names the callback, for a provider that does not call it `post_logout_redirect_uri` (RP-Initiated Logout 1.0 §2). */
+  logoutRedirectParam?: string;
   /** The callback; the default is `authCallback()`. With `signIn`'s `authorize`, the redirect URI the provider registered. */
   callback?: string;
   /** The statuses an API answers an expired access token with: `[401]` by default (RFC 6750 §3.1); `[401, 403]` for a gateway that answers 403. `fetch` and `json` refresh once on each. A token an API refused right after the refresh that brought it refreshes again only once it has expired by the API's `Date`, or, its expiry unknown, a minute after that refusal; where the app cannot read the API's `Date` (from another origin, a browser shows it only when the API exposes it), each read the API refuses refreshes once, as without this limit. */
@@ -126,6 +128,16 @@ export interface OAuthSignIn {
   authorize?: (request: OAuthAuthorization) => Promise<string>;
 }
 
+export interface OAuthSignOut {
+  /** Also end the person's sign-in at the provider (OpenID Connect RP-Initiated Logout 1.0), so that the next sign-in
+   *  shows the provider's page instead of completing as the same account. The browser opens the provider's end-session
+   *  endpoint with the ID token as `id_token_hint`, `client_id`, the callback and `state`; the provider must send the
+   *  person back to the callback with that `state`, so register the callback as a post-logout redirect URI. Send it from
+   *  a press, as `signIn`. The session is forgotten and revoked either way; a browser step that does not finish, or a
+   *  provider that names no end-session endpoint, is answered as `ok` with code "end_session" and a sentence in `error`. */
+  endSession?: boolean;
+}
+
 /** A failed authorized request. A resource source that throws it keeps its last answer (LLP 1016 D4). */
 export class OAuthError extends Error {
   code: string;
@@ -157,8 +169,8 @@ export interface OAuthProvider {
   session(store: OAuthStore): Promise<OAuthSession>;
   /** Opens the provider's sign-in, then exchanges and keeps the tokens. Send it from a press. With `authorize`, the app's own sign-in sends the authorization request instead. */
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
-  /** Forgets the session, then asks the provider to revoke it. */
-  signOut(store: OAuthStore): Promise<OAuthResult>;
+  /** Forgets the session, then asks the provider to revoke it. With `endSession`, also ends the person's sign-in at the provider. */
+  signOut(store: OAuthStore, options?: OAuthSignOut): Promise<OAuthResult>;
   /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
    *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or
    *  `session_changed` when the person has signed in again since it was sent. */
@@ -190,6 +202,8 @@ interface Metadata {
   authorization: string;
   token: string;
   revocation: string;
+  /** OpenID Connect RP-Initiated Logout 1.0 §2's `end_session_endpoint`, "" without one. */
+  endSession: string;
   /** RFC 9207 §3: the server puts `iss` in every authorization response. */
   issInCallback: boolean;
 }
@@ -212,6 +226,7 @@ interface Kept {
   login?: string;
   tokenEndpoint?: string;
   revocationEndpoint?: string;
+  endSessionEndpoint?: string;
   ended?: string;
 }
 
@@ -254,6 +269,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
   for (const [option, url] of [
     ['issuer', config.issuer], ['endpoints.authorization', config.endpoints?.authorization],
     ['endpoints.token', config.endpoints?.token], ['endpoints.revocation', config.endpoints?.revocation],
+    ['endpoints.endSession', config.endpoints?.endSession],
     ...config.apis.map((url, i) => [`apis[${i}]`, url]),
   ]) {
     if (url) secure(url, `oauth: ${option}`);
@@ -546,7 +562,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     // session's, so none of its tokens is used, and the session ends.
     const idToken = reply.fields.id_token;
     if (idToken !== undefined) {
-      const meta: Metadata = { issuer: now.issuer ?? '', authorization: '', token: endpoint, revocation: '', issInCallback: false };
+      const meta: Metadata = { issuer: now.issuer ?? '', authorization: '', token: endpoint, revocation: '', endSession: '', issInCallback: false };
       const first = now.first ?? (now.idToken ? claims(now.idToken) : null);
       const bad = typeof idToken === 'string' && idToken ? checkIdToken(idToken, meta, config, '', reply.date, first) : 'the ID token is unreadable';
       if (bad) {
@@ -627,12 +643,46 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     }
   };
 
+  const signOut = (store: OAuthStore, options: OAuthSignOut = {}): Promise<OAuthResult> => {
+    // Opened before any await, as a sign-in's browser is: a web popup must open in the press's task (LLP 1069.006 D4)
+    const ending = options.endSession ? endSession(read(store)) : null;
+    const revoked = revoke(store);
+    return ending ? Promise.all([ending, revoked]).then(([ended, r]) => ended ?? r) : revoked;
+  };
+
+  // Opens the provider's end-session endpoint for the kept session (RP-Initiated Logout 1.0 §2), answering null when
+  // the browser came back to the callback or nobody is signed in, else what `signOut` reports in its stead.
+  const endSession = (kept: Kept | null): Promise<OAuthResult | null> => {
+    if (!kept?.accessToken) return Promise.resolve(null);
+    const ended = (why: string, status = 0): OAuthResult => ({ ok: true, code: 'end_session', error: `Signed out of this app; the provider may still have you signed in: ${why}`, retryable: false, status });
+    const endpoint = kept.endSessionEndpoint;
+    if (!endpoint) return Promise.resolve(ended('it names no end-session endpoint.'));
+    try {
+      const callback = config.callback ?? hostCallback(), state = random(32);
+      const params: Record<string, string> = {
+        ...(kept.idToken ? { id_token_hint: kept.idToken } : {}),
+        client_id: config.clientId,
+        [config.logoutRedirectParam ?? 'post_logout_redirect_uri']: callback,
+        state,
+      };
+      const url = endpoint + (endpoint.includes('?') ? '&' : '?') + form(params);
+      return openAuthSession(url, { callback, state, ephemeral: config.ephemeral }).then(() => null, (e) => {
+        const status = (e as { status?: number }).status;
+        if (status === 499) return ended('ending its sign-in was cancelled.');
+        if (status === 428) return ended('its window was blocked.');
+        return ended(`its sign-in could not be ended (${(e as Error)?.message ?? String(e)}).`, status === 502 ? 502 : 0);
+      });
+    } catch (e) {
+      return Promise.resolve(ended(`its sign-in could not be ended (${(e as Error)?.message ?? String(e)}).`));
+    }
+  };
+
   // After the session's work in flight, so it waits for a refresh: forgets the
   // session, then revokes its newest token. A token whose revoke gets no reply
   // (offline, or a superseded sign-out, whose request is refused) waits in
   // `unrevoked` for the next sign-out, which revokes every waiting token,
   // newest first, and stops at the first revoke with no reply.
-  const signOut = (store: OAuthStore): Promise<OAuthResult> => exclusive(store, async () => {
+  const revoke = (store: OAuthStore): Promise<OAuthResult> => exclusive(store, async () => {
     const kept = read(store), owed = unrevoked.get(config.key) ?? [];
     const token = (k: Kept): string | undefined => k.refreshToken ?? k.accessToken;
     if (kept && token(kept) && !owed.some(k => token(k) === token(kept))) owed.push(kept);
@@ -749,7 +799,7 @@ async function discover(config: OAuthConfig): Promise<Metadata> {
   // Fixed endpoints need no discovery; an exact issuer beside them is still what the ID token and the callback's `iss` are
   // checked against. A template issuer's `{tenantid}` form is the discovery document's, so it still discovers.
   if (!config.issuer || (fixed.authorization && fixed.token && !config.issuerTemplate)) {
-    return { issuer: config.issuer ?? '', authorization: fixed.authorization!, token: fixed.token!, revocation: fixed.revocation ?? '', issInCallback: false };
+    return { issuer: config.issuer ?? '', authorization: fixed.authorization!, token: fixed.token!, revocation: fixed.revocation ?? '', endSession: fixed.endSession ?? '', issInCallback: false };
   }
   const issuer = config.issuer;
   const origin = originOf(issuer), path = issuer.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]+/i, '').replace(/\/$/, '');
@@ -781,10 +831,11 @@ async function discover(config: OAuthConfig): Promise<Metadata> {
     authorization: fixed.authorization ?? text('authorization_endpoint'),
     token: fixed.token ?? text('token_endpoint'),
     revocation: fixed.revocation ?? text('revocation_endpoint'),
+    endSession: fixed.endSession ?? text('end_session_endpoint'),
     issInCallback: doc.authorization_response_iss_parameter_supported === true,
   };
   if (!meta.authorization || !meta.token) throw new OAuthError('config', `${issuer}'s discovery document names no authorization or token endpoint; check the issuer, or give endpoints instead.`);
-  for (const url of [meta.authorization, meta.token, meta.revocation]) {
+  for (const url of [meta.authorization, meta.token, meta.revocation, meta.endSession]) {
     if (url && !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) throw new OAuthError('config', `${issuer}'s discovery document names an endpoint that is not an absolute URL, ${url}; give endpoints instead.`);
     if (url) secure(url, 'discovery');
   }
@@ -890,6 +941,7 @@ function keep(reply: TokenReply, before: Kept | null, meta: Metadata | null, con
     login: before?.login,
     tokenEndpoint: before?.tokenEndpoint ?? meta?.token,
     revocationEndpoint: before?.revocationEndpoint ?? meta?.revocation,
+    endSessionEndpoint: before?.endSessionEndpoint ?? meta?.endSession,
   };
 }
 

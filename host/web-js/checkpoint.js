@@ -1,6 +1,6 @@
 import { viewChildren, inertAncestor } from './navigation.js';
 import { carryRouter, clock, data, launchLocation, res, sig } from './rt.js';
-import { offerAll } from './focus.js';
+import { offerAll, restartAutofocus } from './focus.js';
 
 // A render's checkpoint answers (LLP 1048.000 D6), as
 // `exact_web::document::checkpoint` writes them: JSON text, one
@@ -45,7 +45,7 @@ export function answers(resources, types, sourceTypes) {
   return { answers: `[${out.join(',')}]`, open, readers };
 }
 
-// The JS dev loop's one-load checkpoint. Its separate MIME type keeps rt.js's
+// The JS dev loop's checkpoint handoff. Its separate MIME type keeps rt.js's
 // rendered-document checkpoint — including an agent drive's zero clock —
 // unchanged. Answers here are validated by source and full result type;
 // slots and focus are development-only fields.
@@ -86,6 +86,7 @@ export function devResource(name, source, args, initial, initialArgs, type, plac
 export function prepareDev() {
   const cp = dev();
   if (!cp) return () => {};
+  restartAutofocus();
   const focus = HTMLElement.prototype.focus;
   HTMLElement.prototype.focus = function () {};
   return () => {

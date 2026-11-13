@@ -235,6 +235,30 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
 }
 
 #[test]
+fn a_press_cancelled_inside_the_slop_drags_nothing_after() {
+    let mut p = phone();
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    let (_, frame) = p.top_sheet().unwrap();
+    let t = p.host().now();
+    let y = frame.1 + 10.0;
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 2., t + 20.).unwrap();
+    p.pointer_cancel(t + 30.).unwrap();
+    // No contact is held: a later move and lift are no drag.
+    p.pointer_move(200., y + 500., t + 80.).unwrap();
+    p.pointer_up(200., y + 520., t + 90.).unwrap();
+    p.run_commands(|| ());
+    after(&mut p, 1000.0);
+    assert!(
+        has(&p, "route-info"),
+        "the cancelled press dismissed nothing"
+    );
+    let (_, rest) = p.top_sheet().unwrap();
+    assert!(near(rest.1, frame.1), "{rest:?} {frame:?}");
+}
+
+#[test]
 fn a_tap_on_a_sheet_presses_what_is_there_and_on_the_scrim_dismisses() {
     let mut p = phone();
     tap(&mut p, "open-stuck");

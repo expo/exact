@@ -138,7 +138,7 @@ export function install(exact) {
     if (el.getAttribute('aria-hidden') === 'true') props.accessibilityElementsHidden = true;
     if (el.getAttribute('aria-modal') === 'true' && !sheet) props.accessibilityModal = true;
     if (el.getAttribute('aria-busy') === 'true') props.accessibilityBusy = true;
-    if (el.hasAttribute('autofocus')) props.autofocus = true; else if (el.dataset.autofocus === 'false') props.autofocus = false;
+    if (el.hasAttribute('autofocus') || el.dataset.autofocus === 'true') props.autofocus = true; else if (el.dataset.autofocus === 'false') props.autofocus = false;
     const n = { id: id(el), type: type(el), depth, props };
     if (el.dataset.exactSaid?.split(' ').includes('appearance')) n.style = { appearance: { value: getComputedStyle(el).appearance, source: 'authored' } };
     if (el.dataset.exactOn) n.handlers = el.dataset.exactOn.split(' ');

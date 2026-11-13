@@ -489,7 +489,6 @@ impl<D: DataSource> Presenter<D> {
         }
         if focused {
             self.hold_input(Some(id)); // a finger on the field lets a hold of it go (presenter/held.rs)
-            self.touched();
         }
         // Under an open surface of the top layer the page is inert (LLP
         // 1115.001 D10): a field there is not given the focus, whatever
@@ -515,10 +514,16 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The reader's field had real input that may change nothing it says
-    /// otherwise (a finger down in it, a key down): a hold of it lets go.
-    pub fn reader_field_input(&mut self, id: ViewId, generation: u32) {
+    /// otherwise: 0 for an IME edit, 1 for a pointer down, 2 for a hardware
+    /// key that counts as keyboard modality. A hold of the field lets go.
+    pub fn reader_field_input(&mut self, id: ViewId, generation: u32, kind: i32) {
         if self.hosted_live(id, generation) {
             self.hold_input(Some(id));
+            match kind {
+                1 => self.touched(),
+                2 => self.key_shows_ring("Unidentified"),
+                _ => {}
+            }
         }
     }
 

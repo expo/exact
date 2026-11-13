@@ -65,7 +65,8 @@ const order = (a, b) => a.at - b.at || a.id - b.id;
 const nextSent = t => ReadsSent ? [...Queue.filter(s => listed(s) && s.by == null), ...Out].reduce((m, s) => s.at > t ? Math.min(m, s.at) : m, Infinity) : Infinity;
 const stateOf = (s, t) => s.by != null ? 'retracted' : s.at - HOLD > t ? 'waiting' : 'handed';
 
-let Ports = { access: 'prompt', inputs: [], outputs: [] }, Granted = false, Uses = false;
+// `Unheard`: the last port report before the grant was known, applied when it is.
+let Ports = { access: 'prompt', inputs: [], outputs: [] }, Granted = false, Uses = false, Unheard = null;
 let Queue = [], Out = [], Next = 0, Received = [], Heard = 0, Ops = [], Open = [], OpenClock = [], Clock = null, Ticks = 0, Played = null, ClockFloor = -Infinity;
 let Preferred = { access: 'granted', inputs: [], outputs: [] }, Readers = {}, ReadsSent = false, Glue = null, Output = null, Boot = true;
 const Listening = () => Sounds.midi ?? []; // [element, handler] pairs from rt.js `onMIDI`, registered as the view is built
@@ -83,7 +84,7 @@ const connectedInput = id => Ports.access === 'granted' && Ports.inputs.some(p =
 // `""`, no output, goes to no host but `sent` lists it as any other (LLP 1125 D6; midi.rs `can_send`).
 const canSend = id => id === '' || connectedOutput(id);
 function setPorts(reported) {
-  if (!Granted) return false;
+  if (!Granted) { Unheard = reported; return false; }
   const ports = merged(reported);
   if (portsEqual(ports, Ports)) return false;
   const count = l => l.filter(p => p.connected).length;
@@ -378,7 +379,11 @@ export function midi(readers, uses) {
   const granted = () => /^\s*device\.midi\s/m.test(data.grants ?? '');
   Granted = granted();
   Ports = { access: Granted ? 'prompt' : 'denied', inputs: [], outputs: [] };
-  if (data.grants == null) data.ready(() => { if (!Granted && granted()) { Granted = true; Ports = { access: 'prompt', inputs: [], outputs: [] }; again('midi'); } });
+  // The host reports its ports once (midi-glue.js), which may be before then: that report applies now.
+  if (data.grants == null) data.ready(() => {
+    if (!Granted && granted()) { Granted = true; Ports = { access: 'prompt', inputs: [], outputs: [] }; if (Unheard) setPorts(Unheard); again('midi'); }
+    Unheard = null;
+  });
   Sounds.midiApply = apply; Sounds.midiAnswer = Answer;
   (data.reserved ??= {}).exactMIDI = (_, a, name) => {
     const [fields, ports] = Readers[name];

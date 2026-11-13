@@ -284,8 +284,9 @@ impl Client {
         if self.succeeded || !self.booted_selection || *generation != self.store.generation() {
             return Ok(());
         }
+        self.store.boot_succeeded(generation)?;
         self.succeeded = true;
-        self.store.boot_succeeded(generation)
+        Ok(())
     }
 
     /// One check against the head, over the host's `fetch` — every URL the
@@ -335,7 +336,7 @@ impl Client {
     }
 
     /// The staged generation, pinned but not applied.
-    pub fn prepare_activation(&self) -> Result<Option<PreparedSelection>, String> {
+    pub fn prepare_activation(&mut self) -> Result<Option<PreparedSelection>, String> {
         self.store.prepare_activation()
     }
 
@@ -576,6 +577,52 @@ mod tests {
             Outcome::Staged { seq: 1, .. }
         ));
         assert_eq!(client.status().selected_seq, 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A blessing whose write fails is not latched: a retry in the same
+    /// process writes it, so the next launch does not count the boot that
+    /// reached first pixel as a second strike.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_blessing_can_be_retried() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = temp("blessing");
+        let open = || Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
+        let mut client = open();
+        let downloaded = client.begin_check().unwrap().fetch(&mut |url| {
+            Ok(if url.ends_with("exact.json") {
+                head(1, b"one")
+            } else {
+                b"one".to_vec()
+            })
+        });
+        assert!(matches!(
+            client.finish_check(downloaded),
+            Outcome::Staged { seq: 1, .. }
+        ));
+        drop(client);
+        // One launch of the selection died before first pixel.
+        let mut died = open();
+        assert!(died.prepare_selected().unwrap().is_some());
+        died.boot_started().unwrap();
+        drop(died);
+
+        let mut client = open();
+        assert!(client.prepare_selected().unwrap().is_some());
+        client.boot_started().unwrap();
+        let dir = client.dir().to_path_buf();
+        let mode = |bits| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(bits));
+        mode(0o555).unwrap();
+        let blessed = client.boot_succeeded(&client.generation());
+        mode(0o755).unwrap();
+        assert!(blessed.is_err(), "the blessing could not be written");
+        client.boot_succeeded(&client.generation()).unwrap();
+        drop(client);
+
+        let mut next = open();
+        let selected = next.prepare_selected().unwrap();
+        assert_eq!(selected.map(|s| s.plan.to_vec()), Some(b"one".to_vec()));
         let _ = std::fs::remove_dir_all(&base);
     }
 

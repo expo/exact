@@ -150,6 +150,66 @@ impl SurfacePainter for Pixels {
     }
 }
 
+#[test]
+fn popup_keyboard_delivery_leaves_android_touch_mode_before_restoring_focus() {
+    for step in [event::TAB, event::DOWN, event::TAB_BACK, event::UP] {
+        let mut p = boot();
+        p.brush.touch_mode = true;
+        p.set_pointer_kind(PointerKind::Touch);
+        p.serve_overlays();
+        p.frame();
+        tap(&mut p, "more").unwrap();
+        let serial = p.top.open.as_ref().unwrap().serial;
+        assert!(p.brush.pointer_modality);
+        p.surface_event(serial, step, 0., 0., 1.);
+        p.surface_event(serial, event::ENTER, 0., 0., 2.);
+        assert!(p.surface().is_none());
+        assert_eq!(p.focus, Some(id(&p, "more")));
+        assert_eq!(p.brush.ringless, None, "surface key {step}");
+        assert!(!p.brush.pointer_modality);
+    }
+}
+
+#[test]
+fn a_surface_touch_after_a_surface_key_restores_the_opener_ringless() {
+    for (android, winui) in [(false, false), (true, false), (false, true)] {
+        let mut p = boot();
+        p.brush.touch_mode = android;
+        p.brush.winui_focus = winui;
+        p.set_pointer_kind(if android {
+            PointerKind::Touch
+        } else {
+            PointerKind::Mouse
+        });
+        p.serve_overlays();
+        p.frame();
+        tap(&mut p, "more").unwrap();
+        let open = p.top.open.as_ref().unwrap();
+        let (serial, (x, y, w, h)) = (open.serial, open.layout.targets[0].rect);
+        let (x, y) = (x + w / 2., y + h / 2.);
+        p.surface_event(serial, event::DOWN, 0., 0., 1.);
+        assert!(!p.brush.pointer_modality);
+        if winui {
+            // A move over the surface, then a dismissal: the restore is a
+            // scripted focus after pointer input.
+            p.surface_event(serial, 2, x, y, 2.);
+            p.surface_event(serial, event::DISMISSED, 0., 0., 3.);
+        } else {
+            p.surface_event(serial, 0, x, y, 2.);
+            p.surface_event(serial, 1, x, y, 3.);
+        }
+        p.run_commands(|| ());
+        assert!(p.surface().is_none());
+        let more = id(&p, "more");
+        assert_eq!(p.focus, Some(more));
+        assert_eq!(
+            p.brush.ringless,
+            Some(more),
+            "android={android}, winui={winui}"
+        );
+    }
+}
+
 fn boot() -> Presenter<()> {
     let (p, error) = Presenter::boot_with(
         &crate::test_plan(APP),

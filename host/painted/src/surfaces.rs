@@ -1189,6 +1189,9 @@ impl<D: DataSource> Presenter<D> {
     /// holding the contact, else the one under the pointer, sees it as the
     /// web does — the first button held is a down, the last released an up.
     pub fn pointer_aux(&mut self, bit: u32, down: bool, x: f32, y: f32, at: f64) {
+        if down {
+            self.touched();
+        }
         let before = self.surfaces.aux;
         self.surfaces.aux = if down { before | bit } else { before & !bit };
         let after = self.surfaces.aux;

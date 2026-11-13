@@ -900,6 +900,9 @@ uint32_t exact_canvas_display(ExactRuntime rt, double scale, double memory);
  * decoded (ok 1, its size in pixels) or not (ok 0); the handle is the input
  * buffer's first len bytes. Returns the batch length. */
 uint32_t exact_canvas_image(ExactRuntime rt, size_t len, uint32_t width, uint32_t height, uint32_t ok);
+/* LLP 1056 D9: the presenter let a decoded Canvas 2D image handle go (the
+ * input buffer's first len bytes); a canvas that draws it again asks again. */
+void exact_canvas_image_released(ExactRuntime rt, size_t len);
 /* LLP 1056 D5: a 2D canvas's replay is behind (held 1) or caught up (0);
  * while held, its frame request waits (frames drop rather than queue). */
 void exact_canvas_held(ExactRuntime rt, uint32_t view, uint32_t held);

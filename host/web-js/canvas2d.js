@@ -18,15 +18,17 @@ import './canvas2d-glue.js';
 import { drawer } from './draw.js';
 
 // The module's draws, over what rust-data.js keeps of it (`data.logic`): a
-// request (draw.rs `draw_request`) and its reply, both in the module's ABI.
-function client({ exports: e, session, writer, reader, encode, ABI }) {
-  if (!e.exact_logic_draw) return null;
+// request (draw.rs `draw_request`) and its reply, both in the module's ABI. A failed call replaces the instance and
+// its session (rust-data.js `call`), so each draw reads them anew.
+function client(logic) {
+  const { writer, reader, encode, ABI } = logic;
+  if (!logic.exports.exact_logic_draw) return null;
   // A computed argument has no declared type: encoded by its shape.
   const value = (w, v, t) => t ? encode(w, v, t) : Array.isArray(v) ? (w.u8(6), w.u32(v.length), v.forEach(x => value(w, x))) : v == null ? w.u8(4) : encode(w, v, typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's');
   const u64 = (w, v) => { w.u32(v >>> 0); w.u32(Math.floor(v / 4294967296)); };
   const call = fill => {
     const w = writer(); w.u32(ABI); w.u8(5); fill(w);
-    const bytes = w.done(), p = e.exact_logic_alloc(bytes.length);
+    const { exports: e, session } = logic, bytes = w.done(), p = e.exact_logic_alloc(bytes.length);
     new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
     const rc = e.exact_logic_draw(session, p, bytes.length);
     e.exact_logic_dealloc(p, bytes.length);

@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName, singleFramework } from './assets.mjs';
 import { assertCapabilityFrameworks, stripProductionExecutable } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
+import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
 import { constValueArgs, intentsMetadata } from './intents.mjs';
 import { appexArgs, keepMain, extensionModuleCache } from './extensions.mjs';
@@ -167,7 +168,14 @@ export function prepareWidgetCore({ directory, swiftBuildRoot, swiftArgs, swiftc
 export function dropLeftoverCore(bin) {
   for (const directory of [bin, resolve(bin, 'Modules')]) for (const name of ['ExactCore.swiftmodule', 'ExactCore.swiftdoc', 'ExactCore.abi.json', 'ExactCore.swiftsourceinfo', 'ExactCore.o']) rmSync(resolve(directory, name), { recursive: true, force: true });
 }
-export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, linkedPlan = null, library = null }) {
+export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, linkedPlan = null, library = null, reserve = false }) {
+  // `reserve`: the core links reserved room for the plan, keyed by its size (sections.mjs), and placeCoreFramework fits
+  // the app's plan into its own copy. A plan edit then neither relinks the core nor changes the framework every importer
+  // compiles against, which cost ~33 s of Swift per edit of an app with widgets (expo/exact#477).
+  if (reserve && linkedPlan) {
+    const dir = reserveLinkedPlan(linkedPlan.dir), sizes = ['app.plan', 'compat.json', 'app.hbc'].map(file => `${file}:${statSync(resolve(dir, file)).size}`);
+    linkedPlan = { dir, digest: createHash('sha256').update(sizes.join('\n')).digest('hex') };
+  }
   const { base, args, framework, xcframework, device, platform } = prepared;
   mkdirSync(base, { recursive: true });
   const coreEnv = { ...env, EXACT_WIDGET_CORE: '1' };
@@ -252,12 +260,15 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
 /** The shared framework's placeholder identifier; no bundle ships it. */
 const SHARED_CORE_ID = 'dev.exact.core.shared';
 /** `framework` (the shared ExactCore) copied to `to` for `app`, with the app's own bundle identifier. */
-export function placeCoreFramework(framework, to, app, platform = 'ios') {
+export function placeCoreFramework(framework, to, app, platform = 'ios', plan = null) {
   rmSync(to, { recursive: true, force: true });
   cpSync(framework, to, { recursive: true, verbatimSymlinks: true });
   const info = resolve(to, platform === 'macos' ? 'Resources/Info.plist' : 'Info.plist');
   writeFileSync(info, readFileSync(info, 'utf8').replace(`<string>${SHARED_CORE_ID}</string>`, `<string>${app.id}.runtime</string>`));
   if (!readFileSync(info, 'utf8').includes(`<string>${app.id}.runtime</string>`)) throw new Error(`host/apple: ${info} names no ExactCore identifier to replace`);
+  // A core linked with reserved room (sharedWidgetCore `reserve`) takes this app's plan, from its linked bake `plan`.
+  // Its UUID is renewed from the new bytes, so a module cache keyed by UUID never takes another plan's copy for this one.
+  if (plan) fitLinkedSections(resolve(to, 'ExactCore'), { plan: readFileSync(resolve(plan, 'app.plan')), compat: readFileSync(resolve(plan, 'compat.json')), bytecode: readFileSync(resolve(plan, 'app.hbc')) }, { renewUuid: true });
   return to;
 }
 /** `to` with `from`'s bytes and modification time, written only when the bytes differ. */

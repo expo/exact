@@ -182,7 +182,7 @@ fn hidden_lights_do_not_starve_visible_slots_and_parent_edits_reselect_paused() 
     ));
     w.propagate();
     let mut scene = Scene::default();
-    scene.feed(&w, false, false, true, false);
+    scene.feed(&w, false, false, true, None);
     assert_eq!(scene.lights_for_test(), [point, spot]);
     assert_eq!(
         scene.frame(&w, 1., glam::Vec2::ONE, false).lights_dropped,
@@ -191,13 +191,14 @@ fn hidden_lights_do_not_starve_visible_slots_and_parent_edits_reselect_paused() 
     w.insert(point, Parent(hidden));
     w.propagate();
     // Exercise parent-only invalidation independently of the moved hint.
-    scene.feed(&w, false, false, false, true);
+    let chains = visibility::ParentChanges::default();
+    scene.feed(&w, false, false, false, Some(&chains));
     assert_eq!(scene.lights_for_test(), [spot]);
     w.insert(shown, Visible(false));
-    scene.feed(&w, false, false, false, false);
+    scene.feed(&w, false, false, false, None);
     assert!(scene.lights_for_test().is_empty());
     w.remove::<Visible>(shown);
-    scene.feed(&w, false, false, false, false);
+    scene.feed(&w, false, false, false, None);
     assert_eq!(scene.lights_for_test(), [spot]);
 }
 

@@ -14,6 +14,25 @@ pub(crate) struct Live {
     retired: Vec<String>,
 }
 
+impl Live {
+    /// Record `frame` as the last scrub shown. A new run's frame retires the
+    /// run before it (a few kept).
+    fn shown(&mut self, frame: Option<&Scrub>) {
+        let Some(frame) = frame else {
+            return;
+        };
+        if let Some(run) = self.scrubbed.as_ref().and_then(|l| l.run.clone()) {
+            if frame.run.as_ref() != Some(&run) && !self.retired.contains(&run) {
+                self.retired.push(run);
+                if self.retired.len() > 8 {
+                    self.retired.remove(0);
+                }
+            }
+        }
+        self.scrubbed = Some(frame.clone());
+    }
+}
+
 /// Why a build does not apply a batch.
 #[derive(Debug, PartialEq)]
 pub enum LiveRefusal {
@@ -115,21 +134,10 @@ impl<D: DataSource> Runner<D> {
         if edit.base.as_ref().is_some_and(|base| *base != running) {
             return Err(LiveRefusal::Stale);
         }
-        if let Some(frame) = &edit.scrub {
-            // A new run's frame retires the run before it (a few kept).
-            if let Some(run) = self.live.scrubbed.as_ref().and_then(|l| l.run.clone()) {
-                if frame.run.as_ref() != Some(&run) && !self.live.retired.contains(&run) {
-                    self.live.retired.push(run);
-                    if self.live.retired.len() > 8 {
-                        self.live.retired.remove(0);
-                    }
-                }
-            }
-            self.live.scrubbed = Some(frame.clone());
-        }
         // No tokens (a notice), or the design it runs already (a snapshot
         // polled again): nothing to set.
         if edit.tokens.is_empty() || edit.design == running {
+            self.live.shown(edit.scrub.as_ref());
             return Ok(nothing());
         }
         let refusals = exact_kernel::style::wide::refusals();
@@ -148,6 +156,9 @@ impl<D: DataSource> Runner<D> {
             RunnerError::InvalidValue { reason, .. } => LiveRefusal::Refused(reason),
             other => LiveRefusal::Refused(format!("{other:?}")),
         })?;
+        // Only a frame that landed is shown: a refused one stays unseen, so
+        // the same frame sent again, or its run's next, is not older.
+        self.live.shown(edit.scrub.as_ref());
         self.design = Some(edit.design.clone());
         // A role crosses to a host as what replaces it, in any row, and the
         // kernel's own defaults read it: every node is the host's to send

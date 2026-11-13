@@ -97,20 +97,15 @@ impl<D: DataSource> Presenter<D> {
             let Some((ox, oy, _, _)) = self.rect_of(id) else {
                 return false;
             };
-            if contact != ASSISTIVE_CONTACT
-                && !self
-                    .focus
-                    .and_then(|v| self.host.kernel().node(v))
-                    .is_some_and(|n| n.node_type == exact_kernel::NodeType::TextInput)
-            {
-                self.focus = Some(id);
-            }
+            let Some(canvas) = self.surfaces.canvases.get(&surface) else {
+                return false;
+            };
             self.control_bindings.insert(
                 key,
                 ControlBinding {
                     view: Some(id),
                     surface,
-                    generation: self.surfaces.canvases[&surface].id,
+                    generation: canvas.id,
                     name,
                     offset: (ox, oy),
                 },
@@ -127,6 +122,20 @@ impl<D: DataSource> Presenter<D> {
             self.control_bindings.remove(&key);
         }
         accepted
+    }
+    /// A press on canvas control `id` focuses it, except that an editor
+    /// keeps the focus. A mouse's press decides focus on its down
+    /// (`focus_on_down`), so its replayed click does not call this.
+    fn control_press_focus(&mut self, id: ViewId, at: f64) {
+        let editing = self
+            .focus
+            .and_then(|v| self.host.kernel().node(v))
+            .is_some_and(|n| n.node_type == exact_kernel::NodeType::TextInput);
+        if !editing {
+            if let Some(error) = self.set_focus_ring(Some(id), at, !self.brush.pointer_modality) {
+                self.host.log(error);
+            }
+        }
     }
     pub(crate) fn input_surface(&self, id: u32) -> Option<u32> {
         let mut cursor = Some(id);
@@ -619,6 +628,10 @@ impl<D: DataSource> Presenter<D> {
         if phase == Some("down") && self.control_contact.is_some() {
             return Some(json!({"error":"a contact is already down"}));
         }
+        if phases.first() == Some(&"down") {
+            self.touched();
+            self.control_press_focus(id, self.host.now());
+        }
         for step in phases {
             if !self.control_input(id, step, x, y, 1, self.host.now()) {
                 return Some(json!({"error":"control surface refused input"}));
@@ -844,7 +857,7 @@ impl<D: DataSource> Presenter<D> {
         mouse_click: bool,
     ) -> Option<ViewId> {
         self.press_point = Some((x, y));
-        self.note_press_from(hit, false, focus_before_down.unwrap_or(self.focus));
+        self.note_press_from(hit, focus_before_down.unwrap_or(self.focus));
         let focus = focus_before_down.is_none() && !self.pointerdown_prevents_focus(hit);
         let click = mouse_click.then(|| self.mouse_press_target(hit)).flatten();
         if let Some(picture) = click.filter(|id| self.brush.region_blocks_action(*id)) {
@@ -874,6 +887,9 @@ impl<D: DataSource> Presenter<D> {
             return self.retained_press(hit, now_ms);
         }
         if let Some(control) = self.control_target(hit) {
+            if focus {
+                self.control_press_focus(control, now_ms);
+            }
             let accepted = ["down", "up"]
                 .into_iter()
                 .all(|phase| self.control_input(control, phase, x, y, 1, now_ms));
@@ -925,8 +941,7 @@ impl<D: DataSource> Presenter<D> {
     /// except that a canvas press leaves an editor focused. The focus a press
     /// gives shows no ring, as the web's `:focus-visible` has it (LLP 1115.004
     /// D9.2: Fluent's focus visual follows keyboard input only); a focus a key
-    /// moves there after shows it, and one the app moves shows it only where
-    /// the focus it leaves did (`set_focus`). A mouse pressing the focus it
+    /// moves there after shows it. A mouse pressing the focus it
     /// does not move leaves its ring as it was, as Chrome's does; a finger
     /// takes it away (LLP 1115.001 D7.6: no focus ring in touch mode). A text
     /// field keeps its ring and `:focus-visible` look, as in Chrome.
@@ -950,13 +965,13 @@ impl<D: DataSource> Presenter<D> {
                 .and_then(|id| self.host.kernel().node(id))
                 .is_some_and(|node| node.node_type == NodeType::TextInput);
         let moves = self.focus != focus && !editing;
-        if direct || moves {
-            let ringless = focus.and_then(|id| self.unringed(id));
+        if direct && !moves {
+            let ringless = self.focus.and_then(|id| self.unringed(id));
             self.dirty |= self.brush.ringless != ringless;
             self.brush.ringless = ringless;
         }
         if moves {
-            if let Some(e) = self.set_focus(focus, now_ms) {
+            if let Some(e) = self.set_focus_ring(focus, now_ms, false) {
                 eprintln!("exact: {e}");
             }
             self.queue_collections();
@@ -988,7 +1003,7 @@ impl<D: DataSource> Presenter<D> {
     /// A held contact's down on its canvas: focus as a press does, then the
     /// pointer's `down`. False when the canvas refuses it.
     pub(crate) fn canvas_contact_down(&mut self, hit: ViewId, x: f32, y: f32, at: f64) -> bool {
-        self.note_press(hit, false);
+        self.note_press(hit);
         self.focus_for_press(hit, (x, y), at, self.direct());
         self.input_surface(hit)
             .is_some_and(|view| self.canvas_pointer(view, "down", 1, x, y, at))
@@ -1050,7 +1065,13 @@ impl<D: DataSource> Presenter<D> {
             && (self.focus.is_none()
                 || (pointer && self.focus == Some(target) && fallback != Some(target)))
         {
+            let ring = self.focus_shows_ring();
             self.focus = fallback;
+            self.brush.ringless = if ring {
+                None
+            } else {
+                fallback.and_then(|id| self.unringed(id))
+            };
             // A pressed button its own handler removed: `focusout` at the
             // ancestors still mounted, as the web's focused node removal.
             let (sent, mut error) = self.clear_removed_focus();

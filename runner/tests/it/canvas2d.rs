@@ -368,6 +368,44 @@ fn an_image_a_draw_asks_for_redraws_it_when_it_decodes() {
     assert_eq!(log.borrow().frames.last().unwrap().cause.primary(), "font");
 }
 
+/// A decoded image the host let go is requested again at its next use, and
+/// draws nothing until the host answers it again.
+#[test]
+fn an_image_the_host_released_is_requested_again() {
+    let (mut r, log) = boot();
+    log.borrow_mut().pictures = true;
+    let view = r.canvas_views()[0];
+    r.set_canvas_geometry(view, geometry(10.0, 10.0, 1.0));
+    r.draw_canvases(&|_| true);
+    r.take_canvas_lists();
+    r.take_canvas_image_requests();
+    r.canvas_image("photo.png", Ok((4, 2)), &[]);
+    r.canvas_image("gone.png", Err("404".into()), &[]);
+    r.draw_canvases(&|_| true);
+    r.take_canvas_lists();
+    r.canvas_image_released("photo.png");
+    assert!(
+        !r.canvas_images_pending(),
+        "nothing is asked before a draw uses it"
+    );
+    r.canvas_fonts_loaded();
+    r.draw_canvases(&|_| true);
+    let lists = r.take_canvas_lists();
+    assert!(
+        !ops(&lists[0].lists[0]).contains(&"DrawImage".to_string()),
+        "released: drawn without it"
+    );
+    assert_eq!(
+        r.take_canvas_image_requests(),
+        ["photo.png"],
+        "the broken one is not asked again"
+    );
+    r.canvas_image("photo.png", Ok((4, 2)), &[]);
+    r.draw_canvases(&|_| true);
+    let lists = r.take_canvas_lists();
+    assert!(ops(&lists[0].lists[0]).contains(&"DrawImage".to_string()));
+}
+
 /// LLP 1100 D12a: `color-space` and `color-type` are the canvas's getContext
 /// settings: the draw is told, the host's bitmap carries them, a change is
 /// a new generation, and float16 counts 8 bytes a pixel.
