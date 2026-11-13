@@ -475,14 +475,15 @@ pub struct Painter {
     decoration_warning: bool,
     /// The node a 3D island paints flat, its own transform being the warp's (LLP 1077 D8).
     pub(crate) flatten: Option<ViewId>,
-    /// The focused node that shows no ring until a key (LLP 1115.001 D7.6).
+    /// The current focus's visibility decision, separate from the last input's modality.
     pub(crate) ringless: Option<ViewId>,
     /// The focus visual follows WinUI's input tracking, not Chrome's `:focus-visible` (LLP
-    /// 1115.004 D9.2): no ring for a focus the app moves before any key (`keyless`), and a key
+    /// 1115.004 D9.2): pointer movement counts as input, and a key
     /// held with Ctrl, Alt or the Windows key counts as keyboard input.
     pub(crate) winui_focus: bool,
-    pub(crate) keyless: bool,
-    /// Android's touch mode (LLP 1115.001 D7.6): a finger or a pen sets `keyless` again.
+    /// The last input was a pointer; Windows and Android start in this mode.
+    pub(crate) pointer_modality: bool,
+    /// Android's touch mode (LLP 1115.001 D7.6): a finger or pen also hides the current ring.
     pub(crate) touch_mode: bool,
     /// Whose shapes a symbol role takes: the process's (`look::symbols`).
     pub(crate) symbols: exact_kernel::SymbolSet,
@@ -597,7 +598,7 @@ impl Painter {
             flatten: None,
             ringless: None,
             winui_focus: cfg!(windows),
-            keyless: cfg!(windows) || cfg!(target_os = "android"),
+            pointer_modality: cfg!(windows) || cfg!(target_os = "android"),
             touch_mode: cfg!(target_os = "android"),
             symbols: look::symbols(),
             feedback: (None, None),
@@ -1059,6 +1060,13 @@ impl Painter {
         let mut paint = BoxPaint::capture(node, walk.scene.kernel, self.dark)
             .presented(&shown.colors)
             .states(node, &shown, self.dark);
+        if let Some(section) = walk.scene.kernel.grouped_card_section(node.id) {
+            if let Some(owner) = walk.scene.kernel.node(section) {
+                paint = paint.section_shadow(&owner, &(walk.scene.presented)(section), self.dark);
+            }
+        } else if walk.scene.kernel.grouped_section_card(node.id).is_some() {
+            paint.shadows.clear();
+        }
         self.split_row(node, &mut paint);
         if self.bare(node) {
             paint.background = [0; 4];

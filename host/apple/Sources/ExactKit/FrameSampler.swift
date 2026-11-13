@@ -452,9 +452,13 @@ final class FrameSampler: NSObject {
         // Hold the interval to the period the last callback announced, so a
         // change of rate (a recording asking for the full one, ProMotion
         // lowering it) misses no frame
-        let announced = period
+        let announced = period ?? (target - now) * 1000
         period = (target - now) * 1000
-        if let last { sample(interval: (now - last) * 1000, period: announced ?? (target - now) * 1000, at: now) }
+        // A callback whose target is its own timestamp announces no period,
+        // and an interval cannot be counted in frames of none
+        if let last, announced.isFinite, announced > 0 {
+            sample(interval: (now - last) * 1000, period: announced, at: now)
+        }
         last = now
     }
 

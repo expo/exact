@@ -104,8 +104,9 @@ object Native {
      * thread, as every `field` call is; what one says of a generation exact2 has moved on from is dropped. */
     @JvmStatic external fun fieldFocused(id: Int, generation: Int, focused: Boolean)
     /** Hosted field [id], known at [generation], had real input that may change nothing exact2 hears of: a finger
-     * down in it, a key down. A state held on it (LLP 1122 D8) lets go. */
-    @JvmStatic external fun fieldInput(id: Int, generation: Int)
+     * down in it, a key down. [kind] is 0 for IME input, 1 for a pointer, 2 for a hardware key that shows focus.
+     * A state held on it (LLP 1122 D8) lets go. */
+    @JvmStatic external fun fieldInput(id: Int, generation: Int, kind: Int)
     /** Hosted field [id] holds [value] after the person's edit number [seq], its selection at [start] to [end]
      * (UTF-16 units). Composing text is part of the value: exact2 fires `input` as the text composes. */
     @JvmStatic external fun fieldEdited(id: Int, generation: Int, seq: Int, value: String, start: Int, end: Int)

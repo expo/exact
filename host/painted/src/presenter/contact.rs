@@ -358,11 +358,11 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
-    /// A finger or a pen on Android puts the focus back in touch mode
-    /// (`touch_mode`): the focus it finds shows no ring until a key.
+    /// Record the pointer before any handler can move focus. Android also
+    /// hides the current ring when a finger or pen enters touch mode.
     pub(crate) fn touched(&mut self) {
+        self.brush.pointer_modality = true;
         if self.brush.touch_mode && self.contact_is_direct() {
-            self.brush.keyless = true;
             let ringless = self.focus.and_then(|id| self.unringed(id));
             self.dirty |= self.brush.ringless != ringless;
             self.brush.ringless = ringless;
@@ -486,13 +486,13 @@ impl<D: DataSource> Presenter<D> {
                         && (field || (c.candidate.is_none() && !c.group)))
                         .then_some((c.hit, c.origin, field))
                 });
+                let from = self.commands.len();
                 match self.pointer_pressed(x, y, now_ms) {
                     Some(error) => Err(error),
                     None => {
-                        let queued = self.commands.len();
-                        self.commands.retain(|c| c.name != "preventDefault");
+                        let blocked = self.prevented_since(from);
                         if let Some(contact) = &mut self.contact {
-                            contact.focus_blocked = self.commands.len() != queued;
+                            contact.focus_blocked = blocked;
                         }
                         if let Some((key, point, field)) = focus {
                             self.focus_on_down(key, point, now_ms, field);
@@ -594,7 +594,7 @@ impl<D: DataSource> Presenter<D> {
                     self.retire_pointer();
                     return Ok(false);
                 };
-                self.pointer_cancel(now_ms)?;
+                self.cancel_before_down(now_ms)?;
                 // Cancellation may run layout/effects; it must not rebind A.
                 if !self.retained_contact_live(&retained) {
                     return Ok(false);
@@ -625,11 +625,15 @@ impl<D: DataSource> Presenter<D> {
                 return Ok(true);
             }
         }
-        self.pointer_cancel(now_ms)?;
+        self.cancel_before_down(now_ms)?;
         let Some(hit) = self
             .hit(x, y)
             .and_then(|id| self.host.kernel().node(id).map(|n| n.key))
         else {
+            if let Some(error) = self.set_focus(None, now_ms) {
+                return Err(error);
+            }
+            self.queue_collections();
             return Ok(false);
         };
         if !self.input_live(hit) {
@@ -759,6 +763,9 @@ impl<D: DataSource> Presenter<D> {
         now_ms: f64,
         event_ms: f64,
     ) -> Result<bool, String> {
+        if self.brush.winui_focus {
+            self.brush.pointer_modality = true;
+        }
         // A sheet's scrim, or its drag once past the slop (`stage/touch.rs`).
         if self.stage_move(x, y, event_ms) {
             return Ok(true);
@@ -1210,11 +1217,7 @@ impl<D: DataSource> Presenter<D> {
                     // Focus is decided from what the finger touched, as
                     // `press_at` decides it: a `retainFocus` child counts.
                     let hit = hit.unwrap_or(id);
-                    self.note_press_from(
-                        hit,
-                        false,
-                        contact.focus_before_down.unwrap_or(self.focus),
-                    );
+                    self.note_press_from(hit, contact.focus_before_down.unwrap_or(self.focus));
                     if contact.focus_before_down.is_none()
                         && !contact.focus_blocked
                         && !self.pointerdown_prevents_focus(hit)

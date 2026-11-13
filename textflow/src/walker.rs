@@ -10,7 +10,7 @@ use unicode_linebreak::{break_property, linebreaks, BreakClass};
 /// whose advances sum to at most this far past the offer still fits — the same
 /// `lineFitEpsilon` Pretext's engine profile applies (`@chenglou/pretext`
 /// `measurement.ts` / `line-break.ts`: 0.005, Safari 1/64).
-const FIT_EPSILON: f64 = 0.005;
+pub(crate) const FIT_EPSILON: f64 = 0.005;
 
 /// Measure a UTF-8 byte range in the original paragraph, shaped in its context.
 /// The caller includes letter spacing and returns a nonnegative finite advance.

@@ -5,6 +5,78 @@ import {createInputHandlers} from '../input-glue.js';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 
+test('Chrome keeps pointer modality beyond a field or empty hit and preserves an unchanged focus ring', async () => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setViewportSize({width: 400, height: 400});
+    await page.setContent('<body style="margin:0"><div style="width:400px;height:300px"><div id="pad" style="width:300px;height:60px"></div><input id="field"><button id="one">One</button><button id="two">Two</button></div>');
+    const focused = () => page.evaluate(() => [document.activeElement.id, document.activeElement.matches(':focus-visible')]);
+    await page.click('#one');
+    await page.keyboard.press('Shift');
+    expect(await focused()).toEqual(['one', true]);
+    await page.click('#pad');
+    await page.focus('#two');
+    expect(await focused()).toEqual(['two', false]);
+    await page.keyboard.press('Shift');
+    await page.mouse.click(390, 390);
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    await page.focus('#one');
+    expect(await focused()).toEqual(['one', false]);
+    await page.click('#field');
+    expect(await focused()).toEqual(['field', true]);
+    await page.focus('#two');
+    expect(await focused()).toEqual(['two', false]);
+    await page.keyboard.press('Shift');
+    await page.click('#two');
+    expect(await focused()).toEqual(['two', true]);
+    await page.focus('#one');
+    expect(await focused()).toEqual(['one', true]);
+    await page.mouse.move(1, 1);
+    await page.focus('#two');
+    expect(await focused()).toEqual(['two', true]);
+  } finally { await browser.close(); }
+});
+
+test('Chrome focus visibility follows input through canvas fallback and a remounted heading', async () => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<input id="field"><canvas id="world" tabindex="0" width="100" height="40"></canvas><button id="hud">HUD</button><button id="open">Open</button>');
+    await page.evaluate(() => {
+      const world = document.getElementById('world'), open = document.getElementById('open');
+      world.addEventListener('pointerdown', e => e.preventDefault());
+      document.getElementById('hud').addEventListener('click', () => world.focus());
+      const arrive = () => {
+        document.getElementById('title')?.remove();
+        const title = document.createElement('h2');
+        title.tabIndex = -1;
+        title.addEventListener('focus', () => {
+          const next = document.createElement('h2');
+          next.id = 'title'; next.tabIndex = -1; next.textContent = 'New title';
+          title.replaceWith(next); next.focus();
+        }, {once: true});
+        document.body.append(title); title.focus();
+      };
+      open.addEventListener('click', arrive);
+      open.addEventListener('keydown', e => { if (e.key === 'ArrowDown') arrive(); });
+    });
+    const focused = () => page.evaluate(() => [document.activeElement.id, document.activeElement.matches(':focus-visible')]);
+    await page.click('#field');
+    await page.click('#world');
+    expect(await focused()).toEqual(['field', true]);
+    await page.focus('#open');
+    expect(await focused()).toEqual(['open', false]);
+    await page.click('#hud');
+    expect(await focused()).toEqual(['world', false]);
+    await page.click('#open');
+    expect(await focused()).toEqual(['title', false]);
+    await page.focus('#open');
+    await page.keyboard.press('ArrowDown');
+    expect(await focused()).toEqual(['title', true]);
+  } finally { await browser.close(); }
+});
+
 async function rovingFixture(target, run) {
   const apply = glueDeclarations(readFileSync(new URL('../wasm/views.js', import.meta.url), 'utf8'), ['applyProps']);
   const server = Bun.serve({port: 0, hostname: '127.0.0.1', async fetch(req) {

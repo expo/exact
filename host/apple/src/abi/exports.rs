@@ -985,6 +985,13 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_display(scale, memory), |n| n)
         }
 
+        /// A Canvas 2D image handle the presenter let go (LLP 1056 D9): the
+        /// handle is the input buffer's first `len` bytes.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_image_released(rt: u32, len: usize) {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_image_released(len), |_| ())
+        }
+
         /// A 2D canvas's replay is behind (`held` 1) or caught up (0): a
         /// frame request for it waits while held (LLP 1056 D5).
         #[no_mangle]

@@ -1032,8 +1032,16 @@ fn a_perf_block_and_its_counts_parse_to_the_drivers_steps() {
 
 #[test]
 fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
-    let e = contract::tests("test \"t\"\n  perf\n    clock +100 real\n").unwrap_err();
-    assert!(e.message.contains("wall clock"), "{e}");
+    for clock in [
+        "clock +100 real",
+        "clock held",
+        "clock held board 5s",
+        "clock until state ready == true within 500",
+    ] {
+        let e = contract::tests(&format!("test \"t\"\n  perf\n    {clock}\n")).unwrap_err();
+        assert!(e.message.contains("wall clock"), "{clock}: {e}");
+        assert_eq!(e.span.line, 3, "{clock}: {e}");
+    }
     let e = contract::tests("test \"t\"\n  expect perf query a == 1\n").unwrap_err();
     assert!(e.message.contains("`perf` block before it"), "{e}");
     let e = contract::tests("test \"t\"\n  perf\n    clock data\n  expect perf query a == 1.5\n")

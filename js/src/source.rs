@@ -487,8 +487,10 @@ impl DataSource for Module {
                 )))
             }
             Answer::Later(_) => {
-                self.parked
-                    .retain(|(k, _)| *k != Module::key(None, source, args));
+                // A stream parks among the streams, which keep the module
+                // outstanding: let both rows go, and the calls with them.
+                let gone = self.replace_on(&Module::key(None, source, args));
+                self.forget_calls(gone);
                 Err(DataError::Unavailable(format!(
                     "`{source}` fetches, and there is no host to run it here"
                 )))

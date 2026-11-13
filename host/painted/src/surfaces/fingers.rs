@@ -89,6 +89,9 @@ impl<D: DataSource> Presenter<D> {
     /// a viewport point, by Android's pointer `id`. Whether a canvas holds
     /// the touch: where none does, the caller ends it.
     pub(crate) fn canvas_finger(&mut self, id: i32, action: i32, x: f32, y: f32, at: f64) -> bool {
+        if action == 0 {
+            self.touched();
+        }
         self.forget_gone_fingers();
         let on = match self.surfaces.fingers.on.clone() {
             Some(on) => on,

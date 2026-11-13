@@ -75,6 +75,7 @@ impl<D: DataSource> Presenter<D> {
         } else {
             String::new()
         };
+        let from = self.commands.len();
         let mut at = Some(id);
         while let Some(view) = at {
             if self.host.runner().handlers_of(view).contains(&kind) {
@@ -91,9 +92,7 @@ impl<D: DataSource> Presenter<D> {
             }
             at = self.host.kernel().node(view).and_then(|n| n.parent);
         }
-        let queued = self.commands.len();
-        self.commands.retain(|c| c.name != "preventDefault");
-        if queued != self.commands.len()
+        if self.prevented_since(from)
             || self.focus != Some(id)
             || self
                 .host

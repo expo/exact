@@ -949,6 +949,13 @@ impl<D: DataSource> Host<D> {
                 self.dispatch(old, Event::Blur);
             }
         }
+        // The blur's commit may have focused something (`focus()`, a
+        // dialog's autofocus), or made the target ineligible: that stands.
+        if self.focus.is_some() || to.is_some_and(|id| !self.input_eligible(id)) {
+            self.changed();
+            self.settle_collections();
+            return;
+        }
         self.focus = to;
         if let Some(new) = to {
             self.caret = self.value(new).graphemes(true).count();

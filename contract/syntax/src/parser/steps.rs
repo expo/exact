@@ -162,7 +162,16 @@ impl Parser {
         for step in &steps {
             let refused = match step {
                 Step::Perf { .. } | Step::ExpectPerf { .. } => Some("a `perf` block measures steps; its `expect perf` lines follow it, and blocks do not nest".to_string()),
-                Step::Clock { arg, .. } if arg.ends_with(" real") => Some(format!("`clock {arg}` lets the wall clock run, so the counts would depend on the machine's speed; step the agent's clock (`clock +N`, `clock data`, `clock settle`)")),
+                // `clock +N real`, `clock held` and `clock until` let real
+                // time pass while the agent's clock stands.
+                Step::Clock { arg, .. }
+                    if arg.ends_with(" real")
+                        || arg == "held"
+                        || arg.starts_with("held ")
+                        || arg.starts_with("until ") =>
+                {
+                    Some(format!("`clock {arg}` lets the wall clock run, so the counts would depend on the machine's speed; step the agent's clock (`clock +N`, `clock data`, `clock settle`)"))
+                }
                 s if !launch_word(s).is_empty() => Some(format!("`{}` is a launch line and leads the test, not a `perf` block", launch_word(s))),
                 _ => None,
             };

@@ -171,3 +171,47 @@ fn a_scrollers_indicator_is_over_its_rows() {
         .collect();
     assert_eq!(ends, "┃┃││", "{screen}");
 }
+
+const BLUR_OPENS: &str = r#"component App
+  state typed = ""
+  state other = ""
+  action open
+    showModal("dialog")
+  action put(value: string)
+    other = value
+  action opened(key: string)
+    showModal("dialog")
+  action edit(value: string)
+    typed = value
+  view
+    column
+      input value=typed input=edit blur=open id="field"
+      button id="next"
+        text "Next"
+      input value=other input=put key=opened id="opener"
+      dialog id="dialog"
+        input autofocus=true id="inside"
+"#;
+
+#[test]
+fn a_dialog_a_blur_opens_keeps_its_autofocus() {
+    let boot = || {
+        let plan = contract::compile_terminal(BLUR_OPENS).unwrap();
+        let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 12).unwrap();
+        host.arm = false;
+        host
+    };
+    let mut host = boot();
+    host.focus(Some(node(&host, "field")));
+    host.key(Key::Named("Tab"));
+    assert_eq!(host.focus, Some(node(&host, "inside")), "the dialog's");
+    host.key(Key::Char('x'));
+    assert_eq!(host.value(node(&host, "field")), "", "the covered field");
+    // A key whose handler opens the dialog types nothing into the field
+    // the dialog now covers.
+    let mut host = boot();
+    host.focus(Some(node(&host, "opener")));
+    host.key(Key::Char('x'));
+    assert_eq!(host.focus, Some(node(&host, "inside")));
+    assert_eq!(host.value(node(&host, "opener")), "");
+}

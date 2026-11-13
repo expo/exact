@@ -158,6 +158,45 @@ fn inputs_move_on_every_input_and_only_then() {
     );
 }
 
+/// A scrub frame the build refuses is not shown: sent again it is refused
+/// again rather than dropped as older, and the run before it is not
+/// retired, so that run's later frame still applies.
+#[test]
+fn a_refused_scrub_frame_is_not_recorded_as_shown() {
+    let a = plan("refused-scrub", DESIGN);
+    let mut r = booted(a.clone());
+    let shape = design::shape(&a);
+    let frame = |run: &str, rev: u64, canvas: &str| {
+        let tokens: Vec<_> = design::tokens(&a)
+            .into_iter()
+            .map(|mut t| {
+                if t.name == "CanvasText" {
+                    t.value = canvas.to_string();
+                }
+                t
+            })
+            .collect();
+        let mut edit = design::snapshot(&shape, &tokens);
+        edit.scrub = Some(design::Scrub {
+            id: "s".into(),
+            rev,
+            run: Some(run.into()),
+        });
+        edit
+    };
+    let canvas = |r: &mut Runner<NoData>| r.tamber().color("CanvasText", Place::Root);
+    r.apply_live(&frame("one", 1, "#202020")).unwrap();
+    assert_eq!(canvas(&mut r), Some(parsed("#202020")));
+    let refused = frame("two", 2, "nonesuch");
+    assert!(r.apply_live(&refused).is_err());
+    assert!(
+        r.apply_live(&refused).is_err(),
+        "refused again, not dropped"
+    );
+    r.apply_live(&frame("one", 3, "#303030")).unwrap();
+    assert_eq!(canvas(&mut r), Some(parsed("#303030")));
+}
+
 /// A pin above a place that moves (bound to state) moves its tuple, its
 /// inputs and what it resolves.
 #[test]

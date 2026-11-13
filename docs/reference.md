@@ -136,6 +136,19 @@ state through its native segment, UIKit bar item or title, or AppKit menu item.
 UIKit menu rows and alert actions remain selectable but read as enabled: their
 public disabled states also stop selection.
 
+## Grouped section shadows
+
+A grouped list section's `box-shadow`, including class and state values, paints
+around its card, excluding the header and footer. A section without a card
+(`background-color="transparent"`) refuses a shadow. Shadow changes support
+`transition`; keyframe shadow animation on a grouped section is not supported
+yet and fails the build. If shadow keyframes are declared, a grouped section's
+animation must name its keyframes with a literal or a choice of literals so the
+compiler can check them; their timing may be computed, and an animation may
+be absent. Animations that do not set `box-shadow` remain on the section. On
+iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
+forwarding from UIKit’s visible cells, header and footer is not implemented yet.
+
 ## Serve RealWorld
 
 RealWorld's public pages can be served by the native renderer:

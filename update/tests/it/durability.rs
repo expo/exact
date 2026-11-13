@@ -495,3 +495,49 @@ fn assets_stage_through_the_index_and_a_rotten_index_refuses_the_entry() {
         .unwrap_err();
     assert!(lower.contains("below the accepted seq 4"), "{lower}");
 }
+
+/// A held (`app-decides`) entry is first read when the app prepares it, so a
+/// plan that rots while it waits must not make its head current forever: the
+/// check writes it again, and a preparation that finds the damage unstages it
+/// so the next check does.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn a_held_entry_whose_plan_rotted_is_staged_again() {
+    let temp = Temp::new("held-rot");
+    let mut origin = Origin::of(&Bundle::new(4, b"plan four"));
+    let mut store = open(&temp);
+    store.hold_staged(true);
+    let Ok(Check::Staged { entry, .. }) = origin.check(&mut store) else {
+        panic!("the head stages");
+    };
+    // The plan is a link to its blob: replaced, not written through.
+    let plan = temp.path().join("entries").join(&entry).join("app.plan");
+    let rot = || {
+        std::fs::remove_file(&plan).unwrap();
+        std::fs::write(&plan, b"plan FOUR").unwrap();
+    };
+
+    rot();
+    assert!(
+        matches!(origin.check(&mut store), Ok(Check::Current { .. })),
+        "still the held bundle, written again"
+    );
+    let prepared = store.prepare_activation().unwrap().unwrap();
+    assert_eq!(&*prepared.plan, b"plan four");
+
+    rot();
+    assert!(store.prepare_activation().is_err());
+    assert!(
+        !store.status().staged,
+        "the damaged entry is no longer held"
+    );
+    assert!(matches!(
+        origin.check(&mut store),
+        Ok(Check::Staged { seq: 4, .. })
+    ));
+    let prepared = store.prepare_activation().unwrap().unwrap();
+    assert_eq!(&*prepared.plan, b"plan four");
+}
