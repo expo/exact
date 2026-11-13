@@ -1,5 +1,7 @@
 # Queue
 
+- **A web menu opened by a click shows its first row highlighted** (2026-11-13, seen in `menu-checks.test.mjs`'s screenshots, Chrome). Since 4916c5289 a menu focuses its first usable row when it opens, and `host/web/neutral.css`'s menu `:focus` rule washes the focused row, so a click-opened menu opens with a highlight that NSMenu and UIMenu show only after the pointer moves or an arrow key is pressed. A tell under LLP 1115; the wash follows `:focus`, which the pointer also moves (`input-glue.js`), so the fix is to wash a row focused on open only when the menu was opened from the keyboard.
+- **`contextmenu.test.mjs` fails "wasm popover and focus commands preserve authored order" on main** (2026-11-13, three runs of three on this Mac): `host/web/tests/contextmenu.test.mjs:162` expects `['first', 'trigger']` and gets `['', '']`.
 - realworld (68.1 KiB brotli against 45) and caltrain (46.9 KiB against 25) are over their web byte budgets on main at 879be020f (`bun scripts/metrics.mjs --web-bytes`).
 - `exact-runner`'s incremental test (`every_app_plan_updates_incrementally_exactly_as_it_does_in_full`, the geofence fixture) fails on main with unchanged runner code (seen by three lanes on Linux).
 - `HeaderMacTests.testASearchInputIsTheBarsSearchItemHoldingTheInputsOwnField` fails on main: the search item's field editor is nil (`HeaderMacTests.swift:943`).
