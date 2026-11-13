@@ -32,7 +32,8 @@ component Helpful
           text (voted == "yes" ? "Thanks for the feedback." : "Sorry about that.") font-size="var(--text-sm)" color="var(--color-text-secondary)" testId=`helpful-thanks${place}`
           if voted == "no"
             link href=href target="_blank" testId=`helpful-issue${place}`
-              text "Tell us what to improve" font-size="var(--text-sm)" color="var(--color-text-default)" text-decoration="underline"
+              row
+                text "Tell us what to improve" font-size="var(--text-sm)" color="var(--color-text-default)" text-decoration="underline"
 
 component PageActions
   props
@@ -46,9 +47,10 @@ component PageActions
     openURL(url)
   view
     row gap=4 align-items="center" flex-shrink=0 margin-left=-12 testId="page-actions"
-      link href=page.editUrl target="_blank" display="flex" align-items="center" gap=4 padding="4px 12px" border-radius="var(--radius-full)" testId="edit-page"
-        image "symbol:icon.edit" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-        text "Edit page" class=ActionText
+      link href=page.editUrl target="_blank" padding="4px 12px" border-radius="var(--radius-full)" testId="edit-page"
+        row align-items="center" gap=4
+          image "symbol:icon.edit" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+          text "Edit page" class=ActionText
       row align-items="center" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)"
         button press=copyLink appearance="none" display="flex" align-items="center" gap=4 padding="4px 2px 4px 12px" border-radius="var(--radius-full) 0 0 var(--radius-full)" testId="copy-link"
           image (linked ? "symbol:checkmark" : "symbol:icon.copy") aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
@@ -60,23 +62,27 @@ component PageActions
           image (copied ? "symbol:checkmark" : "symbol:icon.copy") aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
           text (copied ? "Copied" : "Copy markdown") class=ActionText
         link href=page.markdownPath target="_blank" class=Item testId="view-markdown"
-          image "symbol:icon.file" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-          text "View markdown" class=ActionText
+          row align-items="center" gap=4
+            image "symbol:icon.file" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+            text "View markdown" class=ActionText
         link href=page.chatgptUrl target="_blank" class=Item testId="open-chatgpt"
-          image "symbol:icon.openai" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-          text "Open in ChatGPT" class=ActionText
+          row align-items="center" gap=4
+            image "symbol:icon.openai" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+            text "Open in ChatGPT" class=ActionText
         button press=openApp(page.codexUrl) appearance="none" class=Item testId="open-codex"
           image "symbol:icon.codex" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
           text "Open in Codex" class=ActionText
         link href=page.claudeUrl target="_blank" class=Item testId="open-claude"
-          image "symbol:icon.claude" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-          text "Open in Claude" class=ActionText
+          row align-items="center" gap=4
+            image "symbol:icon.claude" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+            text "Open in Claude" class=ActionText
         button press=openApp(page.claudeCodeUrl) appearance="none" class=Item testId="open-claude-code"
           image "symbol:icon.claude" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
           text "Open in Claude Code" class=ActionText
         link href=page.cursorUrl target="_blank" class=Item testId="open-cursor"
-          image "symbol:icon.cursor" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
-          text "Open in Cursor" class=ActionText
+          row align-items="center" gap=4
+            image "symbol:icon.cursor" aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+            text "Open in Cursor" class=ActionText
 
 component Rail
   props
