@@ -1158,9 +1158,11 @@ fn app_identity_gate() {
         Err(RunnerError::AppMismatch { plan, host, fix }) => {
             assert_eq!(plan, "com.exact.other");
             assert_eq!(host, "com.exact.mine");
-            // The refusal names the declaration to change and the id it should say.
+            // The refusal names both causes: the data source's declaration, and a plan from elsewhere.
             assert!(
-                fix.contains("`fn app_id`") && fix.contains("return \"com.exact.other\""),
+                fix.contains("`fn app_id`")
+                    && fix.contains("must say \"com.exact.other\"")
+                    && fix.contains("the plan is the wrong one"),
                 "{fix}"
             );
         }

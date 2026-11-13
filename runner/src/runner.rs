@@ -705,12 +705,13 @@ impl<D: DataSource> Runner<D> {
                 plan: plan.app_id.clone(),
                 host: data.app_id().to_string(),
                 fix: format!(
-                    "the app's data crate names {:?} in `fn app_id` (its DataSource), and app.json's app.id is {:?}; \
-                     return {:?} there, or remove that `fn app_id` so the data source takes app.json's id \
-                     (a data crate copied from a sample keeps the sample's)",
-                    data.app_id(),
-                    plan.app_id,
-                    plan.app_id
+                    "the plan names {plan:?} and this binary's data source {host:?}. If the plan is this app's own \
+                     (baked from its app.json), the data source is wrong: a Rust data crate's `fn app_id` (one copied \
+                     from a sample keeps the sample's) or app.ts's `appId` must say {plan:?}, or remove that \
+                     `fn app_id` to take app.json's. If the plan came from elsewhere (another app's dev server, \
+                     update or link), the plan is the wrong one: change nothing in the app",
+                    plan = plan.app_id,
+                    host = data.app_id()
                 ),
             });
         }
