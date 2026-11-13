@@ -13,7 +13,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Also for its PATH: the pinned binaryen (and Cargo) as every web build has
 // them, so a prebuild optimizes and keeps what an app's build would.
-import { WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, wasmRemapFlags } from '../../scripts/app.mjs';
+import { WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
 import { withHostDeployment } from '../../scripts/filesystem.mjs';
 import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
@@ -29,6 +29,10 @@ const root = resolve(here, '../..');
 const WEB = WEB_TOOLCHAIN;
 let wasmFlags;
 const WASM_FLAGS = () => (wasmFlags ??= [...WEB_STD, ...wasmRemapFlags(null, WEB)]);
+// A wasm link's flags: the toolchain is checked once first, so a machine that
+// cannot link is refused with its install command (scripts/cargo-check.mjs).
+let linkChecked = false;
+const LINK_FLAGS = () => { if (!linkChecked) { webToolchainEnv(process.env, { linksWasm: true }); linkChecked = true; } return WASM_FLAGS(); };
 // What those flags say apart from this checkout's path, for a kept module's group.
 const WASM_FLAGS_KEY = () => WASM_FLAGS().map(f => f.replaceAll(root, '.'));
 // Under this checkout's own target/ (AGENTS.md: never another checkout's):
@@ -92,7 +96,7 @@ function replace(path, write) {
   try { written = write(temp); } catch (error) { clean(); throw error; }
   return written instanceof Promise ? written.then(land, (error) => { clean(); throw error; }) : land(written);
 }
-const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...WASM_FLAGS()];
+const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...LINK_FLAGS()];
 function cargoWasm(manifest) {
   return spawnSync('cargo', cargoWasmArgs(manifest), { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET } });
 }
@@ -282,7 +286,7 @@ export async function buildFlow({ out = resolve(MODULES, 'flow'), keepFresh = fa
   const leaf = at(), taken = leaf.find();
   if (taken) { replace(wasm, (temp) => cpSync(taken, temp)); held.set(wasm.split('/').at(-1), true); return wasm; }
   const started = Date.now();
-  const r = await run('cargo', [`+${WEB}`, 'build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', 'exact-textflow', '--bin', 'textflow-web', ...WASM_FLAGS()],
+  const r = await run('cargo', [`+${WEB}`, 'build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', 'exact-textflow', '--bin', 'textflow-web', ...LINK_FLAGS()],
     { cwd: root, env: { ...process.env, CARGO_TARGET_DIR: target } });
   if (r.status !== 0) throw new Error('textflow.wasm did not build');
   const optimizedFlow = await replace(wasm, async (temp) => !unoptimized.has(await optimizeAsync(product, temp, 'textflow.wasm')));
