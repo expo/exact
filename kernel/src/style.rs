@@ -667,7 +667,7 @@ fn absolute_length(token: &str) -> Option<Dimension> {
     number(n).map(|v| Dimension::Points(v * scale))
 }
 
-fn parse_pixel_length(token: &str) -> Option<f32> {
+pub(crate) fn parse_pixel_length(token: &str) -> Option<f32> {
     let pixels = token
         .get(token.len().saturating_sub(2)..)
         .is_some_and(|unit| unit.eq_ignore_ascii_case("px"));
@@ -687,7 +687,7 @@ fn parse_pixel_length(token: &str) -> Option<f32> {
 }
 
 /// A finite CSS number token, before a property's unit conversion and range check.
-fn parse_css_number(number: &str) -> Option<f64> {
+pub(crate) fn parse_css_number(number: &str) -> Option<f64> {
     // Rust floats accept spellings outside CSS number tokens. Check the
     // decimal/exponent grammar before the range-preserving conversion.
     let unsigned = number.strip_prefix(['+', '-']).unwrap_or(number);
