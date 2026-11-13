@@ -11,6 +11,8 @@
 // Five's stack with a new root route at another URL. With Redirect on, Four's
 // press selects Three: a press that moves the router to a tab other than the
 // one tapped. With Decline on, Six's press leaves the router where it is.
+// Home's and Five's buttons scroll, so their routes' edges follow a scroller
+// (NavigationSequenceIOSTests).
 routes nav
   tab home "/"
     detail "/detail"
@@ -65,24 +67,28 @@ component MoreTabs
                           text "Back"
                       text e.name role="heading" aria-level=(e.name == "detail" or e.name == "deeper" ? 2 : 1)
                   if e.name == "home"
-                    button press=open("/detail") testId="open-detail"
-                      text "Detail"
-                    button press=redirect testId="redirect"
-                      text (redirecting ? "Redirecting Four" : "Redirect Four")
-                    button press=decline testId="decline"
-                      text "Decline Six"
-                    button press=open("/sheet") testId="open-sheet"
-                      text "Sheet"
+                    scroll testId="list-home" flex=1 min-height=0
+                      button press=open("/detail") testId="open-detail"
+                        text "Detail"
+                      button press=redirect testId="redirect"
+                        text (redirecting ? "Redirecting Four" : "Redirect Four")
+                      button press=decline testId="decline"
+                        text "Decline Six"
+                      button press=open("/sheet") testId="open-sheet"
+                        text "Sheet"
+                      column height=1200
                   if e.name == "sheet"
                     button press=pick("five") testId="sheet-five"
                       text "Five"
                   if e.name == "five"
-                    button press=open("/five/deeper") testId="open-deeper"
-                      text "Deeper"
-                    button press=open("/five/full") testId="open-full"
-                      text "Full"
-                    button press=renew testId="renew"
-                      text "Renew"
+                    scroll testId="list-five" flex=1 min-height=0
+                      button press=open("/five/deeper") testId="open-deeper"
+                        text "Deeper"
+                      button press=open("/five/full") testId="open-full"
+                        text "Full"
+                      button press=renew testId="renew"
+                        text "Renew"
+                      column height=1200
                   if e.name == "barless"
                     text e.name testId=`text-${e.name}`
       row role="tablist" display=(top(nav).name == "full" ? "none" : "flex")
